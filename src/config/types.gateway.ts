@@ -47,6 +47,8 @@ export type CanvasHostConfig = {
 };
 
 export type TalkConfig = {
+  /** Base URL for the ElevenLabs-compatible TTS API (default: https://api.elevenlabs.io). */
+  baseUrl?: string;
   /** Default ElevenLabs voice ID for Talk mode. */
   voiceId?: string;
   /** Optional voice name -> ElevenLabs voice ID map. */

@@ -23,6 +23,7 @@ export const TalkConfigResultSchema = Type.Object(
         talk: Type.Optional(
           Type.Object(
             {
+              baseUrl: Type.Optional(Type.String()),
               voiceId: Type.Optional(Type.String()),
               voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
               modelId: Type.Optional(Type.String()),

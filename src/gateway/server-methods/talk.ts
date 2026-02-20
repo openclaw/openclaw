@@ -23,6 +23,9 @@ function normalizeTalkConfigSection(value: unknown): Record<string, unknown> | u
   }
   const source = value as Record<string, unknown>;
   const talk: Record<string, unknown> = {};
+  if (typeof source.baseUrl === "string") {
+    talk.baseUrl = source.baseUrl;
+  }
   if (typeof source.voiceId === "string") {
     talk.voiceId = source.voiceId;
   }

@@ -96,6 +96,7 @@ class TalkModeManager(
   private var currentModelId: String? = null
   private var defaultOutputFormat: String? = null
   private var apiKey: String? = null
+  private var baseUrl: String? = null
   private var voiceAliases: Map<String, String> = emptyMap()
   private var interruptOnSpeech: Boolean = true
   private var voiceOverrideActive = false
@@ -829,6 +830,7 @@ class TalkModeManager(
       val model = talk?.get("modelId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val outputFormat = talk?.get("outputFormat")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val key = talk?.get("apiKey")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+      val rawBaseUrl = talk?.get("baseUrl")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val interrupt = talk?.get("interruptOnSpeech")?.asBooleanOrNull()
 
       if (!isCanonicalMainSessionKey(mainSessionKey)) {
@@ -841,12 +843,14 @@ class TalkModeManager(
       if (!modelOverrideActive) currentModelId = defaultModelId
       defaultOutputFormat = outputFormat ?: defaultOutputFormatFallback
       apiKey = key ?: envKey?.takeIf { it.isNotEmpty() }
+      baseUrl = rawBaseUrl
       if (interrupt != null) interruptOnSpeech = interrupt
     } catch (_: Throwable) {
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       defaultModelId = defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
       apiKey = envKey?.takeIf { it.isNotEmpty() }
+      baseUrl = null
       voiceAliases = emptyMap()
       defaultOutputFormat = defaultOutputFormatFallback
     }
@@ -944,13 +948,14 @@ class TalkModeManager(
     apiKey: String,
     request: ElevenLabsRequest,
   ): HttpURLConnection {
-    val baseUrl = "https://api.elevenlabs.io/v1/text-to-speech/$voiceId/stream"
+    val effectiveBase = (this.baseUrl ?: "https://api.elevenlabs.io").trimEnd('/')
+    val endpoint = "$effectiveBase/v1/text-to-speech/$voiceId/stream"
     val latencyTier = request.latencyTier
     val url =
       if (latencyTier != null) {
-        URL("$baseUrl?optimize_streaming_latency=$latencyTier")
+        URL("$endpoint?optimize_streaming_latency=$latencyTier")
       } else {
-        URL(baseUrl)
+        URL(endpoint)
       }
     val conn = url.openConnection() as HttpURLConnection
     conn.requestMethod = "POST"
@@ -1144,7 +1149,8 @@ class TalkModeManager(
 
   private suspend fun listVoices(apiKey: String): List<ElevenLabsVoice> {
     return withContext(Dispatchers.IO) {
-      val url = URL("https://api.elevenlabs.io/v1/voices")
+      val effectiveBase = (baseUrl ?: "https://api.elevenlabs.io").trimEnd('/')
+      val url = URL("$effectiveBase/v1/voices")
       val conn = url.openConnection() as HttpURLConnection
       conn.requestMethod = "GET"
       conn.connectTimeout = 15_000

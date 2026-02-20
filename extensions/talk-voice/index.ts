@@ -23,8 +23,8 @@ function isLikelyVoiceId(value: string): boolean {
   return /^[a-zA-Z0-9_-]+$/.test(v);
 }
 
-async function listVoices(apiKey: string): Promise<ElevenLabsVoice[]> {
-  const res = await fetch("https://api.elevenlabs.io/v1/voices", {
+async function listVoices(apiKey: string, baseUrl = "https://api.elevenlabs.io"): Promise<ElevenLabsVoice[]> {
+  const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/v1/voices`, {
     headers: {
       "xi-api-key": apiKey,
     },

@@ -62,6 +62,7 @@ actor TalkModeRuntime {
     private var voiceAliases: [String: String] = [:]
     private var lastSpokenText: String?
     private var apiKey: String?
+    private var baseUrl: URL?
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
 
@@ -584,7 +585,12 @@ actor TalkModeRuntime {
 
         let request = makeRequest(outputFormat: outputFormat)
         self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
-        let client = ElevenLabsTTSClient(apiKey: apiKey)
+        let client: ElevenLabsTTSClient
+        if let baseUrl = self.baseUrl {
+            client = ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl)
+        } else {
+            client = ElevenLabsTTSClient(apiKey: apiKey)
+        }
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
 
@@ -671,7 +677,12 @@ actor TalkModeRuntime {
         if let fallbackVoiceId { return fallbackVoiceId }
 
         do {
-            let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
+            let voices: [ElevenLabsVoice]
+            if let baseUrl = self.baseUrl {
+                voices = try await ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl).listVoices()
+            } else {
+                voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
+            }
             guard let first = voices.first else {
                 self.ttsLogger.error("elevenlabs voices list empty")
                 return nil
@@ -772,14 +783,17 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.apiKey = cfg.apiKey
+        self.baseUrl = cfg.baseUrl
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        let baseUrlLabel = cfg.baseUrl?.absoluteString ?? "default"
         self.logger
             .info(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
+                    "baseUrl=\(baseUrlLabel, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
     }
 
@@ -790,6 +804,7 @@ extension TalkModeRuntime {
         let outputFormat: String?
         let interruptOnSpeech: Bool
         let apiKey: String?
+        let baseUrl: URL?
     }
 
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
@@ -804,6 +819,8 @@ extension TalkModeRuntime {
                 params: ["includeSecrets": AnyCodable(true)],
                 timeoutMs: 8000)
             let talk = snap.config?["talk"]?.dictionaryValue
+            let rawBaseUrl = talk?["baseUrl"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsedBaseUrl = rawBaseUrl.flatMap { $0.isEmpty ? nil : URL(string: $0) }
             let ui = snap.config?["ui"]?.dictionaryValue
             let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             await MainActor.run {
@@ -836,7 +853,8 @@ extension TalkModeRuntime {
                 modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                baseUrl: parsedBaseUrl)
         } catch {
             let resolvedVoice =
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -848,7 +866,8 @@ extension TalkModeRuntime {
                 modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                baseUrl: nil)
         }
     }
 

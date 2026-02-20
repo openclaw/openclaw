@@ -62,6 +62,7 @@ final class TalkModeManager: NSObject {
     private var modelOverrideActive = false
     private var defaultOutputFormat: String?
     private var apiKey: String?
+    private var baseUrl: URL?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
     private var mainSessionKey: String = "main"
@@ -1015,7 +1016,12 @@ final class TalkModeManager: NSObject {
 
                 let request = makeRequest(outputFormat: outputFormat)
 
-                let client = ElevenLabsTTSClient(apiKey: apiKey)
+                let client: ElevenLabsTTSClient
+                if let baseUrl = self.baseUrl {
+                    client = ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl)
+                } else {
+                    client = ElevenLabsTTSClient(apiKey: apiKey)
+                }
                 let stream = client.streamSynthesize(voiceId: voiceId, request: request)
 
                 if self.interruptOnSpeech {
@@ -1360,7 +1366,12 @@ final class TalkModeManager: NSObject {
                 normalize: ElevenLabsTTSClient.validatedNormalize(context.directive?.normalize),
                 language: context.language,
                 latencyTier: TalkTTSValidation.validatedLatencyTier(context.directive?.latencyTier))
-            let client = ElevenLabsTTSClient(apiKey: apiKey)
+            let client: ElevenLabsTTSClient
+            if let baseUrl = self.baseUrl {
+                client = ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl)
+            } else {
+                client = ElevenLabsTTSClient(apiKey: apiKey)
+            }
             let stream = client.streamSynthesize(voiceId: voiceId, request: request)
             let sampleRate = TalkTTSValidation.pcmSampleRate(from: context.outputFormat)
             let result: StreamingPlaybackResult
@@ -1657,7 +1668,12 @@ extension TalkModeManager {
         if let fallbackVoiceId { return fallbackVoiceId }
 
         do {
-            let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
+            let voices: [ElevenLabsVoice]
+            if let baseUrl = self.baseUrl {
+                voices = try await ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl).listVoices()
+            } else {
+                voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
+            }
             guard let first = voices.first else {
                 self.logger.warning("elevenlabs voices list empty")
                 return nil
@@ -1701,6 +1717,8 @@ extension TalkModeManager {
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]
             self.defaultVoiceId = (talk?["voiceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawBaseUrl = (talk?["baseUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.baseUrl = rawBaseUrl.flatMap { $0.isEmpty ? nil : URL(string: $0) }
             if let aliases = talk?["voiceAliases"] as? [String: Any] {
                 var resolved: [String: String] = [:]
                 for (key, value) in aliases {
@@ -1741,6 +1759,7 @@ extension TalkModeManager {
             if !self.modelOverrideActive {
                 self.currentModelId = self.defaultModelId
             }
+            self.baseUrl = nil
         }
     }
 
