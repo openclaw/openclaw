@@ -44,6 +44,8 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Only applies to Anthropic provider (OpenRouter uses openai-completions API
  * with hardcoded cache_control, not the cacheRetention stream option).
+ *
+ * Defaults to "short" for Anthropic provider when not explicitly configured.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
@@ -67,7 +69,9 @@ function resolveCacheRetention(
   if (legacy === "1h") {
     return "long";
   }
-  return undefined;
+
+  // Default to "short" for Anthropic when not explicitly configured
+  return "short";
 }
 
 function createStreamFnWithExtraParams(
