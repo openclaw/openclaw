@@ -11,6 +11,7 @@ import type {
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "partial" | "block" | "off";
 
@@ -92,6 +93,22 @@ export type DiscordIntentsConfig = {
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
   guildMembers?: boolean;
+};
+
+export type DiscordVoiceAutoJoinConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID to join. */
+  channelId: string;
+};
+
+export type DiscordVoiceConfig = {
+  /** Enable Discord voice channel conversations (default: true). */
+  enabled?: boolean;
+  /** Voice channels to auto-join on startup. */
+  autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Optional TTS overrides for Discord voice output. */
+  tts?: TtsConfig;
 };
 
 export type DiscordExecApprovalConfig = {
@@ -211,6 +228,8 @@ export type DiscordAccountConfig = {
   ui?: DiscordUiConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** Voice channel conversation settings. */
+  voice?: DiscordVoiceConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
   /** Outbound response prefix override for this channel/account. */
