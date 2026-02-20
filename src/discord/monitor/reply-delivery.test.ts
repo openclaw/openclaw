@@ -84,4 +84,24 @@ describe("deliverDiscordReply", () => {
     expect(sendVoiceMessageDiscordMock).toHaveBeenCalledTimes(1);
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
   });
+
+  it("uses replyToId only for the first chunk when replyToMode is first", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "1234567890",
+        },
+      ],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 5,
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock.mock.calls[0]?.[2]?.replyTo).toBe("reply-1");
+    expect(sendMessageDiscordMock.mock.calls[1]?.[2]?.replyTo).toBeUndefined();
+  });
 });
