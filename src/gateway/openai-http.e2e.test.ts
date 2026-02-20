@@ -385,6 +385,59 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("returns 429 for repeated failed auth when auth rate limiting uses defaults", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const { startGatewayServer } = await import("./server.js");
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, {
+      host: "127.0.0.1",
+      controlUiEnabled: false,
+      openAiChatCompletionsEnabled: true,
+    });
+    try {
+      const headers = {
+        "content-type": "application/json",
+        authorization: "Bearer wrong",
+        "x-forwarded-for": "203.0.113.10",
+      };
+      const body = {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      };
+
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        expect(res.status).toBe(401);
+      }
+
+      const blocked = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get("retry-after")).toBeTruthy();
+    } finally {
+      await server.close({ reason: "default auth rate-limit test done" });
+    }
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
