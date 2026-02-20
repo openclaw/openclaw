@@ -252,9 +252,10 @@ Fetch a URL and extract readable content.
 
 Notes:
 
-- `web_fetch` uses Readability (main-content extraction) first, then Firecrawl (if configured). If both fail, the tool returns an error.
+- `web_fetch` uses `cf-markdown` extraction when the response is `text/markdown`; otherwise it uses Readability (main-content extraction) first, then Firecrawl (if configured). If all extraction paths fail, the tool returns an error.
 - Firecrawl requests use bot-circumvention mode and cache results by default.
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
+- `web_fetch` also sends `Accept: text/markdown, text/html;q=0.9, */*;q=0.1` so services like Cloudflare Markdown for Agents can return markdown directly.
 - `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`.
 - `web_fetch` caps the downloaded response body size to `tools.web.fetch.maxResponseBytes` before parsing; oversized responses are truncated and include a warning.
