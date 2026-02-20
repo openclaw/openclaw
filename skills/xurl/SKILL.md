@@ -37,22 +37,27 @@ metadata:
 ## Installation
 
 ### Homebrew (macOS)
+
 ```bash
 brew install --cask xdevplatform/tap/xurl
 ```
 
 ### npm
+
 ```bash
 npm install -g @xdevplatform/xurl
 ```
 
 ### Shell script
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xdevplatform/xurl/main/install.sh | bash
 ```
+
 Installs to `~/.local/bin`. If it's not in your PATH, the script will tell you what to add.
 
 ### Go
+
 ```bash
 go install github.com/xdevplatform/xurl@latest
 ```
@@ -74,6 +79,7 @@ xurl auth oauth2
 ```
 
 You can register multiple apps and switch between them:
+
 ```bash
 xurl auth apps add prod-app --client-id PROD_ID --client-secret PROD_SECRET
 xurl auth apps add dev-app  --client-id DEV_ID  --client-secret DEV_SECRET
@@ -100,47 +106,47 @@ Tokens are persisted to `~/.xurl` in YAML format. Each app has its own isolated 
 
 ## Quick Reference
 
-| Action | Command |
-|---|---|
-| Post | `xurl post "Hello world!"` |
-| Reply | `xurl reply POST_ID "Nice post!"` |
-| Quote | `xurl quote POST_ID "My take"` |
-| Delete a post | `xurl delete POST_ID` |
-| Read a post | `xurl read POST_ID` |
-| Search posts | `xurl search "QUERY" -n 10` |
-| Who am I | `xurl whoami` |
-| Look up a user | `xurl user @handle` |
-| Home timeline | `xurl timeline -n 20` |
-| Mentions | `xurl mentions -n 10` |
-| Like | `xurl like POST_ID` |
-| Unlike | `xurl unlike POST_ID` |
-| Repost | `xurl repost POST_ID` |
-| Undo repost | `xurl unrepost POST_ID` |
-| Bookmark | `xurl bookmark POST_ID` |
-| Remove bookmark | `xurl unbookmark POST_ID` |
-| List bookmarks | `xurl bookmarks -n 10` |
-| List likes | `xurl likes -n 10` |
-| Follow | `xurl follow @handle` |
-| Unfollow | `xurl unfollow @handle` |
-| List following | `xurl following -n 20` |
-| List followers | `xurl followers -n 20` |
-| Block | `xurl block @handle` |
-| Unblock | `xurl unblock @handle` |
-| Mute | `xurl mute @handle` |
-| Unmute | `xurl unmute @handle` |
-| Send DM | `xurl dm @handle "message"` |
-| List DMs | `xurl dms -n 10` |
-| Upload media | `xurl media upload path/to/file.mp4` |
-| Media status | `xurl media status MEDIA_ID` |
-| **App Management** | |
-| Register app | `xurl auth apps add NAME --client-id ID --client-secret SEC` |
-| List apps | `xurl auth apps list` |
-| Update app creds | `xurl auth apps update NAME --client-id ID` |
-| Remove app | `xurl auth apps remove NAME` |
-| Set default (interactive) | `xurl auth default` |
-| Set default (command) | `xurl auth default APP_NAME [USERNAME]` |
-| Use app per-request | `xurl --app NAME /2/users/me` |
-| Auth status | `xurl auth status` |
+| Action                    | Command                                                      |
+| ------------------------- | ------------------------------------------------------------ |
+| Post                      | `xurl post "Hello world!"`                                   |
+| Reply                     | `xurl reply POST_ID "Nice post!"`                            |
+| Quote                     | `xurl quote POST_ID "My take"`                               |
+| Delete a post             | `xurl delete POST_ID`                                        |
+| Read a post               | `xurl read POST_ID`                                          |
+| Search posts              | `xurl search "QUERY" -n 10`                                  |
+| Who am I                  | `xurl whoami`                                                |
+| Look up a user            | `xurl user @handle`                                          |
+| Home timeline             | `xurl timeline -n 20`                                        |
+| Mentions                  | `xurl mentions -n 10`                                        |
+| Like                      | `xurl like POST_ID`                                          |
+| Unlike                    | `xurl unlike POST_ID`                                        |
+| Repost                    | `xurl repost POST_ID`                                        |
+| Undo repost               | `xurl unrepost POST_ID`                                      |
+| Bookmark                  | `xurl bookmark POST_ID`                                      |
+| Remove bookmark           | `xurl unbookmark POST_ID`                                    |
+| List bookmarks            | `xurl bookmarks -n 10`                                       |
+| List likes                | `xurl likes -n 10`                                           |
+| Follow                    | `xurl follow @handle`                                        |
+| Unfollow                  | `xurl unfollow @handle`                                      |
+| List following            | `xurl following -n 20`                                       |
+| List followers            | `xurl followers -n 20`                                       |
+| Block                     | `xurl block @handle`                                         |
+| Unblock                   | `xurl unblock @handle`                                       |
+| Mute                      | `xurl mute @handle`                                          |
+| Unmute                    | `xurl unmute @handle`                                        |
+| Send DM                   | `xurl dm @handle "message"`                                  |
+| List DMs                  | `xurl dms -n 10`                                             |
+| Upload media              | `xurl media upload path/to/file.mp4`                         |
+| Media status              | `xurl media status MEDIA_ID`                                 |
+| **App Management**        |                                                              |
+| Register app              | `xurl auth apps add NAME --client-id ID --client-secret SEC` |
+| List apps                 | `xurl auth apps list`                                        |
+| Update app creds          | `xurl auth apps update NAME --client-id ID`                  |
+| Remove app                | `xurl auth apps remove NAME`                                 |
+| Set default (interactive) | `xurl auth default`                                          |
+| Set default (command)     | `xurl auth default APP_NAME [USERNAME]`                      |
+| Use app per-request       | `xurl --app NAME /2/users/me`                                |
+| Auth status               | `xurl auth status`                                           |
 
 > **Post IDs vs URLs:** Anywhere `POST_ID` appears above you can also paste a full post URL (e.g. `https://x.com/user/status/1234567890`) — xurl extracts the ID automatically.
 
@@ -293,13 +299,13 @@ xurl post "lol" --media-id MEDIA_ID
 
 These flags work on every command:
 
-| Flag | Short | Description |
-|---|---|---|
-| `--app` | | Use a specific registered app for this request (overrides default) |
-| `--auth` | | Force auth type: `oauth1`, `oauth2`, or `app` |
-| `--username` | `-u` | Which OAuth2 account to use (if you have multiple) |
-| `--verbose` | `-v` | Print full request/response headers |
-| `--trace` | `-t` | Add `X-B3-Flags: 1` trace header |
+| Flag         | Short | Description                                                        |
+| ------------ | ----- | ------------------------------------------------------------------ |
+| `--app`      |       | Use a specific registered app for this request (overrides default) |
+| `--auth`     |       | Force auth type: `oauth1`, `oauth2`, or `app`                      |
+| `--username` | `-u`  | Which OAuth2 account to use (if you have multiple)                 |
+| `--verbose`  | `-v`  | Print full request/response headers                                |
+| `--trace`    | `-t`  | Add `X-B3-Flags: 1` trace header                                   |
 
 ---
 
@@ -332,11 +338,13 @@ xurl https://api.x.com/2/users/me
 ## Streaming
 
 Streaming endpoints are auto‑detected. Known streaming endpoints include:
+
 - `/2/tweets/search/stream`
 - `/2/tweets/sample/stream`
 - `/2/tweets/sample10/stream`
 
 You can force streaming on any endpoint with `-s`:
+
 ```bash
 xurl -s /2/some/endpoint
 ```
@@ -357,6 +365,7 @@ All commands return **JSON** to stdout, pretty‑printed with syntax highlightin
 ```
 
 Errors are also returned as JSON:
+
 ```json
 {
   "errors": [
@@ -373,6 +382,7 @@ Errors are also returned as JSON:
 ## Common Workflows
 
 ### Post with an image
+
 ```bash
 # 1. Upload the image
 xurl media upload photo.jpg
@@ -381,6 +391,7 @@ xurl post "Check out this photo!" --media-id MEDIA_ID
 ```
 
 ### Reply to a conversation
+
 ```bash
 # 1. Read the post to understand context
 xurl read https://x.com/user/status/1234567890
@@ -389,6 +400,7 @@ xurl reply 1234567890 "Here are my thoughts..."
 ```
 
 ### Search and engage
+
 ```bash
 # 1. Search for relevant posts
 xurl search "topic of interest" -n 10
@@ -399,6 +411,7 @@ xurl reply POST_ID_FROM_RESULTS "Great point!"
 ```
 
 ### Check your activity
+
 ```bash
 # See who you are
 xurl whoami
@@ -409,6 +422,7 @@ xurl timeline -n 20
 ```
 
 ### Set up multiple apps
+
 ```bash
 # Register two apps
 xurl auth apps add prod --client-id PROD_ID --client-secret PROD_SECRET
