@@ -17,20 +17,9 @@ NODE_OPTIONS = "--max-old-space-size=2880"
 [processes]
 app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
 
-[http_service]
-internal_port = 3000
-force_https = true
-auto_stop_machines = false # Keep running for persistent connections
-auto_start_machines = true
-min_machines_running = 1
-processes = ["app"]
-
-[[http_service.checks]]
-  grace_period = "30s"
-  interval = "15s"
-  method = "GET"
-  path = "/health"
-  timeout = "5s"
+# No [http_service] — gateway is only accessible via Tailscale VPN.
+# Telegram uses outbound long polling and does not need inbound HTTP.
+# Health checks are available at http://clawdbot-fly:3000/health via Tailscale.
 
 [[vm]]
 size = "shared-cpu-2x"
