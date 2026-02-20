@@ -1,3 +1,5 @@
+import { firstDefined, isSenderIdAllowed, mergeAllowFromSources } from "../channels/allow-from.js";
+
 export type NormalizedAllowFrom = {
   entries: string[];
   hasWildcard: boolean;
@@ -28,33 +30,14 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
 export const normalizeAllowFromWithStore = (params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: string[];
-}): NormalizedAllowFrom => {
-  const combined = [...(params.allowFrom ?? []), ...(params.storeAllowFrom ?? [])];
-  return normalizeAllowFrom(combined);
-};
-
-export const firstDefined = <T>(...values: Array<T | undefined>) => {
-  for (const value of values) {
-    if (typeof value !== "undefined") {
-      return value;
-    }
-  }
-  return undefined;
-};
+}): NormalizedAllowFrom => normalizeAllowFrom(mergeAllowFromSources(params));
 
 export const isSenderAllowed = (params: {
   allow: NormalizedAllowFrom;
   senderId?: string;
 }): boolean => {
   const { allow, senderId } = params;
-  if (!allow.hasEntries) {
-    return false;
-  }
-  if (allow.hasWildcard) {
-    return true;
-  }
-  if (!senderId) {
-    return false;
-  }
-  return allow.entries.includes(senderId);
+  return isSenderIdAllowed(allow, senderId, false);
 };
+
+export { firstDefined };
