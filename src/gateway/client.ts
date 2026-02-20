@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "../infra/device-auth-store.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -74,6 +74,19 @@ export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
 
 export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
+}
+
+export function formatGatewayConnectError(err: unknown): string {
+  const raw = String(err);
+  const lower = raw.toLowerCase();
+  if (lower.includes("pairing required")) {
+    return (
+      `gateway connect failed: ${raw}\n` +
+      "Pairing repair required. Run `openclaw devices approve --latest` " +
+      "(or `openclaw devices list` to pick a requestId)."
+    );
+  }
+  return `gateway connect failed: ${raw}`;
 }
 
 export class GatewayClient {
@@ -275,7 +288,7 @@ export class GatewayClient {
           });
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-        const msg = `gateway connect failed: ${String(err)}`;
+        const msg = formatGatewayConnectError(err);
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
           logDebug(msg);
         } else {
