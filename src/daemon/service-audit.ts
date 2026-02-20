@@ -170,7 +170,10 @@ async function auditLaunchdPlist(
   }
 
   const hasRunAtLoad = /<key>RunAtLoad<\/key>\s*<true\s*\/>/i.test(content);
-  const hasKeepAlive = /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content);
+  // Accept both <true/> format and <dict> format (e.g., with SuccessfulExit)
+  const hasKeepAlive =
+    /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content) ||
+    /<key>KeepAlive<\/key>\s*<dict>/i.test(content);
   if (!hasRunAtLoad) {
     issues.push({
       code: SERVICE_AUDIT_CODES.launchdRunAtLoad,
