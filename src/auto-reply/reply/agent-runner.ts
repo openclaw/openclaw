@@ -41,6 +41,7 @@ import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
+import { checkFallbackNotification } from "./fallback-notify.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
   auditPostCompactionReads,
@@ -387,7 +388,7 @@ export async function runReplyAgent(params: {
       runResult,
       fallbackProvider,
       fallbackModel,
-      fallbackAttempts,
+      fallbackAttempts = [],
       directlySentBlockKeys,
     } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
@@ -694,6 +695,18 @@ export async function runReplyAgent(params: {
     }
     if (verboseNotices.length > 0) {
       finalPayloads = [...verboseNotices, ...finalPayloads];
+    }
+    // Notify user when a fallback model was used instead of the primary (once per failover event)
+    const fallbackNotice = checkFallbackNotification({
+      sessionKey,
+      originalProvider: followupRun.run.provider,
+      originalModel: followupRun.run.model,
+      usedProvider: fallbackProvider ?? followupRun.run.provider,
+      usedModel: fallbackModel ?? followupRun.run.model,
+      attempts: fallbackAttempts,
+    });
+    if (fallbackNotice) {
+      finalPayloads = [{ text: fallbackNotice }, ...finalPayloads];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
