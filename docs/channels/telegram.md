@@ -690,6 +690,70 @@ dig +short api.telegram.org AAAA
 ```
 
   </Accordion>
+
+  <Accordion title="Messages reach Telegram API but never reach the Agent">
+
+    This scenario can appear after an update when Telegram inbound messages stop reaching the Agent, even though the bot can still send messages.
+
+    **Symptoms**
+
+    - Sending from Agent → Telegram: ✅ works (bot replies in Telegram)
+    - Sending from Telegram → Agent: ❌ no reply, no error in Telegram UI
+    - `getUpdates` shows pending updates and message payloads
+    - `openclaw gateway status` shows Telegram channel as `ON / OK`
+
+    **Quick checks**
+
+    1. Verify how updates are delivered:
+
+       ```bash
+       # Long polling: runner should be active
+       openclaw logs --follow
+       ```
+
+       - You should see `telegram` polling logs when messages arrive.
+       - If you only see `pending_update_count` increasing in `getUpdates` but no logs in OpenClaw, the runner is not consuming updates.
+
+    2. If you previously used webhook mode, double-check configuration:
+
+       - `channels.telegram.webhookUrl`
+       - `channels.telegram.webhookSecret` (required when `webhookUrl` is set)
+       - any reverse proxy in front of the gateway
+
+       Use the Bot API to inspect the current webhook state:
+
+       ```bash
+       curl "https://api.telegram.org/bot<bot_token>/getWebhookInfo"
+       ```
+
+       - If `url` is empty and you expect webhook mode, re-apply your config and restart the gateway.
+       - If `pending_update_count` is high and `last_error_message` is set, fix the reported error (DNS/HTTPS, TLS, or path).
+
+    3. Confirm channel configuration and status:
+
+       ```bash
+       openclaw channels list
+       openclaw channels status
+       ```
+
+       - Ensure `channels.telegram.enabled` is `true`.
+       - Check for warnings about group/DM policy or `allowFrom` that might block inbound senders.
+
+    **If the issue started immediately after an update**
+
+    - Capture a short log window while sending a test message from Telegram:
+
+      ```bash
+      openclaw logs --since 2m --until now
+      ```
+
+    - Include:
+      - your OpenClaw version (`openclaw --version`)
+      - `openclaw channels status` output
+      - `getWebhookInfo` or `getUpdates` snippet
+
+    This information helps maintainers reproduce and diagnose regressions where Telegram inbound delivery stops working after a specific release.
+  </Accordion>
 </AccordionGroup>
 
 More help: [Channel troubleshooting](/channels/troubleshooting).
