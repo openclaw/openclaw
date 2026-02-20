@@ -22,6 +22,19 @@ import {
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 
+/** Reaction notification event data */
+export interface WebReactionEvent {
+  accountId: string;
+  chatJid: string;
+  messageId: string;
+  emoji: string;
+  action: "added" | "removed";
+  reactorJid: string;
+  reactorE164: string | null;
+  /** Whether the reacted message was sent by us (key.fromMe) */
+  fromMe: boolean;
+}
+
 export async function monitorWebInbox(options: {
   verbose: boolean;
   accountId: string;
@@ -34,6 +47,10 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Reaction notification mode: off, own (only our messages), all */
+  reactionNotifications?: "off" | "own" | "all";
+  /** Callback for reaction events (called after mode filtering) */
+  onReaction?: (event: WebReactionEvent) => Promise<void>;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -341,6 +358,77 @@ export async function monitorWebInbox(options: {
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
 
+  // Handle reaction events (when someone reacts to a message)
+  const handleMessagesReaction = async (
+    reactions: Array<{ key: proto.IMessageKey; reaction: proto.IReaction }>,
+  ) => {
+    const reactionMode = options.reactionNotifications ?? "off";
+
+    // Skip if notifications are disabled
+    if (reactionMode === "off") {
+      return;
+    }
+
+    for (const { key, reaction } of reactions) {
+      try {
+        recordChannelActivity({
+          channel: "whatsapp",
+          accountId: options.accountId,
+          direction: "inbound",
+        });
+
+        const emoji = reaction.text ?? "";
+        const removed = !emoji; // If emoji is empty, reaction was removed
+        const action = removed ? "removed" : "added";
+
+        const messageId = key.id ?? "unknown";
+        const chatJid = key.remoteJid ?? "unknown";
+        const fromMe = key.fromMe === true;
+
+        // For "own" mode, only notify about reactions to messages we sent
+        if (reactionMode === "own" && !fromMe) {
+          continue;
+        }
+
+        // The person who reacted - from reaction.key.participant or key.participant
+        const reactorJid =
+          (reaction as { key?: { participant?: string } }).key?.participant ??
+          key.participant ??
+          "unknown";
+
+        // Resolve reactor to E164 format
+        const reactorE164 = await resolveInboundJid(reactorJid);
+        const reactorLabel = reactorE164 ?? reactorJid;
+
+        inboundLogger.info(
+          { chatJid, messageId, emoji: emoji || "(removed)", action, reactor: reactorLabel, fromMe },
+          "whatsapp reaction event",
+        );
+
+        if (shouldLogVerbose()) {
+          logVerbose(`WhatsApp reaction ${action}: ${emoji || "(removed)"} by ${reactorLabel}`);
+        }
+
+        // Call the onReaction callback if provided (higher layer handles routing)
+        if (options.onReaction) {
+          await options.onReaction({
+            accountId: options.accountId,
+            chatJid,
+            messageId,
+            emoji,
+            action,
+            reactorJid,
+            reactorE164,
+            fromMe,
+          });
+        }
+      } catch (err) {
+        inboundLogger.error({ error: String(err) }, "failed handling reaction event");
+      }
+    }
+  };
+  sock.ev.on("messages.reaction", handleMessagesReaction);
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -378,14 +466,19 @@ export async function monitorWebInbox(options: {
         const messagesUpsertHandler = handleMessagesUpsert as unknown as (
           ...args: unknown[]
         ) => void;
+        const messagesReactionHandler = handleMessagesReaction as unknown as (
+          ...args: unknown[]
+        ) => void;
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
+          ev.off("messages.reaction", messagesReactionHandler);
           ev.off("connection.update", connectionUpdateHandler);
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
+          ev.removeListener("messages.reaction", messagesReactionHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
         }
         sock.ws?.close();

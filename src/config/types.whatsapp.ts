@@ -168,4 +168,6 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Reaction notification mode: off (default), own (only our messages), all */
+  reactionNotifications?: "off" | "own" | "all";
 };
