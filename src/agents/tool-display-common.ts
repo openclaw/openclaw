@@ -598,7 +598,9 @@ function stripShellPreamble(command: string): PreambleResult {
 
     const first = candidates[0];
     const head = (first ? rest.slice(0, first.index) : rest).trim();
-    const isChdir = first && isChdirCommand(head);
+    // cd/pushd/popd is preamble when followed by a separator, or when we already
+    // stripped at least one preamble segment (handles chained cd's like `cd /tmp && cd /app`).
+    const isChdir = (first || i > 0) && isChdirCommand(head);
     const isPreamble =
       head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ") || isChdir;
 
@@ -905,7 +907,8 @@ type ExecSummary = {
 function summarizeExecCommand(command: string): ExecSummary | undefined {
   const { command: cleaned, chdirPath } = stripShellPreamble(command);
   if (!cleaned) {
-    return undefined;
+    // All segments were preamble (e.g. `cd /tmp && cd /app`) — preserve chdirPath for context.
+    return chdirPath ? { text: "", chdirPath } : undefined;
   }
 
   const stages = splitTopLevelStages(cleaned);
@@ -1006,7 +1009,7 @@ export function resolveExecDetail(args: unknown): string | undefined {
 
   const unwrapped = unwrapShellWrapper(raw);
   const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
-  const summary = result?.text ?? "run command";
+  const summary = result?.text || "run command";
 
   const cwdRaw =
     typeof record.workdir === "string"

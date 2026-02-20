@@ -208,6 +208,18 @@ describe("tool display details", () => {
     expect(detail).toBe("cd /tmp");
   });
 
+  it("handles chained cd commands using last path", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /tmp && cd /app" },
+      }),
+    );
+
+    // both cd's are preamble; last path wins
+    expect(detail).toBe("cd /tmp && cd /app (in /app)");
+  });
+
   it("recognizes heredoc/inline script exec details", () => {
     const pyDetail = formatToolDetail(
       resolveToolDisplay({
