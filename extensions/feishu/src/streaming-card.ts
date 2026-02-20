@@ -182,6 +182,10 @@ export class FeishuStreamingSession {
       return;
     }
     this.closed = true;
+    if (this.pendingTimer) {
+      clearTimeout(this.pendingTimer);
+      this.pendingTimer = undefined;
+    }
     await this.queue;
 
     // Use finalText, or pending throttled text, or current text
