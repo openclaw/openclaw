@@ -297,9 +297,22 @@ describe("isSecureWebSocketUrl", () => {
 
     it("returns false for ws:// to non-loopback addresses (CWE-319)", () => {
       expect(isSecureWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
+      // Even on WSL2, arbitrary private IPs that aren't our own LAN IP are rejected.
+      // Only the machine's own gateway bind address gets the WSL2 exception. (#21142)
       expect(isSecureWebSocketUrl("ws://192.168.1.100:18789")).toBe(false);
       expect(isSecureWebSocketUrl("ws://10.0.0.5:18789")).toBe(false);
       expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(false);
+    });
+
+    it("allows ws:// to own LAN IP on WSL2 (#21142)", async () => {
+      const { isWSL2Sync } = await import("../infra/wsl.js");
+      const { pickPrimaryLanIPv4 } = await import("./net.js");
+      const lanIp = pickPrimaryLanIPv4();
+      if (!isWSL2Sync() || !lanIp) {
+        // Only testable on WSL2 with a LAN IP
+        return;
+      }
+      expect(isSecureWebSocketUrl(`ws://${lanIp}:18789`)).toBe(true);
     });
   });
 

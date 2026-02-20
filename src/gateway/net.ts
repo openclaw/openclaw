@@ -1,6 +1,7 @@
 import net from "node:net";
 import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { isWSL2Sync } from "../infra/wsl.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -406,6 +407,10 @@ export function isLoopbackHost(host: string): boolean {
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
  * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - On WSL2, ws:// to private/RFC1918 addresses is also allowed because WSL2
+ *   runs in a NAT'd VM — traffic to its LAN IP (e.g. 172.18.x.x) never leaves
+ *   the host machine. Requiring loopback-only breaks all CLI commands when
+ *   bind=lan, which is needed for Windows browser/webchat access. (#21142)
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -426,6 +431,21 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  // ws:// is always secure for loopback addresses
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  // On WSL2, the gateway's own LAN bind address is local-equivalent — the
+  // NAT'd VM means traffic to it never leaves the physical host. We only
+  // allow the machine's own interface IPs, not arbitrary private addresses,
+  // to avoid bypassing CWE-319 protection for actual remote hosts.
+  if (isWSL2Sync()) {
+    const lanIp = pickPrimaryLanIPv4();
+    if (lanIp && parsed.hostname === lanIp) {
+      return true;
+    }
+  }
+
+  return false;
 }
