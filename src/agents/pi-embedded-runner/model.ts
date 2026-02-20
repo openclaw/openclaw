@@ -42,7 +42,7 @@ export function buildInlineProviderModels(
 
 export function resolveModel(
   provider: string,
-  modelId: string,
+  modelId: string | undefined,
   agentDir?: string,
   cfg?: OpenClawConfig,
 ): {
@@ -51,6 +51,23 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
+  // Guard against undefined/null modelId — log a warning so the upstream caller
+  // can be traced, then return an error instead of crashing on .trim().
+  if (!modelId || typeof modelId !== "string") {
+    console.warn(
+      `[openclaw] resolveModel called with invalid modelId: ${String(modelId)} (provider=${provider}). ` +
+        `This indicates a bug in the caller — modelId should always be a non-empty string.`,
+    );
+    const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+    const authStorage = discoverAuthStorage(resolvedAgentDir);
+    const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+    return {
+      error: `Invalid modelId: ${String(modelId)}. Check model configuration or session overrides.`,
+      authStorage,
+      modelRegistry,
+    };
+  }
+
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
