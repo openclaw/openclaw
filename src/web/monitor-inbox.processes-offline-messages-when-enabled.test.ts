@@ -88,9 +88,7 @@ describe("web monitor inbox – offline messages", () => {
     sock.ev.emit("messages.upsert", upsert);
     await tick();
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "missed message" }),
-    );
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ body: "missed message" }));
     await listener.close();
   });
 
