@@ -437,15 +437,34 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
   const { cfg, chatId, replyToMessageId, mentionTargets, accountId } = params;
   let status: "thinking" | "tool" | "completed" | "error" = "thinking";
   let timeline: TimelineEntry[] = [];
+  let progressText = "";
+  let finalText = "";
   let answer = "";
   let messageId: string | null = null;
   let updater: ReturnType<typeof createCardUpdateQueue> | null = null;
   let createMessagePromise: Promise<void> | null = null;
   let opQueue: Promise<void> = Promise.resolve();
   let timelineCarryLine = "";
-  let assistantCarryLine = "";
   let finalStreamStarted = false;
-  let processTextForFinalStrip = "";
+  let finalHasBegun = false;
+
+  const recomputeAnswer = () => {
+    if (!finalHasBegun || !finalText.trim()) {
+      answer = progressText;
+      return;
+    }
+    const left = progressText.trimEnd();
+    const right = finalText.trimStart();
+    if (!left) {
+      answer = right;
+      return;
+    }
+    if (!right) {
+      answer = left;
+      return;
+    }
+    answer = `${left}\n\n${right}`;
+  };
 
   const render = (collapseTimeline: boolean) =>
     buildCard({
@@ -496,10 +515,6 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
           for (const line of traceLines) {
             timeline = [...timeline, { kind: "block", text: line }];
           }
-          processTextForFinalStrip = mergeStreamText(
-            processTextForFinalStrip,
-            `${traceLines.join("\n")}\n`,
-          );
         }
 
         if (info.kind === "tool") {
@@ -509,10 +524,6 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
             status = parsed.isError ? "error" : "tool";
           } else if (textRaw.trim()) {
             timeline = [...timeline, { kind: "block", text: textRaw.trim() }];
-            processTextForFinalStrip = mergeStreamText(
-              processTextForFinalStrip,
-              `${textRaw.trim()}\n`,
-            );
           }
           await sendOrUpdate(false);
           return;
@@ -527,25 +538,10 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
           });
           timeline = appended.timeline;
           timelineCarryLine = appended.carryLine;
-          if (appended.processText) {
-            processTextForFinalStrip = mergeStreamText(
-              processTextForFinalStrip,
-              `${appended.processText}\n`,
-            );
-          }
           await sendOrUpdate(false);
           return;
         }
         if (info.kind === "final") {
-          if (assistantCarryLine.trim()) {
-            const trimmed = assistantCarryLine.trim();
-            const last = timeline[timeline.length - 1];
-            if (!(last?.kind === "block" && last.text === trimmed)) {
-              timeline = [...timeline, { kind: "block", text: trimmed }];
-              processTextForFinalStrip = mergeStreamText(processTextForFinalStrip, `${trimmed}\n`);
-            }
-            assistantCarryLine = "";
-          }
           const flushed = appendTimelineBlockChunk({
             text: "",
             timeline,
@@ -563,8 +559,11 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         }
 
         if (info.kind === "final") {
-          const cleanedFinal = stripProcessPrefixFromFinal(text, processTextForFinalStrip);
-          answer = cleanedFinal.trim();
+          finalHasBegun = true;
+          // The final payload often includes the entire assistant message (including the
+          // earlier "progress" text). Keep progress as-is and append only the delta.
+          finalText = stripProcessPrefixFromFinal(text, progressText);
+          recomputeAnswer();
         }
         status = info.kind === "final" ? "completed" : status === "error" ? "error" : "thinking";
         await sendOrUpdate(info.kind === "final" || finalStreamStarted);
@@ -577,22 +576,14 @@ export function createFeishuAgentCardRenderer(params: CreateFeishuAgentCardRende
         if (!text) {
           return;
         }
-        // Treat assistant partials as part of the "process" timeline to avoid subtitle-like
-        // flicker in the body. The final answer is rendered when `final` arrives.
-        const appended = appendTimelineBlockChunk({
-          text,
-          timeline,
-          carryLine: assistantCarryLine,
-          flushIncompleteLine: false,
-        });
-        timeline = appended.timeline;
-        assistantCarryLine = appended.carryLine;
-        if (appended.processText) {
-          processTextForFinalStrip = mergeStreamText(
-            processTextForFinalStrip,
-            `${appended.processText}\n`,
-          );
+        // Keep streaming assistant text in the body (progress), not the timeline.
+        // Text may be either delta chunks or cumulative; mergeStreamText handles both.
+        if (!finalHasBegun) {
+          progressText = mergeStreamText(progressText, text);
+        } else {
+          finalText = mergeStreamText(finalText, text);
         }
+        recomputeAnswer();
         await sendOrUpdate(false);
       });
     },
