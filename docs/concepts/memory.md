@@ -415,32 +415,76 @@ BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
 Hybrid search is the pragmatic middle ground: **use both retrieval signals** so you get
 good results for both "natural language" queries and "needle in a haystack" queries.
 
-#### How we merge results (the current design)
+#### How we merge results
 
-Implementation sketch:
+OpenClaw supports two fusion methods for combining vector and keyword results:
+
+##### 1. Weighted Fusion (default)
+
+The default, simple approach:
 
 1. Retrieve a candidate pool from both sides:
 
-- **Vector**: top `maxResults * candidateMultiplier` by cosine similarity.
-- **BM25**: top `maxResults * candidateMultiplier` by FTS5 BM25 rank (lower is better).
+   - **Vector**: top `maxResults * candidateMultiplier` by cosine similarity.
+   - **BM25**: top `maxResults * candidateMultiplier` by FTS5 BM25 rank (lower is better).
 
 2. Convert BM25 rank into a 0..1-ish score:
 
-- `textScore = 1 / (1 + max(0, bm25Rank))`
+   - `textScore = 1 / (1 + max(0, bm25Rank))`
 
 3. Union candidates by chunk id and compute a weighted score:
 
-- `finalScore = vectorWeight * vectorScore + textWeight * textScore`
+   - `finalScore = vectorWeight * vectorScore + textWeight * textScore`
 
-Notes:
+**Pros:** Simple, fast, familiar (like standard learning-to-rank).  
+**Cons:** Score ranges differ (e.g., cosine similarity vs BM25 BM25), so weights are somewhat arbitrary.
 
-- `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages.
+##### 2. Reciprocal Rank Fusion (RRF)
+
+Newer fusion method that combines ranks instead of scores:
+
+1. Retrieve candidates from both sources (same candidate multiplier logic).
+
+2. Rank each source independently by relevance (highest to lowest).
+
+3. For each result appearing in both sources, calculate:
+
+   - `rrfScore = Σ 1/(K + rank)` where K is a constant (default: 60)
+
+4. Results appearing in both sources (e.g., high vector match AND high keyword match) get boosted scores.
+
+**Enable with config:**
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "query": {
+          "hybrid": {
+            "fusion": "rrf",
+            "rrfK": 60
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Pros:** Rank-based (scale-independent), results found by both methods naturally rank higher, theoretically robust.  
+**Cons:** Doesn't use score magnitudes (loses information about "how good" each match was).
+
+**When to use:**
+
+- **Weighted (default)**: Simpler tuning, faster for most use cases, fine-grained score control.
+- **RRF**: When you want to emphasize results that "agree" across both retrieval methods, or when score distributions are unpredictable.
+
+##### Common notes
+
+- `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages (weighted mode only).
 - If embeddings are unavailable (or the provider returns a zero-vector), we still run BM25 and return keyword matches.
 - If FTS5 can't be created, we keep vector-only search (no hard failure).
-
-This isn't "IR-theory perfect", but it's simple, fast, and tends to improve recall/precision on real notes.
-If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
-(min/max or z-score) before mixing.
 
 #### Post-processing pipeline
 
@@ -580,8 +624,13 @@ agents: {
       query: {
         hybrid: {
           enabled: true,
+          // Fusion method: "weighted" (default) or "rrf" (rank-based)
+          fusion: "weighted",
+          // For weighted fusion: control the balance
           vectorWeight: 0.7,
           textWeight: 0.3,
+          // For RRF fusion: customize the RRF constant
+          rrfK: 60,
           candidateMultiplier: 4,
           // Diversity: reduce redundant results
           mmr: {

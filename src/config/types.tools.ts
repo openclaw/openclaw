@@ -351,6 +351,10 @@ export type MemorySearchConfig = {
       textWeight?: number;
       /** Multiplier for candidate pool size (default: 4). */
       candidateMultiplier?: number;
+      /** Fusion method for combining vector and keyword results (default: "weighted"). */
+      fusion?: "weighted" | "rrf";
+      /** RRF constant for Reciprocal Rank Fusion (default: 60). */
+      rrfK?: number;
       /** Optional MMR re-ranking for result diversity. */
       mmr?: {
         /** Enable MMR re-ranking (default: false). */

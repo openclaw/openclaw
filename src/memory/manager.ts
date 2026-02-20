@@ -282,6 +282,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
       textWeight: hybrid.textWeight,
+      fusion: hybrid.fusion,
+      rrfK: hybrid.rrfK,
       mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
@@ -344,6 +346,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
+    fusion?: "weighted" | "rrf";
+    rrfK?: number;
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
   }): Promise<MemorySearchResult[]> {
@@ -368,6 +372,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
+      fusion: params.fusion,
+      rrfK: params.rrfK,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
