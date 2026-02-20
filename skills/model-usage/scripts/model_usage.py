@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-Summarize CodexBar local cost usage by model.
+Summarize model usage cost (CodexBar) and basic OpenClaw observability signals.
 
-Defaults to current model (most recent daily entry), or list all models.
+Modes:
+- current: current model cost summary (CodexBar)
+- all: all model cost summary (CodexBar)
+- errors: recent failed/aborted sessions (+ optional gateway log snippets)
+- overview: combine cost + errors in one report
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -38,7 +43,7 @@ def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
     return payload
 
 
-def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
+def load_cost_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
     if input_path:
         if input_path == "-":
             raw = sys.stdin.read()
@@ -59,6 +64,27 @@ def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
         raise RuntimeError(f"Provider '{provider}' not found in codexbar payload.")
 
     raise RuntimeError("Unsupported JSON input format.")
+
+
+def run_openclaw_sessions(limit: int) -> List[Dict[str, Any]]:
+    cmd = ["openclaw", "sessions", "list", "--json", "--limit", str(limit)]
+    try:
+        output = subprocess.check_output(cmd, text=True)
+    except FileNotFoundError:
+        raise RuntimeError("openclaw not found on PATH.")
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"openclaw sessions list failed (exit {exc.returncode}).")
+
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Failed to parse openclaw sessions JSON: {exc}")
+
+    if isinstance(data, dict) and isinstance(data.get("sessions"), list):
+        return [s for s in data["sessions"] if isinstance(s, dict)]
+    if isinstance(data, list):
+        return [s for s in data if isinstance(s, dict)]
+    return []
 
 
 @dataclass
@@ -175,6 +201,128 @@ def latest_day_cost(entries: List[Dict[str, Any]], model: str) -> Tuple[Optional
     return None, None
 
 
+def pick_session_status(session: Dict[str, Any]) -> str:
+    for key in ("lastStatus", "status", "runStatus"):
+        value = session.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown"
+
+
+def session_is_problematic(session: Dict[str, Any]) -> bool:
+    aborted = bool(session.get("abortedLastRun"))
+    raw_status = None
+    for key in ("lastStatus", "status", "runStatus"):
+        value = session.get(key)
+        if isinstance(value, str) and value:
+            raw_status = value.lower()
+            break
+
+    # If status is missing entirely, do not mark as problematic by status.
+    if raw_status is None:
+        return aborted
+
+    not_ok = raw_status not in {"ok", "success", "succeeded", "completed"}
+    return aborted or not_ok
+
+
+def summarize_recent_errors(limit: int) -> Dict[str, Any]:
+    sessions = run_openclaw_sessions(limit)
+    bad = [s for s in sessions if session_is_problematic(s)]
+
+    def sort_key(s: Dict[str, Any]) -> str:
+        for k in ("updatedAt", "lastMessageAt", "createdAt"):
+            v = s.get(k)
+            if isinstance(v, str):
+                return v
+        return ""
+
+    bad.sort(key=sort_key, reverse=True)
+
+    rows: List[Dict[str, Any]] = []
+    for s in bad[:limit]:
+        rows.append(
+            {
+                "id": s.get("id") or s.get("sessionKey") or s.get("key") or s.get("sessionId") or "unknown",
+                "title": s.get("title") or "Untitled",
+                "status": pick_session_status(s),
+                "aborted": bool(s.get("abortedLastRun")),
+                "updatedAt": s.get("updatedAt"),
+                "model": s.get("model"),
+            }
+        )
+
+    return {
+        "checked": len(sessions),
+        "problematic": len(rows),
+        "sessions": rows,
+    }
+
+
+def collect_gateway_log_hints(max_lines: int = 200) -> Dict[str, Any]:
+    patterns = ("error", "exception", "fail", "warn")
+
+    # Prefer journalctl on Linux/systemd.
+    if shutil.which("journalctl"):
+        try:
+            cmd = [
+                "journalctl",
+                "--user",
+                "-u",
+                "openclaw-gateway",
+                "-n",
+                str(max_lines),
+                "--no-pager",
+            ]
+            output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+            lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+            hit = [ln for ln in lines if any(p in ln.lower() for p in patterns)]
+            uniq = []
+            seen = set()
+            for ln in hit:
+                if ln not in seen:
+                    uniq.append(ln)
+                    seen.add(ln)
+            return {
+                "available": True,
+                "source": "journalctl",
+                "lines": uniq[-10:],
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "source": "journalctl",
+                "reason": f"journalctl read failed: {exc}",
+                "lines": [],
+            }
+
+    # macOS fallback: check common gateway log path if present.
+    log_path = os.path.expanduser("~/.openclaw/logs/gateway.log")
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[-max_lines:]
+            hit = [ln.strip() for ln in lines if ln.strip() and any(p in ln.lower() for p in patterns)]
+            return {
+                "available": True,
+                "source": log_path,
+                "lines": hit[-10:],
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "source": log_path,
+                "reason": f"log read failed: {exc}",
+                "lines": [],
+            }
+
+    return {
+        "available": False,
+        "reason": "No journalctl and no ~/.openclaw/logs/gateway.log",
+        "lines": [],
+    }
+
+
 def render_text_current(
     provider: str,
     model: str,
@@ -198,6 +346,39 @@ def render_text_all(provider: str, totals: Dict[str, float]) -> str:
     lines = [f"Provider: {provider}", "Models:"]
     for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True):
         lines.append(f"- {model}: {usd(cost)}")
+    return "\n".join(lines)
+
+
+def render_text_errors(errors: Dict[str, Any], logs: Dict[str, Any]) -> str:
+    lines = [
+        "## Recent Errors Overview",
+        f"Sessions checked: {errors.get('checked', 0)}",
+        f"Problematic sessions: {errors.get('problematic', 0)}",
+        "",
+        "### Problematic Sessions",
+    ]
+    sessions = errors.get("sessions") or []
+    if not sessions:
+        lines.append("- No failed/aborted sessions found.")
+    else:
+        for s in sessions:
+            lines.append(
+                f"- {s.get('id')}: {s.get('title')} | status={s.get('status')} | "
+                f"aborted={s.get('aborted')} | model={s.get('model') or '-'} | updatedAt={s.get('updatedAt') or '-'}"
+            )
+
+    lines += ["", "### Gateway Log Hints"]
+    if logs.get("available"):
+        source = logs.get("source") or "gateway logs"
+        lines.append(f"Source: {source}")
+        if logs.get("lines"):
+            for ln in logs["lines"]:
+                lines.append(f"- {ln}")
+        else:
+            lines.append("- No recent warning/error lines found.")
+    else:
+        lines.append(f"- Not available: {logs.get('reason', 'unknown reason')}")
+
     return "\n".join(lines)
 
 
@@ -233,20 +414,44 @@ def build_json_all(provider: str, totals: Dict[str, float]) -> Dict[str, Any]:
     }
 
 
+def print_json(payload_out: Dict[str, Any], pretty: bool) -> None:
+    indent = 2 if pretty else None
+    print(json.dumps(payload_out, indent=indent, sort_keys=pretty))
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Summarize CodexBar model usage from local cost logs.")
+    parser = argparse.ArgumentParser(
+        description="Summarize CodexBar model usage and basic OpenClaw observability."
+    )
     parser.add_argument("--provider", choices=["codex", "claude"], default="codex")
-    parser.add_argument("--mode", choices=["current", "all"], default="current")
+    parser.add_argument("--mode", choices=["current", "all", "errors", "overview"], default="current")
     parser.add_argument("--model", help="Explicit model name to report instead of auto-current.")
     parser.add_argument("--input", help="Path to codexbar cost JSON (or '-' for stdin).")
-    parser.add_argument("--days", type=int, help="Limit to last N days (based on daily rows).")
+    parser.add_argument("--days", type=int, help="Limit cost summary to last N days (daily rows).")
+    parser.add_argument("--error-limit", type=int, default=50, help="How many sessions to inspect for errors.")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     args = parser.parse_args()
 
+    # Errors-only mode does not require codexbar.
+    if args.mode == "errors":
+        try:
+            errors = summarize_recent_errors(args.error_limit)
+            logs = collect_gateway_log_hints()
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+
+        if args.format == "json":
+            print_json({"mode": "errors", "errors": errors, "gatewayLogs": logs}, args.pretty)
+        else:
+            print(render_text_errors(errors, logs))
+        return 0
+
+    # Modes using CodexBar cost payload.
     try:
-        payload = load_payload(args.input, args.provider)
+        payload = load_cost_payload(args.input, args.provider)
     except Exception as exc:
         eprint(str(exc))
         return 1
@@ -276,8 +481,7 @@ def main() -> int:
                 latest_cost_date=latest_cost_date,
                 entry_count=len(entries),
             )
-            indent = 2 if args.pretty else None
-            print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))
+            print_json(payload_out, args.pretty)
         else:
             print(
                 render_text_current(
@@ -292,17 +496,57 @@ def main() -> int:
             )
         return 0
 
+    if args.mode == "all":
+        totals = aggregate_costs(entries)
+        if not totals:
+            eprint("No model breakdowns found in codexbar cost payload.")
+            return 2
+
+        if args.format == "json":
+            payload_out = build_json_all(provider=args.provider, totals=totals)
+            print_json(payload_out, args.pretty)
+        else:
+            print(render_text_all(provider=args.provider, totals=totals))
+        return 0
+
+    # overview: combine cost + recent errors
     totals = aggregate_costs(entries)
-    if not totals:
-        eprint("No model breakdowns found in codexbar cost payload.")
-        return 2
+    top_models = [
+        {"model": model, "totalCostUSD": cost}
+        for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+    try:
+        errors = summarize_recent_errors(args.error_limit)
+        logs = collect_gateway_log_hints()
+    except Exception as exc:
+        eprint(f"Failed to load observability data: {exc}")
+        return 1
 
     if args.format == "json":
-        payload_out = build_json_all(provider=args.provider, totals=totals)
-        indent = 2 if args.pretty else None
-        print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))
-    else:
-        print(render_text_all(provider=args.provider, totals=totals))
+        payload_out = {
+            "mode": "overview",
+            "provider": args.provider,
+            "days": args.days,
+            "cost": {
+                "modelCount": len(top_models),
+                "models": top_models,
+            },
+            "errors": errors,
+            "gatewayLogs": logs,
+        }
+        print_json(payload_out, args.pretty)
+        return 0
+
+    lines = [
+        f"Provider: {args.provider}",
+        f"Cost models: {len(top_models)}",
+        "Top cost models:",
+    ]
+    for m in top_models[:10]:
+        lines.append(f"- {m['model']}: {usd(m['totalCostUSD'])}")
+    lines += ["", render_text_errors(errors, logs)]
+    print("\n".join(lines))
     return 0
 
 
