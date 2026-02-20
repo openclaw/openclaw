@@ -176,6 +176,33 @@ describe("cron view", () => {
     expect(options).toContain("Webhook POST");
   });
 
+  it("shows session reuse toggle for isolated agentTurn jobs", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          form: {
+            ...DEFAULT_CRON_FORM,
+            sessionTarget: "isolated",
+            payloadKind: "agentTurn",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".field > span")).map((el) =>
+      (el.textContent ?? "").trim(),
+    );
+    expect(labels).toContain("Session reuse");
+    const checkbox = Array.from(container.querySelectorAll('input[type="checkbox"]')).find(
+      (input) =>
+        input.closest(".field")?.querySelector("span")?.textContent?.trim() === "Session reuse",
+    ) as HTMLInputElement | undefined;
+    expect(checkbox).toBeDefined();
+    expect(checkbox?.checked).toBe(false);
+  });
+
   it("normalizes stale announce selection in the form when unsupported", () => {
     const container = document.createElement("div");
     render(
@@ -199,6 +226,7 @@ describe("cron view", () => {
     expect(options).toContain("Webhook POST");
     expect(options).toContain("None (internal)");
     expect(container.querySelector('input[placeholder="https://example.invalid/cron"]')).toBeNull();
+    expect(container.textContent).not.toContain("Session reuse");
   });
 
   it("shows webhook delivery details for jobs", () => {
@@ -221,5 +249,45 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Delivery");
     expect(container.textContent).toContain("webhook");
     expect(container.textContent).toContain("https://example.invalid/cron");
+  });
+
+  it("shows session mode chips for isolated jobs", () => {
+    const container = document.createElement("div");
+    const job = {
+      ...createJob("job-3"),
+      sessionTarget: "isolated" as const,
+      payload: { kind: "agentTurn" as const, message: "do it" },
+      sessionReuse: true,
+    };
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("reuse");
+  });
+
+  it("shows fresh chip when isolated job does not opt into reuse", () => {
+    const container = document.createElement("div");
+    const job = {
+      ...createJob("job-4"),
+      sessionTarget: "isolated" as const,
+      payload: { kind: "agentTurn" as const, message: "do it" },
+      sessionReuse: false,
+    };
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("fresh");
   });
 });
