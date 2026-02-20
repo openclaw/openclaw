@@ -195,7 +195,6 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     defer = true;
     ephemeral = params.ephemeralDefault;
     options: CommandOptions = [
-    options: CommandOptions = [
       {
         name: "channel",
         description: "Voice channel to join",
