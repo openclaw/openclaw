@@ -901,7 +901,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (json.includes(REDACTED_SENTINEL)) {
       const sentinel_err = new Error(
         `Refusing to write config for "${configPath}": found redaction sentinel ` +
-          `"${REDACTED_SENTINEL}". This is a bug — credentials would be permanently lost. ` +
+          `"${REDACTED_SENTINEL}". This is a bug in the calling code shown in the attached stacktrace — credentials would be permanently lost. ` +
           `The config file on disk was not changed.`,
       );
       deps.logger.error(
