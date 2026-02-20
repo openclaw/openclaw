@@ -82,6 +82,51 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
+const MAX_REDIRECTS = 5;
+
+async function fetchWithManualRedirects(params: {
+  url: string;
+  fetchFn: typeof fetch;
+  allowHosts: string[];
+  resolveRequestInit?: (url: string) => RequestInit;
+}): Promise<Response> {
+  let currentUrl = params.url;
+
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    const init = params.resolveRequestInit?.(currentUrl);
+    const res = await params.fetchFn(currentUrl, { ...init, redirect: "manual" });
+
+    if (res.ok) {
+      return res;
+    }
+
+    const redirectUrl = readRedirectUrl(currentUrl, res);
+    if (!redirectUrl) {
+      return res;
+    }
+
+    // Allowlist is checked for every hop.
+    if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+      return res;
+    }
+
+    // Only follow HTTPS redirects.
+    try {
+      const parsed = new URL(redirectUrl);
+      if (parsed.protocol !== "https:") {
+        return res;
+      }
+    } catch {
+      return res;
+    }
+
+    currentUrl = redirectUrl;
+  }
+
+  // Too many redirects. Return the last response.
+  return await params.fetchFn(currentUrl, { redirect: "manual" });
+}
+
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
@@ -90,7 +135,13 @@ async function fetchWithAuthFallback(params: {
   authAllowHosts: string[];
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url);
+
+  // SECURITY: never let the fetch client auto-follow redirects before allowlist checks.
+  const firstAttempt = await fetchWithManualRedirects({
+    url: params.url,
+    fetchFn,
+    allowHosts: params.allowHosts,
+  });
   if (firstAttempt.ok) {
     return firstAttempt;
   }
@@ -108,31 +159,23 @@ async function fetchWithAuthFallback(params: {
   for (const scope of scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
-      const res = await fetchFn(params.url, {
-        headers: { Authorization: `Bearer ${token}` },
-        redirect: "manual",
+      const res = await fetchWithManualRedirects({
+        url: params.url,
+        fetchFn,
+        allowHosts: params.allowHosts,
+        resolveRequestInit: (url) => {
+          // Only attach Authorization on hosts explicitly allowlisted for auth.
+          if (!isUrlAllowed(url, params.authAllowHosts)) {
+            return {};
+          }
+          return {
+            headers: { Authorization: `Bearer ${token}` },
+          };
+        },
       });
+
       if (res.ok) {
         return res;
-      }
-      const redirectUrl = readRedirectUrl(params.url, res);
-      if (redirectUrl && isUrlAllowed(redirectUrl, params.allowHosts)) {
-        const redirectRes = await fetchFn(redirectUrl);
-        if (redirectRes.ok) {
-          return redirectRes;
-        }
-        if (
-          (redirectRes.status === 401 || redirectRes.status === 403) &&
-          isUrlAllowed(redirectUrl, params.authAllowHosts)
-        ) {
-          const redirectAuthRes = await fetchFn(redirectUrl, {
-            headers: { Authorization: `Bearer ${token}` },
-            redirect: "manual",
-          });
-          if (redirectAuthRes.ok) {
-            return redirectAuthRes;
-          }
-        }
       }
     } catch {
       // Try the next scope.

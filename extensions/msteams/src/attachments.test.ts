@@ -104,7 +104,7 @@ describe("msteams attachments", () => {
   describe("downloadMSTeamsAttachments", () => {
     it("downloads and stores image contentUrl attachments", async () => {
       const { downloadMSTeamsAttachments } = await load();
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn(async (_url: string, _opts?: RequestInit) => {
         return new Response(Buffer.from("png"), {
           status: 200,
           headers: { "content-type": "image/png" },
@@ -118,7 +118,7 @@ describe("msteams attachments", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/img");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/img", { redirect: "manual" });
       expect(saveMediaBufferMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.png");
@@ -126,7 +126,7 @@ describe("msteams attachments", () => {
 
     it("supports Teams file.download.info downloadUrl attachments", async () => {
       const { downloadMSTeamsAttachments } = await load();
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn(async (_url: string, _opts?: RequestInit) => {
         return new Response(Buffer.from("png"), {
           status: 200,
           headers: { "content-type": "image/png" },
@@ -145,13 +145,13 @@ describe("msteams attachments", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/dl");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/dl", { redirect: "manual" });
       expect(media).toHaveLength(1);
     });
 
     it("downloads non-image file attachments (PDF)", async () => {
       const { downloadMSTeamsAttachments } = await load();
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn(async (_url: string, _opts?: RequestInit) => {
         return new Response(Buffer.from("pdf"), {
           status: 200,
           headers: { "content-type": "application/pdf" },
@@ -170,7 +170,7 @@ describe("msteams attachments", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf", { redirect: "manual" });
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.pdf");
       expect(media[0]?.placeholder).toBe("<media:document>");
@@ -178,7 +178,7 @@ describe("msteams attachments", () => {
 
     it("downloads inline image URLs from html attachments", async () => {
       const { downloadMSTeamsAttachments } = await load();
-      const fetchMock = vi.fn(async () => {
+      const fetchMock = vi.fn(async (_url: string, _opts?: RequestInit) => {
         return new Response(Buffer.from("png"), {
           status: 200,
           headers: { "content-type": "image/png" },
@@ -198,7 +198,7 @@ describe("msteams attachments", () => {
       });
 
       expect(media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png", { redirect: "manual" });
     });
 
     it("stores inline data:image base64 payloads", async () => {
@@ -248,6 +248,7 @@ describe("msteams attachments", () => {
 
       expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
+      // First attempt unauthenticated + retry with Authorization.
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
@@ -298,6 +299,112 @@ describe("msteams attachments", () => {
 
       expect(media).toHaveLength(0);
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-follow redirects to disallowed hosts before allowlist checks", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async (url: string, _opts?: RequestInit) => {
+        if (url === "https://attacker.example/file") {
+          return new Response("redirect", {
+            status: 302,
+            headers: { location: "https://internal.service.local/secret" },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [
+          { contentType: "application/pdf", contentUrl: "https://attacker.example/file" },
+        ],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["attacker.example"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      // Should not follow the redirect, so nothing is downloaded.
+      expect(media).toHaveLength(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith("https://attacker.example/file", {
+        redirect: "manual",
+      });
+    });
+
+    it("follows redirects when every hop is allowlisted", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async (url: string, _opts?: RequestInit) => {
+        if (url === "https://x/start") {
+          return new Response("redirect", {
+            status: 302,
+            headers: { location: "/final" },
+          });
+        }
+        if (url === "https://x/final") {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "image/png", contentUrl: "https://x/start" }],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not forward auth headers to redirect destinations outside auth allowlist", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+
+      const calls: Array<{ url: string; auth?: string }> = [];
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        const auth =
+          opts && typeof opts === "object" && "headers" in opts
+            ? (opts.headers as Record<string, string>)?.Authorization
+            : undefined;
+        calls.push({ url, auth });
+
+        if (url === "https://graph.microsoft.com/file") {
+          // Unauth first, auth retry will happen.
+          if (!auth) {
+            return new Response("unauthorized", { status: 401 });
+          }
+          // Auth retry redirects to a different allowlisted host.
+          return new Response("redirect", {
+            status: 302,
+            headers: { location: "https://files.example/final" },
+          });
+        }
+
+        if (url === "https://files.example/final") {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "image/png", contentUrl: "https://graph.microsoft.com/file" }],
+        maxBytes: 1024 * 1024,
+        tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+        allowHosts: ["graph.microsoft.com", "files.example"],
+        authAllowHosts: ["graph.microsoft.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(1);
+
+      const redirectCall = calls.find((c) => c.url === "https://files.example/final");
+      expect(redirectCall?.auth).toBeUndefined();
     });
   });
 

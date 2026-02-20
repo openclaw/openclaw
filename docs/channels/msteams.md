@@ -521,6 +521,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
+Redirects are handled in **manual** mode and every redirect hop is validated against `channels.msteams.mediaAllowHosts` (HTTPS-only) to prevent SSRF via allowlisted URL → disallowed redirect.
 Authorization headers are only attached for hosts in `channels.msteams.mediaAuthAllowHosts` (defaults to Graph + Bot Framework hosts). Keep this list strict (avoid multi-tenant suffixes).
 
 ## Sending files in group chats
