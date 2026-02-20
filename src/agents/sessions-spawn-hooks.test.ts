@@ -56,7 +56,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
     expect(runSubagentSpawnedMock).toHaveBeenCalledTimes(1);
-    const [event, ctx] = runSubagentSpawnedMock.mock.calls[0] as [
+    const [event, ctx] = (runSubagentSpawnedMock.mock.calls[0] ?? []) as unknown as [
       Record<string, unknown>,
       Record<string, unknown>,
     ];
@@ -72,11 +72,11 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       },
       threadRequested: true,
     });
-    expect(event.childSessionKey).toEqual(expect.stringMatching(/^agent:main:subagent:/));
+    expect(event.targetSessionKey).toEqual(expect.stringMatching(/^agent:main:subagent:/));
     expect(ctx).toMatchObject({
       runId: "run-1",
       requesterSessionKey: "main",
-      childSessionKey: event.childSessionKey,
+      targetSessionKey: event.targetSessionKey,
     });
   });
 
@@ -94,7 +94,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
     expect(runSubagentSpawnedMock).toHaveBeenCalledTimes(1);
-    const [event] = runSubagentSpawnedMock.mock.calls[0] as [Record<string, unknown>];
+    const [event] = (runSubagentSpawnedMock.mock.calls[0] ?? []) as unknown as [
+      Record<string, unknown>,
+    ];
     expect(event).toMatchObject({
       threadRequested: false,
       requester: {

@@ -212,7 +212,7 @@ describe("subagent registry steer restarts", () => {
       },
       {
         runId: "run-killed",
-        childSessionKey,
+        targetSessionKey: childSessionKey,
         requesterSessionKey: "agent:main:main",
       },
     );

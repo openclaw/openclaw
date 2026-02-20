@@ -631,7 +631,7 @@ describe("gateway server sessions", () => {
         outcome: "deleted",
       },
       {
-        childSessionKey: "agent:main:discord:group:dev",
+        targetSessionKey: "agent:main:discord:group:dev",
       },
     );
 
@@ -671,7 +671,7 @@ describe("gateway server sessions", () => {
         outcome: "reset",
       },
       {
-        childSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:main",
       },
     );
 
