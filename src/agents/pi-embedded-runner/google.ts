@@ -471,6 +471,11 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
+  // Always apply reasoning block repair for OpenAI Responses API, not just on
+  // model change. After compaction the last assistant message may contain only a
+  // reasoning/thinking block with no following content block, causing the API to
+  // reject with "Item 'rs_[...]' of type 'reasoning' was provided without its
+  // required following item." (#17019)
   const sanitizedOpenAI = isOpenAIResponsesApi
     ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
     : sanitizedToolResults;
