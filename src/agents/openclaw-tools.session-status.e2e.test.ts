@@ -218,6 +218,8 @@ describe("session_status tool", () => {
       main: {
         sessionId: "s1",
         updatedAt: 10,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
         providerOverride: "anthropic",
         modelOverride: "claude-sonnet-4-5",
         authProfileOverride: "p1",
@@ -233,6 +235,8 @@ describe("session_status tool", () => {
       Record<string, unknown>,
     ];
     const saved = savedStore.main as Record<string, unknown>;
+    expect(saved.modelProvider).toBeUndefined();
+    expect(saved.model).toBeUndefined();
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();

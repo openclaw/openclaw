@@ -17,6 +17,14 @@ export function applyModelOverrideToSessionEntry(params: {
   let updated = false;
 
   if (selection.isDefault) {
+    if (entry.modelProvider) {
+      delete entry.modelProvider;
+      updated = true;
+    }
+    if (entry.model) {
+      delete entry.model;
+      updated = true;
+    }
     if (entry.providerOverride) {
       delete entry.providerOverride;
       updated = true;
