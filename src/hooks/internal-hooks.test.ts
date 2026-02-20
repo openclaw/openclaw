@@ -7,7 +7,11 @@ import {
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  isToolAfterEvent,
+  isToolBeforeEvent,
   registerInternalHook,
+  type ToolAfterHookContext,
+  type ToolBeforeHookContext,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
@@ -288,6 +292,63 @@ describe("hooks", () => {
         // missing success
       });
       expect(isMessageSentEvent(event)).toBe(false);
+    });
+  });
+
+  describe("isToolBeforeEvent", () => {
+    it("returns true for tool:before events with expected context", () => {
+      const context: ToolBeforeHookContext = {
+        tool: "exec",
+        toolCallId: "tool-1",
+        arguments: { command: "ls" },
+        abort: () => {},
+      };
+      const event = createInternalHookEvent("tool", "before", "test-session", context);
+      expect(isToolBeforeEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-tool events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isToolBeforeEvent(event)).toBe(false);
+    });
+
+    it("returns false when required fields are missing", () => {
+      const event = createInternalHookEvent("tool", "before", "test-session", {
+        tool: "exec",
+      });
+      expect(isToolBeforeEvent(event)).toBe(false);
+    });
+  });
+
+  describe("isToolAfterEvent", () => {
+    it("returns true for tool:after events with expected context", () => {
+      const context: ToolAfterHookContext = {
+        tool: "read",
+        toolCallId: "tool-2",
+        arguments: { path: "README.md" },
+        success: true,
+        durationMs: 12,
+        result: { content: [{ type: "text", text: "ok" }] },
+      };
+      const event = createInternalHookEvent("tool", "after", "test-session", context);
+      expect(isToolAfterEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-tool events", () => {
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        from: "a",
+        content: "b",
+        channelId: "test",
+      });
+      expect(isToolAfterEvent(event)).toBe(false);
+    });
+
+    it("returns false when required fields are missing", () => {
+      const event = createInternalHookEvent("tool", "after", "test-session", {
+        tool: "exec",
+        success: true,
+      });
+      expect(isToolAfterEvent(event)).toBe(false);
     });
   });
 

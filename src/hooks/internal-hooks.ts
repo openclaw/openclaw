@@ -9,7 +9,13 @@ import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "tool";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -90,6 +96,50 @@ export type MessageSentHookEvent = InternalHookEvent & {
   type: "message";
   action: "sent";
   context: MessageSentHookContext;
+};
+
+export type ToolBeforeHookContext = {
+  /** Tool name (e.g., "exec", "read") */
+  tool: string;
+  /** Tool call id from the model/provider */
+  toolCallId?: string;
+  /** Tool arguments payload */
+  arguments: unknown;
+  /** Agent id when available */
+  agentId?: string;
+  /** Call to abort tool execution */
+  abort: () => void;
+};
+
+export type ToolBeforeHookEvent = InternalHookEvent & {
+  type: "tool";
+  action: "before";
+  context: ToolBeforeHookContext;
+};
+
+export type ToolAfterHookContext = {
+  /** Tool name (e.g., "exec", "read") */
+  tool: string;
+  /** Tool call id from the model/provider */
+  toolCallId?: string;
+  /** Tool arguments payload that were executed */
+  arguments: unknown;
+  /** Agent id when available */
+  agentId?: string;
+  /** Whether the tool execution succeeded */
+  success: boolean;
+  /** Duration in milliseconds from dispatch to completion/failure */
+  durationMs: number;
+  /** Tool result payload for successful executions */
+  result?: unknown;
+  /** Error message for failed executions */
+  error?: string;
+};
+
+export type ToolAfterHookEvent = InternalHookEvent & {
+  type: "tool";
+  action: "after";
+  context: ToolAfterHookContext;
 };
 
 export interface InternalHookEvent {
@@ -280,5 +330,31 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.to === "string" &&
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
+  );
+}
+
+export function isToolBeforeEvent(event: InternalHookEvent): event is ToolBeforeHookEvent {
+  if (event.type !== "tool" || event.action !== "before") {
+    return false;
+  }
+  const context = event.context as Partial<ToolBeforeHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.tool === "string" && typeof context.abort === "function";
+}
+
+export function isToolAfterEvent(event: InternalHookEvent): event is ToolAfterHookEvent {
+  if (event.type !== "tool" || event.action !== "after") {
+    return false;
+  }
+  const context = event.context as Partial<ToolAfterHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return (
+    typeof context.tool === "string" &&
+    typeof context.success === "boolean" &&
+    typeof context.durationMs === "number"
   );
 }

@@ -1,4 +1,5 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -184,6 +185,41 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      const hookSessionKey = ctx?.sessionKey ?? ctx?.agentId ?? "tool:unknown";
+      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const startedAt = Date.now();
+      let activeParams: unknown = params;
+
+      let abortedByHook = false;
+      const beforeEvent = createInternalHookEvent("tool", "before", hookSessionKey, {
+        tool: normalizedToolName,
+        toolCallId,
+        arguments: params,
+        agentId: ctx?.agentId,
+        abort: () => {
+          abortedByHook = true;
+        },
+      });
+      await triggerInternalHook(beforeEvent);
+
+      if (abortedByHook) {
+        const reason =
+          beforeEvent.messages.find((m) => typeof m === "string" && m.trim().length > 0) ||
+          `Tool execution aborted by hook for "${normalizedToolName}"`;
+        await triggerInternalHook(
+          createInternalHookEvent("tool", "after", hookSessionKey, {
+            tool: normalizedToolName,
+            toolCallId,
+            arguments: params,
+            agentId: ctx?.agentId,
+            success: false,
+            durationMs: Date.now() - startedAt,
+            error: reason,
+          }),
+        );
+        throw new Error(reason);
+      }
+
       const outcome = await runBeforeToolCallHook({
         toolName,
         params,
@@ -191,8 +227,20 @@ export function wrapToolWithBeforeToolCallHook(
         ctx,
       });
       if (outcome.blocked) {
+        await triggerInternalHook(
+          createInternalHookEvent("tool", "after", hookSessionKey, {
+            tool: normalizedToolName,
+            toolCallId,
+            arguments: params,
+            agentId: ctx?.agentId,
+            success: false,
+            durationMs: Date.now() - startedAt,
+            error: outcome.reason,
+          }),
+        );
         throw new Error(outcome.reason);
       }
+      activeParams = outcome.params;
       if (toolCallId) {
         adjustedParamsByToolCallId.set(toolCallId, outcome.params);
         if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
@@ -202,7 +250,6 @@ export function wrapToolWithBeforeToolCallHook(
           }
         }
       }
-      const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
         await recordLoopOutcome({
@@ -212,6 +259,17 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
+        await triggerInternalHook(
+          createInternalHookEvent("tool", "after", hookSessionKey, {
+            tool: normalizedToolName,
+            toolCallId,
+            arguments: activeParams,
+            agentId: ctx?.agentId,
+            success: true,
+            durationMs: Date.now() - startedAt,
+            result,
+          }),
+        );
         return result;
       } catch (err) {
         await recordLoopOutcome({
@@ -221,6 +279,18 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           error: err,
         });
+        const error = err instanceof Error ? err.message : String(err);
+        await triggerInternalHook(
+          createInternalHookEvent("tool", "after", hookSessionKey, {
+            tool: normalizedToolName,
+            toolCallId,
+            arguments: activeParams,
+            agentId: ctx?.agentId,
+            success: false,
+            durationMs: Date.now() - startedAt,
+            error,
+          }),
+        );
         throw err;
       }
     },
