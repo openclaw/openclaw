@@ -6,13 +6,26 @@ import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } fr
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
 ): number | null {
-  const values = [stats.cooldownUntil, stats.disabledUntil]
-    .filter((value): value is number => typeof value === "number")
-    .filter((value) => Number.isFinite(value) && value > 0);
-  if (values.length === 0) {
-    return null;
+  let latest: number | null = null;
+
+  if (
+    typeof stats.cooldownUntil === "number" &&
+    Number.isFinite(stats.cooldownUntil) &&
+    stats.cooldownUntil > 0
+  ) {
+    latest = stats.cooldownUntil;
   }
-  return Math.max(...values);
+
+  if (
+    typeof stats.disabledUntil === "number" &&
+    Number.isFinite(stats.disabledUntil) &&
+    stats.disabledUntil > 0 &&
+    (latest === null || stats.disabledUntil > latest)
+  ) {
+    latest = stats.disabledUntil;
+  }
+
+  return latest;
 }
 
 /**

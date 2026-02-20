@@ -313,13 +313,20 @@ function pickAmbiguousMatch(
   if (mode === "first") {
     return entries[0] ?? null;
   }
-  const ranked = entries.map((entry) => ({
-    entry,
-    rank: typeof entry.rank === "number" ? entry.rank : 0,
-  }));
-  const bestRank = Math.max(...ranked.map((item) => item.rank));
-  const best = ranked.find((item) => item.rank === bestRank)?.entry;
-  return best ?? entries[0] ?? null;
+
+  let best = entries[0] ?? null;
+  let bestRank = typeof best?.rank === "number" ? best.rank : 0;
+
+  for (let index = 1; index < entries.length; index++) {
+    const entry = entries[index];
+    const rank = typeof entry.rank === "number" ? entry.rank : 0;
+    if (rank > bestRank) {
+      best = entry;
+      bestRank = rank;
+    }
+  }
+
+  return best;
 }
 
 export async function resolveMessagingTarget(params: {
