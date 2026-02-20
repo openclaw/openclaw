@@ -11,6 +11,7 @@ import {
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
+  searchSessionTranscript,
 } from "./session-utils.fs.js";
 
 function registerTempSessionStore(
@@ -742,5 +743,146 @@ describe("archiveSessionTranscripts", () => {
     expect(archived).toHaveLength(1);
     expect(archived[0]).toContain(".deleted.");
     expect(fs.existsSync(transcriptPath)).toBe(false);
+  });
+});
+
+describe("searchSessionTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-search-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  function writeTranscript(sessionId: string, messages: Array<{ role: string; content: string }>) {
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...messages.map((m) => JSON.stringify({ message: m })),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+  }
+
+  test("returns matching messages with string content", () => {
+    writeTranscript("search-1", [
+      { role: "user", content: "How do I configure authentication?" },
+      { role: "assistant", content: "You can set up auth in the config file." },
+      { role: "user", content: "What about authorization?" },
+    ]);
+
+    const matches = searchSessionTranscript("search-1", storePath, "auth");
+    expect(matches).toHaveLength(3);
+    expect(matches[0].snippet).toContain("auth");
+  });
+
+  test("returns empty array for no matches", () => {
+    writeTranscript("search-2", [
+      { role: "user", content: "Hello world" },
+      { role: "assistant", content: "Hi there" },
+    ]);
+
+    const matches = searchSessionTranscript("search-2", storePath, "nonexistent-term");
+    expect(matches).toHaveLength(0);
+  });
+
+  test("returns empty array for nonexistent session", () => {
+    const matches = searchSessionTranscript("nonexistent-session", storePath, "test");
+    expect(matches).toHaveLength(0);
+  });
+
+  test("returns empty array for empty query", () => {
+    writeTranscript("search-3", [{ role: "user", content: "Hello" }]);
+
+    const matches = searchSessionTranscript("search-3", storePath, "");
+    expect(matches).toHaveLength(0);
+  });
+
+  test("respects limit parameter", () => {
+    writeTranscript("search-4", [
+      { role: "user", content: "test message 1" },
+      { role: "assistant", content: "test reply 1" },
+      { role: "user", content: "test message 2" },
+      { role: "assistant", content: "test reply 2" },
+      { role: "user", content: "test message 3" },
+    ]);
+
+    const matches = searchSessionTranscript("search-4", storePath, "test", { limit: 2 });
+    expect(matches).toHaveLength(2);
+  });
+
+  test("search is case-insensitive", () => {
+    writeTranscript("search-5", [
+      { role: "user", content: "Hello World" },
+      { role: "assistant", content: "hello world" },
+    ]);
+
+    const matches = searchSessionTranscript("search-5", storePath, "HELLO");
+    expect(matches).toHaveLength(2);
+  });
+
+  test("includes correct message index", () => {
+    writeTranscript("search-6", [
+      { role: "user", content: "First message" },
+      { role: "assistant", content: "Second message" },
+      { role: "user", content: "Target keyword here" },
+    ]);
+
+    const matches = searchSessionTranscript("search-6", storePath, "Target keyword");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].index).toBe(2);
+  });
+
+  test("message index accounts for compaction entries", () => {
+    const sessionId = "search-compact";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "First message" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Second message" } }),
+      JSON.stringify({ type: "compaction", id: "c1", timestamp: new Date().toISOString() }),
+      JSON.stringify({ message: { role: "user", content: "Target keyword here" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const matches = searchSessionTranscript(sessionId, storePath, "Target keyword");
+    expect(matches).toHaveLength(1);
+    // Index should be 3 (0=first, 1=second, 2=compaction, 3=target) to align with readSessionMessages
+    expect(matches[0].index).toBe(3);
+  });
+
+  test("handles array content format", () => {
+    const sessionId = "search-7";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Here is the searchable content" },
+            { type: "text", text: "with multiple parts" },
+          ],
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const matches = searchSessionTranscript(sessionId, storePath, "searchable");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].snippet).toContain("searchable");
+  });
+
+  test("handles malformed JSON lines gracefully", () => {
+    const sessionId = "search-8";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      "not valid json",
+      JSON.stringify({ message: { role: "user", content: "Valid searchable message" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const matches = searchSessionTranscript(sessionId, storePath, "searchable");
+    expect(matches).toHaveLength(1);
   });
 });

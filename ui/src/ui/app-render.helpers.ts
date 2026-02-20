@@ -38,6 +38,9 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
+  state.chatSearchOpen = false;
+  state.chatSearchQuery = "";
+  state.chatSearchResults = null;
   (state as unknown as OpenClawApp).resetToolStream();
   (state as unknown as OpenClawApp).resetChatScroll();
   state.applySettings({
@@ -140,6 +143,9 @@ export function renderChatControls(state: AppViewState) {
             state.chatStream = null;
             (state as unknown as OpenClawApp).chatStreamStartedAt = null;
             state.chatRunId = null;
+            state.chatSearchOpen = false;
+            state.chatSearchQuery = "";
+            state.chatSearchResults = null;
             (state as unknown as OpenClawApp).resetToolStream();
             (state as unknown as OpenClawApp).resetChatScroll();
             state.applySettings({
@@ -192,6 +198,20 @@ export function renderChatControls(state: AppViewState) {
         ${refreshIcon}
       </button>
       <span class="chat-controls__separator">|</span>
+      <button
+        class="btn btn--sm btn--icon ${state.chatSearchOpen ? "active" : ""}"
+        @click=${() => {
+          state.chatSearchOpen = !state.chatSearchOpen;
+          if (!state.chatSearchOpen) {
+            state.chatSearchQuery = "";
+            state.chatSearchResults = null;
+          }
+        }}
+        aria-pressed=${state.chatSearchOpen}
+        title="Search messages"
+      >
+        ${icons.search}
+      </button>
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}

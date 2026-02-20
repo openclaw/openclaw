@@ -150,6 +150,11 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsSearch: string;
+  chatSearchOpen: boolean;
+  chatSearchQuery: string;
+  chatSearchResults: Array<{ index: number; role: string; snippet: string }> | null;
+  chatSearchLoading: boolean;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;

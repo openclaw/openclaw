@@ -141,6 +141,7 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              messageIndex: item.messageIndex,
             },
             opts.onOpenSidebar,
           ),
@@ -218,7 +219,7 @@ function renderMessageImages(images: ImageBlock[]) {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: { isStreaming: boolean; showReasoning: boolean; messageIndex?: number },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -260,8 +261,10 @@ function renderGroupedMessage(
     return nothing;
   }
 
+  const indexAttr = opts.messageIndex != null ? String(opts.messageIndex) : undefined;
+
   return html`
-    <div class="${bubbleClasses}">
+    <div class="${bubbleClasses}" data-message-index=${indexAttr ?? nothing}>
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${renderMessageImages(images)}
       ${

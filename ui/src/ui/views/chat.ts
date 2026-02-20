@@ -80,6 +80,13 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Search
+  searchOpen?: boolean;
+  searchQuery?: string;
+  searchResults?: Array<{ index: number; role: string; snippet: string }> | null;
+  searchLoading?: boolean;
+  onSearchQueryChange?: (query: string) => void;
+  onSearchClose?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -237,6 +244,81 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+function scrollToMessage(index: number) {
+  const el = document.querySelector(`[data-message-index="${index}"]`);
+  if (!el) {
+    return;
+  }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("search-highlight");
+  setTimeout(() => el.classList.remove("search-highlight"), 2000);
+}
+
+function renderSearchBar(props: ChatProps) {
+  if (!props.searchOpen) {
+    return nothing;
+  }
+  const results = props.searchResults;
+  const hasResults = Array.isArray(results) && results.length > 0;
+  const query = props.searchQuery ?? "";
+
+  return html`
+    <div class="chat-search">
+      <div class="chat-search__bar">
+        <input
+          class="chat-search__input"
+          type="text"
+          .value=${query}
+          placeholder="Search messages..."
+          ${ref((el) => {
+            if (el instanceof HTMLInputElement) {
+              requestAnimationFrame(() => el.focus());
+            }
+          })}
+          @input=${(e: Event) => {
+            props.onSearchQueryChange?.((e.target as HTMLInputElement).value);
+          }}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+              props.onSearchClose?.();
+            }
+          }}
+        />
+        ${props.searchLoading ? html`<span class="chat-search__spinner">${icons.loader}</span>` : nothing}
+        <button
+          class="chat-search__close"
+          @click=${props.onSearchClose}
+          aria-label="Close search"
+        >
+          ${icons.x}
+        </button>
+      </div>
+      ${hasResults
+        ? html`
+          <div class="chat-search__results" role="list">
+            <div class="chat-search__count">${results!.length} match${results!.length !== 1 ? "es" : ""}</div>
+            ${results!.map(
+              (match) => html`
+                <div
+                  class="chat-search__match"
+                  role="listitem"
+                  @click=${() => scrollToMessage(match.index)}
+                >
+                  <span class="chat-search__role">${match.role}</span>
+                  <span class="chat-search__snippet">${match.snippet}</span>
+                </div>
+              `,
+            )}
+          </div>
+        `
+        : results !== null && results !== undefined
+          ? html`<div class="chat-search__empty">No matches found</div>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -319,6 +401,8 @@ export function renderChat(props: ChatProps) {
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+
+      ${renderSearchBar(props)}
 
       ${
         props.focusMode
@@ -507,12 +591,12 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
-        messages: [{ message: item.message, key: item.key }],
+        messages: [{ message: item.message, key: item.key, messageIndex: item.messageIndex }],
         timestamp,
         isStreaming: false,
       };
     } else {
-      currentGroup.messages.push({ message: item.message, key: item.key });
+      currentGroup.messages.push({ message: item.message, key: item.key, messageIndex: item.messageIndex });
     }
   }
 
@@ -564,6 +648,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       kind: "message",
       key: messageKey(msg, i),
       message: msg,
+      messageIndex: i,
     });
   }
   if (props.showThinking) {

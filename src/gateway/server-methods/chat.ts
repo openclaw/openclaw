@@ -29,6 +29,7 @@ import {
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatInjectParams,
+  validateChatSearchParams,
   validateChatSendParams,
 } from "../protocol/index.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -37,6 +38,7 @@ import {
   loadSessionEntry,
   readSessionMessages,
   resolveSessionModelRef,
+  searchSessionTranscript,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -1072,5 +1074,44 @@ export const chatHandlers: GatewayRequestHandlers = {
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
+  },
+  "chat.search": ({ params, respond }) => {
+    if (!validateChatSearchParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.search params: ${formatValidationErrors(validateChatSearchParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const { sessionKey, query, limit } = params as {
+      sessionKey: string;
+      query: string;
+      limit?: number;
+    };
+    const { storePath, entry } = loadSessionEntry(sessionKey);
+    const sessionId = entry?.sessionId;
+    if (!sessionId || !storePath) {
+      respond(true, { sessionKey, matches: [], count: 0 });
+      return;
+    }
+    const maxResults = typeof limit === "number" ? Math.min(200, Math.max(1, limit)) : 50;
+    const matches = searchSessionTranscript(sessionId, storePath, query, {
+      sessionFile: entry?.sessionFile,
+      limit: maxResults,
+    });
+    respond(true, {
+      sessionKey,
+      query,
+      matches: matches.map((m) => ({
+        index: m.index,
+        role: (m.message as { role?: string })?.role ?? "unknown",
+        snippet: m.snippet,
+      })),
+      count: matches.length,
+    });
   },
 };

@@ -10,7 +10,8 @@ import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-iden
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, searchChatHistory } from "./controllers/chat.ts";
+import type { ChatState } from "./controllers/chat.ts";
 import {
   applyConfig,
   loadConfig,
@@ -71,6 +72,8 @@ import { renderSkills } from "./views/skills.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
+
+let _searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -872,6 +875,41 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                // Search props
+                searchOpen: state.chatSearchOpen,
+                searchQuery: state.chatSearchQuery,
+                searchResults: state.chatSearchResults,
+                searchLoading: state.chatSearchLoading,
+                onSearchQueryChange: (query: string) => {
+                  state.chatSearchQuery = query;
+                  if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
+                  const trimmed = query.trim();
+                  if (trimmed) {
+                    _searchDebounceTimer = setTimeout(async () => {
+                      state.chatSearchLoading = true;
+                      state.chatSearchResults = null;
+                      try {
+                        const result = await searchChatHistory(
+                          state as unknown as ChatState,
+                          trimmed,
+                        );
+                        if (state.chatSearchQuery.trim() === trimmed) {
+                          state.chatSearchResults = result?.matches ?? [];
+                        }
+                      } finally {
+                        state.chatSearchLoading = false;
+                      }
+                    }, 300);
+                  } else {
+                    state.chatSearchResults = null;
+                  }
+                },
+                onSearchClose: () => {
+                  if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
+                  state.chatSearchOpen = false;
+                  state.chatSearchQuery = "";
+                  state.chatSearchResults = null;
+                },
               })
             : nothing
         }
