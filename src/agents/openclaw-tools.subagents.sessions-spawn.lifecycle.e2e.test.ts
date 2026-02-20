@@ -287,6 +287,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       vi.useRealTimers();
     }
 
+    await waitFor(() => ctx.calls.filter((call) => call.method === "send").length >= 1);
+    await waitFor(() => Boolean(deletedKey));
+
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
 
