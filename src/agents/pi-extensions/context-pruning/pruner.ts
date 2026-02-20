@@ -4,7 +4,10 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
-const CHARS_PER_TOKEN_ESTIMATE = 4;
+// Empirically, tool results (mostly code/JSON/shell output) average ~2.5 chars per token.
+// The previous value of 4 significantly over-estimated charWindow, causing the pruner to
+// under-estimate the actual fill ratio and skip pruning prematurely.
+const CHARS_PER_TOKEN_ESTIMATE = 2.5;
 // We currently skip pruning tool results that contain images. Still, we count them (approx.) so
 // we start trimming prunable tool results earlier when image-heavy context is consuming the window.
 const IMAGE_CHAR_ESTIMATE = 8_000;
