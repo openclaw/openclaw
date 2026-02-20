@@ -12,23 +12,19 @@ title: "DigitalOcean"
 
 Run a persistent OpenClaw Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
-If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
-
 ## Cost Comparison (2026)
 
-| Provider     | Plan            | Specs                  | Price/mo    | Notes                                 |
-| ------------ | --------------- | ---------------------- | ----------- | ------------------------------------- |
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0          | ARM, limited capacity / signup quirks |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | €3.79 (~$4) | Cheapest paid option                  |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6          | Easy UI, good docs                    |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6          | Many locations                        |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5          | Now part of Akamai                    |
+| Provider     | Plan          | Specs           | Price/mo    | Notes                |
+| ------------ | ------------- | --------------- | ----------- | -------------------- |
+| Hetzner      | CX22          | 2 vCPU, 4GB RAM | €3.79 (~$4) | Cheapest paid option |
+| DigitalOcean | Basic         | 1 vCPU, 1GB RAM | $6          | Easy UI, good docs   |
+| Vultr        | Cloud Compute | 1 vCPU, 1GB RAM | $6          | Many locations       |
+| Linode       | Nanode        | 1 vCPU, 1GB RAM | $5          | Now part of Akamai   |
 
 **Picking a provider:**
 
 - DigitalOcean: simplest UX + predictable setup (this guide)
 - Hetzner: good price/perf (see [Hetzner guide](/install/hetzner))
-- Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
 
 ---
 
@@ -206,26 +202,6 @@ These survive reboots. Back them up periodically:
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 ```
-
----
-
-## Oracle Cloud Free Alternative
-
-Oracle Cloud offers **Always Free** ARM instances that are significantly more powerful than any paid option here — for $0/month.
-
-| What you get      | Specs                  |
-| ----------------- | ---------------------- |
-| **4 OCPUs**       | ARM Ampere A1          |
-| **24GB RAM**      | More than enough       |
-| **200GB storage** | Block volume           |
-| **Forever free**  | No credit card charges |
-
-**Caveats:**
-
-- Signup can be finicky (retry if it fails)
-- ARM architecture — most things work, but some binaries need ARM builds
-
-For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips and troubleshooting the enrollment process, see this [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
 
 ---
 

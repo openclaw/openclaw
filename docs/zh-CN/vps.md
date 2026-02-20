@@ -2,7 +2,7 @@
 read_when:
   - 你想在云端运行 Gateway 网关
   - 你需要 VPS/托管指南的快速索引
-summary: OpenClaw 的 VPS 托管中心（Oracle/Fly/Hetzner/GCP/exe.dev）
+summary: OpenClaw 的 VPS 托管中心（Fly/Hetzner/GCP/exe.dev）
 title: VPS 托管
 x-i18n:
   generated_at: "2026-02-03T10:12:57Z"
@@ -21,7 +21,6 @@ x-i18n:
 
 - **Railway**（一键 + 浏览器设置）：[Railway](/install/railway)
 - **Northflank**（一键 + 浏览器设置）：[Northflank](/install/northflank)
-- **Oracle Cloud（永久免费）**：[Oracle](/platforms/oracle) — $0/月（永久免费，ARM；容量/注册可能不太稳定）
 - **Fly.io**：[Fly.io](/install/fly)
 - **Hetzner（Docker）**：[Hetzner](/install/hetzner)
 - **GCP（Compute Engine）**：[GCP](/install/gcp)

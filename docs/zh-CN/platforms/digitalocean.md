@@ -19,23 +19,19 @@ x-i18n:
 
 以 **$6/月**（或使用预留定价 $4/月）在 DigitalOcean 上运行持久的 OpenClaw Gateway 网关。
 
-如果你想要 $0/月的选项且不介意 ARM + 特定提供商的设置，请参阅 [Oracle Cloud 指南](/platforms/oracle)。
-
 ## 成本比较（2026）
 
-| 提供商       | 方案            | 配置                  | 价格/月     | 备注                     |
-| ------------ | --------------- | --------------------- | ----------- | ------------------------ |
-| Oracle Cloud | Always Free ARM | 最高 4 OCPU、24GB RAM | $0          | ARM，容量有限 / 注册有坑 |
-| Hetzner      | CX22            | 2 vCPU、4GB RAM       | €3.79 (~$4) | 最便宜的付费选项         |
-| DigitalOcean | Basic           | 1 vCPU、1GB RAM       | $6          | 界面简单，文档完善       |
-| Vultr        | Cloud Compute   | 1 vCPU、1GB RAM       | $6          | 多地区可选               |
-| Linode       | Nanode          | 1 vCPU、1GB RAM       | $5          | 现为 Akamai 旗下         |
+| 提供商       | 方案          | 配置            | 价格/月     | 备注               |
+| ------------ | ------------- | --------------- | ----------- | ------------------ |
+| Hetzner      | CX22          | 2 vCPU、4GB RAM | €3.79 (~$4) | 最便宜的付费选项   |
+| DigitalOcean | Basic         | 1 vCPU、1GB RAM | $6          | 界面简单，文档完善 |
+| Vultr        | Cloud Compute | 1 vCPU、1GB RAM | $6          | 多地区可选         |
+| Linode       | Nanode        | 1 vCPU、1GB RAM | $5          | 现为 Akamai 旗下   |
 
 **选择提供商：**
 
 - DigitalOcean：最简单的用户体验 + 可预测的设置（本指南）
 - Hetzner：性价比高（参见 [Hetzner 指南](/install/hetzner)）
-- Oracle Cloud：可以 $0/月，但更麻烦且仅限 ARM（参见 [Oracle 指南](/platforms/oracle)）
 
 ---
 
@@ -209,26 +205,6 @@ htop
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 ```
-
----
-
-## Oracle Cloud 免费替代方案
-
-Oracle Cloud 提供 **Always Free** ARM 实例，比这里任何付费选项都强大得多 — 每月 $0。
-
-| 你将获得       | 配置             |
-| -------------- | ---------------- |
-| **4 OCPUs**    | ARM Ampere A1    |
-| **24GB RAM**   | 绰绰有余         |
-| **200GB 存储** | 块存储卷         |
-| **永久免费**   | 不收取信用卡费用 |
-
-**注意事项：**
-
-- 注册可能有点麻烦（失败了就重试）
-- ARM 架构 — 大多数东西都能工作，但有些二进制文件需要 ARM 构建
-
-完整设置指南请参阅 [Oracle Cloud](/platforms/oracle)。关于注册技巧和注册流程故障排除，请参阅此[社区指南](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd)。
 
 ---
 
