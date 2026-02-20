@@ -43,7 +43,7 @@ export async function fetchGeminiUsage(
   for (const bucket of data.buckets || []) {
     const model = bucket.modelId || "unknown";
     const frac = bucket.remainingFraction ?? 1;
-    if (!quotas[model] || frac < quotas[model]) {
+    if (quotas[model] === undefined || frac < quotas[model]) {
       quotas[model] = frac;
     }
   }
