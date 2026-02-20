@@ -503,9 +503,22 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir, name } = resolved;
+    const content = String(params.content ?? "");
+    // Security: enforce 10MB byte-length limit to prevent disk exhaustion DoS (OC-32)
+    const MAX_CONTENT_BYTES = 10 * 1024 * 1024;
+    if (Buffer.byteLength(content, "utf-8") > MAX_CONTENT_BYTES) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "content exceeds maximum allowed size of 10MB",
+        ),
+      );
+      return;
+    }
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
-    const content = String(params.content ?? "");
     await fs.writeFile(filePath, content, "utf-8");
     const meta = await statFile(filePath);
     respond(

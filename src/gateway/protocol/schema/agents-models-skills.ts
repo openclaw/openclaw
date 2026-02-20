@@ -149,7 +149,9 @@ export const AgentsFilesSetParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
     name: NonEmptyString,
-    content: Type.String(),
+    // maxLength is in Unicode code points (chars), not bytes. Use 2621440 (10MB/4) so even
+    // 4-byte UTF-8 chars cannot exceed the handler's 10MB byte-length limit (OC-32).
+    content: Type.String({ maxLength: 2621440 }),
   },
   { additionalProperties: false },
 );
