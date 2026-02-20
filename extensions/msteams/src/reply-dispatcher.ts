@@ -89,7 +89,6 @@ export function createMSTeamsReplyDispatcher(params: {
           adapter: params.adapter,
           appId: params.appId,
           conversationRef: params.conversationRef,
-          context: params.context,
           messages,
           // Enable default retry/backoff for throttling/transient failures.
           retry: {},

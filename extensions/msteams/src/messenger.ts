@@ -385,7 +385,6 @@ export async function sendMSTeamsMessages(params: {
   adapter: MSTeamsAdapter;
   appId: string;
   conversationRef: StoredConversationReference;
-  context?: SendContext;
   messages: MSTeamsRenderedMessage[];
   retry?: false | MSTeamsSendRetryOptions;
   onRetry?: (event: MSTeamsSendRetryEvent) => void;
@@ -441,51 +440,36 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
-  if (params.replyStyle === "thread") {
-    const ctx = params.context;
-    if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
-    }
-    const messageIds: string[] = [];
-    for (const [idx, message] of messages.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
-        { messageIndex: idx, messageCount: messages.length },
-      );
-      messageIds.push(extractMessageId(response) ?? "unknown");
-    }
-    return messageIds;
-  }
-
   const baseRef = buildConversationReference(params.conversationRef);
-  const proactiveRef: MSTeamsConversationReference = {
-    ...baseRef,
-    activityId: undefined,
-  };
+
+  // Both thread and top-level replies use continueConversation so that
+  // delivery succeeds even when the original TurnContext proxy has expired
+  // (which happens after ~15 s when tool calls are in flight).
+  //
+  // For thread replies, we keep activityId in the reference and set
+  // replyToId on each outgoing activity so Teams preserves the thread.
+  // For top-level replies, activityId is cleared so Teams posts a new
+  // message to the channel/chat root.
+  const proactiveRef: MSTeamsConversationReference =
+    params.replyStyle === "thread"
+      ? baseRef
+      : { ...baseRef, activityId: undefined };
 
   const messageIds: string[] = [];
   await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
     for (const [idx, message] of messages.entries()) {
+      const activity = await buildActivity(
+        message,
+        params.conversationRef,
+        params.tokenProvider,
+        params.sharePointSiteId,
+        params.mediaMaxBytes,
+      );
+      if (params.replyStyle === "thread" && baseRef.activityId) {
+        activity.replyToId = baseRef.activityId;
+      }
       const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
+        async () => await ctx.sendActivity(activity),
         { messageIndex: idx, messageCount: messages.length },
       );
       messageIds.push(extractMessageId(response) ?? "unknown");
