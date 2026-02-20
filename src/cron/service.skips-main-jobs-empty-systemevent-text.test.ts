@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
@@ -112,6 +114,75 @@ describe("CronService", () => {
       expect(requestHeartbeatNow).not.toHaveBeenCalled();
       expect(noopLogger.warn).toHaveBeenCalled();
     });
+  });
+
+  it("prunes expired cron run sessions on startup even when cron is disabled", async () => {
+    const store = await makeStorePath();
+    const now = Date.now();
+    const rootDir = path.dirname(path.dirname(store.storePath));
+    const sessionStorePath = path.join(rootDir, "agents", "main", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(sessionStorePath), { recursive: true });
+    fs.writeFileSync(
+      sessionStorePath,
+      JSON.stringify(
+        {
+          "agent:main:cron:job1": {
+            sessionId: "base",
+            updatedAt: now,
+          },
+          "agent:main:cron:job1:run:expired": {
+            sessionId: "expired",
+            updatedAt: now - 25 * 3_600_000,
+          },
+          "agent:main:cron:job1:run:fresh": {
+            sessionId: "fresh",
+            updatedAt: now - 30 * 60_000,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: false,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      sessionStorePath,
+    });
+
+    await cron.start();
+
+    const updated = JSON.parse(fs.readFileSync(sessionStorePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(updated["agent:main:cron:job1"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:fresh"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:expired"]).toBeUndefined();
+
+    const status = await cron.status();
+    expect(status.enabled).toBe(false);
+    expect(status.nextWakeAtMs).toBeNull();
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeCount: 1,
+        sweptStores: 1,
+        totalPruned: 1,
+        failedStores: 0,
+        elapsedMs: expect.any(Number),
+        slowestStorePath: sessionStorePath,
+        slowestStoreElapsedMs: expect.any(Number),
+      }),
+      "cron: startup session reaper metrics",
+    );
+
+    cron.stop();
+    await store.cleanup();
   });
 
   it("status reports next wake when enabled", async () => {

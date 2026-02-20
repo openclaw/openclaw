@@ -1,3 +1,4 @@
+import { sweepCronRunSessions } from "../session-reaper.js";
 import type { CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -10,6 +11,7 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { collectSessionStorePathsForReaper } from "./reaper-paths.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
@@ -27,13 +29,81 @@ async function ensureLoadedForRead(state: CronServiceState) {
   }
 }
 
+async function runSessionReaperSweep(
+  state: CronServiceState,
+  storePaths: string[],
+  opts: { force?: boolean } = {},
+): Promise<{
+  storeCount: number;
+  sweptStores: number;
+  totalPruned: number;
+  failedStores: number;
+  elapsedMs: number;
+  slowestStorePath: string | null;
+  slowestStoreElapsedMs: number;
+}> {
+  const startedAt = Date.now();
+  if (storePaths.length === 0) {
+    return {
+      storeCount: 0,
+      sweptStores: 0,
+      totalPruned: 0,
+      failedStores: 0,
+      elapsedMs: 0,
+      slowestStorePath: null,
+      slowestStoreElapsedMs: 0,
+    };
+  }
+  let sweptStores = 0;
+  let totalPruned = 0;
+  let failedStores = 0;
+  let slowestStorePath: string | null = null;
+  let slowestStoreElapsedMs = 0;
+  const nowMs = state.deps.nowMs();
+  for (const storePath of storePaths) {
+    const perStoreStartedAt = Date.now();
+    try {
+      const result = await sweepCronRunSessions({
+        cronConfig: state.deps.cronConfig,
+        sessionStorePath: storePath,
+        nowMs,
+        log: state.deps.log,
+        force: opts.force,
+      });
+      sweptStores += result.swept ? 1 : 0;
+      totalPruned += result.pruned;
+    } catch (err) {
+      failedStores++;
+      state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
+    } finally {
+      const perStoreElapsedMs = Math.max(0, Date.now() - perStoreStartedAt);
+      if (slowestStorePath === null || perStoreElapsedMs > slowestStoreElapsedMs) {
+        slowestStoreElapsedMs = perStoreElapsedMs;
+        slowestStorePath = storePath;
+      }
+    }
+  }
+  return {
+    storeCount: storePaths.length,
+    sweptStores,
+    totalPruned,
+    failedStores,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+    slowestStorePath,
+    slowestStoreElapsedMs,
+  };
+}
+
 export async function start(state: CronServiceState) {
+  let startupReaperStorePaths: string[] = [];
   await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    startupReaperStorePaths = collectSessionStorePathsForReaper(state);
+
     if (!state.deps.cronEnabled) {
       state.deps.log.info({ enabled: false }, "cron: disabled");
       return;
     }
-    await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
     const startupInterruptedJobIds = new Set<string>();
     for (const job of jobs) {
@@ -59,6 +129,20 @@ export async function start(state: CronServiceState) {
       "cron: started",
     );
   });
+
+  const startupSweep = await runSessionReaperSweep(state, startupReaperStorePaths, { force: true });
+  state.deps.log.info(
+    {
+      storeCount: startupSweep.storeCount,
+      sweptStores: startupSweep.sweptStores,
+      totalPruned: startupSweep.totalPruned,
+      failedStores: startupSweep.failedStores,
+      elapsedMs: startupSweep.elapsedMs,
+      slowestStorePath: startupSweep.slowestStorePath,
+      slowestStoreElapsedMs: startupSweep.slowestStoreElapsedMs,
+    },
+    "cron: startup session reaper metrics",
+  );
 }
 
 export function stop(state: CronServiceState) {
