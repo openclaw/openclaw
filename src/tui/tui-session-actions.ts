@@ -38,6 +38,14 @@ type SessionInfoEntry = SessionInfo & {
   providerOverride?: string;
 };
 
+function normalizeModelField(value?: string | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 export function createSessionActions(context: SessionActionContext) {
   const {
     client,
@@ -114,21 +122,28 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const resolveModelSelection = (entry?: SessionInfoEntry) => {
+  const resolveModelSelection = (entry?: SessionInfoEntry, defaults?: SessionInfoDefaults) => {
+    const defaultModel = normalizeModelField(defaults?.model);
+    const defaultProvider = normalizeModelField(defaults?.modelProvider);
+    const runtimeModel = normalizeModelField(entry?.model);
+    const runtimeProvider = normalizeModelField(entry?.modelProvider);
     if (entry?.modelProvider || entry?.model) {
       return {
-        modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
-        model: entry.model ?? state.sessionInfo.model,
+        modelProvider: runtimeProvider ?? defaultProvider ?? state.sessionInfo.modelProvider,
+        model: runtimeModel ?? defaultModel ?? state.sessionInfo.model,
       };
     }
-    const overrideModel = entry?.modelOverride?.trim();
+    const overrideModel = normalizeModelField(entry?.modelOverride);
     if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
+      const overrideProvider =
+        normalizeModelField(entry?.providerOverride) ??
+        defaultProvider ??
+        state.sessionInfo.modelProvider;
       return { modelProvider: overrideProvider, model: overrideModel };
     }
     return {
-      modelProvider: state.sessionInfo.modelProvider,
-      model: state.sessionInfo.model,
+      modelProvider: defaultProvider ?? state.sessionInfo.modelProvider,
+      model: defaultModel ?? state.sessionInfo.model,
     };
   };
 
@@ -199,7 +214,7 @@ export function createSessionActions(context: SessionActionContext) {
       next.updatedAt = entry.updatedAt;
     }
 
-    const selection = resolveModelSelection(entry);
+    const selection = resolveModelSelection(entry, defaults);
     if (selection.modelProvider !== undefined) {
       next.modelProvider = selection.modelProvider;
     }
