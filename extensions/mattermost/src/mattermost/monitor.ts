@@ -12,7 +12,6 @@ import {
   logInboundDrop,
   logTypingFailure,
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
@@ -22,11 +21,13 @@ import {
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
+  createMattermostPost,
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostMe,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
+  patchMattermostPost,
   sendMattermostTyping,
   type MattermostChannel,
   type MattermostPost,
@@ -70,6 +71,8 @@ const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+const MATTERMOST_STREAM_PREVIEW_MAX_CHARS = 4000;
+const MATTERMOST_STREAM_PREVIEW_THROTTLE_MS = 1000;
 
 const recentInboundMessages = createDedupeCache({
   ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
@@ -193,6 +196,23 @@ function buildMattermostWsUrl(baseUrl: string): string {
   }
   const wsBase = normalized.replace(/^http/i, "ws");
   return `${wsBase}/api/v4/websocket`;
+}
+
+function normalizeMattermostStreamPreviewText(text: string, maxChars: number): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function buildMattermostToolStatusText(params: { name?: string; phase?: string }): string {
+  const phase = params.phase === "update" ? "Running" : "Starting";
+  const tool = params.name?.trim() ? ` \`${params.name.trim()}\`` : " tool";
+  return `Status: ${phase}${tool}...`;
 }
 
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
@@ -510,6 +530,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const sessionKey = threadKeys.sessionKey;
     const historyKey = kind === "direct" ? null : sessionKey;
+    const threadLabel = threadRootId ? `Mattermost thread ${roomLabel}` : undefined;
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
@@ -579,6 +600,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     if (!bodyText) {
       return;
     }
+    const currentHistoryEntry =
+      historyKey && bodyText.trim()
+        ? {
+            sender: senderName,
+            body: bodyText.trim(),
+            timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+            messageId: post.id ?? undefined,
+          }
+        : null;
 
     core.channel.activity.record({
       channel: "mattermost",
@@ -677,6 +707,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
       ReplyToId: threadRootId,
       MessageThreadId: threadRootId,
+      ThreadLabel: threadLabel,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
@@ -738,13 +769,145 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
       },
     });
+    const streamPreviewMaxChars = Math.min(textLimit, MATTERMOST_STREAM_PREVIEW_MAX_CHARS);
+    let streamPreviewPostId: string | undefined;
+    let streamPreviewLastText = "";
+    let streamPreviewPendingText: string | undefined;
+    let streamPreviewLastSentAt = 0;
+    let streamPreviewDisabled = false;
+    let streamPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+    let streamPreviewQueue: Promise<void> = Promise.resolve();
+
+    const updateStreamPreviewNow = async (text: string): Promise<void> => {
+      if (streamPreviewDisabled) {
+        return;
+      }
+      const normalized = normalizeMattermostStreamPreviewText(text, streamPreviewMaxChars);
+      if (!normalized || normalized === streamPreviewLastText) {
+        return;
+      }
+      try {
+        if (streamPreviewPostId) {
+          await patchMattermostPost(client, {
+            postId: streamPreviewPostId,
+            message: normalized,
+          });
+        } else {
+          const sent = await createMattermostPost(client, {
+            channelId,
+            message: normalized,
+            rootId: threadRootId,
+          });
+          const postId = sent.id?.trim();
+          if (!postId) {
+            throw new Error("missing preview post id");
+          }
+          streamPreviewPostId = postId;
+        }
+        streamPreviewLastText = normalized;
+        streamPreviewLastSentAt = Date.now();
+      } catch (err) {
+        streamPreviewDisabled = true;
+        logVerboseMessage(`mattermost stream preview disabled: ${String(err)}`);
+      }
+    };
+
+    const flushQueuedStreamPreview = async (): Promise<void> => {
+      const nextText = streamPreviewPendingText;
+      streamPreviewPendingText = undefined;
+      if (!nextText || streamPreviewDisabled) {
+        return;
+      }
+      await updateStreamPreviewNow(nextText);
+      if (streamPreviewPendingText && !streamPreviewTimer) {
+        const elapsed = Date.now() - streamPreviewLastSentAt;
+        const delay = Math.max(0, MATTERMOST_STREAM_PREVIEW_THROTTLE_MS - elapsed);
+        streamPreviewTimer = setTimeout(() => {
+          streamPreviewTimer = undefined;
+          streamPreviewQueue = streamPreviewQueue.then(flushQueuedStreamPreview).catch(() => {});
+        }, delay);
+      }
+    };
+
+    const queueStreamPreviewUpdate = (text?: string): void => {
+      if (streamPreviewDisabled) {
+        return;
+      }
+      const normalized = normalizeMattermostStreamPreviewText(text ?? "", streamPreviewMaxChars);
+      if (!normalized) {
+        return;
+      }
+      streamPreviewPendingText = normalized;
+      const elapsed = Date.now() - streamPreviewLastSentAt;
+      if (elapsed >= MATTERMOST_STREAM_PREVIEW_THROTTLE_MS && !streamPreviewTimer) {
+        streamPreviewQueue = streamPreviewQueue.then(flushQueuedStreamPreview).catch(() => {});
+        return;
+      }
+      if (!streamPreviewTimer) {
+        const delay = Math.max(0, MATTERMOST_STREAM_PREVIEW_THROTTLE_MS - elapsed);
+        streamPreviewTimer = setTimeout(() => {
+          streamPreviewTimer = undefined;
+          streamPreviewQueue = streamPreviewQueue.then(flushQueuedStreamPreview).catch(() => {});
+        }, delay);
+      }
+    };
+
+    const flushStreamPreview = async (): Promise<void> => {
+      if (streamPreviewTimer) {
+        clearTimeout(streamPreviewTimer);
+        streamPreviewTimer = undefined;
+      }
+      streamPreviewQueue = streamPreviewQueue.then(flushQueuedStreamPreview).catch(() => {});
+      await streamPreviewQueue;
+    };
+
+    const previewTextForPayload = (payload: ReplyPayload): string => {
+      return core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim();
+    };
+
+    const finalizeStreamPreviewWithPayload = async (payload: ReplyPayload): Promise<boolean> => {
+      const finalText = previewTextForPayload(payload);
+      const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+      const canFinalizeViaEdit =
+        Boolean(streamPreviewPostId) &&
+        mediaUrls.length === 0 &&
+        !payload.isError &&
+        finalText.length > 0 &&
+        finalText.length <= streamPreviewMaxChars;
+      if (!canFinalizeViaEdit || !streamPreviewPostId) {
+        return false;
+      }
+      try {
+        await patchMattermostPost(client, {
+          postId: streamPreviewPostId,
+          message: finalText,
+        });
+        streamPreviewLastText = finalText;
+        streamPreviewLastSentAt = Date.now();
+        return true;
+      } catch (err) {
+        logVerboseMessage(`mattermost stream final edit failed: ${String(err)}`);
+        return false;
+      }
+    };
+
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
+          await flushStreamPreview();
+          if (await finalizeStreamPreviewWithPayload(payload)) {
+            runtime.log?.(`delivered streamed reply to ${to}`);
+            return;
+          }
+
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          if (streamPreviewPostId && mediaUrls.length > 0) {
+            queueStreamPreviewUpdate("Status: complete. Final answer posted below.");
+            await flushStreamPreview();
+          }
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,
@@ -781,24 +944,38 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         onReplyStart: typingCallbacks.onReplyStart,
       });
 
-    await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        ...replyOptions,
-        disableBlockStreaming:
-          typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected,
-      },
-    });
-    markDispatchIdle();
-    if (historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: channelHistories,
-        historyKey,
-        limit: historyLimit,
+    try {
+      await core.channel.reply.dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          ...replyOptions,
+          disableBlockStreaming:
+            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+          onPartialReply: async (payload) => {
+            queueStreamPreviewUpdate(payload.text);
+          },
+          onReasoningStream: async (payload) => {
+            queueStreamPreviewUpdate(payload.text);
+          },
+          onToolStart: async (payload) => {
+            queueStreamPreviewUpdate(buildMattermostToolStatusText(payload));
+          },
+          onModelSelected,
+        },
       });
+    } finally {
+      await flushStreamPreview();
+      markDispatchIdle();
+      if (historyKey) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: channelHistories,
+          historyKey,
+          limit: historyLimit,
+          entry: currentHistoryEntry,
+        });
+      }
     }
   };
 
