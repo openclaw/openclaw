@@ -229,6 +229,7 @@ export const ToolsWebSearchSchema = z
     enabled: z.boolean().optional(),
     provider: z.union([z.literal("brave"), z.literal("perplexity"), z.literal("grok")]).optional(),
     apiKey: z.string().optional().register(sensitive),
+    baseUrl: z.string().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
