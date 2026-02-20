@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildFileEntry,
   chunkMarkdown,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
@@ -113,6 +114,35 @@ describe("listMemoryFiles", () => {
       expect(files.some((file) => file.endsWith("linked.md"))).toBe(false);
       expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
     }
+  });
+});
+
+describe("buildFileEntry", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-build-entry-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns null when the file disappears before reading", async () => {
+    const target = path.join(tmpDir, "ghost.md");
+    await fs.writeFile(target, "ghost", "utf-8");
+    await fs.rm(target);
+    const entry = await buildFileEntry(target, tmpDir);
+    expect(entry).toBeNull();
+  });
+
+  it("returns metadata when the file exists", async () => {
+    const target = path.join(tmpDir, "note.md");
+    await fs.writeFile(target, "hello", "utf-8");
+    const entry = await buildFileEntry(target, tmpDir);
+    expect(entry).not.toBeNull();
+    expect(entry?.path).toBe("note.md");
+    expect(entry?.size).toBeGreaterThan(0);
   });
 });
 
