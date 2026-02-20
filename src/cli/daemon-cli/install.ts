@@ -171,6 +171,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        watchdog: true,
       });
     },
   });

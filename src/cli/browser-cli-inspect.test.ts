@@ -87,7 +87,7 @@ describe("browser cli snapshot defaults", () => {
   it.each<SnapshotDefaultsCase>([
     {
       label: "uses config snapshot defaults when mode is not provided",
-      args: [],
+      args: [] as string[],
       expectMode: "efficient",
     },
     {

@@ -187,6 +187,7 @@ export async function maybeRepairGatewayDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            watchdog: true,
           });
         } catch (err) {
           note(`Gateway service install failed: ${String(err)}`, "Gateway");
