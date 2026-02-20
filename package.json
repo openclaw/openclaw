@@ -182,6 +182,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@google-cloud/secret-manager": "^6.1.1",
     "@grammyjs/types": "^3.24.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",

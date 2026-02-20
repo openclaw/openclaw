@@ -97,6 +97,18 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  secrets?: {
+    providers?: {
+      gcp?: {
+        /** GCP project ID for Secret Manager. */
+        project: string;
+        /** Cache TTL in seconds. Default: 300 (5 minutes). */
+        cacheTtlSeconds?: number;
+        /** Path to service account key file. If omitted, uses ADC. */
+        credentialsFile?: string;
+      };
+    };
+  };
 };
 
 export type ConfigValidationIssue = {
