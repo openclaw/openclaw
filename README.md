@@ -38,6 +38,8 @@ Fork-specific resources:
 
 - Community priorities: `docs/anonymanetwork/community-priorities.md`
 - Feedback report tool: `pnpm feedback:report`
+- Troubleshooting guide: `docs/anonymanetwork/troubleshooting.md`
+- Quick diagnostics: `pnpm anonymanetwork:doctor`
 
 Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
 The wizard guides you step by step through setting up the gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
