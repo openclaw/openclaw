@@ -60,7 +60,7 @@ describe("resolveApiKeyForProfile config compatibility", () => {
     expect(result).toBeNull();
   });
 
-  it("rejects oauth credentials when config mode is token", async () => {
+  it("accepts oauth credentials when config mode is token (bidirectional compat)", async () => {
     const profileId = "anthropic:oauth";
     const store: AuthProfileStore = {
       version: 1,
@@ -80,7 +80,12 @@ describe("resolveApiKeyForProfile config compatibility", () => {
       store,
       profileId,
     });
-    expect(result).toBeNull();
+    // token ↔ oauth are bidirectionally compatible bearer-token auth paths.
+    expect(result).toEqual({
+      apiKey: "access-123",
+      provider: "anthropic",
+      email: undefined,
+    });
   });
 
   it("rejects credentials when provider does not match config", async () => {
