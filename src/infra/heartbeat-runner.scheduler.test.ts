@@ -202,4 +202,30 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("enforces interval check regardless of trigger reason (exec events should respect interval)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startDefaultRunner(runSpy);
+
+    // First: interval trigger should run after 30 minutes
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
+
+    // Second: exec:session:exit trigger BEFORE next interval should be SKIPPED
+    // This tests the fix for #14440 - non-interval triggers must also respect interval
+    requestHeartbeatNow({ reason: "exec:session:exit", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1); // Still 1, not 2 - skipped!
+
+    // Third: After interval passes, exec trigger should now run
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
 });
