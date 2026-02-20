@@ -34,14 +34,14 @@ src/cron/                               @tyler6204
 extensions/bluebubbles/                 @tyler6204
 apps/macos/                             @tyler6204
 
-# Security
-src/security/                           @mbelinky
-src/infra/net/fetch-guard.ts            @mbelinky
-src/infra/net/fetch-guard.ssrf.test.ts  @mbelinky
-
 # Docs, Runtime Hardening
 docs/                                   @sebslight
 src/infra/                              @sebslight
+
+# Security (after src/infra/ so specific files override the broad rule)
+src/security/                           @mbelinky
+src/infra/net/fetch-guard.ts            @mbelinky
+src/infra/net/fetch-guard.ssrf.test.ts  @mbelinky
 
 # JS Infra (build, CI, packaging)
 package.json                            @cpojer
@@ -56,14 +56,14 @@ src/cli/                                @gumadeiras
 ui/                                     @gumadeiras
 src/sessions/                           @gumadeiras
 
-# Signal
+# Signal (not explicitly listed in CONTRIBUTING.md — verify owner)
 src/signal/                             @joshp123
 extensions/signal/                      @joshp123
 
-# Slack
+# Slack (not explicitly listed in CONTRIBUTING.md — verify owner)
 src/slack/                              @joshp123
 extensions/slack/                       @joshp123
 
-# WhatsApp
+# WhatsApp (not explicitly listed in CONTRIBUTING.md — verify owner)
 src/whatsapp/                           @joshp123
 extensions/whatsapp/                    @joshp123
