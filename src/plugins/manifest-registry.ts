@@ -216,6 +216,29 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // When a higher-precedence origin (e.g. user-installed "global") shadows a
+      // lower-precedence one (e.g. "bundled"), silently prefer the higher-precedence
+      // entry — this is expected when a user installs a bundled plugin explicitly.
+      // Only warn when two plugins at the same precedence level share an id (#21714).
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (candidateRank < existingRank) {
+        // Candidate wins — replace silently.
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        continue;
+      }
+      if (candidateRank > existingRank) {
+        // Existing wins — skip candidate silently.
+        continue;
+      }
+      // Same rank — genuine duplicate, warn.
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
