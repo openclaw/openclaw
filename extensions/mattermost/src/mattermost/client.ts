@@ -190,6 +190,25 @@ export async function createMattermostPost(
   });
 }
 
+export async function patchMattermostPost(
+  client: MattermostClient,
+  params: {
+    postId: string;
+    message: string;
+  },
+): Promise<MattermostPost> {
+  const postId = params.postId?.trim();
+  if (!postId) {
+    throw new Error("Mattermost post id is required");
+  }
+  return await client.request<MattermostPost>(`/posts/${postId}/patch`, {
+    method: "PUT",
+    body: JSON.stringify({
+      message: params.message,
+    }),
+  });
+}
+
 export async function uploadMattermostFile(
   client: MattermostClient,
   params: {
