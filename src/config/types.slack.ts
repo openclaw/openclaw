@@ -76,6 +76,8 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /** Re-fetch thread history when the session has been idle longer than this duration in milliseconds (default: 1800000 = 30 minutes). Set to 0 to disable refresh. */
+  historyRefreshMs?: number;
 };
 
 export type SlackAccountConfig = {

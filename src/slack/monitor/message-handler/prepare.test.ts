@@ -364,6 +364,137 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
   });
 
+  it("re-fetches thread history when session is stale (idle > historyRefreshMs)", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "300.000",
+    });
+    // Write a session entry with updatedAt 2 hours ago (well beyond 30-min default)
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        { [threadKeys.sessionKey]: { updatedAt: Date.now() - 2 * 60 * 60_000 } },
+        null,
+        2,
+      ),
+    );
+
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: "300.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter", user: "U2", ts: "300.000" },
+          { text: "old reply", bot_id: "B1", ts: "300.500" },
+          { text: "missed question", user: "U1", ts: "300.800" },
+          { text: "new message", user: "U1", ts: "301.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.resolveUserName = async (id: string) => ({
+      name: id === "U1" ? "Alice" : "Bob",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const account = createThreadAccount();
+
+    const message: SlackMessageEvent = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "new message",
+      ts: "301.000",
+      thread_ts: "300.000",
+    } as SlackMessageEvent;
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    // Stale session is NOT a first thread turn
+    expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    // But history should be populated
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("old reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("missed question");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("new message");
+  });
+
+  it("skips thread history refresh when session is recent (idle < historyRefreshMs)", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "400.000",
+    });
+    // Write a session entry with updatedAt 5 minutes ago (within 30-min default)
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        { [threadKeys.sessionKey]: { updatedAt: Date.now() - 5 * 60_000 } },
+        null,
+        2,
+      ),
+    );
+
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "starter", user: "U2", ts: "400.000" }],
+    });
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const account = createThreadAccount();
+
+    const message: SlackMessageEvent = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "reply in recent thread",
+      ts: "401.000",
+      thread_ts: "400.000",
+    } as SlackMessageEvent;
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",

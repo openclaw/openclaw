@@ -513,15 +513,21 @@ export async function prepareSlackMessage(params: {
       threadLabel = `Slack thread ${roomLabel}`;
     }
 
-    // Fetch full thread history for new thread sessions
-    // This provides context of previous messages (including bot replies) in the thread
-    // Use the thread session key (not base session key) to determine if this is a new session
+    // Fetch full thread history for new thread sessions or when the session has been
+    // idle longer than the configured refresh threshold (e.g. after a Gateway restart).
+    // Use the thread session key (not base session key) to determine if this is a new session.
     const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
+    const threadHistoryRefreshMs = account.config?.thread?.historyRefreshMs ?? 1_800_000; // 30 min
     threadSessionPreviousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+    const isNewThreadSession = !threadSessionPreviousTimestamp;
+    const isStaleThreadSession =
+      threadHistoryRefreshMs > 0 &&
+      threadSessionPreviousTimestamp != null &&
+      Date.now() - threadSessionPreviousTimestamp > threadHistoryRefreshMs;
+    if (threadInitialHistoryLimit > 0 && (isNewThreadSession || isStaleThreadSession)) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
@@ -566,7 +572,9 @@ export async function prepareSlackMessage(params: {
         }
         threadHistoryBody = historyParts.join("\n\n");
         logVerbose(
-          `slack: populated thread history with ${threadHistory.length} messages for new session`,
+          isStaleThreadSession
+            ? `slack: refreshed thread history with ${threadHistory.length} messages (session idle ${Math.round((Date.now() - threadSessionPreviousTimestamp!) / 1000)}s)`
+            : `slack: populated thread history with ${threadHistory.length} messages for new session`,
         );
       }
     }
