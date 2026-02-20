@@ -109,6 +109,9 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+
+  recordThreadParticipation: (channelId: string, threadTs: string) => void;
+  hasParticipatedInThread: (channelId: string, threadTs: string) => boolean;
 };
 
 export function createSlackMonitorContext(params: {
@@ -375,6 +378,14 @@ export function createSlackMonitorContext(params: {
     return false;
   };
 
+  const participatedThreads = new Set<string>();
+  const recordThreadParticipation = (channelId: string, threadTs: string) => {
+    participatedThreads.add(`${channelId}:${threadTs}`);
+  };
+  const hasParticipatedInThread = (channelId: string, threadTs: string) => {
+    return participatedThreads.has(`${channelId}:${threadTs}`);
+  };
+
   return {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -415,5 +426,7 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    recordThreadParticipation,
+    hasParticipatedInThread,
   };
 }

@@ -408,6 +408,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
+  // Record thread participation after successful reply
+  if (anyReplyDelivered) {
+    const threadTs = prepared.ctxPayload.MessageThreadId ?? prepared.ctxPayload.ReplyToId;
+    if (threadTs) {
+      ctx.recordThreadParticipation(message.channel, String(threadTs));
+    }
+  }
+
   if (!anyReplyDelivered) {
     await draftStream.clear();
     if (prepared.isRoomish) {
