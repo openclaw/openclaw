@@ -346,10 +346,9 @@ export function normalizeCronJobInput(
       const trimmed = sessionReuse.trim().toLowerCase();
       if (trimmed === "true") {
         next.sessionReuse = true;
-      }
-      if (trimmed === "false") {
+      } else if (trimmed === "false") {
         next.sessionReuse = false;
-      } else if (trimmed !== "true") {
+      } else {
         delete next.sessionReuse;
       }
     } else {
