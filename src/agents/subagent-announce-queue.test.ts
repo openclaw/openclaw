@@ -82,6 +82,42 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("[Queue overflow]");
   });
 
+  it("drops stale items that exceed the TTL", async () => {
+    const prompts: string[] = [];
+    const send = vi.fn(async (item: { prompt: string }) => {
+      prompts.push(item.prompt);
+    });
+
+    // Enqueue an item with an enqueuedAt 10 minutes in the past (stale)
+    enqueueAnnounce({
+      key: "announce:test:ttl",
+      item: {
+        prompt: "stale result from 10 min ago",
+        enqueuedAt: Date.now() - 10 * 60 * 1000,
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+
+    // Enqueue a fresh item
+    enqueueAnnounce({
+      key: "announce:test:ttl",
+      item: {
+        prompt: "fresh result",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+
+    // Wait for drain
+    await vi.waitFor(() => expect(send).toHaveBeenCalled(), { timeout: 2000 });
+    // Only the fresh item should be delivered
+    expect(prompts).toEqual(["fresh result"]);
+  });
+
   it("retries collect-mode batches without losing queued items", async () => {
     const sender = createRetryingSend();
 
