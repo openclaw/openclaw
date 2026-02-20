@@ -40,6 +40,7 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
 
@@ -367,7 +368,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channelName: channelName ?? messageChannelId,
         channelId: messageChannelId,
       });
-  const senderLabel = sender.label;
+  const resolvedSender =
+    sender ??
+    resolveDiscordSenderIdentity({
+      author,
+      member: data.member,
+      pluralkitInfo: null,
+    });
+  const senderLabel = resolvedSender.label;
   const isForumParent =
     threadParentType === ChannelType.GuildForum || threadParentType === ChannelType.GuildMedia;
   const forumParentSlug =
@@ -385,13 +393,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         entries: [channelInfo?.topic],
       })
     : undefined;
-  const senderName = sender.isPluralKit
-    ? (sender.name ?? author.username)
+  const senderName = resolvedSender.isPluralKit
+    ? (resolvedSender.name ?? author.username)
     : (data.member?.nickname ?? author.globalName ?? author.username);
-  const senderUsername = sender.isPluralKit
-    ? (sender.tag ?? sender.name ?? author.username)
+  const senderUsername = resolvedSender.isPluralKit
+    ? (resolvedSender.tag ?? resolvedSender.name ?? author.username)
     : author.username;
-  const senderTag = sender.tag;
+  const senderTag = resolvedSender.tag;
   const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
     (entry): entry is string => Boolean(entry),
   );
@@ -400,7 +408,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
     guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
+    sender: { id: resolvedSender.id, name: resolvedSender.name, tag: resolvedSender.tag },
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -534,7 +542,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
     SenderName: senderName,
-    SenderId: sender.id,
+    SenderId: resolvedSender.id,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
     GroupSubject: groupSubject,
