@@ -1,4 +1,4 @@
-import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
+import { stripEnvelope, stripInboundMeta } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -9,7 +9,7 @@ export function extractText(message: unknown): string | null {
   const role = typeof m.role === "string" ? m.role : "";
   const content = m.content;
   if (typeof content === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+    const processed = role === "assistant" ? stripThinkingTags(content) : stripInboundMeta(stripEnvelope(content));
     return processed;
   }
   if (Array.isArray(content)) {
@@ -24,12 +24,12 @@ export function extractText(message: unknown): string | null {
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
       const joined = parts.join("\n");
-      const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+      const processed = role === "assistant" ? stripThinkingTags(joined) : stripInboundMeta(stripEnvelope(joined));
       return processed;
     }
   }
   if (typeof m.text === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
+    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripInboundMeta(stripEnvelope(m.text));
     return processed;
   }
   return null;

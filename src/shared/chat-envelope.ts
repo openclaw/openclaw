@@ -39,6 +39,28 @@ export function stripEnvelope(text: string): string {
   return text.slice(match[0].length);
 }
 
+/**
+ * Strip the inbound metadata preamble injected by the gateway for agent context.
+ * This block is not intended for display in chat UIs.
+ *
+ * Matches patterns like:
+ *   Conversation info (untrusted metadata):
+ *   ```json
+ *   { ... }
+ *   ```
+ *
+ * Also strips "Sender (untrusted metadata):" and "Forwarded message context (untrusted metadata):" blocks.
+ */
+const INBOUND_META_BLOCK =
+  /(?:^|\n)\s*(?:Conversation info|Sender|Forwarded message context)\s*\(untrusted metadata\):?\s*\n```json\n[\s\S]*?\n```/g;
+
+export function stripInboundMeta(text: string): string {
+  if (!text.includes("(untrusted metadata)")) {
+    return text;
+  }
+  return text.replace(INBOUND_META_BLOCK, "").trim();
+}
+
 export function stripMessageIdHints(text: string): string {
   if (!text.includes("[message_id:")) {
     return text;
