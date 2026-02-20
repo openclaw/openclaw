@@ -19,6 +19,7 @@ import { writeConfigFile } from "../config/io.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -91,6 +92,13 @@ export const registerTelegramHandlers = ({
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
+
+  const mediaFetchSsrFPolicy: SsrFPolicy | undefined = telegramCfg.mediaFetch
+    ? {
+        allowPrivateNetwork: telegramCfg.mediaFetch.allowPrivateNetwork,
+        hostnameAllowlist: telegramCfg.mediaFetch.urlAllowlist,
+      }
+    : undefined;
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
@@ -270,7 +278,13 @@ export const registerTelegramHandlers = ({
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        const media = await resolveMedia(
+          ctx,
+          mediaMaxBytes,
+          opts.token,
+          opts.proxyFetch,
+          mediaFetchSsrFPolicy,
+        );
         if (media) {
           allMedia.push({
             path: media.path,
@@ -661,7 +675,13 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+      media = await resolveMedia(
+        ctx,
+        mediaMaxBytes,
+        opts.token,
+        opts.proxyFetch,
+        mediaFetchSsrFPolicy,
+      );
     } catch (mediaErr) {
       const errMsg = String(mediaErr);
       if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {

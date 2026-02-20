@@ -135,6 +135,13 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
+    mediaFetch: z
+      .object({
+        allowPrivateNetwork: z.boolean().optional(),
+        urlAllowlist: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     webhookUrl: z.string().optional(),
     webhookSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),

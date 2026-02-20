@@ -723,6 +723,8 @@ Primary reference:
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streamMode`: `off | partial | block` (live stream preview).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
+- `channels.telegram.mediaFetch.allowPrivateNetwork`: allow Telegram media fetch URLs that resolve to private/internal IPs (default: false).
+- `channels.telegram.mediaFetch.urlAllowlist`: optional hostname allowlist for Telegram media fetch URLs (exact host or wildcard subdomains).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
@@ -747,7 +749,7 @@ Telegram-specific high-signal fields:
 - threading/replies: `replyToMode`
 - streaming: `streamMode` (preview), `draftChunk`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
+- media/network: `mediaMaxMb`, `mediaFetch.allowPrivateNetwork`, `mediaFetch.urlAllowlist`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`

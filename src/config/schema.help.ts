@@ -395,6 +395,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+  "channels.telegram.mediaFetch.allowPrivateNetwork":
+    "Allow Telegram media fetch URLs that resolve to private/internal IPs (default: false).",
+  "channels.telegram.mediaFetch.urlAllowlist":
+    "Optional hostname allowlist for Telegram media fetch URLs (exact or wildcard like *.example.com).",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",

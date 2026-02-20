@@ -188,4 +188,37 @@ describe("resolveMedia getFile retry", () => {
     expect(getFile).toHaveBeenCalledTimes(2);
     expect(result).not.toBeNull();
   });
+
+  it("forwards SSRF policy to media fetch", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "photo/file_1.jpg" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/jpeg",
+      fileName: "file_1.jpg",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_1.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const ssrfPolicy = {
+      allowPrivateNetwork: true,
+      hostnameAllowlist: ["api.telegram.org"],
+    };
+
+    const result = await resolveMedia(
+      makeCtx("photo", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      ssrfPolicy,
+    );
+
+    expect(result).toEqual(expect.objectContaining({ path: "/tmp/file_1.jpg" }));
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy,
+      }),
+    );
+  });
 });

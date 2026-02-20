@@ -27,6 +27,19 @@ export type TelegramNetworkConfig = {
   autoSelectFamily?: boolean;
 };
 
+export type TelegramMediaFetchConfig = {
+  /**
+   * Allow Telegram media download URLs that resolve to private/internal IPs.
+   * Default: false (safer).
+   */
+  allowPrivateNetwork?: boolean;
+  /**
+   * Optional hostname allowlist for Telegram media fetches.
+   * Supports exact hostnames and wildcard subdomains (e.g. "*.example.com").
+   */
+  urlAllowlist?: string[];
+};
+
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 
 export type TelegramCapabilitiesConfig =
@@ -111,6 +124,8 @@ export type TelegramAccountConfig = {
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
   proxy?: string;
+  /** Telegram media fetch SSRF policy overrides. */
+  mediaFetch?: TelegramMediaFetchConfig;
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;
