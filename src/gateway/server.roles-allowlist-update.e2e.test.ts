@@ -96,6 +96,9 @@ describe("gateway role enforcement", () => {
       const statusRes = await rpcReq(nodeWs, "status", {});
       expect(statusRes.ok).toBe(false);
       expect(statusRes.error?.message ?? "").toContain("unauthorized role");
+
+      const healthRes = await rpcReq(nodeWs, "health", {});
+      expect(healthRes.ok).toBe(true);
     } finally {
       nodeWs.close();
     }
