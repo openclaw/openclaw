@@ -874,6 +874,105 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  test("does not require scope re-pair when paired device already has admin scope", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
+      await import("../utils/message-channel.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-admin-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+    };
+    const buildDevice = (scopes: string[]) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+      };
+    };
+
+    const baseScopes = [
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.read",
+    ];
+    const initial = await connectReq(ws, {
+      token: "secret",
+      scopes: baseScopes,
+      client,
+      device: buildDevice(baseScopes),
+    });
+    if (!initial.ok) {
+      const list = await listDevicePairing();
+      const pending = list.pending.at(0);
+      expect(pending?.requestId).toBeDefined();
+      if (pending?.requestId) {
+        await approveDevicePairing(pending.requestId);
+      }
+    }
+
+    const pairedBefore = await getPairedDevice(identity.deviceId);
+    expect(pairedBefore?.scopes).toContain("operator.admin");
+    expect(pairedBefore?.scopes).not.toContain("operator.write");
+
+    ws.close();
+
+    // Seed a non-silent pending scope-upgrade request (matches real incidents where
+    // a stale pending request would previously block local backend reconnects).
+    await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      displayName: client.id,
+      platform: client.platform,
+      clientId: client.id,
+      clientMode: client.mode,
+      role: "operator",
+      scopes: ["operator.write"],
+      silent: false,
+    });
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const res = await connectReq(ws2, {
+      token: "secret",
+      scopes: ["operator.write"],
+      client,
+      device: buildDevice(["operator.write"]),
+    });
+    expect(res.ok).toBe(true);
+
+    ws2.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
   test("rejects revoked device token", async () => {
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, revokeDeviceToken } =

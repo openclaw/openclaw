@@ -64,6 +64,7 @@ import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-m
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
+const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
@@ -731,18 +732,24 @@ export function attachGatewayWsMessageHandler(params: {
 
             const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
             if (scopes.length > 0) {
-              if (pairedScopes.length === 0) {
-                const ok = await requirePairing("scope-upgrade", paired);
-                if (!ok) {
-                  return;
-                }
-              } else {
-                const allowedScopes = new Set(pairedScopes);
-                const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
-                if (missingScope) {
+              // Admin is a superset permission in gateway method authorization.
+              // If the paired device already has admin, don't force a pairing
+              // upgrade when a client asks for read/write-style least-privilege scopes.
+              const pairedHasAdminScope = pairedScopes.includes(OPERATOR_ADMIN_SCOPE);
+              if (!pairedHasAdminScope) {
+                if (pairedScopes.length === 0) {
                   const ok = await requirePairing("scope-upgrade", paired);
                   if (!ok) {
                     return;
+                  }
+                } else {
+                  const allowedScopes = new Set(pairedScopes);
+                  const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
+                  if (missingScope) {
+                    const ok = await requirePairing("scope-upgrade", paired);
+                    if (!ok) {
+                      return;
+                    }
                   }
                 }
               }
