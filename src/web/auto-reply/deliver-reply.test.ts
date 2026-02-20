@@ -172,9 +172,11 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).toContain("⚠️ Media failed");
+    const fallback = String(
+      (msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0],
+    );
+    expect(fallback).toContain("⚠️ Media failed. Sending text only.");
+    expect(fallback).not.toContain("boom");
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",

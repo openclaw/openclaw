@@ -114,6 +114,24 @@ describe("normalizeReplyPayload", () => {
     expect(normalized).toBeNull();
     expect(reasons).toEqual(["empty"]);
   });
+
+  it("strips untrusted metadata blocks while keeping visible text", () => {
+    const payload = {
+      text: [
+        "Visible start",
+        "",
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"msg-1"}',
+        "```",
+        "",
+        "Visible end",
+      ].join("\n"),
+    };
+
+    const normalized = normalizeReplyPayload(payload);
+    expect(normalized?.text).toBe("Visible start\n\nVisible end");
+  });
 });
 
 describe("typing controller", () => {

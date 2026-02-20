@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { stripUntrustedMetadataBlocks } from "../../shared/untrusted-metadata.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
 import type { FailoverReason } from "./types.js";
@@ -509,7 +510,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripUntrustedMetadataBlocks(stripFinalTagsFromText(text));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
