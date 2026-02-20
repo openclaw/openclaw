@@ -954,15 +954,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           disableBlockStreaming:
             typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
           onPartialReply: async (payload) => {
-            await replyOptions.onPartialReply?.(payload);
             queueStreamPreviewUpdate(payload.text);
           },
           onReasoningStream: async (payload) => {
-            await replyOptions.onReasoningStream?.(payload);
             queueStreamPreviewUpdate(payload.text);
           },
           onToolStart: async (payload) => {
-            await replyOptions.onToolStart?.(payload);
             queueStreamPreviewUpdate(buildMattermostToolStatusText(payload));
           },
           onModelSelected,

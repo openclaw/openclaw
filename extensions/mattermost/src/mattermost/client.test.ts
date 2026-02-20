@@ -3,7 +3,7 @@ import { createMattermostClient, patchMattermostPost } from "./client.js";
 
 describe("mattermost client", () => {
   it("request returns undefined on 204 responses", async () => {
-    const fetchImpl = vi.fn(async () => {
+    const fetchImpl = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(async () => {
       return new Response(null, { status: 204 });
     });
 
@@ -18,7 +18,7 @@ describe("mattermost client", () => {
   });
 
   it("patchMattermostPost updates a post via /patch endpoint", async () => {
-    const fetchImpl = vi.fn(async () => {
+    const fetchImpl = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(async () => {
       return new Response(JSON.stringify({ id: "post-123", message: "updated" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -38,8 +38,12 @@ describe("mattermost client", () => {
 
     expect(post).toMatchObject({ id: "post-123", message: "updated" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe("https://chat.example.com/api/v4/posts/post-123/patch");
+    expect(init).toBeDefined();
+    if (!init) {
+      throw new Error("expected fetch init for patch request");
+    }
     expect(init.method).toBe("PUT");
     expect(String(init.body)).toBe(JSON.stringify({ message: "updated" }));
   });
