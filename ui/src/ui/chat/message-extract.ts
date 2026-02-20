@@ -3,13 +3,78 @@ import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
+const INBOUND_METADATA_START_LINES = new Set<string>([
+  "Conversation info (untrusted metadata):",
+  "Sender (untrusted metadata):",
+  "Thread starter (untrusted, for context):",
+  "Replied message (untrusted, for context):",
+  "Forwarded message context (untrusted metadata):",
+  "Chat history since last reply (untrusted, for context):",
+]);
+
+function stripInboundMetadataPrefix(text: string): string {
+  if (!text.includes("untrusted metadata") && !text.includes("untrusted, for context")) {
+    return text;
+  }
+
+  const lines = text.split(/\r?\n/);
+  let index = 0;
+
+  while (index < lines.length) {
+    const rawLine = lines[index];
+    const line = typeof rawLine === "string" ? rawLine.trim() : "";
+
+    if (!line) {
+      index++;
+      continue;
+    }
+
+    if (!INBOUND_METADATA_START_LINES.has(line)) {
+      break;
+    }
+
+    // Expected shape:
+    // <Header>
+    // ```json
+    // ...
+    // ```
+    const fenceLine = lines[index + 1];
+    if (typeof fenceLine !== "string" || fenceLine.trim() !== "```json") {
+      break;
+    }
+
+    let closeFenceIndex = index + 2;
+    while (closeFenceIndex < lines.length && lines[closeFenceIndex]?.trim() !== "```") {
+      closeFenceIndex++;
+    }
+    if (closeFenceIndex >= lines.length) {
+      break;
+    }
+
+    index = closeFenceIndex + 1;
+    while (index < lines.length && lines[index].trim() === "") {
+      index++;
+    }
+  }
+
+  if (index >= lines.length) {
+    return "";
+  }
+
+  return lines.slice(index).join("\n");
+}
+
+export { stripInboundMetadataPrefix };
 
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const content = m.content;
   if (typeof content === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+    const processed =
+      role === "assistant"
+        ? stripThinkingTags(content)
+        : stripInboundMetadataPrefix(stripEnvelope(content));
     return processed;
   }
   if (Array.isArray(content)) {
@@ -24,12 +89,18 @@ export function extractText(message: unknown): string | null {
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
       const joined = parts.join("\n");
-      const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+      const processed =
+        role === "assistant"
+          ? stripThinkingTags(joined)
+          : stripInboundMetadataPrefix(stripEnvelope(joined));
       return processed;
     }
   }
   if (typeof m.text === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
+    const processed =
+      role === "assistant"
+        ? stripThinkingTags(m.text)
+        : stripInboundMetadataPrefix(stripEnvelope(m.text));
     return processed;
   }
   return null;
