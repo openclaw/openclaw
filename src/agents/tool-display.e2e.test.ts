@@ -104,7 +104,7 @@ describe("tool display details", () => {
     expect(detail).toContain(".openclaw/workspace)");
   });
 
-  it("moves cd path to context suffix and summarizes the real command", () => {
+  it("moves cd path to context suffix and appends raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -112,10 +112,10 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies (in ~/my-project)");
+    expect(detail).toBe("install dependencies (in ~/my-project)\n`cd ~/my-project && npm install`");
   });
 
-  it("moves cd path to context suffix with multiple stages", () => {
+  it("moves cd path to context suffix with multiple stages and raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -123,10 +123,12 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies → run tests (in ~/my-project)");
+    expect(detail).toBe(
+      "install dependencies → run tests (in ~/my-project)\n`cd ~/my-project && npm install && npm test`",
+    );
   });
 
-  it("moves pushd path to context suffix", () => {
+  it("moves pushd path to context suffix and appends raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -134,7 +136,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("check git status (in /tmp)");
+    expect(detail).toBe("check git status (in /tmp)\n`pushd /tmp && git status`");
   });
 
   it("moves cd path to context suffix with || separator", () => {
@@ -145,7 +147,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies (in /app)");
+    expect(detail).toBe("install dependencies (in /app)\n`cd /app || npm install`");
   });
 
   it("explicit workdir takes priority over cd path", () => {
@@ -156,10 +158,10 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies (in /app)");
+    expect(detail).toBe("install dependencies (in /app)\n`cd /tmp && npm install`");
   });
 
-  it("summarizes all stages joined by && or ;", () => {
+  it("summarizes all stages and appends raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
@@ -167,7 +169,9 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("fetch git changes → rebase git branch");
+    expect(detail).toBe(
+      "fetch git changes → rebase git branch\n`git fetch && git rebase origin/main`",
+    );
   });
 
   it("falls back to raw command for unknown binaries", () => {

@@ -1017,13 +1017,21 @@ export function resolveExecDetail(args: unknown): string | undefined {
   // Explicit workdir takes priority; fall back to cd path extracted from the command.
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
+  const compact = compactRawCommand(unwrapped);
+
   // When the summary is generic (e.g. "run jj"), use the compact raw command instead.
   if (isGenericSummary(summary)) {
-    const compact = compactRawCommand(unwrapped);
     return cwd ? `${compact} (in ${cwd})` : compact;
   }
 
-  return cwd ? `${summary} (in ${cwd})` : summary;
+  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
+
+  // Append the raw command when the summary differs meaningfully from the command itself.
+  if (compact && compact !== displaySummary && compact !== summary) {
+    return `${displaySummary}\n\`${compact}\``;
+  }
+
+  return displaySummary;
 }
 
 export function resolveActionSpec(
