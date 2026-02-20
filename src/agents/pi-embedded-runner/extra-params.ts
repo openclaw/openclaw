@@ -54,8 +54,7 @@ function resolveCacheRetention(
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const isAnthropicBedrock =
-    provider === "amazon-bedrock" &&
-    extraParams?.cacheRetention !== undefined;
+    provider === "amazon-bedrock" && extraParams?.cacheRetention !== undefined;
   if (!isAnthropicDirect && !isAnthropicBedrock) {
     return undefined;
   }
