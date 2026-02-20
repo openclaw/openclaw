@@ -88,6 +88,7 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 .agents/
+.agents
 /local/
 package-lock.json
 .claude/settings.local.json
