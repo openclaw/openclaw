@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Plugins
+
+- **Fastmail CLI** — Fastmail email, contacts, and calendar tools (36 tools, 5-7x token savings via compact formatting)
+  npm: `fastmail-cli`
+  repo: `https://github.com/omarshahine/fastmail-mcp-remote`
+  install: `openclaw plugins install fastmail-cli`
