@@ -13,8 +13,8 @@
 
 ### 핵심 기술 스택
 
-- **데이터 레이크**: Obsidian (Markdown + YAML frontmatter)
-- **그래프 DB**: Neo4j / NetworkX
+- **데이터 레이크 + 지식그래프**: Obsidian (Markdown + YAML + `[[위키링크]]`) — 볼트 자체가 source of truth
+- **그래프 엔진**: NetworkX (Python 인메모리) — 볼트에서 동적 빌드
 - **GraphRAG**: Microsoft GraphRAG / LightRAG / 커스텀
 - **AI 에이전트**: OpenClaw (MAIBOT)
 - **언어**: Python (그래프/RAG) + TypeScript (Obsidian 플러그인)
@@ -22,7 +22,7 @@
 ### 4단계 로드맵
 
 1. 지식 수집 파이프라인 (RSS, 웹클리핑, YouTube 요약)
-2. 온톨로지 그래프 구축 (엔티티 추출, 관계 매핑, Neo4j)
+2. 온톨로지 그래프 구축 (엔티티 추출, 관계 매핑, NetworkX 인메모리)
 3. GraphRAG 검색 엔진 (벡터+그래프 하이브리드, 멀티홉 추론)
 4. AI 에이전트 자동화 (복습, 브리핑, 연결 제안)
 
@@ -47,7 +47,7 @@
 ## 결정사항
 
 - 브랜드명: Mnemo (므네모)
-- 프로토타이핑은 Python (NetworkX) → 프로덕션은 Neo4j
+- Neo4j 불필요 — Obsidian 볼트 자체가 지식그래프, NetworkX 인메모리로 충분
 - Obsidian을 데이터 레이크로 활용 (노션 아닌 옵시디언 선택 이유: 데이터 소유권, 로컬 저장, 마크다운 파워)
 
 ## 다음 액션
