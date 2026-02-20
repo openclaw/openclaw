@@ -21,7 +21,10 @@
   border-radius: 999px;
   pointer-events: none;
   opacity: 0;
-  transition: transform 260ms ease-in-out, width 260ms ease-in-out, opacity 160ms ease-in-out;
+  transition:
+    transform 260ms ease-in-out,
+    width 260ms ease-in-out,
+    opacity 160ms ease-in-out;
   will-change: transform, width;
 }
 
