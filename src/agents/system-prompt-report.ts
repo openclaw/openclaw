@@ -101,7 +101,7 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
 function extractToolListText(systemPrompt: string): string {
   const markerA = "Tool names are case-sensitive. Call tools exactly as listed.\n";
   const markerB =
-    "\nTOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
+    "\n./TOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
   const extracted = extractBetween(systemPrompt, markerA, markerB);
   if (!extracted.found) {
     return "";
