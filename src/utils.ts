@@ -87,10 +87,13 @@ export function withWhatsAppPrefix(number: string): string {
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
+  // Extract pure digit portion (strip any leading '+')
+  const pureDigits = digits.startsWith("+") ? digits.slice(1) : digits;
+  // Return empty string for invalid input (no digits) instead of bare "+"
+  if (!pureDigits) {
+    return "";
   }
-  return `+${digits}`;
+  return `+${pureDigits}`;
 }
 
 /**
@@ -109,12 +112,17 @@ export function isSelfChatMode(
     return false;
   }
   const normalizedSelf = normalizeE164(selfE164);
+  // Guard against invalid self number (no digits → empty string)
+  if (!normalizedSelf) {
+    return false;
+  }
   return allowFrom.some((n) => {
     if (n === "*") {
       return false;
     }
     try {
-      return normalizeE164(String(n)) === normalizedSelf;
+      const normalizedN = normalizeE164(String(n));
+      return normalizedN !== "" && normalizedN === normalizedSelf;
     } catch {
       return false;
     }
@@ -127,6 +135,9 @@ export function toWhatsappJid(number: string): string {
     return withoutPrefix;
   }
   const e164 = normalizeE164(withoutPrefix);
+  if (!e164) {
+    return withoutPrefix;
+  }
   const digits = e164.replace(/\D/g, "");
   return `${digits}@s.whatsapp.net`;
 }

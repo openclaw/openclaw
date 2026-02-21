@@ -6,6 +6,7 @@ import {
   assertWebChannel,
   CONFIG_DIR,
   ensureDir,
+  isSelfChatMode,
   jidToE164,
   normalizeE164,
   normalizePath,
@@ -79,6 +80,60 @@ describe("normalizeE164 & toWhatsappJid", () => {
     expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
+  });
+});
+
+describe("normalizeE164 edge cases", () => {
+  it("returns empty string for empty input", () => {
+    expect(normalizeE164("")).toBe("");
+  });
+
+  it("returns empty string for whitespace-only input", () => {
+    expect(normalizeE164("   ")).toBe("");
+  });
+
+  it("returns empty string for non-digit input", () => {
+    expect(normalizeE164("abc")).toBe("");
+    expect(normalizeE164("no-digits-here!")).toBe("");
+  });
+
+  it("returns empty string for bare whatsapp: prefix with no number", () => {
+    expect(normalizeE164("whatsapp:")).toBe("");
+  });
+
+  it("returns empty string for bare + sign", () => {
+    expect(normalizeE164("+")).toBe("");
+  });
+
+  it("normalizes a plain number to E.164", () => {
+    expect(normalizeE164("1555123")).toBe("+1555123");
+  });
+
+  it("normalizes a +prefixed number", () => {
+    expect(normalizeE164("+1555123")).toBe("+1555123");
+  });
+
+  it("strips non-digit characters", () => {
+    expect(normalizeE164("+1 (555) 123-4567")).toBe("+15551234567");
+  });
+});
+
+describe("isSelfChatMode edge cases", () => {
+  it("returns false when selfE164 has no digits", () => {
+    // Previously this would match because both normalize to "+"
+    expect(isSelfChatMode("abc", ["def"])).toBe(false);
+  });
+
+  it("returns false for empty selfE164", () => {
+    expect(isSelfChatMode("", ["+1555"])).toBe(false);
+  });
+
+  it("returns true when self number matches allowFrom", () => {
+    expect(isSelfChatMode("+1555123", ["+1555123"])).toBe(true);
+  });
+
+  it("returns false when numbers differ", () => {
+    expect(isSelfChatMode("+1555123", ["+9876543"])).toBe(false);
   });
 });
 
