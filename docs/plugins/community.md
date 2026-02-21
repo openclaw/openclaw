@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Listed plugins
+
+- **Workspace Cloud Sync** — Bidirectional workspace sync with cloud storage (Dropbox, Google Drive, OneDrive, S3, 70+ providers) via rclone
+  npm: `openclaw-workspace-sync`
+  repo: `https://github.com/ashbrener/openclaw-workspace-sync`
+  install: `openclaw plugins install openclaw-workspace-sync`
