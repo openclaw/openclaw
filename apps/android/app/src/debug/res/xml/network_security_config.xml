@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+  <!-- Debug-only policy for local/tailnet development endpoints, including IP-based hosts. -->
+  <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">openclaw.local</domain>
+  </domain-config>
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">ts.net</domain>
+  </domain-config>
+</network-security-config>
