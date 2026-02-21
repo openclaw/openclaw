@@ -2,10 +2,11 @@
 # https://docs.zizmor.sh/configuration/
 
 rules:
-  # Disable unpinned-uses - pinning to SHA hashes is a significant change
-  # that should be done deliberately, not enforced by pre-commit
+  # All actions are now pinned to SHA hashes (CRITICAL-13)
   unpinned-uses:
-    disable: true
+    config:
+      policies:
+        "*": hash
 
   # Disable excessive-permissions for now - adding explicit permissions
   # blocks requires careful review of each workflow's needs

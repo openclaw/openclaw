@@ -25,16 +25,22 @@ RUN apt-get update \
 
 RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
 
+# CRITICAL-14: Download installer to disk before executing (avoid pipe-to-shell)
 RUN if [ "${INSTALL_BUN}" = "1" ]; then \
-  curl -fsSL https://bun.sh/install | bash; \
+  curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install && \
+  bash /tmp/bun-install.sh && \
+  rm -f /tmp/bun-install.sh && \
   ln -sf "${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \
 fi
 
+# CRITICAL-14: Download installer to disk before executing (avoid pipe-to-shell)
 RUN if [ "${INSTALL_BREW}" = "1" ]; then \
   if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \
   mkdir -p "${BREW_INSTALL_DIR}"; \
   chown -R linuxbrew:linuxbrew "$(dirname "${BREW_INSTALL_DIR}")"; \
-  su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash -c '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)'"; \
+  curl -fsSL -o /tmp/brew-install.sh https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh && \
+  su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash /tmp/brew-install.sh" && \
+  rm -f /tmp/brew-install.sh; \
   if [ ! -e "${BREW_INSTALL_DIR}/Library" ]; then ln -s "${BREW_INSTALL_DIR}/Homebrew/Library" "${BREW_INSTALL_DIR}/Library"; fi; \
   if [ ! -x "${BREW_INSTALL_DIR}/bin/brew" ]; then echo \"brew install failed\"; exit 1; fi; \
   ln -sf "${BREW_INSTALL_DIR}/bin/brew" /usr/local/bin/brew; \
