@@ -190,6 +190,9 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     replyAccountId: opts.replyAccount,
   };
   if (opts.local === true) {
+    if (opts.omitSystemPrompt) {
+      runtime.error?.("--omit-system-prompt is only supported in gateway mode (--json); ignored in --local mode.");
+    }
     return await agentCommand(localOpts, runtime, deps);
   }
 
