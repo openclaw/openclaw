@@ -207,6 +207,9 @@ importers:
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
+      '@types/long':
+        specifier: ^5.0.0
+        version: 5.0.0
       '@types/markdown-it':
         specifier: ^14.1.2
         version: 14.1.2
@@ -3197,6 +3200,10 @@ packages:
 
   '@types/long@4.0.2':
     resolution: {integrity: sha512-MqTGEo5bj5t157U6fA/BiDynNkn0YknVdh48CMPkTSpFTVmvao5UQmm7uEF6xBEo7qIMAlY/JSleYaE6VOdpaA==}
+
+  '@types/long@5.0.0':
+    resolution: {integrity: sha512-eQs9RsucA/LNjnMoJvWG/nXa7Pot/RbBzilF/QRIU/xRl+0ApxrSUFsV5lmf01SvSlqMzJ7Zwxe440wmz2SJGA==}
+    deprecated: This is a stub types definition. long provides its own type definitions, so you do not need this installed.
 
   '@types/markdown-it@14.1.2':
     resolution: {integrity: sha512-promo4eFwuiW+TfGxhi+0x3czqTYJkG8qB17ZUJiVF10Xm7NLVRSLUsfRTU/6h1e24VvRnXCx+hG7li58lkzog==}
@@ -9164,6 +9171,10 @@ snapshots:
   '@types/linkify-it@5.0.0': {}
 
   '@types/long@4.0.2': {}
+
+  '@types/long@5.0.0':
+    dependencies:
+      long: 5.3.2
 
   '@types/markdown-it@14.1.2':
     dependencies:
