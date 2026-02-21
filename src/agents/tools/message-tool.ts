@@ -41,7 +41,12 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
 }
 function buildRoutingSchema() {
   return {
-    channel: Type.Optional(Type.String()),
+    channel: Type.Optional(
+      Type.String({
+        description:
+          "Messaging provider name (e.g. 'slack', 'discord'). Not the channel/conversation ID.",
+      }),
+    ),
     target: Type.Optional(channelTargetSchema({ description: "Target channel/user id or name." })),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
