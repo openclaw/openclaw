@@ -16,6 +16,7 @@ describe("resolveSlackStreamMode", () => {
     expect(resolveSlackStreamMode("replace")).toBe("replace");
     expect(resolveSlackStreamMode("status_final")).toBe("status_final");
     expect(resolveSlackStreamMode("append")).toBe("append");
+    expect(resolveSlackStreamMode("off")).toBe("off");
   });
 });
 

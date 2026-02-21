@@ -1,4 +1,4 @@
-export type SlackStreamMode = "replace" | "status_final" | "append";
+export type SlackStreamMode = "replace" | "status_final" | "append" | "off";
 
 const DEFAULT_STREAM_MODE: SlackStreamMode = "replace";
 
@@ -7,7 +7,12 @@ export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {
     return DEFAULT_STREAM_MODE;
   }
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
+  if (
+    normalized === "replace" ||
+    normalized === "status_final" ||
+    normalized === "append" ||
+    normalized === "off"
+  ) {
     return normalized;
   }
   return DEFAULT_STREAM_MODE;
