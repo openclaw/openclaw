@@ -491,6 +491,12 @@ by Peter Steinberger and the community.
 - [steipete.me](https://steipete.me)
 - [@openclaw](https://x.com/openclaw)
 
+## Community Projects
+
+| Project | Description |
+|---------|-------------|
+| [OpenClaw Dashboard](https://github.com/actionagentai/openclaw-dashboard) | React/Next.js visual dashboard — every CLI command as a UI page, with streaming chat, WhatsApp QR login, and speech-to-text |
+
 ## Community
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
