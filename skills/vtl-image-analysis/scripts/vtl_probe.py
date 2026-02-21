@@ -41,6 +41,7 @@ IMAGE_EXTS            = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tif
 # ── LOADING ───────────────────────────────────────────────────────────────────
 
 def load_and_resize(path):
+    path = os.path.realpath(os.path.abspath(path))
     data = open(path, "rb").read()
     arr  = np.frombuffer(data, dtype=np.uint8)
     img  = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -296,6 +297,8 @@ def main(path):
         files = [f for f in glob(os.path.join(path, "*.*"))
                  if os.path.splitext(f.lower())[1] in IMAGE_EXTS]
         out   = os.path.join(path, "metrics.jsonl")
+        if os.path.exists(out):
+            print(f"Warning: {out} already exists and will be overwritten.", file=sys.stderr)
         with open(out, "w") as fh:
             for f in sorted(files):
                 r = analyze(f)
