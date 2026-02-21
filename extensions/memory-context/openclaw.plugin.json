@@ -28,8 +28,8 @@
       "help": "Use 'transformer' for semantic search (recommended) or 'hash' for fast local fallback"
     },
     "embeddingModelName": {
-      "label": "Transformer Model Name",
-      "placeholder": "Xenova/all-MiniLM-L6-v2",
+      "label": "Embedding Model Name",
+      "placeholder": "EmbeddingGemma-300M",
       "advanced": true
     },
     "indexType": {

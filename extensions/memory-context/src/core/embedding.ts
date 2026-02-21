@@ -163,10 +163,10 @@ function wrapUnifiedProvider(
  * Map memory-context embedding model names to the unified provider system.
  *
  * Fallback chain (auto / gemini):
- *   Gemini API → OpenAI → Voyage → Local (EmbeddingGemma) → Transformer (MiniLM) → noop (BM25)
+ *   Gemini API → OpenAI → Voyage → Local (EmbeddingGemma-300M) → noop (BM25)
  *
  * When "transformer" is requested explicitly:
- *   Transformer (MiniLM) → noop (BM25)
+ *   Local (EmbeddingGemma-300M) → noop (BM25)
  */
 export async function createEmbeddingProvider(
   cfg: OpenClawConfig | undefined,

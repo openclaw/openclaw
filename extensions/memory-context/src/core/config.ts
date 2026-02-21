@@ -40,7 +40,7 @@ export type MemoryContextConfig = {
 
 const DEFAULT_EMBEDDING_DIM = 384;
 const DEFAULT_EMBEDDING_MODEL: EmbeddingModelType = "transformer";
-const DEFAULT_EMBEDDING_MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
+const DEFAULT_EMBEDDING_MODEL_NAME = "EmbeddingGemma-300M";
 const DEFAULT_INDEX_TYPE: IndexType = "hnsw";
 
 function resolveDefaultStoragePath(): string {
@@ -278,8 +278,8 @@ export const memoryContextConfigSchema = {
       help: "Use 'transformer' for semantic search (recommended) or 'hash' for fast local fallback",
     },
     embeddingModelName: {
-      label: "Transformer Model Name",
-      placeholder: "Xenova/all-MiniLM-L6-v2",
+      label: "Embedding Model Name",
+      placeholder: "EmbeddingGemma-300M",
       advanced: true,
     },
     indexType: {
