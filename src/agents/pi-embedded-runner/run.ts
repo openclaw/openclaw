@@ -9,6 +9,8 @@ import {
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
+  resyncExternalCliOnAuthError,
+  saveAuthProfileStore,
 } from "../auth-profiles.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -818,6 +820,26 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
+            // On auth errors, try re-syncing from external CLI before marking failure.
+            // Handles the case where Claude CLI refreshed independently, revoking our token.
+            if (promptFailoverReason === "auth" && lastProfileId) {
+              const resynced = resyncExternalCliOnAuthError(authStore, lastProfileId);
+              if (resynced) {
+                saveAuthProfileStore(authStore, agentDir);
+                try {
+                  await applyApiKeyInfo(lastProfileId);
+                  log.info("retrying with re-synced external cli credentials", {
+                    profileId: lastProfileId,
+                  });
+                  continue;
+                } catch (resyncErr) {
+                  log.warn("re-synced external cli credentials but apply failed", {
+                    profileId: lastProfileId,
+                    error: resyncErr instanceof Error ? resyncErr.message : String(resyncErr),
+                  });
+                }
+              }
+            }
             if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
               await markAuthProfileFailure({
                 store: authStore,
@@ -904,6 +926,25 @@ export async function runEmbeddedPiAgent(
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
+            // On auth errors, try re-syncing from external CLI before marking failure.
+            if (assistantFailoverReason === "auth" && lastProfileId) {
+              const resynced = resyncExternalCliOnAuthError(authStore, lastProfileId);
+              if (resynced) {
+                saveAuthProfileStore(authStore, agentDir);
+                try {
+                  await applyApiKeyInfo(lastProfileId);
+                  log.info("retrying with re-synced external cli credentials", {
+                    profileId: lastProfileId,
+                  });
+                  continue;
+                } catch (resyncErr) {
+                  log.warn("re-synced external cli credentials but apply failed", {
+                    profileId: lastProfileId,
+                    error: resyncErr instanceof Error ? resyncErr.message : String(resyncErr),
+                  });
+                }
+              }
+            }
             if (lastProfileId) {
               const reason =
                 timedOut || assistantFailoverReason === "timeout"
