@@ -4,6 +4,10 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose, warn } from "../../globals.js";
+import {
+  decrementDeliveryInFlight,
+  incrementDeliveryInFlight,
+} from "../../infra/delivery-in-flight.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -24,6 +28,7 @@ import {
 import { buildInlineKeyboard } from "../send.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
+import { isRecoverableTelegramNetworkError } from "../network-errors.js";
 import {
   buildTelegramThreadParams,
   resolveTelegramMediaPlaceholder,
@@ -53,6 +58,30 @@ export async function deliverReplies(params: {
   /** Controls whether link previews are shown. Default: true (previews enabled). */
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
+  replyQuoteText?: string;
+}): Promise<{ delivered: boolean }> {
+  incrementDeliveryInFlight();
+  try {
+    return await deliverRepliesInner(params);
+  } finally {
+    decrementDeliveryInFlight();
+  }
+}
+
+async function deliverRepliesInner(params: {
+  replies: ReplyPayload[];
+  chatId: string;
+  token: string;
+  runtime: RuntimeEnv;
+  bot: Bot;
+  mediaLocalRoots?: readonly string[];
+  replyToMode: ReplyToMode;
+  textLimit: number;
+  thread?: TelegramThreadSpec | null;
+  tableMode?: MarkdownTableMode;
+  chunkMode?: ChunkMode;
+  onVoiceRecording?: () => Promise<void> | void;
+  linkPreview?: boolean;
   replyQuoteText?: string;
 }): Promise<{ delivered: boolean }> {
   const {
@@ -545,19 +574,36 @@ async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
-  try {
-    const res = await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      runtime,
-      shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
-      fn: () =>
-        bot.api.sendMessage(chatId, htmlText, {
-          parse_mode: "HTML",
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...baseParams,
+  const sendWithRetry = async (msgText: string, parseMode?: "HTML") => {
+    return retryAsync(
+      () =>
+        withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
+          fn: () =>
+            bot.api.sendMessage(chatId, msgText, {
+              ...(parseMode ? { parse_mode: parseMode } : {}),
+              ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+              ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+              ...baseParams,
+            }),
         }),
-    });
+      {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 5000,
+        jitter: 0.2,
+        shouldRetry: (err) =>
+          isRecoverableTelegramNetworkError(err, {
+            context: "send",
+            allowMessageMatch: true,
+          }),
+      },
+    );
+  };
+  try {
+    const res = await sendWithRetry(htmlText, "HTML");
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
     return res.message_id;
   } catch (err) {
@@ -565,16 +611,7 @@ async function sendTelegramText(
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const fallbackText = opts?.plainText ?? text;
-      const res = await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, fallbackText, {
-            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-            ...baseParams,
-          }),
-      });
+      const res = await sendWithRetry(fallbackText);
       runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
       return res.message_id;
     }

@@ -27,6 +27,10 @@ import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
+import {
+  decrementDeliveryInFlight,
+  incrementDeliveryInFlight,
+} from "../delivery-in-flight.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -224,6 +228,18 @@ type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
 };
 
 export async function deliverOutboundPayloads(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryResult[]> {
+  const { channel, to, payloads } = params;
+  incrementDeliveryInFlight();
+  try {
+    return await deliverOutboundPayloadsInner(params);
+  } finally {
+    decrementDeliveryInFlight();
+  }
+}
+
+async function deliverOutboundPayloadsInner(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
