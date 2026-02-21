@@ -363,7 +363,7 @@ describe("gateway canvas host auth", () => {
 
               await new Promise<void>((resolve, reject) => {
                 const ws = new WebSocket(`ws://[::1]:${listener.port}${wsPath}`);
-                const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
+                const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
                 ws.once("open", () => {
                   clearTimeout(timer);
                   ws.terminate();
