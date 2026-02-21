@@ -619,7 +619,9 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const skipPairing = shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk) || (authOk && authMethod === "trusted-proxy");
+        const skipPairing =
+          shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk) ||
+          (authOk && authMethod === "trusted-proxy");
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
