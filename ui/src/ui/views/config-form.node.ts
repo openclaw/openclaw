@@ -16,6 +16,10 @@ function isAnySchema(schema: JsonSchema): boolean {
   return keys.length === 0;
 }
 
+// Checks whether `key` matches any pattern in `unsupported`, supporting "*"
+// wildcards in individual path segments.  Complexity is O(n·m) where n is the
+// number of segments in `key` and m is the size of `unsupported`; this is fine
+// for typical schema sizes but worth noting for very large schemas.
 function isUnsupportedPath(key: string, unsupported: Set<string>): boolean {
   if (unsupported.has(key)) {
     return true;

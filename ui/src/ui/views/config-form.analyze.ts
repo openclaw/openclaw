@@ -96,10 +96,13 @@ function normalizeSchemaNode(
     if (!itemsSchema) {
       unsupported.add(pathLabel);
     } else {
-      const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
+      // Arrays use numeric indices at render time, which pathKey() strips,
+      // so we recurse with the same path (no "*" segment) unlike maps where
+      // string keys are preserved by pathKey().
+      const res = normalizeSchemaNode(itemsSchema, [...path]);
       normalized.items = res.schema ?? itemsSchema;
-      if (res.unsupportedPaths.length > 0) {
-        unsupported.add(pathLabel);
+      for (const entry of res.unsupportedPaths) {
+        unsupported.add(entry);
       }
     }
   } else if (

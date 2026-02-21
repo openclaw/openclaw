@@ -257,6 +257,54 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toContain("extra");
   });
 
+  it("does not flag array parent as unsupported when only nested children are unsupported", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        tags: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string" },
+              complex: {
+                anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+
+    // The array parent should NOT be unsupported
+    expect(analysis.unsupportedPaths).not.toContain("tags");
+
+    // The nested unsupported field should be flagged — arrays use the parent
+    // path directly (no "*") because pathKey strips numeric indices
+    expect(analysis.unsupportedPaths).toContain("tags.complex");
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { tags: [{ label: "hello", complex: "world" }] },
+        onPatch,
+      }),
+      container,
+    );
+
+    // The array section should render, not show "Unsupported schema node"
+    expect(container.textContent).toContain("Tags");
+    expect(container.textContent).toContain("1 item");
+
+    // The unsupported nested field should show the error
+    expect(container.textContent).toContain("Unsupported schema node");
+  });
+
   it("does not flag map parent as unsupported when only nested children are unsupported", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
