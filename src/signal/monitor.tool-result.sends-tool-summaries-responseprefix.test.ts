@@ -14,7 +14,7 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
-await import("./monitor.js");
+const { monitorSignalProvider } = await import("./monitor.js");
 
 const {
   replyMock,
@@ -26,6 +26,7 @@ const {
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
+type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
 
 function createMonitorRuntime() {
   return {
@@ -69,16 +70,13 @@ function createAutoAbortController() {
   return abortController;
 }
 
-async function runMonitorWithMocks(
-  opts: Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0],
-) {
-  const { monitorSignalProvider } = await import("./monitor.js");
+async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider(opts);
 }
 
 async function receiveSignalPayloads(params: {
   payloads: unknown[];
-  opts?: Partial<Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0]>;
+  opts?: Partial<MonitorSignalProviderOptions>;
 }) {
   const abortController = new AbortController();
   streamMock.mockImplementation(async ({ onEvent }) => {
@@ -122,7 +120,7 @@ function makeBaseEnvelope(overrides: Record<string, unknown> = {}) {
 
 async function receiveSingleEnvelope(
   envelope: Record<string, unknown>,
-  opts?: Partial<Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0]>,
+  opts?: Partial<MonitorSignalProviderOptions>,
 ) {
   await receiveSignalPayloads({
     payloads: [{ envelope }],

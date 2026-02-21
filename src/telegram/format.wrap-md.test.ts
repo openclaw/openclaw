@@ -7,58 +7,33 @@ import {
 } from "./format.js";
 
 describe("wrapFileReferencesInHtml", () => {
-  it("wraps .md filenames in code tags", () => {
-    expect(wrapFileReferencesInHtml("Check README.md")).toContain("Check <code>README.md</code>");
-    expect(wrapFileReferencesInHtml("See HEARTBEAT.md for status")).toContain(
-      "See <code>HEARTBEAT.md</code> for status",
-    );
+  it("wraps supported file references and paths", () => {
+    const cases = [
+      ["Check README.md", "Check <code>README.md</code>"],
+      ["See HEARTBEAT.md for status", "See <code>HEARTBEAT.md</code> for status"],
+      ["Check main.go", "Check <code>main.go</code>"],
+      ["Run script.py", "Run <code>script.py</code>"],
+      ["Check backup.pl", "Check <code>backup.pl</code>"],
+      ["Run backup.sh", "Run <code>backup.sh</code>"],
+      ["Look at squad/friday/HEARTBEAT.md", "Look at <code>squad/friday/HEARTBEAT.md</code>"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(wrapFileReferencesInHtml(input), input).toContain(expected);
+    }
   });
 
-  it("wraps .go filenames", () => {
-    expect(wrapFileReferencesInHtml("Check main.go")).toContain("Check <code>main.go</code>");
-  });
-
-  it("wraps .py filenames", () => {
-    expect(wrapFileReferencesInHtml("Run script.py")).toContain("Run <code>script.py</code>");
-  });
-
-  it("wraps .pl filenames", () => {
-    expect(wrapFileReferencesInHtml("Check backup.pl")).toContain("Check <code>backup.pl</code>");
-  });
-
-  it("wraps .sh filenames", () => {
-    expect(wrapFileReferencesInHtml("Run backup.sh")).toContain("Run <code>backup.sh</code>");
-  });
-
-  it("wraps file paths", () => {
-    expect(wrapFileReferencesInHtml("Look at squad/friday/HEARTBEAT.md")).toContain(
-      "Look at <code>squad/friday/HEARTBEAT.md</code>",
-    );
-  });
-
-  it("does not wrap inside existing code tags", () => {
-    const input = "Already <code>wrapped.md</code> here";
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe(input);
-    expect(result).not.toContain("<code><code>");
-  });
-
-  it("does not wrap inside pre tags", () => {
-    const input = "<pre><code>README.md</code></pre>";
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe(input);
-  });
-
-  it("does not wrap inside anchor tags", () => {
-    const input = '<a href="README.md">Link</a>';
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe(input);
-  });
-
-  it("does not wrap file refs inside real URL anchor tags", () => {
-    const input = 'Visit <a href="https://example.com/README.md">example.com/README.md</a>';
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe(input);
+  it("does not wrap inside protected html contexts", () => {
+    const cases = [
+      "Already <code>wrapped.md</code> here",
+      "<pre><code>README.md</code></pre>",
+      '<a href="README.md">Link</a>',
+      'Visit <a href="https://example.com/README.md">example.com/README.md</a>',
+    ] as const;
+    for (const input of cases) {
+      const result = wrapFileReferencesInHtml(input);
+      expect(result, input).toBe(input);
+    }
+    expect(wrapFileReferencesInHtml(cases[0])).not.toContain("<code><code>");
   });
 
   it("handles mixed content correctly", () => {
@@ -67,32 +42,51 @@ describe("wrapFileReferencesInHtml", () => {
     expect(result).toContain("<code>CONTRIBUTING.md</code>");
   });
 
-  it("handles edge cases", () => {
-    expect(wrapFileReferencesInHtml("No markdown files here")).not.toContain("<code>");
-    expect(wrapFileReferencesInHtml("File.md at start")).toContain("<code>File.md</code>");
-    expect(wrapFileReferencesInHtml("Ends with file.md")).toContain("<code>file.md</code>");
+  it("handles boundary and punctuation wrapping cases", () => {
+    const cases = [
+      { input: "No markdown files here", contains: undefined },
+      { input: "File.md at start", contains: "<code>File.md</code>" },
+      { input: "Ends with file.md", contains: "<code>file.md</code>" },
+      { input: "See README.md.", contains: "<code>README.md</code>." },
+      { input: "See README.md,", contains: "<code>README.md</code>," },
+      { input: "(README.md)", contains: "(<code>README.md</code>)" },
+      { input: "README.md:", contains: "<code>README.md</code>:" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = wrapFileReferencesInHtml(testCase.input);
+      if (!testCase.contains) {
+        expect(result).not.toContain("<code>");
+        continue;
+      }
+      expect(result).toContain(testCase.contains);
+    }
   });
 
-  it("wraps file refs with punctuation boundaries", () => {
-    expect(wrapFileReferencesInHtml("See README.md.")).toContain("<code>README.md</code>.");
-    expect(wrapFileReferencesInHtml("See README.md,")).toContain("<code>README.md</code>,");
-    expect(wrapFileReferencesInHtml("(README.md)")).toContain("(<code>README.md</code>)");
-    expect(wrapFileReferencesInHtml("README.md:")).toContain("<code>README.md</code>:");
-  });
-
-  it("de-linkifies auto-linkified file ref anchors", () => {
-    const input = '<a href="http://README.md">README.md</a>';
-    expect(wrapFileReferencesInHtml(input)).toBe("<code>README.md</code>");
-  });
-
-  it("de-linkifies auto-linkified path anchors", () => {
-    const input = '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>';
-    expect(wrapFileReferencesInHtml(input)).toBe("<code>squad/friday/HEARTBEAT.md</code>");
+  it("de-linkifies auto-linkified anchors for plain files and paths", () => {
+    const cases = [
+      {
+        input: '<a href="http://README.md">README.md</a>',
+        expected: "<code>README.md</code>",
+      },
+      {
+        input: '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
+        expected: "<code>squad/friday/HEARTBEAT.md</code>",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(wrapFileReferencesInHtml(testCase.input)).toBe(testCase.expected);
+    }
   });
 
   it("preserves explicit links where label differs from href", () => {
-    const input = '<a href="http://README.md">click here</a>';
-    expect(wrapFileReferencesInHtml(input)).toBe(input);
+    const cases = [
+      '<a href="http://README.md">click here</a>',
+      '<a href="http://other.md">README.md</a>',
+    ] as const;
+    for (const input of cases) {
+      expect(wrapFileReferencesInHtml(input)).toBe(input);
+    }
   });
 
   it("wraps file ref after closing anchor tag", () => {
@@ -167,14 +161,14 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
 });
 
 describe("edge cases", () => {
-  it("wraps file ref inside bold tags", () => {
-    const result = markdownToTelegramHtml("**README.md**");
-    expect(result).toBe("<b><code>README.md</code></b>");
-  });
-
-  it("wraps file ref inside italic tags", () => {
-    const result = markdownToTelegramHtml("*script.py*");
-    expect(result).toBe("<i><code>script.py</code></i>");
+  it("wraps file refs inside emphasis tags", () => {
+    const cases = [
+      ["**README.md**", "<b><code>README.md</code></b>"],
+      ["*script.py*", "<i><code>script.py</code></i>"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(markdownToTelegramHtml(input), input).toBe(expected);
+    }
   });
 
   it("does not wrap inside fenced code blocks", () => {
@@ -183,15 +177,22 @@ describe("edge cases", () => {
     expect(result).not.toContain("<code><code>");
   });
 
-  it("preserves domain-like paths as anchor tags", () => {
-    const result = markdownToTelegramHtml("example.com/README.md");
-    expect(result).toContain('<a href="http://example.com/README.md">');
-    expect(result).not.toContain("<code>");
-  });
-
-  it("preserves github URLs with file paths", () => {
-    const result = markdownToTelegramHtml("https://github.com/foo/README.md");
-    expect(result).toContain('<a href="https://github.com/foo/README.md">');
+  it("preserves real URL/domain paths as anchors", () => {
+    const cases = [
+      {
+        input: "example.com/README.md",
+        href: 'href="http://example.com/README.md"',
+      },
+      {
+        input: "https://github.com/foo/README.md",
+        href: 'href="https://github.com/foo/README.md"',
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const result = markdownToTelegramHtml(testCase.input);
+      expect(result).toContain(`<a ${testCase.href}>`);
+      expect(result).not.toContain("<code>");
+    }
   });
 
   it("handles wrapFileRefs: false (plain text output)", () => {
@@ -233,14 +234,14 @@ describe("edge cases", () => {
     expect(result).not.toContain("<code>script.js</code>");
   });
 
-  it("handles file ref at start of message", () => {
-    const result = markdownToTelegramHtml("README.md is important");
-    expect(result).toBe("<code>README.md</code> is important");
-  });
-
-  it("handles file ref at end of message", () => {
-    const result = markdownToTelegramHtml("Check the README.md");
-    expect(result).toBe("Check the <code>README.md</code>");
+  it("handles file refs at message boundaries", () => {
+    const cases = [
+      ["README.md is important", "<code>README.md</code> is important"],
+      ["Check the README.md", "Check the <code>README.md</code>"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(markdownToTelegramHtml(input), input).toBe(expected);
+    }
   });
 
   it("handles multiple file refs in sequence", () => {
@@ -267,15 +268,13 @@ describe("edge cases", () => {
     expect(result).toContain('<a href="http://example.com/v1.0/README.md">');
   });
 
-  it("handles file ref with hyphen and underscore in name", () => {
-    const result = markdownToTelegramHtml("my-file_name.md");
-    expect(result).toContain("<code>my-file_name.md</code>");
-  });
+  it("wraps hyphen/underscore filenames and uppercase extensions", () => {
+    const first = markdownToTelegramHtml("my-file_name.md");
+    expect(first).toContain("<code>my-file_name.md</code>");
 
-  it("handles uppercase extensions", () => {
-    const result = markdownToTelegramHtml("README.MD and SCRIPT.PY");
-    expect(result).toContain("<code>README.MD</code>");
-    expect(result).toContain("<code>SCRIPT.PY</code>");
+    const second = markdownToTelegramHtml("README.MD and SCRIPT.PY");
+    expect(second).toContain("<code>README.MD</code>");
+    expect(second).toContain("<code>SCRIPT.PY</code>");
   });
 
   it("handles nested code tags (depth tracking)", () => {
@@ -291,12 +290,6 @@ describe("edge cases", () => {
     const result = wrapFileReferencesInHtml(input);
     expect(result).toContain("</a> <code>README.md</code> <a");
     expect(result).toContain("</a> <code>script.py</code>");
-  });
-
-  it("preserves anchor when href and label differ (no backreference match)", () => {
-    // Different href and label - should NOT de-linkify
-    const input = '<a href="http://other.md">README.md</a>';
-    expect(wrapFileReferencesInHtml(input)).toBe(input);
   });
 
   it("wraps orphaned TLD pattern after special character", () => {
@@ -363,19 +356,16 @@ describe("edge cases", () => {
     expect(result).not.toContain("<code><code>");
   });
 
-  it("does not wrap orphaned TLD inside href attributes", () => {
-    // D.md inside href should NOT be wrapped
-    const input = '<a href="http://example.com/R&D.md">link</a>';
-    const result = wrapFileReferencesInHtml(input);
-    // href should be untouched
-    expect(result).toBe(input);
-    expect(result).not.toContain("<code>D.md</code>");
-  });
-
-  it("does not wrap orphaned TLD inside any HTML attribute", () => {
-    const input = '<img src="logo/R&D.md" alt="R&D.md">';
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe(input);
+  it("does not wrap orphaned TLD fragments inside HTML attributes", () => {
+    const cases = [
+      '<a href="http://example.com/R&D.md">link</a>',
+      '<img src="logo/R&D.md" alt="R&D.md">',
+    ] as const;
+    for (const input of cases) {
+      const result = wrapFileReferencesInHtml(input);
+      expect(result).toBe(input);
+      expect(result).not.toContain("<code>D.md</code>");
+    }
   });
 
   it("handles multiple orphaned TLDs with HTML tags (offset stability)", () => {
