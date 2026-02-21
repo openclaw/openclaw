@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
-import {
-  autoBindSpawnedDiscordSubagent,
-  unbindThreadBindingsBySessionKey,
-} from "../discord/monitor/thread-bindings.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -102,35 +99,51 @@ function summarizeError(err: unknown): string {
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
   childSessionKey: string;
   agentId: string;
   label?: string;
+  mode: SpawnSubagentMode;
+  requesterSessionKey?: string;
+  requester: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
 }): Promise<{ status: "ok" } | { status: "error"; error: string }> {
-  const channel = params.channel?.trim().toLowerCase();
-  if (channel !== "discord") {
-    const channelLabel = params.channel?.trim() || "unknown";
+  const hookRunner = params.hookRunner;
+  if (!hookRunner?.hasHooks("subagent_spawning")) {
     return {
       status: "error",
-      error: `thread=true is not supported for channel "${channelLabel}". Only Discord thread-bound subagent sessions are supported right now.`,
+      error:
+        "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.",
     };
   }
 
   try {
-    const binding = await autoBindSpawnedDiscordSubagent({
-      accountId: params.accountId,
-      channel: params.channel,
-      to: params.to,
-      threadId: params.threadId,
-      childSessionKey: params.childSessionKey,
-      agentId: params.agentId,
-      label: params.label,
-      boundBy: "system",
-    });
-    if (!binding) {
+    const result = await hookRunner.runSubagentSpawning(
+      {
+        childSessionKey: params.childSessionKey,
+        agentId: params.agentId,
+        label: params.label,
+        mode: params.mode,
+        requester: params.requester,
+        threadRequested: true,
+      },
+      {
+        childSessionKey: params.childSessionKey,
+        requesterSessionKey: params.requesterSessionKey,
+      },
+    );
+    if (result?.status === "error") {
+      const error = result.error.trim();
+      return {
+        status: "error",
+        error: error || "Failed to prepare thread binding for this subagent session.",
+      };
+    }
+    if (result?.status !== "ok" || !result.threadBindingReady) {
       return {
         status: "error",
         error:
@@ -179,6 +192,7 @@ export async function spawnSubagentDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
+  const hookRunner = getGlobalHookRunner();
   const runTimeoutSeconds =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
@@ -203,7 +217,8 @@ export async function spawnSubagentDirect(
   });
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
-  const maxSpawnDepth = cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  const maxSpawnDepth =
+    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxSpawnDepth) {
     return {
       status: "forbidden",
@@ -325,13 +340,18 @@ export async function spawnSubagentDirect(
   }
   if (requestThreadBinding) {
     const bindResult = await ensureThreadBindingForSubagentSpawn({
-      channel: requesterOrigin?.channel,
-      accountId: requesterOrigin?.accountId,
-      to: requesterOrigin?.to,
-      threadId: requesterOrigin?.threadId,
+      hookRunner,
       childSessionKey,
       agentId: targetAgentId,
       label: label || undefined,
+      mode: spawnMode,
+      requesterSessionKey: requesterInternalKey,
+      requester: {
+        channel: requesterOrigin?.channel,
+        accountId: requesterOrigin?.accountId,
+        to: requesterOrigin?.to,
+        threadId: requesterOrigin?.threadId,
+      },
     });
     if (bindResult.status === "error") {
       try {
@@ -400,15 +420,28 @@ export async function spawnSubagentDirect(
       childRunId = response.runId;
     }
   } catch (err) {
-    if (threadBindingReady) {
-      unbindThreadBindingsBySessionKey({
-        targetSessionKey: childSessionKey,
-        accountId: requesterOrigin?.accountId,
-        targetKind: "subagent",
-        reason: "spawn-failed",
-        sendFarewell: true,
-        farewellText: "Session failed to start. Messages here will no longer be routed.",
-      });
+    if (threadBindingReady && hookRunner?.hasHooks("subagent_ended")) {
+      try {
+        await hookRunner.runSubagentEnded(
+          {
+            targetSessionKey: childSessionKey,
+            targetKind: "subagent",
+            reason: "spawn-failed",
+            sendFarewell: true,
+            accountId: requesterOrigin?.accountId,
+            runId: childRunId,
+            outcome: "error",
+            error: "Session failed to start",
+          },
+          {
+            runId: childRunId,
+            childSessionKey,
+            requesterSessionKey: requesterInternalKey,
+          },
+        );
+      } catch {
+        // Spawn should still return an actionable error even if cleanup hooks fail.
+      }
     }
     const messageText = summarizeError(err);
     return {
@@ -434,7 +467,6 @@ export async function spawnSubagentDirect(
     spawnMode,
   });
 
-  const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("subagent_spawned")) {
     try {
       await hookRunner.runSubagentSpawned(

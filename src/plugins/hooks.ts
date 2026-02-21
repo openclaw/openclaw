@@ -37,6 +37,8 @@ import type {
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
   PluginHookSubagentContext,
+  PluginHookSubagentSpawningEvent,
+  PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
@@ -80,6 +82,8 @@ export type {
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
   PluginHookSubagentContext,
+  PluginHookSubagentSpawningEvent,
+  PluginHookSubagentSpawningResult,
   PluginHookSubagentSpawnedEvent,
   PluginHookSubagentEndedEvent,
   PluginHookGatewayContext,
@@ -137,6 +141,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         ? `${acc.prependContext}\n\n${next.prependContext}`
         : (next.prependContext ?? acc?.prependContext),
   });
+
+  const mergeSubagentSpawningResult = (
+    acc: PluginHookSubagentSpawningResult | undefined,
+    next: PluginHookSubagentSpawningResult,
+  ): PluginHookSubagentSpawningResult => {
+    if (acc?.status === "error") {
+      return acc;
+    }
+    if (next.status === "error") {
+      return next;
+    }
+    return {
+      status: "ok",
+      threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
+    };
+  };
 
   /**
    * Run a hook that doesn't return a value (fire-and-forget style).
@@ -577,6 +597,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run subagent_spawning hook.
+   * Runs sequentially so channel plugins can deterministically provision session bindings.
+   */
+  async function runSubagentSpawning(
+    event: PluginHookSubagentSpawningEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<PluginHookSubagentSpawningResult | undefined> {
+    return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
+      "subagent_spawning",
+      event,
+      ctx,
+      mergeSubagentSpawningResult,
+    );
+  }
+
+  /**
    * Run subagent_spawned hook.
    * Runs in parallel (fire-and-forget).
    */
@@ -666,6 +702,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Session hooks
     runSessionStart,
     runSessionEnd,
+    runSubagentSpawning,
     runSubagentSpawned,
     runSubagentEnded,
     // Gateway hooks
