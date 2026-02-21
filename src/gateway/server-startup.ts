@@ -5,6 +5,7 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -44,6 +45,10 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
 }) {
+  // Bump global skills snapshot version so persisted sessions re-snapshot on next message
+  // (fix #22517: after gateway restart, in-memory version was 0 so old snapshots were never refreshed).
+  bumpSkillsSnapshotVersion({ reason: "manual" });
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
