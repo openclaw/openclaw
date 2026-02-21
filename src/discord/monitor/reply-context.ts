@@ -43,7 +43,11 @@ export function buildDirectLabel(author: User, tagOverride?: string) {
   return `${username ?? "unknown"} user id:${author.id}`;
 }
 
-export function buildGuildLabel(params: { guild?: Guild; channelName: string; channelId: string }) {
+export function buildGuildLabel(params: {
+  guild?: Guild<true> | Guild;
+  channelName: string;
+  channelId: string;
+}) {
   const { guild, channelName, channelId } = params;
   return `${guild?.name ?? "Guild"} #${channelName} channel id:${channelId}`;
 }

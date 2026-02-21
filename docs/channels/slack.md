@@ -21,7 +21,7 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
   </Card>
 </CardGroup>
 
-## Quick setup
+## Onboarding
 
 <Tabs>
   <Tab title="Socket Mode (default)">
@@ -127,6 +127,7 @@ openclaw gateway
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
 
 <Tip>
 For actions/directory reads, user token can be preferred when configured. For writes, bot token remains preferred; user-token writes are only allowed when `userTokenReadOnly: false` and bot token is unavailable.
@@ -136,17 +137,18 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dm.policy` controls DM access:
+    `channels.slack.dmPolicy` controls DM access (legacy: `channels.slack.dm.policy`):
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `dm.allowFrom` to include `"*"`)
+    - `open` (requires `channels.slack.allowFrom` to include `"*"`; legacy: `channels.slack.dm.allowFrom`)
     - `disabled`
 
     DM flags:
 
     - `dm.enabled` (default true)
-    - `dm.allowFrom`
+    - `channels.slack.allowFrom` (preferred)
+    - `dm.allowFrom` (legacy)
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
@@ -199,6 +201,12 @@ For actions/directory reads, user token can be preferred when configured. For wr
 - Enable native Slack command handlers with `channels.slack.commands.native: true` (or global `commands.native: true`).
 - When native commands are enabled, register matching slash commands in Slack (`/<command>` names).
 - If native commands are not enabled, you can run a single configured slash command via `channels.slack.slashCommand`.
+- Native arg menus now adapt their rendering strategy:
+  - up to 5 options: button blocks
+  - 6-100 options: static select menu
+  - more than 100 options: external select with async option filtering when interactivity options handlers are available
+  - if encoded option values exceed Slack limits, the flow falls back to buttons
+- For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
 
 Default slash command settings:
 
@@ -232,6 +240,8 @@ Manual reply tags are supported:
 
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
+
+Note: `replyToMode="off"` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
 ## Media, chunking, and delivery
 
@@ -280,8 +290,28 @@ Available action groups in current Slack tooling:
 - Message edits/deletes/thread broadcasts are mapped into system events.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
+- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+  - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
+
+## Ack reactions
+
+`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+
+Resolution order:
+
+- `channels.slack.accounts.<accountId>.ackReaction`
+- `channels.slack.ackReaction`
+- `messages.ackReaction`
+- agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+
+Notes:
+
+- Slack expects shortcodes (for example `"eyes"`).
+- Use `""` to disable the reaction for a channel or account.
 
 ## Manifest and scope checklist
 
@@ -322,6 +352,7 @@ Available action groups in current Slack tooling:
         "mpim:history",
         "users:read",
         "app_mentions:read",
+        "assistant:write",
         "reactions:read",
         "reactions:write",
         "pins:read",
@@ -396,7 +427,7 @@ openclaw doctor
     Check:
 
     - `channels.slack.dm.enabled`
-    - `channels.slack.dm.policy`
+    - `channels.slack.dmPolicy` (or legacy `channels.slack.dm.policy`)
     - pairing approvals / allowlist entries
 
 ```bash
@@ -430,20 +461,45 @@ openclaw pairing list slack
   </Accordion>
 </AccordionGroup>
 
-## Configuration reference pointers
+## Text streaming
+
+OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
+
+By default, streaming is enabled. Disable it per account:
+
+```yaml
+channels:
+  slack:
+    streaming: false
+```
+
+### Requirements
+
+1. Enable **Agents and AI Apps** in your Slack app settings.
+2. Ensure the app has the `assistant:write` scope.
+3. A reply thread must be available for that message. Thread selection still follows `replyToMode`.
+
+### Behavior
+
+- First text chunk starts a stream (`chat.startStream`).
+- Later text chunks append to the same stream (`chat.appendStream`).
+- End of reply finalizes stream (`chat.stopStream`).
+- Media and non-text payloads fall back to normal delivery.
+- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+
+## Configuration
 
 Primary reference:
 
 - [Configuration reference - Slack](/gateway/configuration-reference#slack)
 
-High-signal Slack fields:
-
-- mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
-- DM access: `dm.enabled`, `dm.policy`, `dm.allowFrom`, `dm.groupEnabled`, `dm.groupChannels`
-- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
-- threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
-- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+  High-signal Slack fields:
+  - mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+  - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
+  - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
+  - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
+  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Related
 

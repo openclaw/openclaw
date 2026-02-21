@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -41,18 +42,6 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
-
-function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function normalizeProcArg(arg: string): string {
   return arg.replaceAll("\\", "/").toLowerCase();
@@ -116,7 +105,7 @@ function resolveGatewayOwnerStatus(
   payload: LockPayload | null,
   platform: NodeJS.Platform,
 ): LockOwnerStatus {
-  if (!isAlive(pid)) {
+  if (!isPidAlive(pid)) {
     return "dead";
   }
   if (platform !== "linux") {
@@ -167,7 +156,7 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
 function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
+  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const lockDir = resolveGatewayLockDir();
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };

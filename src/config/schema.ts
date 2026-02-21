@@ -1,6 +1,6 @@
-import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
+import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -302,6 +302,12 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   const root = asSchemaObject(next);
   if (!root || !root.properties) {
     return next;
+  }
+  // Allow `$schema` in config files for editor tooling, but hide it from the
+  // Control UI form schema so it does not show up as a configurable section.
+  delete root.properties.$schema;
+  if (Array.isArray(root.required)) {
+    root.required = root.required.filter((key) => key !== "$schema");
   }
   const channelsNode = asSchemaObject(root.properties.channels);
   if (channelsNode) {

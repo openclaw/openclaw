@@ -17,13 +17,24 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
-		<string>APPL</string>
-		<key>CFBundleShortVersionString</key>
-		<string>2026.2.13</string>
-		<key>CFBundleVersion</key>
-		<string>20260213</string>
-		<key>NSAppTransportSecurity</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2026.2.21</string>
+	<key>CFBundleURLTypes</key>
+	<array>
 		<dict>
+			<key>CFBundleURLName</key>
+			<string>ai.openclaw.ios</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>openclaw</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>20260220</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>
 		<true/>
 	</dict>
@@ -51,6 +62,11 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>ai.openclaw.ios.bgrefresh</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

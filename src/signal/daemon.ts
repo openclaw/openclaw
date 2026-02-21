@@ -34,6 +34,23 @@ export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   return "log";
 }
 
+function bindSignalCliOutput(params: {
+  stream: NodeJS.ReadableStream | null | undefined;
+  log: (message: string) => void;
+  error: (message: string) => void;
+}): void {
+  params.stream?.on("data", (data) => {
+    for (const line of data.toString().split(/\r?\n/)) {
+      const kind = classifySignalCliLogLine(line);
+      if (kind === "log") {
+        params.log(`signal-cli: ${line.trim()}`);
+      } else if (kind === "error") {
+        params.error(`signal-cli: ${line.trim()}`);
+      }
+    }
+  });
+}
+
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   const args: string[] = [];
   if (opts.account) {
@@ -67,26 +84,8 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
 
-  child.stdout?.on("data", (data) => {
-    for (const line of data.toString().split(/\r?\n/)) {
-      const kind = classifySignalCliLogLine(line);
-      if (kind === "log") {
-        log(`signal-cli: ${line.trim()}`);
-      } else if (kind === "error") {
-        error(`signal-cli: ${line.trim()}`);
-      }
-    }
-  });
-  child.stderr?.on("data", (data) => {
-    for (const line of data.toString().split(/\r?\n/)) {
-      const kind = classifySignalCliLogLine(line);
-      if (kind === "log") {
-        log(`signal-cli: ${line.trim()}`);
-      } else if (kind === "error") {
-        error(`signal-cli: ${line.trim()}`);
-      }
-    }
-  });
+  bindSignalCliOutput({ stream: child.stdout, log, error });
+  bindSignalCliOutput({ stream: child.stderr, log, error });
   child.on("error", (err) => {
     error(`signal-cli spawn error: ${String(err)}`);
   });

@@ -96,7 +96,9 @@ export async function readRequestBodyWithLimit(
   if (declaredLength !== null && declaredLength > maxBytes) {
     const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
     if (!req.destroyed) {
-      req.destroy(error);
+      // Limit violations are expected user input; destroying with an Error causes
+      // an async 'error' event which can crash the process if no listener remains.
+      req.destroy();
     }
     throw error;
   }
@@ -131,7 +133,7 @@ export async function readRequestBodyWithLimit(
     const timer = setTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
       if (!req.destroyed) {
-        req.destroy(error);
+        req.destroy();
       }
       fail(error);
     }, timeoutMs);
@@ -145,7 +147,7 @@ export async function readRequestBodyWithLimit(
       if (totalBytes > maxBytes) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         if (!req.destroyed) {
-          req.destroy(error);
+          req.destroy();
         }
         fail(error);
         return;
@@ -294,7 +296,9 @@ export function installRequestBodyLimitGuard(
     finish();
     respond(error);
     if (!req.destroyed) {
-      req.destroy(error);
+      // Limit violations are expected user input; destroying with an Error causes
+      // an async 'error' event which can crash the process if no listener remains.
+      req.destroy();
     }
   };
 

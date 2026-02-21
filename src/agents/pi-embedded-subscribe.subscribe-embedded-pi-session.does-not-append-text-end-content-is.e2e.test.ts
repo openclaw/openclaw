@@ -1,133 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
-import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
+import {
+  createTextEndBlockReplyHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  const _THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
+  function setupTextEndSubscription() {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-  it("does not append when text_end content is a prefix of deltas", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
+    const emitDelta = (delta: string) => {
+      emitAssistantTextDelta({ emit, delta });
     };
 
-    const onBlockReply = vi.fn();
-
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Hello",
-      },
-    });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
-  });
-  it("does not append when text_end content is already contained", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
+    const emitTextEnd = (content: string) => {
+      emitAssistantTextEnd({ emit, content });
     };
 
-    const onBlockReply = vi.fn();
+    return { onBlockReply, subscription, emitDelta, emitTextEnd };
+  }
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
+  it.each([
+    {
+      name: "does not append when text_end content is a prefix of deltas",
+      delta: "Hello world",
+      content: "Hello",
+      expected: "Hello world",
+    },
+    {
+      name: "does not append when text_end content is already contained",
+      delta: "Hello world",
+      content: "world",
+      expected: "Hello world",
+    },
+    {
+      name: "appends suffix when text_end content extends deltas",
+      delta: "Hello",
+      content: "Hello world",
+      expected: "Hello world",
+    },
+  ])("$name", ({ delta, content, expected }) => {
+    const { onBlockReply, subscription, emitDelta, emitTextEnd } = setupTextEndSubscription();
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "world",
-      },
-    });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
-  });
-  it("appends suffix when text_end content extends deltas", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onBlockReply = vi.fn();
-
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello",
-      },
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Hello world",
-      },
-    });
+    emitDelta(delta);
+    emitTextEnd(content);
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    expect(subscription.assistantTexts).toEqual([expected]);
   });
 });

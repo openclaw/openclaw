@@ -8,11 +8,15 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
-import type { InternalHookHandler } from "./internal-hooks.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
+import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
+
+const log = createSubsystemLogger("hooks:loader");
 
 /**
  * Load and register all hook handlers
@@ -68,6 +72,16 @@ export async function loadInternalHooks(
       }
 
       try {
+        if (
+          !isPathInsideWithRealpath(entry.hook.baseDir, entry.hook.handlerPath, {
+            requireRealpath: true,
+          })
+        ) {
+          log.error(
+            `Hook '${entry.hook.name}' handler path resolves outside hook directory: ${entry.hook.handlerPath}`,
+          );
+          continue;
+        }
         // Import handler module with cache-busting
         const url = pathToFileURL(entry.hook.handlerPath).href;
         const cacheBustedUrl = `${url}?t=${Date.now()}`;
@@ -78,16 +92,14 @@ export async function loadInternalHooks(
         const handler = mod[exportName];
 
         if (typeof handler !== "function") {
-          console.error(
-            `Hook error: Handler '${exportName}' from ${entry.hook.name} is not a function`,
-          );
+          log.error(`Handler '${exportName}' from ${entry.hook.name} is not a function`);
           continue;
         }
 
         // Register for all events listed in metadata
         const events = entry.metadata?.events ?? [];
         if (events.length === 0) {
-          console.warn(`Hook warning: Hook '${entry.hook.name}' has no events defined in metadata`);
+          log.warn(`Hook '${entry.hook.name}' has no events defined in metadata`);
           continue;
         }
 
@@ -95,21 +107,19 @@ export async function loadInternalHooks(
           registerInternalHook(event, handler as InternalHookHandler);
         }
 
-        console.log(
+        log.info(
           `Registered hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
         );
         loadedCount++;
       } catch (err) {
-        console.error(
-          `Failed to load hook ${entry.hook.name}:`,
-          err instanceof Error ? err.message : String(err),
+        log.error(
+          `Failed to load hook ${entry.hook.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
   } catch (err) {
-    console.error(
-      "Failed to load directory-based hooks:",
-      err instanceof Error ? err.message : String(err),
+    log.error(
+      `Failed to load directory-based hooks: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -117,10 +127,35 @@ export async function loadInternalHooks(
   const handlers = cfg.hooks.internal.handlers ?? [];
   for (const handlerConfig of handlers) {
     try {
-      // Resolve module path (absolute or relative to cwd)
-      const modulePath = path.isAbsolute(handlerConfig.module)
-        ? handlerConfig.module
-        : path.join(process.cwd(), handlerConfig.module);
+      // Legacy handler paths: keep them workspace-relative.
+      const rawModule = handlerConfig.module.trim();
+      if (!rawModule) {
+        log.error("Handler module path is empty");
+        continue;
+      }
+      if (path.isAbsolute(rawModule)) {
+        log.error(
+          `Handler module path must be workspace-relative (got absolute path): ${rawModule}`,
+        );
+        continue;
+      }
+      const baseDir = path.resolve(workspaceDir);
+      const modulePath = path.resolve(baseDir, rawModule);
+      const rel = path.relative(baseDir, modulePath);
+      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+        log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
+        continue;
+      }
+      if (
+        !isPathInsideWithRealpath(baseDir, modulePath, {
+          requireRealpath: true,
+        })
+      ) {
+        log.error(
+          `Handler module path resolves outside workspaceDir after symlink resolution: ${rawModule}`,
+        );
+        continue;
+      }
 
       // Import the module with cache-busting to ensure fresh reload
       const url = pathToFileURL(modulePath).href;
@@ -132,20 +167,18 @@ export async function loadInternalHooks(
       const handler = mod[exportName];
 
       if (typeof handler !== "function") {
-        console.error(`Hook error: Handler '${exportName}' from ${modulePath} is not a function`);
+        log.error(`Handler '${exportName}' from ${modulePath} is not a function`);
         continue;
       }
 
-      // Register the handler
       registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
-      console.log(
+      log.info(
         `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
       loadedCount++;
     } catch (err) {
-      console.error(
-        `Failed to load hook handler from ${handlerConfig.module}:`,
-        err instanceof Error ? err.message : String(err),
+      log.error(
+        `Failed to load hook handler from ${handlerConfig.module}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

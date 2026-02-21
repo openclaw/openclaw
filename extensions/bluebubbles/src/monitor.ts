@@ -1,5 +1,15 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  registerWebhookTarget,
+  rejectNonPostWebhookRequest,
+  requestBodyErrorToText,
+  resolveSingleWebhookTarget,
+  resolveWebhookTargets,
+} from "openclaw/plugin-sdk";
 import {
   normalizeWebhookMessage,
   normalizeWebhookReaction,
@@ -225,81 +235,69 @@ function removeDebouncer(target: WebhookTarget): void {
 }
 
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
-  const key = normalizeWebhookPath(target.path);
-  const normalizedTarget = { ...target, path: key };
-  const existing = webhookTargets.get(key) ?? [];
-  const next = [...existing, normalizedTarget];
-  webhookTargets.set(key, next);
+  const registered = registerWebhookTarget(webhookTargets, target);
   return () => {
-    const updated = (webhookTargets.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
-    if (updated.length > 0) {
-      webhookTargets.set(key, updated);
-    } else {
-      webhookTargets.delete(key);
-    }
+    registered.unregister();
     // Clean up debouncer when target is unregistered
-    removeDebouncer(normalizedTarget);
+    removeDebouncer(registered.target);
   };
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes: number, timeoutMs = 30_000) {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  return await new Promise<{ ok: boolean; value?: unknown; error?: string }>((resolve) => {
-    let done = false;
-    const finish = (result: { ok: boolean; value?: unknown; error?: string }) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(timer);
-      resolve(result);
+type ReadBlueBubblesWebhookBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; statusCode: number; error: string };
+
+function parseBlueBubblesWebhookPayload(
+  rawBody: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    return { ok: false, error: "empty payload" };
+  }
+  try {
+    return { ok: true, value: JSON.parse(trimmed) as unknown };
+  } catch {
+    const params = new URLSearchParams(rawBody);
+    const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
+    if (!payload) {
+      return { ok: false, error: "invalid json" };
+    }
+    try {
+      return { ok: true, value: JSON.parse(payload) as unknown };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+}
+
+async function readBlueBubblesWebhookBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<ReadBlueBubblesWebhookBodyResult> {
+  try {
+    const rawBody = await readRequestBodyWithLimit(req, {
+      maxBytes,
+      timeoutMs: 30_000,
+    });
+    const parsed = parseBlueBubblesWebhookPayload(rawBody);
+    if (!parsed.ok) {
+      return { ok: false, statusCode: 400, error: parsed.error };
+    }
+    return parsed;
+  } catch (error) {
+    if (isRequestBodyLimitError(error)) {
+      return {
+        ok: false,
+        statusCode: error.statusCode,
+        error: requestBodyErrorToText(error.code),
+      };
+    }
+    return {
+      ok: false,
+      statusCode: 400,
+      error: error instanceof Error ? error.message : String(error),
     };
-
-    const timer = setTimeout(() => {
-      finish({ ok: false, error: "request body timeout" });
-      req.destroy();
-    }, timeoutMs);
-
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        finish({ ok: false, error: "payload too large" });
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      try {
-        const raw = Buffer.concat(chunks).toString("utf8");
-        if (!raw.trim()) {
-          finish({ ok: false, error: "empty payload" });
-          return;
-        }
-        try {
-          finish({ ok: true, value: JSON.parse(raw) as unknown });
-          return;
-        } catch {
-          const params = new URLSearchParams(raw);
-          const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
-          if (payload) {
-            finish({ ok: true, value: JSON.parse(payload) as unknown });
-            return;
-          }
-          throw new Error("invalid json");
-        }
-      } catch (err) {
-        finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-    });
-    req.on("error", (err) => {
-      finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    });
-    req.on("close", () => {
-      finish({ ok: false, error: "connection closed" });
-    });
-  });
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -315,33 +313,49 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
+function normalizeAuthToken(raw: string): string {
+  const value = raw.trim();
+  if (!value) {
+    return "";
+  }
+  if (value.toLowerCase().startsWith("bearer ")) {
+    return value.slice("bearer ".length).trim();
+  }
+  return value;
+}
+
+function safeEqualSecret(aRaw: string, bRaw: string): boolean {
+  const a = normalizeAuthToken(aRaw);
+  const b = normalizeAuthToken(bRaw);
+  if (!a || !b) {
+    return false;
+  }
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
 export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const path = normalizeWebhookPath(url.pathname);
-  const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) {
+  const resolved = resolveWebhookTargets(req, webhookTargets);
+  if (!resolved) {
     return false;
   }
+  const { path, targets } = resolved;
+  const url = new URL(req.url ?? "/", "http://localhost");
 
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "POST");
-    res.end("Method Not Allowed");
+  if (rejectNonPostWebhookRequest(req, res)) {
     return true;
   }
 
-  const body = await readJsonBody(req, 1024 * 1024);
+  const body = await readBlueBubblesWebhookBody(req, 1024 * 1024);
   if (!body.ok) {
-    if (body.error === "payload too large") {
-      res.statusCode = 413;
-    } else if (body.error === "request body timeout") {
-      res.statusCode = 408;
-    } else {
-      res.statusCode = 400;
-    }
+    res.statusCode = body.statusCode;
     res.end(body.error ?? "invalid payload");
     console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
     return true;
@@ -398,25 +412,19 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
 
-  const matching = targets.filter((target) => {
-    const token = target.account.config.password?.trim();
-    if (!token) {
-      return true;
-    }
-    const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
-    const headerToken =
-      req.headers["x-guid"] ??
-      req.headers["x-password"] ??
-      req.headers["x-bluebubbles-guid"] ??
-      req.headers["authorization"];
-    const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-    if (guid && guid.trim() === token) {
-      return true;
-    }
-    return false;
+  const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
+  const headerToken =
+    req.headers["x-guid"] ??
+    req.headers["x-password"] ??
+    req.headers["x-bluebubbles-guid"] ??
+    req.headers["authorization"];
+  const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
+  const matchedTarget = resolveSingleWebhookTarget(targets, (target) => {
+    const token = target.account.config.password?.trim() ?? "";
+    return safeEqualSecret(guid, token);
   });
 
-  if (matching.length === 0) {
+  if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
     console.warn(
@@ -425,24 +433,30 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
 
-  for (const target of matching) {
-    target.statusSink?.({ lastInboundAt: Date.now() });
-    if (reaction) {
-      processReaction(reaction, target).catch((err) => {
-        target.runtime.error?.(
-          `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
-        );
-      });
-    } else if (message) {
-      // Route messages through debouncer to coalesce rapid-fire events
-      // (e.g., text message + URL balloon arriving as separate webhooks)
-      const debouncer = getOrCreateDebouncer(target);
-      debouncer.enqueue({ message, target }).catch((err) => {
-        target.runtime.error?.(
-          `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
-        );
-      });
-    }
+  if (matchedTarget.kind === "ambiguous") {
+    res.statusCode = 401;
+    res.end("ambiguous webhook target");
+    console.warn(`[bluebubbles] webhook rejected: ambiguous target match path=${path}`);
+    return true;
+  }
+
+  const target = matchedTarget.target;
+  target.statusSink?.({ lastInboundAt: Date.now() });
+  if (reaction) {
+    processReaction(reaction, target).catch((err) => {
+      target.runtime.error?.(
+        `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
+      );
+    });
+  } else if (message) {
+    // Route messages through debouncer to coalesce rapid-fire events
+    // (e.g., text message + URL balloon arriving as separate webhooks)
+    const debouncer = getOrCreateDebouncer(target);
+    debouncer.enqueue({ message, target }).catch((err) => {
+      target.runtime.error?.(
+        `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+      );
+    });
   }
 
   res.statusCode = 200;
@@ -483,6 +497,11 @@ export async function monitorBlueBubblesProvider(
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);
+  }
+  if (typeof serverInfo?.private_api === "boolean") {
+    runtime.log?.(
+      `[${account.accountId}] BlueBubbles Private API ${serverInfo.private_api ? "enabled" : "disabled"}`,
+    );
   }
 
   const unregister = registerBlueBubblesWebhookTarget({

@@ -32,7 +32,7 @@ openclaw plugins install ./extensions/tlon
 
 Details: [Plugins](/tools/plugin)
 
-## Setup
+## Onboarding
 
 1. Install the Tlon plugin.
 2. Gather your ship URL and login code.
@@ -50,6 +50,22 @@ Minimal config (single account):
       ship: "~sampel-palnet",
       url: "https://your-ship-host",
       code: "lidlut-tabwed-pillex-ridrup",
+    },
+  },
+}
+```
+
+Private/LAN ship URLs (advanced):
+
+By default, OpenClaw blocks private/internal hostnames and IP ranges for this plugin (SSRF hardening).
+If your ship URL is on a private network (for example `http://192.168.1.50:8080` or `http://localhost:8080`),
+you must explicitly opt in:
+
+```json5
+{
+  channels: {
+    tlon: {
+      allowPrivateNetwork: true,
     },
   },
 }

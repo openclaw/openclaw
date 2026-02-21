@@ -1,5 +1,6 @@
 import type { APIChannel } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
+import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordChannelCreate,
   DiscordChannelEdit,
@@ -7,7 +8,6 @@ import type {
   DiscordChannelPermissionSet,
   DiscordReactOpts,
 } from "./send.types.js";
-import { resolveDiscordRest } from "./send.shared.js";
 
 export async function createChannelDiscord(
   payload: DiscordChannelCreate,
@@ -69,6 +69,15 @@ export async function editChannelDiscord(
   }
   if (payload.autoArchiveDuration !== undefined) {
     body.auto_archive_duration = payload.autoArchiveDuration;
+  }
+  if (payload.availableTags !== undefined) {
+    body.available_tags = payload.availableTags.map((t) => ({
+      ...(t.id !== undefined && { id: t.id }),
+      name: t.name,
+      ...(t.moderated !== undefined && { moderated: t.moderated }),
+      ...(t.emoji_id !== undefined && { emoji_id: t.emoji_id }),
+      ...(t.emoji_name !== undefined && { emoji_name: t.emoji_name }),
+    }));
   }
   return (await rest.patch(Routes.channel(payload.channelId), {
     body,

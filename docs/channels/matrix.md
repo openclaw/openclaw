@@ -36,7 +36,7 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
-## Setup
+## Onboarding
 
 1. Install the Matrix plugin:
    - From npm: `openclaw plugins install @openclaw/matrix`
@@ -190,6 +190,7 @@ Notes:
   - `openclaw pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
 - `channels.matrix.dm.allowFrom` accepts full Matrix user IDs (example: `@user:server`). The wizard resolves display names to user IDs when directory search finds a single exact match.
+- Do not use display names or bare localparts (example: `"Alice"` or `"alice"`). They are ambiguous and are ignored for allowlist matching. Use full `@user:server` IDs.
 
 ## Rooms (groups)
 
@@ -269,7 +270,7 @@ Common failures:
 
 For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
-## Configuration reference (Matrix)
+## Configuration
 
 Full configuration: [Configuration](/gateway/configuration)
 

@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
   DEFAULT_SAFE_BINS,
   analyzeShellCommand,
@@ -12,31 +9,14 @@ import {
   type CommandResolution,
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
-
-function isPathLikeToken(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed === "-") {
-    return false;
-  }
-  if (trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed.startsWith("~")) {
-    return true;
-  }
-  if (trimmed.startsWith("/")) {
-    return true;
-  }
-  return /^[A-Za-z]:[\\/]/.test(trimmed);
-}
-
-function defaultFileExists(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath);
-  } catch {
-    return false;
-  }
-}
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import {
+  SAFE_BIN_GENERIC_PROFILE,
+  SAFE_BIN_PROFILES,
+  type SafeBinProfile,
+  validateSafeBinArgv,
+} from "./exec-safe-bin-policy.js";
+import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
 export function normalizeSafeBins(entries?: string[]): Set<string> {
   if (!Array.isArray(entries)) {
@@ -59,9 +39,17 @@ export function isSafeBinUsage(params: {
   argv: string[];
   resolution: CommandResolution | null;
   safeBins: Set<string>;
-  cwd?: string;
-  fileExists?: (filePath: string) => boolean;
+  platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
+  safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
+  safeBinGenericProfile?: SafeBinProfile;
+  isTrustedSafeBinPathFn?: typeof isTrustedSafeBinPath;
 }): boolean {
+  // Windows host exec uses PowerShell, which has different parsing/expansion rules.
+  // Keep safeBins conservative there (require explicit allowlist entries).
+  if (isWindowsPlatform(params.platform ?? process.platform)) {
+    return false;
+  }
   if (params.safeBins.size === 0) {
     return false;
   }
@@ -70,50 +58,36 @@ export function isSafeBinUsage(params: {
   if (!execName) {
     return false;
   }
-  const matchesSafeBin =
-    params.safeBins.has(execName) ||
-    (process.platform === "win32" && params.safeBins.has(path.parse(execName).name));
+  const matchesSafeBin = params.safeBins.has(execName);
   if (!matchesSafeBin) {
     return false;
   }
   if (!resolution?.resolvedPath) {
     return false;
   }
-  const cwd = params.cwd ?? process.cwd();
-  const exists = params.fileExists ?? defaultFileExists;
-  const argv = params.argv.slice(1);
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token) {
-      continue;
-    }
-    if (token === "-") {
-      continue;
-    }
-    if (token.startsWith("-")) {
-      const eqIndex = token.indexOf("=");
-      if (eqIndex > 0) {
-        const value = token.slice(eqIndex + 1);
-        if (value && (isPathLikeToken(value) || exists(path.resolve(cwd, value)))) {
-          return false;
-        }
-      }
-      continue;
-    }
-    if (isPathLikeToken(token)) {
-      return false;
-    }
-    if (exists(path.resolve(cwd, token))) {
-      return false;
-    }
+  const isTrustedPath = params.isTrustedSafeBinPathFn ?? isTrustedSafeBinPath;
+  if (
+    !isTrustedPath({
+      resolvedPath: resolution.resolvedPath,
+      trustedDirs: params.trustedSafeBinDirs,
+    })
+  ) {
+    return false;
   }
-  return true;
+  const argv = params.argv.slice(1);
+  const safeBinProfiles = params.safeBinProfiles ?? SAFE_BIN_PROFILES;
+  const genericSafeBinProfile = params.safeBinGenericProfile ?? SAFE_BIN_GENERIC_PROFILE;
+  const profile = safeBinProfiles[execName] ?? genericSafeBinProfile;
+  return validateSafeBinArgv(argv, profile);
 }
 
 export type ExecAllowlistEvaluation = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
+
+export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "skills" | null;
 
 function evaluateSegments(
   segments: ExecCommandSegment[],
@@ -121,12 +95,19 @@ function evaluateSegments(
     allowlist: ExecAllowlistEntry[];
     safeBins: Set<string>;
     cwd?: string;
+    platform?: string | null;
+    trustedSafeBinDirs?: ReadonlySet<string>;
     skillBins?: Set<string>;
     autoAllowSkills?: boolean;
   },
-): { satisfied: boolean; matches: ExecAllowlistEntry[] } {
+): {
+  satisfied: boolean;
+  matches: ExecAllowlistEntry[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+} {
   const matches: ExecAllowlistEntry[] = [];
   const allowSkills = params.autoAllowSkills === true && (params.skillBins?.size ?? 0) > 0;
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   const satisfied = segments.every((segment) => {
     const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
@@ -142,16 +123,25 @@ function evaluateSegments(
       argv: segment.argv,
       resolution: segment.resolution,
       safeBins: params.safeBins,
-      cwd: params.cwd,
+      platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
     });
     const skillAllow =
       allowSkills && segment.resolution?.executableName
         ? params.skillBins?.has(segment.resolution.executableName)
         : false;
-    return Boolean(match || safe || skillAllow);
+    const by: ExecSegmentSatisfiedBy = match
+      ? "allowlist"
+      : safe
+        ? "safeBins"
+        : skillAllow
+          ? "skills"
+          : null;
+    segmentSatisfiedBy.push(by);
+    return Boolean(by);
   });
 
-  return { satisfied, matches };
+  return { satisfied, matches, segmentSatisfiedBy };
 }
 
 export function evaluateExecAllowlist(params: {
@@ -159,12 +149,15 @@ export function evaluateExecAllowlist(params: {
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
   cwd?: string;
+  platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: Set<string>;
   autoAllowSkills?: boolean;
 }): ExecAllowlistEvaluation {
   const allowlistMatches: ExecAllowlistEntry[] = [];
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
   if (!params.analysis.ok || params.analysis.segments.length === 0) {
-    return { allowlistSatisfied: false, allowlistMatches };
+    return { allowlistSatisfied: false, allowlistMatches, segmentSatisfiedBy };
   }
 
   // If the analysis contains chains, evaluate each chain part separately
@@ -174,15 +167,18 @@ export function evaluateExecAllowlist(params: {
         allowlist: params.allowlist,
         safeBins: params.safeBins,
         cwd: params.cwd,
+        platform: params.platform,
+        trustedSafeBinDirs: params.trustedSafeBinDirs,
         skillBins: params.skillBins,
         autoAllowSkills: params.autoAllowSkills,
       });
       if (!result.satisfied) {
-        return { allowlistSatisfied: false, allowlistMatches: [] };
+        return { allowlistSatisfied: false, allowlistMatches: [], segmentSatisfiedBy: [] };
       }
       allowlistMatches.push(...result.matches);
+      segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
     }
-    return { allowlistSatisfied: true, allowlistMatches };
+    return { allowlistSatisfied: true, allowlistMatches, segmentSatisfiedBy };
   }
 
   // No chains, evaluate all segments together
@@ -190,10 +186,16 @@ export function evaluateExecAllowlist(params: {
     allowlist: params.allowlist,
     safeBins: params.safeBins,
     cwd: params.cwd,
+    platform: params.platform,
+    trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
   });
-  return { allowlistSatisfied: result.satisfied, allowlistMatches: result.matches };
+  return {
+    allowlistSatisfied: result.satisfied,
+    allowlistMatches: result.matches,
+    segmentSatisfiedBy: result.segmentSatisfiedBy,
+  };
 }
 
 export type ExecAllowlistAnalysis = {
@@ -201,6 +203,7 @@ export type ExecAllowlistAnalysis = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
 /**
@@ -212,10 +215,19 @@ export function evaluateShellAllowlist(params: {
   safeBins: Set<string>;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: Set<string>;
   autoAllowSkills?: boolean;
   platform?: string | null;
 }): ExecAllowlistAnalysis {
+  const analysisFailure = (): ExecAllowlistAnalysis => ({
+    analysisOk: false,
+    allowlistSatisfied: false,
+    allowlistMatches: [],
+    segments: [],
+    segmentSatisfiedBy: [],
+  });
+
   const chainParts = isWindowsPlatform(params.platform) ? null : splitCommandChain(params.command);
   if (!chainParts) {
     const analysis = analyzeShellCommand({
@@ -225,18 +237,15 @@ export function evaluateShellAllowlist(params: {
       platform: params.platform,
     });
     if (!analysis.ok) {
-      return {
-        analysisOk: false,
-        allowlistSatisfied: false,
-        allowlistMatches: [],
-        segments: [],
-      };
+      return analysisFailure();
     }
     const evaluation = evaluateExecAllowlist({
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
       cwd: params.cwd,
+      platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
     });
@@ -245,11 +254,13 @@ export function evaluateShellAllowlist(params: {
       allowlistSatisfied: evaluation.allowlistSatisfied,
       allowlistMatches: evaluation.allowlistMatches,
       segments: analysis.segments,
+      segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
     };
   }
 
   const allowlistMatches: ExecAllowlistEntry[] = [];
   const segments: ExecCommandSegment[] = [];
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   for (const part of chainParts) {
     const analysis = analyzeShellCommand({
@@ -259,12 +270,7 @@ export function evaluateShellAllowlist(params: {
       platform: params.platform,
     });
     if (!analysis.ok) {
-      return {
-        analysisOk: false,
-        allowlistSatisfied: false,
-        allowlistMatches: [],
-        segments: [],
-      };
+      return analysisFailure();
     }
 
     segments.push(...analysis.segments);
@@ -273,16 +279,20 @@ export function evaluateShellAllowlist(params: {
       allowlist: params.allowlist,
       safeBins: params.safeBins,
       cwd: params.cwd,
+      platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
     });
     allowlistMatches.push(...evaluation.allowlistMatches);
+    segmentSatisfiedBy.push(...evaluation.segmentSatisfiedBy);
     if (!evaluation.allowlistSatisfied) {
       return {
         analysisOk: true,
         allowlistSatisfied: false,
         allowlistMatches,
         segments,
+        segmentSatisfiedBy,
       };
     }
   }
@@ -292,5 +302,6 @@ export function evaluateShellAllowlist(params: {
     allowlistSatisfied: true,
     allowlistMatches,
     segments,
+    segmentSatisfiedBy,
   };
 }
