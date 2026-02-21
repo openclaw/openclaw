@@ -1,6 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
+import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 
 export type { AuthChoiceGroupId };
 
@@ -143,6 +143,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["venice-api-key"],
   },
   {
+    value: "nebius-token-factory",
+    label: "Nebius Token Factory",
+    hint: "OpenAI-compatible",
+    choices: ["nebius-token-factory-api-key"],
+  },
+  {
     value: "litellm",
     label: "LiteLLM",
     hint: "Unified LLM gateway (100+ providers)",
@@ -216,6 +222,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  },
+  {
+    value: "nebius-token-factory-api-key",
+    label: "Nebius Token Factory API key",
+    hint: "OpenAI-compatible (GLM via Nebius)",
   },
   {
     value: "together-api-key",

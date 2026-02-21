@@ -1,8 +1,8 @@
-import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
-import { formatCliCommand } from "../cli/command-format.js";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -285,6 +285,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
 
   if (normalized === "kimi-coding") {
     return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
+  }
+
+  if (normalized === "nebius-token-factory") {
+    return pick("NEBIUS_TOKEN_FACTORY") ?? pick("NEBIUS_API_KEY");
   }
 
   if (normalized === "huggingface") {

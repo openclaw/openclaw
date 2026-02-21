@@ -43,6 +43,7 @@ describe("buildAuthChoiceOptions", () => {
     ["Chutes OAuth auth choice", ["chutes"]],
     ["Qwen auth choice", ["qwen-portal"]],
     ["xAI auth choice", ["xai-api-key"]],
+    ["Nebius Token Factory auth choice", ["nebius-token-factory-api-key"]],
     ["vLLM auth choice", ["vllm"]],
   ])("includes %s", (_label, expectedValues) => {
     const options = getOptions();

@@ -8,6 +8,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "aiGatewayApiKey"
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
+  | "nebiusTokenFactoryApiKey"
   | "kimiCodeApiKey"
   | "geminiApiKey"
   | "zaiApiKey"
@@ -74,6 +75,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--moonshot-api-key",
     cliOption: "--moonshot-api-key <key>",
     description: "Moonshot API key",
+  },
+  {
+    optionKey: "nebiusTokenFactoryApiKey",
+    authChoice: "nebius-token-factory-api-key",
+    cliFlag: "--nebius-token-factory-api-key",
+    cliOption: "--nebius-token-factory-api-key <key>",
+    description: "Nebius Token Factory API key",
   },
   {
     optionKey: "kimiCodeApiKey",

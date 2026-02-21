@@ -1,9 +1,10 @@
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { RuntimeEnv } from "../../../runtime.js";
+import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { upsertSharedEnvVar } from "../../../infra/env-file.js";
-import type { RuntimeEnv } from "../../../runtime.js";
 import { shortenHomePath } from "../../../utils.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
@@ -18,6 +19,7 @@ import {
   applyMinimaxConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
+  applyNebiusTokenFactoryConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -37,6 +39,7 @@ import {
   setLitellmApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNebiusTokenFactoryApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -54,7 +57,6 @@ import {
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
-import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { applyOpenAIConfig } from "../../openai-model-default.js";
 import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
@@ -484,6 +486,30 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "moonshot-api-key-cn") {
     return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
+  }
+
+  if (authChoice === "nebius-token-factory-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "nebius-token-factory",
+      cfg: baseConfig,
+      flagValue: opts.nebiusTokenFactoryApiKey,
+      flagName: "--nebius-token-factory-api-key",
+      envVar: "NEBIUS_TOKEN_FACTORY",
+      envVarFallbacks: ["NEBIUS_API_KEY"],
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setNebiusTokenFactoryApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nebius-token-factory:default",
+      provider: "nebius-token-factory",
+      mode: "api_key",
+    });
+    return applyNebiusTokenFactoryConfig(nextConfig);
   }
 
   if (authChoice === "kimi-code-api-key") {

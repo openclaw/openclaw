@@ -1,7 +1,5 @@
 import type { Command } from "commander";
-import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -9,6 +7,8 @@ import type {
   NodeManagerChoice,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
+import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import { onboardCommand } from "../../commands/onboard.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -137,6 +137,7 @@ export function registerOnboardCommand(program: Command) {
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
           cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
           moonshotApiKey: opts.moonshotApiKey as string | undefined,
+          nebiusTokenFactoryApiKey: opts.nebiusTokenFactoryApiKey as string | undefined,
           kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
           geminiApiKey: opts.geminiApiKey as string | undefined,
           zaiApiKey: opts.zaiApiKey as string | undefined,

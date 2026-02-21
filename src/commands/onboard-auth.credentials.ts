@@ -206,6 +206,18 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setNebiusTokenFactoryApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "nebius-token-factory:default",
+    credential: {
+      type: "api_key",
+      provider: "nebius-token-factory",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";

@@ -32,6 +32,8 @@ import {
   applyOpencodeZenProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyNebiusTokenFactoryConfig,
+  applyNebiusTokenFactoryProviderConfig,
   applyTogetherConfig,
   applyTogetherProviderConfig,
   applyVeniceConfig,
@@ -47,6 +49,7 @@ import {
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
@@ -58,6 +61,7 @@ import {
   setLitellmApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
+  setNebiusTokenFactoryApiKey,
   setOpencodeZenApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
@@ -109,6 +113,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "nebius-token-factory") {
+      authChoice = "nebius-token-factory-api-key";
     } else if (params.opts.tokenProvider === "together") {
       authChoice = "together-api-key";
     } else if (params.opts.tokenProvider === "huggingface") {
@@ -404,6 +410,58 @@ export async function applyAuthChoiceApiProviders(
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyDefaultConfig: applyMoonshotConfigCn,
         applyProviderConfig: applyMoonshotProviderConfigCn,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "nebius-token-factory-api-key") {
+    let hasCredential = false;
+
+    if (
+      !hasCredential &&
+      params.opts?.token &&
+      params.opts?.tokenProvider === "nebius-token-factory"
+    ) {
+      await setNebiusTokenFactoryApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("nebius-token-factory");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing Nebius Token Factory API key from ${envKey.source} (${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setNebiusTokenFactoryApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Nebius Token Factory API key",
+        validate: validateApiKeyInput,
+      });
+      await setNebiusTokenFactoryApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nebius-token-factory:default",
+      provider: "nebius-token-factory",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyNebiusTokenFactoryConfig,
+        applyProviderConfig: applyNebiusTokenFactoryProviderConfig,
+        noteDefault: NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });
