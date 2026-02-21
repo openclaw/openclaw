@@ -99,6 +99,27 @@ const validateTelegramCustomCommands = (
   }
 };
 
+function normalizeTelegramStreamingConfig(value: {
+  streaming?: boolean;
+  streamMode?: "off" | "partial" | "block";
+}) {
+  if (typeof value.streaming === "boolean") {
+    delete value.streamMode;
+    return;
+  }
+  if (value.streamMode === "off") {
+    value.streaming = false;
+    delete value.streamMode;
+    return;
+  }
+  if (value.streamMode === "partial" || value.streamMode === "block") {
+    value.streaming = true;
+    delete value.streamMode;
+    return;
+  }
+  value.streaming = false;
+}
+
 export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -122,10 +143,12 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
+    // Legacy key kept for automatic migration to `streaming`.
+    streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
@@ -159,6 +182,7 @@ export const TelegramAccountSchemaBase = z
   .strict();
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+  normalizeTelegramStreamingConfig(value);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -173,6 +197,7 @@ export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((valu
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
 }).superRefine((value, ctx) => {
+  normalizeTelegramStreamingConfig(value);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -360,6 +385,14 @@ export const DiscordAccountSchema = z
     slashCommand: z
       .object({
         ephemeral: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),

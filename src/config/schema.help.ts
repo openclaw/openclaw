@@ -26,6 +26,13 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
+  "agents.defaults.sandbox.browser.network":
+    "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
+  "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.defaults.sandbox.browser.cdpSourceRange":
+    "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
+  "agents.list[].sandbox.browser.cdpSourceRange":
+    "Per-agent override for CDP source CIDR allowlist.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
@@ -33,7 +40,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowedOrigins":
     "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
   "gateway.controlUi.allowInsecureAuth":
-    "Allow Control UI auth over insecure HTTP (token-only; not recommended).",
+    "Insecure-auth toggle; Control UI still enforces secure context + device identity unless dangerouslyDisableDeviceAuth is enabled.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "DANGEROUS. Disable Control UI device identity checks (token/password only).",
   "gateway.http.endpoints.chatCompletions.enabled":
@@ -338,6 +345,10 @@ export const FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
     "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
+  "session.threadBindings.enabled":
+    "Global master switch for thread-bound session routing features. Channel/provider keys (for example channels.discord.threadBindings.enabled) override this default. Default: true.",
+  "session.threadBindings.ttlHours":
+    "Default auto-unfocus TTL in hours for thread-bound sessions across providers/channels. Set 0 to disable (default: 24). Provider keys (for example channels.discord.threadBindings.ttlHours) override this.",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":
@@ -391,14 +402,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
-  "channels.telegram.streamMode":
-    "Live stream preview mode for Telegram replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessageText.",
-  "channels.telegram.draftChunk.minChars":
-    'Minimum chars before emitting a Telegram stream preview update when channels.telegram.streamMode="block" (default: 200).',
-  "channels.telegram.draftChunk.maxChars":
-    'Target max size for a Telegram stream preview chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
-  "channels.telegram.draftChunk.breakPreference":
-    "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
+  "channels.telegram.streaming":
+    "Enable Telegram live stream preview via message edits (default: false; legacy streamMode auto-maps here).",
   "channels.discord.streamMode":
     "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
   "channels.discord.draftChunk.minChars":
@@ -438,6 +443,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
+  "channels.discord.threadBindings.enabled":
+    "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+  "channels.discord.threadBindings.ttlHours":
+    "Auto-unfocus TTL in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable (default: 24). Overrides session.threadBindings.ttlHours when set.",
+  "channels.discord.threadBindings.spawnSubagentSessions":
+    "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":

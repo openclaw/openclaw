@@ -419,6 +419,136 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("warns when sandbox browser containers have missing or stale hash labels", async () => {
+    const tmp = await makeTmpDir("browser-hash-labels");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    await fs.chmod(configPath, 0o600);
+
+    const execDockerRawFn = (async (args: string[]) => {
+      if (args[0] === "ps") {
+        return {
+          stdout: Buffer.from("openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
+        return {
+          stdout: Buffer.from("abc123\tepoch-v0\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
+        return {
+          stdout: Buffer.from("<no value>\t<no value>\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      return {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from("not found"),
+        code: 1,
+      };
+    }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>;
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      execDockerRawFn,
+    });
+
+    expect(hasFinding(res, "sandbox.browser_container.hash_label_missing", "warn")).toBe(true);
+    expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale", "warn")).toBe(true);
+    const staleEpoch = res.findings.find(
+      (f) => f.checkId === "sandbox.browser_container.hash_epoch_stale",
+    );
+    expect(staleEpoch?.detail).toContain("openclaw-sbx-browser-old");
+  });
+
+  it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
+    const tmp = await makeTmpDir("browser-hash-labels-skip");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    await fs.chmod(configPath, 0o600);
+
+    const execDockerRawFn = (async () => {
+      throw new Error("spawn docker ENOENT");
+    }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>;
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      execDockerRawFn,
+    });
+
+    expect(hasFinding(res, "sandbox.browser_container.hash_label_missing")).toBe(false);
+    expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale")).toBe(false);
+  });
+
+  it("flags sandbox browser containers with non-loopback published ports", async () => {
+    const tmp = await makeTmpDir("browser-non-loopback-publish");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    await fs.chmod(configPath, 0o600);
+
+    const execDockerRawFn = (async (args: string[]) => {
+      if (args[0] === "ps") {
+        return {
+          stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+        return {
+          stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+        return {
+          stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      return {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from("not found"),
+        code: 1,
+      };
+    }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>;
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      execDockerRawFn,
+    });
+
+    expect(hasFinding(res, "sandbox.browser_container.non_loopback_publish", "critical")).toBe(
+      true,
+    );
+  });
+
   it("uses symlink target permissions for config checks", async () => {
     if (isWindows) {
       return;
@@ -573,6 +703,47 @@ describe("security audit", () => {
     );
   });
 
+  it("warns when sandbox browser uses bridge network without cdpSourceRange", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            browser: {
+              enabled: true,
+              network: "bridge",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("agents.defaults.sandbox.browser");
+  });
+
+  it("does not warn when sandbox browser uses dedicated default network", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            browser: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expect(hasFinding(res, "sandbox.browser_cdp_bridge_unrestricted")).toBe(false);
+  });
+
   it("flags ineffective gateway.nodes.denyCommands entries", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -707,7 +878,12 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "gateway.control_ui.insecure_auth",
-          severity: "critical",
+          severity: "warn",
+        }),
+        expect.objectContaining({
+          checkId: "config.insecure_or_dangerous_flags",
+          severity: "warn",
+          detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
         }),
       ]),
     );
@@ -728,8 +904,38 @@ describe("security audit", () => {
           checkId: "gateway.control_ui.device_auth_disabled",
           severity: "critical",
         }),
+        expect.objectContaining({
+          checkId: "config.insecure_or_dangerous_flags",
+          severity: "warn",
+          detail: expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
+        }),
       ]),
     );
+  });
+
+  it("warns when insecure/dangerous debug flags are enabled", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: { allowUnsafeExternalContent: true },
+        mappings: [{ allowUnsafeExternalContent: true }],
+      },
+      tools: {
+        exec: {
+          applyPatch: {
+            workspaceOnly: false,
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+
+    expect(finding).toBeTruthy();
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
+    expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
+    expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
   it("flags trusted-proxy auth mode without generic shared-secret findings", async () => {
