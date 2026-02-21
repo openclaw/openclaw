@@ -14,19 +14,30 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
   const traces = new Map<string, string>();
   /** Most recent generation spanId keyed by sessionKey, used as parent for tool spans */
   const generationSpans = new Map<string, string>();
+  /** Last runId seen per sessionKey — a new runId means a new message cycle */
+  const lastRunId = new Map<string, string>();
 
   let client: import("posthog-node").PostHog | null = null;
   let unsubscribe: (() => void) | null = null;
 
-  function getOrCreateTraceId(sessionKey: string | undefined): string {
+  function getOrCreateTraceId(sessionKey: string | undefined, runId: string): string {
     if (!sessionKey) {
       return generateTraceId();
     }
-    let traceId = traces.get(sessionKey);
-    if (!traceId) {
-      traceId = generateTraceId();
-      traces.set(sessionKey, traceId);
+
+    const existingTraceId = traces.get(sessionKey);
+    const prevRunId = lastRunId.get(sessionKey);
+
+    // Same runId = same message cycle (e.g. tool-use continuation within one
+    // agent invocation). Reuse the existing trace.
+    if (existingTraceId && prevRunId === runId) {
+      return existingTraceId;
     }
+
+    // New runId = new message cycle, start a fresh trace.
+    lastRunId.set(sessionKey, runId);
+    const traceId = generateTraceId();
+    traces.set(sessionKey, traceId);
     return traceId;
   }
 
@@ -82,26 +93,16 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
       runs.clear();
       traces.clear();
       generationSpans.clear();
+      lastRunId.clear();
     },
   });
 
   // -- Lifecycle Hooks --
 
-  api.on("message_received", (_event, ctx) => {
-    // Start a new trace for this message cycle.
-    // Key by channelId — the diagnostic event's sessionKey also resolves to this.
-    // Also clear any previous generation span so tool calls link correctly.
-    const key = ctx.channelId;
-    if (key) {
-      traces.set(key, generateTraceId());
-      generationSpans.delete(key);
-    }
-  });
-
   api.on("llm_input", (event, ctx) => {
     cleanupStaleRuns();
 
-    const traceId = getOrCreateTraceId(ctx.sessionKey);
+    const traceId = getOrCreateTraceId(ctx.sessionKey, event.runId);
     const spanId = generateSpanId();
 
     // Build the input message array: system prompt + history + current prompt
@@ -134,7 +135,7 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
     if (!runState) return;
     runs.delete(event.runId);
 
-    // Track the generation spanId for tool call parenting
+    // Track the generation spanId for tool call parenting.
     const sessionKey = ctx.sessionKey;
     if (sessionKey) {
       generationSpans.set(sessionKey, runState.spanId);

@@ -44,6 +44,7 @@ export function buildAiGeneration(
     distinctId,
     properties: {
       $ai_trace_id: runState.traceId,
+      $ai_session_id: runState.sessionKey ?? null,
       $ai_span_id: runState.spanId,
       $ai_model: output.model,
       $ai_provider: output.provider,
@@ -80,6 +81,7 @@ export function buildAiSpan(
     distinctId,
     properties: {
       $ai_trace_id: traceId,
+      $ai_session_id: ctx.sessionKey ?? null,
       $ai_span_id: spanId,
       $ai_parent_id: parentSpanId ?? null,
       $ai_span_name: event.toolName,
@@ -108,6 +110,7 @@ export function buildAiTrace(
     distinctId,
     properties: {
       $ai_trace_id: traceId,
+      $ai_session_id: event.sessionKey ?? null,
       $ai_latency: latency,
       $ai_is_error: event.outcome === "error",
       $ai_error: event.error ?? null,

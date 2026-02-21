@@ -156,6 +156,53 @@ describe("buildAiGeneration", () => {
     expect(input[3]).toEqual({ role: "assistant", content: "It's sunny and 22°C!" });
   });
 
+  test("converts OpenClaw toolCall/toolResult to OpenAI format", () => {
+    const rawInput: unknown[] = [
+      { role: "user", content: "read my identity file" },
+      // OpenClaw-style assistant turn with toolCall (camelCase, arguments instead of input)
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_vrtx_01",
+            name: "read",
+            arguments: { file_path: "IDENTITY.md" },
+          },
+        ],
+      },
+      // OpenClaw-style tool result (role: "toolResult", flat message)
+      { role: "toolResult", content: "# IDENTITY.md\nName: Sir Hogsalot" },
+      { role: "assistant", content: "Your name is Sir Hogsalot!" },
+    ];
+
+    const runState: RunState = { ...baseRunState, input: rawInput };
+    const result = buildAiGeneration(runState, baseOutput, false);
+    const input = result.properties.$ai_input as Array<Record<string, unknown>>;
+
+    // [0] user text
+    expect(input[0]).toEqual({ role: "user", content: "read my identity file" });
+    // [1] assistant with tool_calls (converted from toolCall)
+    expect(input[1]).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: "toolu_vrtx_01",
+          type: "function",
+          function: { name: "read", arguments: '{"file_path":"IDENTITY.md"}' },
+        },
+      ],
+    });
+    // [2] toolResult → role:"tool"
+    expect(input[2]).toEqual({
+      role: "tool",
+      content: "# IDENTITY.md\nName: Sir Hogsalot",
+    });
+    // [3] final assistant text
+    expect(input[3]).toEqual({ role: "assistant", content: "Your name is Sir Hogsalot!" });
+  });
+
   test("skips assistant turns with only thinking blocks (empty content)", () => {
     const rawInput: unknown[] = [
       { role: "user", content: "hello" },

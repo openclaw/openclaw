@@ -103,6 +103,15 @@ function normalizeMessage(raw: unknown): FormattedMessage[] {
   const obj = raw as Record<string, unknown>;
   const role = typeof obj.role === "string" ? obj.role : "user";
 
+  // OpenClaw tool result message → OpenAI role:"tool" message
+  if (role === "toolResult") {
+    const content =
+      typeof obj.content === "string"
+        ? obj.content
+        : truncate(safeStringify(obj.content) ?? "", 2000);
+    return [{ role: "tool", content }];
+  }
+
   // Simple string content — pass through directly
   if (typeof obj.content === "string") {
     return [{ role, content: obj.content }];
@@ -139,6 +148,19 @@ function normalizeMessage(raw: unknown): FormattedMessage[] {
         function: {
           name: typeof block.name === "string" ? block.name : "unknown",
           arguments: safeStringify(block.input) ?? "{}",
+        },
+      });
+      continue;
+    }
+
+    // OpenClaw toolCall → OpenAI tool_calls (arguments instead of input)
+    if (type === "toolCall") {
+      toolUseCalls.push({
+        id: typeof block.id === "string" ? block.id : `call_${randomUUID()}`,
+        type: "function",
+        function: {
+          name: typeof block.name === "string" ? block.name : "unknown",
+          arguments: safeStringify(block.arguments) ?? "{}",
         },
       });
       continue;

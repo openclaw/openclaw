@@ -80,10 +80,10 @@ describe("registerPostHogHooks", () => {
     expect(services[0]!.id).toBe("posthog");
 
     const registeredHooks = [...hooks.keys()];
-    expect(registeredHooks).toContain("message_received");
     expect(registeredHooks).toContain("llm_input");
     expect(registeredHooks).toContain("llm_output");
     expect(registeredHooks).toContain("after_tool_call");
+    expect(registeredHooks).not.toContain("message_received");
   });
 
   test("service start initializes PostHog client", async () => {
@@ -148,6 +148,141 @@ describe("registerPostHogHooks", () => {
     expect(captured.properties.$ai_output_tokens).toBe(5);
     expect(captured.properties.$ai_input).toEqual([{ role: "user", content: "What is 2+2?" }]);
     expect(captured.properties.$ai_output_choices).toEqual([{ role: "assistant", content: "4" }]);
+    expect(captured.properties.$ai_session_id).toBe("telegram:123");
+  });
+
+  test("separate messages (different runIds) get distinct trace IDs", async () => {
+    const { api, hooks, services } = createMockApi();
+    registerPostHogHooks(api, defaultConfig());
+    await services[0]!.start();
+
+    const llmInputHandlers = hooks.get("llm_input")!;
+    const llmOutputHandlers = hooks.get("llm_output")!;
+
+    // First message (runId "run-a")
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-a",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "Hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "agent:main:main" },
+    );
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-a",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["Hi!"],
+        usage: { input: 5, output: 2 },
+      },
+      { sessionKey: "agent:main:main" },
+    );
+
+    const traceId1 = captureMock.mock.calls[0]![0].properties.$ai_trace_id;
+
+    // Second message — same sessionKey but different runId
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-b",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "Goodbye",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "agent:main:main" },
+    );
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-b",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["Bye!"],
+        usage: { input: 5, output: 2 },
+      },
+      { sessionKey: "agent:main:main" },
+    );
+
+    const traceId2 = captureMock.mock.calls[1]![0].properties.$ai_trace_id;
+    expect(traceId1).toBeTruthy();
+    expect(traceId2).toBeTruthy();
+    expect(traceId1).not.toBe(traceId2);
+
+    // Both should have the same session ID
+    expect(captureMock.mock.calls[0]![0].properties.$ai_session_id).toBe("agent:main:main");
+    expect(captureMock.mock.calls[1]![0].properties.$ai_session_id).toBe("agent:main:main");
+  });
+
+  test("tool-use cycle (same runId) reuses the same trace ID", async () => {
+    const { api, hooks, services } = createMockApi();
+    registerPostHogHooks(api, defaultConfig());
+    await services[0]!.start();
+
+    const llmInputHandlers = hooks.get("llm_input")!;
+    const llmOutputHandlers = hooks.get("llm_output")!;
+
+    // First LLM call — model requests tool use (same runId throughout)
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-tool",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "What's the weather?",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:789" },
+    );
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-tool",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["Let me check..."],
+        usage: { input: 10, output: 5 },
+      },
+      { sessionKey: "telegram:789" },
+    );
+
+    const traceId1 = captureMock.mock.calls[0]![0].properties.$ai_trace_id;
+
+    // Second LLM call — after tool execution, same runId (same agent invocation)
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-tool",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "Tool result: sunny",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:789" },
+    );
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-tool",
+        sessionId: "sess-1",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["It's sunny!"],
+        usage: { input: 15, output: 5 },
+      },
+      { sessionKey: "telegram:789" },
+    );
+
+    const traceId2 = captureMock.mock.calls[1]![0].properties.$ai_trace_id;
+    expect(traceId1).toBe(traceId2);
   });
 
   test("privacy mode redacts input/output content", async () => {
@@ -256,14 +391,38 @@ describe("registerPostHogHooks", () => {
     registerPostHogHooks(api, defaultConfig());
     await services[0]!.start();
 
-    // Set up trace by triggering message_received
-    const messageHandlers = hooks.get("message_received")!;
-    await messageHandlers[0]!(
-      { from: "user1", content: "hello", timestamp: Date.now() },
-      { channelId: "telegram" },
+    // Set up trace via llm_input (creates trace for this sessionKey)
+    const llmInputHandlers = hooks.get("llm_input")!;
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-trace",
+        sessionId: "sess-trace",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:trace-test" },
     );
 
-    // Trigger diagnostic event
+    // Complete the run (so trace exists)
+    const llmOutputHandlers = hooks.get("llm_output")!;
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-trace",
+        sessionId: "sess-trace",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["hi"],
+        usage: { input: 5, output: 2 },
+      },
+      { sessionKey: "telegram:trace-test" },
+    );
+
+    captureMock.mockClear();
+
+    // Trigger diagnostic event with matching sessionKey
     diagnosticListener({
       type: "message.processed",
       ts: Date.now(),
@@ -271,7 +430,7 @@ describe("registerPostHogHooks", () => {
       channel: "telegram",
       outcome: "completed",
       durationMs: 3000,
-      sessionKey: "telegram",
+      sessionKey: "telegram:trace-test",
     });
 
     expect(captureMock).toHaveBeenCalledTimes(1);
@@ -279,6 +438,7 @@ describe("registerPostHogHooks", () => {
     expect(captured.event).toBe("$ai_trace");
     expect(captured.properties.$ai_latency).toBeCloseTo(3.0, 2);
     expect(captured.properties.$ai_is_error).toBe(false);
+    expect(captured.properties.$ai_session_id).toBe("telegram:trace-test");
   });
 
   test("llm_output without matching llm_input is ignored", async () => {

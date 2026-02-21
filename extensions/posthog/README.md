@@ -19,9 +19,11 @@ Add to your `openclaw.json` (or `openclaw.yaml`):
     "entries": {
       "posthog": {
         "enabled": true,
-        "apiKey": "phc_your_project_key",
-        "host": "https://us.i.posthog.com",
-        "privacyMode": true,
+        "config": {
+          "apiKey": "phc_your_project_key",
+          "host": "https://us.i.posthog.com",
+          "privacyMode": true,
+        },
       },
     },
   },
