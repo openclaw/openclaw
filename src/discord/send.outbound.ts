@@ -295,6 +295,100 @@ export async function sendMessageDiscord(
   return toDiscordSendResult(result, channelId);
 }
 
+type DiscordWebhookSendOpts = {
+  webhookId: string;
+  webhookToken: string;
+  accountId?: string;
+  threadId?: string | number;
+  replyTo?: string;
+  username?: string;
+  avatarUrl?: string;
+  wait?: boolean;
+};
+
+function resolveWebhookExecutionUrl(params: {
+  webhookId: string;
+  webhookToken: string;
+  threadId?: string | number;
+  wait?: boolean;
+}) {
+  const baseUrl = new URL(
+    `https://discord.com/api/v10/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}`,
+  );
+  baseUrl.searchParams.set("wait", params.wait === false ? "false" : "true");
+  if (params.threadId !== undefined && params.threadId !== null && params.threadId !== "") {
+    baseUrl.searchParams.set("thread_id", String(params.threadId));
+  }
+  return baseUrl.toString();
+}
+
+export async function sendWebhookMessageDiscord(
+  text: string,
+  opts: DiscordWebhookSendOpts,
+): Promise<DiscordSendResult> {
+  const webhookId = opts.webhookId.trim();
+  const webhookToken = opts.webhookToken.trim();
+  if (!webhookId || !webhookToken) {
+    throw new Error("Discord webhook id/token are required");
+  }
+
+  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
+  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+
+  const response = await fetch(
+    resolveWebhookExecutionUrl({
+      webhookId,
+      webhookToken,
+      threadId: opts.threadId,
+      wait: opts.wait,
+    }),
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        content: text,
+        username: opts.username?.trim() || undefined,
+        avatar_url: opts.avatarUrl?.trim() || undefined,
+        ...(messageReference ? { message_reference: messageReference } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    const raw = await response.text().catch(() => "");
+    throw new Error(
+      `Discord webhook send failed (${response.status}${raw ? `: ${raw.slice(0, 200)}` : ""})`,
+    );
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    id?: string;
+    channel_id?: string;
+  };
+  try {
+    const account = resolveDiscordAccount({
+      cfg: loadConfig(),
+      accountId: opts.accountId,
+    });
+    recordChannelActivity({
+      channel: "discord",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+  } catch {
+    // Best-effort telemetry only.
+  }
+  return {
+    messageId: payload.id ? String(payload.id) : "unknown",
+    channelId: payload.channel_id
+      ? String(payload.channel_id)
+      : opts.threadId
+        ? String(opts.threadId)
+        : "",
+  };
+}
+
 export async function sendStickerDiscord(
   to: string,
   stickerIds: string[],

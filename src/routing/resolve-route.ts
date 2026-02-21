@@ -10,6 +10,7 @@ import {
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
+  normalizeAccountId,
   normalizeAgentId,
   sanitizeAgentId,
 } from "./session-key.js";
@@ -71,11 +72,6 @@ function normalizeId(value: unknown): string {
   return "";
 }
 
-function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
-}
-
 function matchesAccountId(match: string | undefined, actual: string): boolean {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
@@ -84,7 +80,7 @@ function matchesAccountId(match: string | undefined, actual: string): boolean {
   if (trimmed === "*") {
     return true;
   }
-  return trimmed === actual;
+  return normalizeAccountId(trimmed) === actual;
 }
 
 export function buildAgentSessionKey(params: {

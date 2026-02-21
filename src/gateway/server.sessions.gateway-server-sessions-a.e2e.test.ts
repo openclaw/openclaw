@@ -26,6 +26,18 @@ const sessionHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async () => {}),
 }));
 
+const subagentLifecycleHookMocks = vi.hoisted(() => ({
+  runSubagentEnded: vi.fn(async () => {}),
+}));
+
+const subagentLifecycleHookState = vi.hoisted(() => ({
+  hasSubagentEndedHook: true,
+}));
+
+const threadBindingMocks = vi.hoisted(() => ({
+  unbindThreadBindingsBySessionKey: vi.fn((_params?: unknown) => []),
+}));
+
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
     "../auto-reply/reply/queue.js",
@@ -53,6 +65,27 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   return {
     ...actual,
     triggerInternalHook: sessionHookMocks.triggerInternalHook,
+  };
+});
+
+vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: vi.fn(() => ({
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook,
+      runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+    })),
+  };
+});
+
+vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+  return {
+    ...actual,
+    unbindThreadBindingsBySessionKey: (params: unknown) =>
+      threadBindingMocks.unbindThreadBindingsBySessionKey(params),
   };
 });
 
@@ -134,6 +167,9 @@ describe("gateway server sessions", () => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     sessionHookMocks.triggerInternalHook.mockClear();
+    subagentLifecycleHookMocks.runSubagentEnded.mockClear();
+    subagentLifecycleHookState.hasSubagentEndedHook = true;
+    threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -605,6 +641,148 @@ describe("gateway server sessions", () => {
       ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
       "sess-active",
     );
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
+      {
+        targetSessionKey: "agent:main:discord:group:dev",
+        targetKind: "acp",
+        reason: "session-delete",
+        sendFarewell: true,
+        outcome: "deleted",
+      },
+      {
+        childSessionKey: "agent:main:discord:group:dev",
+      },
+    );
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:discord:group:dev",
+      targetKind: "acp",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:missing",
+    });
+
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(false);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("sessions.delete emits subagent targetKind for subagent sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+      | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
+      | undefined;
+    expect(event).toMatchObject({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      outcome: "deleted",
+    });
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+      emitLifecycleHooks: false,
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.delete directly unbinds thread bindings when hooks are unavailable", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    subagentLifecycleHookState.hasSubagentEndedHook = false;
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
 
     ws.close();
   });
@@ -632,6 +810,125 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
+      {
+        targetSessionKey: "agent:main:main",
+        targetKind: "acp",
+        reason: "session-reset",
+        sendFarewell: true,
+        outcome: "reset",
+      },
+      {
+        childSessionKey: "agent:main:main",
+      },
+    );
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:main",
+      targetKind: "acp",
+      reason: "session-reset",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      ws,
+      "sessions.reset",
+      {
+        key: "agent:main:subagent:missing",
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("sessions.reset emits subagent targetKind for subagent sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      ws,
+      "sessions.reset",
+      {
+        key: "agent:main:subagent:worker",
+      },
+    );
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:main:subagent:worker");
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+      | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
+      | undefined;
+    expect(event).toMatchObject({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-reset",
+      outcome: "reset",
+    });
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-reset",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    subagentLifecycleHookState.hasSubagentEndedHook = false;
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+    });
+    expect(reset.ok).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:main",
+      targetKind: "acp",
+      reason: "session-reset",
+      sendFarewell: true,
+    });
 
     ws.close();
   });
