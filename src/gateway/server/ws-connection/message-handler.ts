@@ -643,7 +643,10 @@ export function attachGatewayWsMessageHandler(params: {
           };
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade",
+            hasExistingPairing: boolean,
           ) => {
+            const shouldSilentPair =
+              isLocalClient && (reason === "not-paired" || hasExistingPairing);
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -654,7 +657,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              silent: shouldSilentPair,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -701,7 +704,7 @@ export function attachGatewayWsMessageHandler(params: {
           const paired = await getPairedDevice(device.id);
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
-            const ok = await requirePairing("not-paired");
+            const ok = await requirePairing("not-paired", false);
             if (!ok) {
               return;
             }
@@ -717,13 +720,13 @@ export function attachGatewayWsMessageHandler(params: {
               const allowedRoles = new Set(pairedRoles);
               if (allowedRoles.size === 0) {
                 logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
-                const ok = await requirePairing("role-upgrade");
+                const ok = await requirePairing("role-upgrade", true);
                 if (!ok) {
                   return;
                 }
               } else if (!allowedRoles.has(role)) {
                 logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
-                const ok = await requirePairing("role-upgrade");
+                const ok = await requirePairing("role-upgrade", true);
                 if (!ok) {
                   return;
                 }
@@ -733,7 +736,7 @@ export function attachGatewayWsMessageHandler(params: {
               if (scopes.length > 0) {
                 if (pairedScopes.length === 0) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                  const ok = await requirePairing("scope-upgrade");
+                  const ok = await requirePairing("scope-upgrade", true);
                   if (!ok) {
                     return;
                   }
@@ -745,7 +748,7 @@ export function attachGatewayWsMessageHandler(params: {
                   });
                   if (!scopesAllowed) {
                     logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                    const ok = await requirePairing("scope-upgrade");
+                    const ok = await requirePairing("scope-upgrade", true);
                     if (!ok) {
                       return;
                     }
