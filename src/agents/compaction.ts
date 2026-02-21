@@ -5,6 +5,45 @@ import { retryAsync } from "../infra/retry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
+type CompactionModel = NonNullable<ExtensionContext["model"]>;
+
+/**
+ * Non-direct Anthropic endpoints (Vertex AI, Portkey proxies, etc.) do not
+ * support `thinking: { type: "adaptive" }` — only `"enabled"` / `"disabled"`.
+ * The upstream pi-ai library decides the thinking type based on the model ID,
+ * but has no awareness of the destination endpoint.  Disabling `reasoning` on
+ * the model prevents the library from adding *any* thinking parameters, which
+ * avoids the 400 error on these endpoints at a small quality trade-off for
+ * compaction summarization.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/18634
+ */
+function normalizeModelForCompaction(model: CompactionModel): CompactionModel {
+  if (model.api !== "anthropic-messages") {
+    return model;
+  }
+  const rawBaseUrl = (model.baseUrl ?? "").trim();
+  let isDirectAnthropic = !rawBaseUrl;
+  if (!isDirectAnthropic) {
+    try {
+      const parsed = new URL(rawBaseUrl);
+      const hostname = parsed.hostname.toLowerCase();
+      isDirectAnthropic = hostname === "anthropic.com" || hostname.endsWith(".anthropic.com");
+    } catch {
+      // Malformed URL: treat as non-direct/proxy to avoid enabling reasoning.
+      isDirectAnthropic = false;
+    }
+  }
+  if (isDirectAnthropic) {
+    return model;
+  }
+  // Proxy endpoint — disable reasoning to avoid unsupported thinking params.
+  if (!model.reasoning) {
+    return model;
+  }
+  return { ...model, reasoning: false };
+}
+
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
@@ -158,13 +197,14 @@ async function summarizeChunks(params: {
   const safeMessages = stripToolResultDetails(params.messages);
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
+  const model = normalizeModelForCompaction(params.model);
 
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
         generateSummary(
           chunk,
-          params.model,
+          model,
           params.reserveTokens,
           params.apiKey,
           params.signal,
@@ -387,3 +427,5 @@ export function pruneHistoryForContextShare(params: {
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
 }
+
+export { normalizeModelForCompaction };
