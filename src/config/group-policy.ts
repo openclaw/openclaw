@@ -9,6 +9,12 @@ export type ChannelGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /**
+   * How long (ms) after the bot replies to a sender in this group to treat
+   * their follow-up messages as implicit mentions. Default: 300000 (5 min).
+   * Set to 0 to disable.
+   */
+  followUpWindowMs?: number;
 };
 
 export type ChannelGroupPolicy = {

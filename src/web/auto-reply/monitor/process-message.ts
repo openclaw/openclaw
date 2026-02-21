@@ -35,6 +35,7 @@ import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import { recordGroupReply } from "./group-gating.js";
 import { formatGroupMembers } from "./group-members.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
@@ -394,6 +395,12 @@ export async function processMessage(params: {
             params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
           whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+          if (params.msg.chatType === "group" && params.msg.senderE164) {
+            recordGroupReply(
+              conversationId,
+              normalizeE164(params.msg.senderE164) ?? params.msg.senderE164,
+            );
+          }
           if (shouldLogVerbose()) {
             const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
             whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);

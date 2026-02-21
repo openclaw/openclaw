@@ -4,6 +4,12 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /**
+   * Global default for the follow-up window (ms) after the bot replies in a
+   * group chat. Per-group `followUpWindowMs` takes precedence. Default: 300000
+   * (5 min). Set to 0 to disable globally.
+   */
+  followUpWindowMs?: number;
 };
 
 export type DmConfig = {
