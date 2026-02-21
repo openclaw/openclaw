@@ -86,7 +86,9 @@ export const SessionSchema = z
       .superRefine((val, ctx) => {
         if (val.pruneAfter !== undefined) {
           try {
-            parseDurationMs(String(val.pruneAfter).trim(), { defaultUnit: "d" });
+            parseDurationMs(String(val.pruneAfter).trim(), {
+              defaultUnit: "d",
+            });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

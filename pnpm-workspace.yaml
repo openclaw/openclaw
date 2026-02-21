@@ -14,3 +14,13 @@ onlyBuiltDependencies:
   - node-llama-cpp
   - protobufjs
   - sharp
+
+updateConfig:
+  minimumReleaseAge: 1440
+  minimumReleaseAgeExclude:
+    - oxfmt
+    - oxlint
+    - oxlint-tsgolint
+    - "@oxfmt/*"
+    - "@oxlint/*"
+    - "@oxlint-tsgolint/*"

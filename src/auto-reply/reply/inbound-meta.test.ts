@@ -83,6 +83,17 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
+  it("treats openclaw-control-ui as a direct chat (hides metadata)", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderId: "openclaw-control-ui",
+      MessageSid: "123",
+      ConversationLabel: "some-label",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
   it("keeps conversation label for group chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
@@ -95,7 +106,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("includes sender identifier in conversation info", () => {
     const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
+      ChatType: "group",
       SenderE164: " +15551234567 ",
     } as TemplateContext);
 
@@ -105,7 +116,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("includes message_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
+      ChatType: "group",
       MessageSid: "  msg-123  ",
     } as TemplateContext);
 
@@ -127,7 +138,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("omits message_id_full when it matches message_id", () => {
     const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
+      ChatType: "group",
       MessageSid: "same-id",
       MessageSidFull: "same-id",
     } as TemplateContext);
@@ -139,7 +150,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("includes reply_to_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
+      ChatType: "group",
       MessageSid: "msg-200",
       ReplyToId: "msg-199",
     } as TemplateContext);
@@ -161,7 +172,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("trims sender_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
+      ChatType: "group",
       MessageSid: "msg-457",
       SenderId: "  289522496  ",
     } as TemplateContext);
@@ -172,7 +183,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("falls back to SenderId when sender phone is missing", () => {
     const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
+      ChatType: "group",
       SenderId: " user@example.com ",
     } as TemplateContext);
 
