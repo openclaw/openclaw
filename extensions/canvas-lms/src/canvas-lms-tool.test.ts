@@ -195,4 +195,127 @@ describe("canvas-lms-tool", () => {
     const submissionsText = (submissions.content?.[0] as { text?: string } | undefined)?.text ?? "";
     expect(submissionsText).toContain('"assignmentId": 99');
   });
+
+  it("supports calendar, grades, and course files actions", async () => {
+    const calendarResponse = new Response(
+      JSON.stringify([
+        {
+          id: 501,
+          title: "Prueba Parcial 1",
+          start_at: "2026-03-12T10:00:00Z",
+          end_at: "2026-03-12T11:30:00Z",
+          all_day: false,
+          html_url: "https://canvas.example.edu/calendar_events/501",
+        },
+      ]),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const gradesResponse = new Response(
+      JSON.stringify([
+        {
+          id: 9001,
+          user_id: 42,
+          type: "StudentEnrollment",
+          grades: {
+            current_grade: "A",
+            current_score: 94.2,
+            final_grade: "A-",
+            final_score: 92.1,
+          },
+          current_points: 188.4,
+        },
+      ]),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const filesResponse = new Response(
+      JSON.stringify([
+        {
+          id: 777,
+          display_name: "Syllabus.pdf",
+          filename: "Syllabus.pdf",
+          size: 245760,
+          "content-type": "application/pdf",
+          updated_at: "2026-02-01T15:00:00Z",
+          url: "https://canvas.example.edu/files/777/download",
+          locked: false,
+        },
+      ]),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(calendarResponse)
+      .mockResolvedValueOnce(gradesResponse)
+      .mockResolvedValueOnce(filesResponse);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          token: "tkn",
+        },
+      }),
+    );
+
+    const calendar = await tool.execute("call-6", {
+      action: "list_calendar_events",
+      courseId: "123",
+      startDate: "2026-03-01",
+      endDate: "2026-03-31",
+    });
+    const calendarText = (calendar.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(calendarText).toContain("Prueba Parcial 1");
+
+    const grades = await tool.execute("call-7", {
+      action: "list_grades",
+      courseId: "123",
+      studentId: "self",
+    });
+    const gradesText = (grades.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(gradesText).toContain('"currentGrade": "A"');
+
+    const files = await tool.execute("call-8", {
+      action: "list_course_files",
+      courseId: "123",
+    });
+    const filesText = (files.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(filesText).toContain("Syllabus.pdf");
+
+    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledUrls[0]).toContain("/calendar_events?");
+    expect(calledUrls[1]).toContain("/courses/123/enrollments?");
+    expect(calledUrls[2]).toContain("/courses/123/files?");
+  });
+
+  it("requires course id for calendar, grades, and course files", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          token: "tkn",
+        },
+      }),
+    );
+
+    await expect(tool.execute("call-9", { action: "list_calendar_events" })).rejects.toThrow(
+      /courseId is required/,
+    );
+    await expect(tool.execute("call-10", { action: "list_grades" })).rejects.toThrow(
+      /courseId is required/,
+    );
+    await expect(tool.execute("call-11", { action: "list_course_files" })).rejects.toThrow(
+      /courseId is required/,
+    );
+  });
 });

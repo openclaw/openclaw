@@ -8,6 +8,9 @@ const CANVAS_LMS_ACTIONS = [
   "list_announcements",
   "list_modules",
   "list_submissions",
+  "list_calendar_events",
+  "list_grades",
+  "list_course_files",
 ] as const;
 const ASSIGNMENT_BUCKETS = ["all", "upcoming", "undated", "past"] as const;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -198,7 +201,7 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
     name: "canvas-lms",
     label: "Canvas LMS",
     description:
-      "Read data from Canvas LMS (courses, assignments, announcements) using a Canvas API token.",
+      "Read data from Canvas LMS (courses, assignments, announcements, modules, submissions, calendar, grades, files) using a Canvas API token.",
     parameters: Type.Object({
       action: stringEnum(CANVAS_LMS_ACTIONS, {
         description: `Action to perform: ${CANVAS_LMS_ACTIONS.join(", ")}`,
@@ -228,6 +231,16 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
       studentId: Type.Optional(
         Type.String({
           description: "Canvas student identifier for list_submissions (default: self).",
+        }),
+      ),
+      startDate: Type.Optional(
+        Type.String({
+          description: "ISO date or datetime for calendar filters (used by list_calendar_events).",
+        }),
+      ),
+      endDate: Type.Optional(
+        Type.String({
+          description: "ISO date or datetime for calendar filters (used by list_calendar_events).",
         }),
       ),
       bucket: optionalStringEnum(ASSIGNMENT_BUCKETS, {
@@ -365,6 +378,56 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
           timeoutMs,
           maxRetries,
         });
+      } else if (action === "list_calendar_events") {
+        const courseId = readString(args, "courseId");
+        if (!courseId) {
+          throw new Error("courseId is required for list_calendar_events");
+        }
+        const startDate = readString(args, "startDate");
+        const endDate = readString(args, "endDate");
+        const dateFilter = `${startDate ? `&start_date=${encodeURIComponent(startDate)}` : ""}${
+          endDate ? `&end_date=${encodeURIComponent(endDate)}` : ""
+        }`;
+        rows = await fetchPaginatedArray({
+          fetchImpl: fetch,
+          apiBase,
+          token,
+          firstPath: `/calendar_events?context_codes[]=${encodeURIComponent(`course_${courseId}`)}&per_page=${perPage}${dateFilter}`,
+          maxPages,
+          timeoutMs,
+          maxRetries,
+        });
+      } else if (action === "list_grades") {
+        const courseId = readString(args, "courseId");
+        if (!courseId) {
+          throw new Error("courseId is required for list_grades");
+        }
+        const studentId = readString(args, "studentId") ?? "self";
+        rows = await fetchPaginatedArray({
+          fetchImpl: fetch,
+          apiBase,
+          token,
+          firstPath: `/courses/${encodeURIComponent(courseId)}/enrollments?type[]=StudentEnrollment&user_id=${encodeURIComponent(
+            studentId,
+          )}&include[]=grades&include[]=current_points&include[]=total_scores&per_page=${perPage}`,
+          maxPages,
+          timeoutMs,
+          maxRetries,
+        });
+      } else if (action === "list_course_files") {
+        const courseId = readString(args, "courseId");
+        if (!courseId) {
+          throw new Error("courseId is required for list_course_files");
+        }
+        rows = await fetchPaginatedArray({
+          fetchImpl: fetch,
+          apiBase,
+          token,
+          firstPath: `/courses/${encodeURIComponent(courseId)}/files?per_page=${perPage}`,
+          maxPages,
+          timeoutMs,
+          maxRetries,
+        });
       } else {
         throw new Error(`Unsupported action: ${action}`);
       }
@@ -409,6 +472,46 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
             workflowState: item.workflow_state,
             late: item.late,
             missing: item.missing,
+          };
+        }
+        if (action === "list_calendar_events") {
+          return {
+            id: item.id,
+            title: item.title,
+            startAt: item.start_at,
+            endAt: item.end_at,
+            allDay: item.all_day,
+            locationName: item.location_name,
+            htmlUrl: item.html_url,
+          };
+        }
+        if (action === "list_grades") {
+          const grades =
+            item.grades && typeof item.grades === "object"
+              ? (item.grades as Record<string, unknown>)
+              : undefined;
+          return {
+            enrollmentId: item.id,
+            userId: item.user_id,
+            type: item.type,
+            currentGrade: grades?.current_grade,
+            currentScore: grades?.current_score,
+            finalGrade: grades?.final_grade,
+            finalScore: grades?.final_score,
+            currentPoints: item.current_points,
+            unpostedCurrentGrade: grades?.unposted_current_grade,
+          };
+        }
+        if (action === "list_course_files") {
+          return {
+            id: item.id,
+            displayName: item.display_name,
+            filename: item.filename,
+            size: item.size,
+            contentType: item["content-type"],
+            updatedAt: item.updated_at,
+            url: item.url,
+            locked: item.locked,
           };
         }
         return {
