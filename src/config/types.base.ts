@@ -133,6 +133,8 @@ export type LoggingConfig = {
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
   redactPatterns?: string[];
+  /** Maximum log file size in bytes. Default: 500 MB. */
+  maxFileBytes?: number;
 };
 
 export type DiagnosticsOtelConfig = {
