@@ -548,6 +548,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/webex:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/whatsapp:
     devDependencies:
       openclaw:

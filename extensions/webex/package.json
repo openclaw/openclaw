@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/webex",
+  "version": "2026.2.4",
+  "description": "OpenClaw Cisco Webex channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
