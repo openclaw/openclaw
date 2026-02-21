@@ -154,8 +154,9 @@ export function attachGatewayWsConnectionHandler(params: {
     const send = (obj: unknown) => {
       try {
         socket.send(JSON.stringify(obj));
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logWsControl.warn(`send failed conn=${connId}: ${formatError(err)}`);
+        setCloseCause("send-error");
       }
     };
 
@@ -182,7 +183,7 @@ export function attachGatewayWsConnectionHandler(params: {
       }
     };
 
-    socket.once("error", (err) => {
+    socket.on("error", (err) => {
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
     });
