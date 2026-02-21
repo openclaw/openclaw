@@ -3,7 +3,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
 import {
   createThrowingRuntime,
@@ -54,42 +54,31 @@ async function withOnboardEnv(
   prefix: string,
   run: (ctx: OnboardEnv) => Promise<void>,
 ): Promise<void> {
-  const prev = captureEnv([
-    "HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_SKIP_CHANNELS",
-    "OPENCLAW_SKIP_GMAIL_WATCHER",
-    "OPENCLAW_SKIP_CRON",
-    "OPENCLAW_SKIP_CANVAS_HOST",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-    "CUSTOM_API_KEY",
-    "OPENCLAW_DISABLE_CONFIG_CACHE",
-  ]);
-
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-  process.env.OPENCLAW_DISABLE_CONFIG_CACHE = "1";
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-  delete process.env.CUSTOM_API_KEY;
-
   const tempHome = await makeTempWorkspace(prefix);
   const configPath = path.join(tempHome, "openclaw.json");
-  process.env.HOME = tempHome;
-  process.env.OPENCLAW_STATE_DIR = tempHome;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
-
   const runtime = createThrowingRuntime();
 
   try {
-    await run({ configPath, runtime });
+    await withEnvAsync(
+      {
+        HOME: tempHome,
+        OPENCLAW_STATE_DIR: tempHome,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        CUSTOM_API_KEY: undefined,
+        OPENCLAW_DISABLE_CONFIG_CACHE: "1",
+      },
+      async () => {
+        await run({ configPath, runtime });
+      },
+    );
   } finally {
     await removeDirWithRetry(tempHome);
-    prev.restore();
   }
 }
 
