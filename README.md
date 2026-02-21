@@ -413,6 +413,39 @@ Browser control (optional):
 }
 ```
 
+## Troubleshooting
+
+### A2UI bundling fails with "node_modules missing" or exit code 254
+
+If you see errors like:
+
+- `Local package.json exists, but node_modules missing, did you mean to install?`
+- `A2UI bundling failed. Re-run with: pnpm canvas:a2ui:bundle`
+- `ELIFECYCLE Command failed with exit code 254`
+
+It usually means dependencies were not installed from the workspace root.
+
+Fix:
+
+```bash
+# from the repository root (where pnpm-workspace.yaml is)
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm install
+pnpm canvas:a2ui:bundle
+```
+
+If it still fails, try a clean install:
+
+```bash
+rm -rf node_modules **/node_modules
+pnpm store prune
+pnpm install
+pnpm canvas:a2ui:bundle
+```
+
+Also make sure you are running the commands from the workspace root (the folder that contains pnpm-workspace.yaml).
+
 ## Docs
 
 Use these when you’re past the onboarding flow and want the deeper reference.
