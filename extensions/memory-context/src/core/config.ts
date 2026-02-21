@@ -195,7 +195,7 @@ export const memoryContextConfigSchema = {
 
     const autoRecallMaxTokens =
       cfg.autoRecallMaxTokens === undefined
-        ? 5000
+        ? 12000
         : assertNumber(cfg.autoRecallMaxTokens, "autoRecallMaxTokens", { min: 0, integer: true });
 
     const maxSegments =

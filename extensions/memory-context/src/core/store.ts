@@ -69,6 +69,7 @@ export class WarmStore {
   /** When true, vectors.bin contains higher-quality vectors from a provider that
    *  is currently unavailable. We must not overwrite it with lower-quality vectors. */
   private preserveVectorCache = false;
+  private backgroundReEmbedding = false;
 
   constructor(private readonly opts: WarmStoreOptions) {
     this.cold = new ColdStore(opts.coldStore.path);
@@ -109,20 +110,23 @@ export class WarmStore {
     }
 
     // Detect provider downgrade vs upgrade when dim changes.
-    // Downgrade: cached vectors are higher-quality (e.g. Gemini 3072) but current
-    //   provider is a fallback (e.g. hash 384 or local 768) because the real API
-    //   provider is unavailable.
-    //   → Skip re-embedding, use BM25-only, preserve vectors.bin for when provider returns.
-    // Upgrade: cached vectors are lower-quality (e.g. hash 384) and current provider
-    //   is better (e.g. Gemini 3072). → Re-embed all segments with the better provider.
+    // Semantic providers (gemini, openai, voyage, local, transformer) produce
+    // meaningful embeddings. Non-semantic providers (hash, none, noop) are true fallbacks.
+    //
+    // Downgrade: cached = semantic, current = non-semantic (e.g. hash)
+    //   → Preserve vectors.bin, use BM25-only.
+    // Async re-embed: cached = semantic A, current = semantic B (dim mismatch)
+    //   → Load BM25-only first, then re-embed in background without blocking init.
+    // Upgrade: cached = non-semantic, current = semantic → re-embed immediately.
     const currentDim = this.opts.embedding.dim;
     const providerName = this.opts.embedding.name ?? "";
-    // Only remote API providers (gemini, openai, voyage) justify mass re-embedding.
-    // Local providers (local/onnx, hash, none, noop, transformer) are fallbacks —
-    // when they produce a different dim, preserve the cached high-quality vectors.
-    const API_PROVIDERS = new Set(["gemini", "openai", "voyage"]);
-    const isFallbackProvider = !API_PROVIDERS.has(providerName);
-    const isDowngrade = cachedDim > 0 && cachedDim !== currentDim && isFallbackProvider;
+    const SEMANTIC_PROVIDERS = new Set(["gemini", "openai", "voyage", "local", "transformer"]);
+    const isSemanticProvider = SEMANTIC_PROVIDERS.has(providerName);
+    const dimMismatch = cachedDim > 0 && cachedDim !== currentDim;
+    // Downgrade: dim mismatch with a non-semantic fallback → preserve cache
+    const isDowngrade = dimMismatch && !isSemanticProvider;
+    // Async re-embed: dim mismatch but current IS semantic → re-embed in background
+    const needsAsyncReEmbed = dimMismatch && isSemanticProvider;
 
     if (isDowngrade) {
       console.info(
@@ -130,6 +134,11 @@ export class WarmStore {
           `with fallback provider "${providerName}" — preserving vector cache, using BM25-only`,
       );
       this.preserveVectorCache = true;
+    } else if (needsAsyncReEmbed) {
+      console.info(
+        `[memory-context] dim mismatch (cached=${cachedDim}, current=${currentDim}) ` +
+          `with semantic provider "${providerName}" — will re-embed in background`,
+      );
     }
 
     const eviction = this.opts.eviction ?? DEFAULT_EVICTION;
@@ -155,10 +164,10 @@ export class WarmStore {
         continue;
       }
 
-      if (isDowngrade) {
-        // Downgrade mode: load for BM25 only, skip vector embedding entirely.
-        // This avoids expensive re-embedding with a fallback provider and
-        // preserves the higher-quality vectors.bin for when the real provider returns.
+      if (isDowngrade || needsAsyncReEmbed) {
+        // BM25-only fast load:
+        // - Downgrade: preserve cached vectors for when the real provider returns.
+        // - Async re-embed: load fast now, vectors will be filled in background.
         const restored: ConversationSegment = {
           id: seg.id,
           sessionId: seg.sessionId,
@@ -171,7 +180,7 @@ export class WarmStore {
             topics: extractTopics(seg.content),
             entities: extractEntities(seg.content),
           },
-          // No embedding — vector search disabled for existing segments
+          // No embedding — vector search will be enabled after background re-embedding
         };
         this.segments.set(restored.id, restored);
         this.timeline.push(restored.id);
@@ -204,6 +213,70 @@ export class WarmStore {
       console.info(`[memory-context] persisting ${reEmbeddedCount} re-embedded vectors`);
       this.persistVectorsNow();
     }
+
+    // Kick off background re-embedding if semantic provider has dim mismatch
+    if (needsAsyncReEmbed) {
+      this.startBackgroundReEmbedding();
+    }
+  }
+
+  /**
+   * Re-embed all segments in the background using the current semantic provider.
+   * Builds a fresh VectorIndex, then swaps it in atomically via replaceFrom().
+   * Does not block init — BM25 search works immediately, vector search becomes
+   * available once re-embedding completes.
+   */
+  private startBackgroundReEmbedding(): void {
+    if (this.backgroundReEmbedding) return;
+    this.backgroundReEmbedding = true;
+
+    const BATCH_SIZE = 20;
+    const BATCH_DELAY_MS = 50;
+
+    const run = async () => {
+      const dim = this.opts.embedding.dim;
+      const tmpIndex = new VectorIndex(dim);
+      const allSegments = [...this.segments.values()];
+      let count = 0;
+
+      for (let i = 0; i < allSegments.length; i += BATCH_SIZE) {
+        const batch = allSegments.slice(i, i + BATCH_SIZE);
+        for (const seg of batch) {
+          try {
+            const vec = await this.safeEmbed(seg.content);
+            if (vec.length === dim) {
+              seg.embedding = vec;
+              tmpIndex.add(seg.id, vec);
+              count++;
+            }
+          } catch {
+            // Skip failed embeddings
+          }
+        }
+        // Yield to event loop between batches
+        if (i + BATCH_SIZE < allSegments.length) {
+          await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+        }
+      }
+
+      // Atomic swap: replace live index contents with the fully-built tmp index
+      if (count > 0 && this.index instanceof VectorIndex) {
+        this.index.replaceFrom(tmpIndex);
+        console.info(
+          `[memory-context] background re-embedding complete: ${count}/${allSegments.length} segments`,
+        );
+        // Persist the new vectors
+        if (this.opts.vectorPersist !== false) {
+          this.persistVectorsNow();
+        }
+      }
+      this.backgroundReEmbedding = false;
+    };
+
+    run().catch((err) => {
+      console.warn(`[memory-context] background re-embedding failed:`, err);
+      this.backgroundReEmbedding = false;
+    });
   }
 
   private async restoreSegment(

@@ -386,7 +386,7 @@ export class KnowledgeStore {
    *     rare/meaningful tokens dominate the score.
    *  3. A minimum score threshold filters out weak matches.
    */
-  search(query: string, limit = 10): KnowledgeFact[] {
+  search(query: string, limit = 25): KnowledgeFact[] {
     const queryTokens = [...new Set(KnowledgeStore.tokenize(query))];
     if (queryTokens.length === 0) {
       return [];

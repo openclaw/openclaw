@@ -82,6 +82,17 @@ export class VectorIndex implements VectorIndexInterface {
     results.sort((x, y) => y.score - x.score);
     return cappedLimit === 0 ? [] : results.slice(0, cappedLimit);
   }
+
+  /**
+   * Replace all entries in this index with entries from another VectorIndex.
+   * Used by background re-embedding to atomically swap in new vectors.
+   */
+  replaceFrom(other: VectorIndex): void {
+    this.vectors.clear();
+    for (const [id, vec] of other.vectors.entries()) {
+      this.vectors.set(id, vec);
+    }
+  }
 }
 
 // Lazy-loaded hnswlib module (untyped, so `any` is appropriate)
