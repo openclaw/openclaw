@@ -6,9 +6,6 @@ let toModelRow: typeof import("./models/list.registry.js").toModelRow;
 
 const loadConfig = vi.fn();
 const ensureOpenClawModelsJson = vi.fn().mockResolvedValue(undefined);
-const ensurePiAuthJsonFromAuthProfiles = vi
-  .fn()
-  .mockResolvedValue({ wrote: false, authPath: "/tmp/openclaw-agent/auth.json" });
 const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
@@ -36,10 +33,6 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson,
-}));
-
-vi.mock("../agents/pi-auth-json.js", () => ({
-  ensurePiAuthJsonFromAuthProfiles,
 }));
 
 vi.mock("../agents/agent-paths.js", () => ({
@@ -121,7 +114,6 @@ beforeEach(() => {
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   listProfilesForProvider.mockReturnValue([]);
-  ensurePiAuthJsonFromAuthProfiles.mockClear();
 });
 
 afterEach(() => {
@@ -223,13 +215,12 @@ describe("models list/status", () => {
     ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
   });
 
-  it("models list syncs auth-profiles into auth.json before availability checks", async () => {
+  it("models list runs model discovery without auth.json sync", async () => {
     setDefaultZaiRegistry();
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, json: true }, runtime);
-
-    expect(ensurePiAuthJsonFromAuthProfiles).toHaveBeenCalledWith("/tmp/openclaw-agent");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("models list outputs canonical zai key for configured z.ai model", async () => {
