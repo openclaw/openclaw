@@ -105,6 +105,31 @@ describe("cron tool", () => {
     expect(call?.params).toEqual({ id: "job-due", mode: "due" });
   });
 
+  it("uses a longer default timeout for run action", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-run-timeout", {
+      action: "run",
+      jobId: "job-timeout",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      timeoutMs?: unknown;
+    };
+    expect(call?.timeoutMs).toBe(300_000);
+  });
+
+  it("keeps the default timeout for non-run actions", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-status-timeout", {
+      action: "status",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      timeoutMs?: unknown;
+    };
+    expect(call?.timeoutMs).toBe(60_000);
+  });
+
   it("normalizes cron.add job payloads", async () => {
     const tool = createCronTool();
     await tool.execute("call2", {
