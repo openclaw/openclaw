@@ -48,7 +48,7 @@ body:
     attributes:
       label: OpenClaw version
       description: Exact version/build tested.
-      placeholder: 2026.2.17
+      placeholder: <version such as 2026.2.17>
     validations:
       required: true
   - type: input
