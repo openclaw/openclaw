@@ -131,6 +131,7 @@ export async function handleToolsInvokeHttpRequest(
     auth: ResolvedGatewayAuth;
     maxBodyBytes?: number;
     trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
@@ -151,6 +152,7 @@ export async function handleToolsInvokeHttpRequest(
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
