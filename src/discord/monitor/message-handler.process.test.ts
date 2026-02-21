@@ -230,7 +230,7 @@ describe("processDiscordMessage ack reactions", () => {
     });
 
     const ctx = await createBaseContext({
-      cfg: { messages: { ackReaction: "👀", statusReactions: false }, session: { store: "/tmp/fake-test-store.json" } },
+      cfg: { messages: { ackReaction: "👀", statusReactions: { enabled: false } }, session: { store: "/tmp/fake-test-store.json" } },
     });
 
     // oxlint-disable-next-line typescript/no-explicit-any
