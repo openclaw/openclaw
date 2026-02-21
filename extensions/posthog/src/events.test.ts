@@ -172,8 +172,12 @@ describe("buildAiGeneration", () => {
           },
         ],
       },
-      // OpenClaw-style tool result (role: "toolResult", flat message)
-      { role: "toolResult", content: "# IDENTITY.md\nName: Sir Hogsalot" },
+      // OpenClaw-style tool result (role: "toolResult", flat message) with toolCallId
+      {
+        role: "toolResult",
+        toolCallId: "toolu_vrtx_01",
+        content: "# IDENTITY.md\nName: Sir Hogsalot",
+      },
       { role: "assistant", content: "Your name is Sir Hogsalot!" },
     ];
 
@@ -195,13 +199,43 @@ describe("buildAiGeneration", () => {
         },
       ],
     });
-    // [2] toolResult → role:"tool"
+    // [2] toolResult → role:"tool" with tool_call_id preserved
     expect(input[2]).toEqual({
       role: "tool",
       content: "# IDENTITY.md\nName: Sir Hogsalot",
+      tool_call_id: "toolu_vrtx_01",
     });
     // [3] final assistant text
     expect(input[3]).toEqual({ role: "assistant", content: "Your name is Sir Hogsalot!" });
+  });
+
+  test("toolResult with toolUseId maps to tool_call_id", () => {
+    const rawInput: unknown[] = [
+      { role: "toolResult", toolUseId: "call_abc123", content: "result data" },
+    ];
+
+    const runState: RunState = { ...baseRunState, input: rawInput };
+    const result = buildAiGeneration(runState, baseOutput, false);
+    const input = result.properties.$ai_input as Array<Record<string, unknown>>;
+
+    expect(input[0]).toEqual({
+      role: "tool",
+      content: "result data",
+      tool_call_id: "call_abc123",
+    });
+  });
+
+  test("toolResult without toolCallId omits tool_call_id", () => {
+    const rawInput: unknown[] = [{ role: "toolResult", content: "result without correlation" }];
+
+    const runState: RunState = { ...baseRunState, input: rawInput };
+    const result = buildAiGeneration(runState, baseOutput, false);
+    const input = result.properties.$ai_input as Array<Record<string, unknown>>;
+
+    expect(input[0]).toEqual({
+      role: "tool",
+      content: "result without correlation",
+    });
   });
 
   test("skips assistant turns with only thinking blocks (empty content)", () => {

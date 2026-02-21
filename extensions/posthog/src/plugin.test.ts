@@ -390,6 +390,59 @@ describe("registerPostHogHooks", () => {
     expect(captured.properties.$ai_parent_id).toBeTruthy();
   });
 
+  test("after_tool_call falls back to lastActiveSessionKey when ctx.sessionKey is missing", async () => {
+    const { api, hooks, services } = createMockApi();
+    registerPostHogHooks(api, defaultConfig());
+    await services[0]!.start();
+
+    // Set up a trace via llm_input + llm_output (sets lastActiveSessionKey)
+    const llmInputHandlers = hooks.get("llm_input")!;
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-fallback",
+        sessionId: "sess-fallback",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "use a tool",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:fallback", agentId: "agent-1", messageProvider: "telegram" },
+    );
+    const llmOutputHandlers = hooks.get("llm_output")!;
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-fallback",
+        sessionId: "sess-fallback",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["Calling tool..."],
+        usage: { input: 10, output: 5 },
+      },
+      { sessionKey: "telegram:fallback" },
+    );
+
+    captureMock.mockClear();
+
+    // Fire after_tool_call WITHOUT sessionKey (simulates upstream bug)
+    const toolCallHandlers = hooks.get("after_tool_call")!;
+    await toolCallHandlers[0]!(
+      {
+        toolName: "web_search",
+        params: { query: "test" },
+        result: { answer: "result" },
+        durationMs: 100,
+      },
+      { toolName: "web_search" },
+    );
+
+    expect(captureMock).toHaveBeenCalledTimes(1);
+    const captured = captureMock.mock.calls[0]![0];
+    expect(captured.event).toBe("$ai_span");
+    expect(captured.properties.$ai_span_name).toBe("web_search");
+    expect(captured.properties.$ai_parent_id).toBeTruthy();
+  });
+
   test("diagnostic message.processed captures $ai_trace", async () => {
     const { api, hooks, services } = createMockApi();
     let diagnosticListener: (evt: unknown) => void = () => {};

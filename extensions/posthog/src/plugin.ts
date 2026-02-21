@@ -22,6 +22,8 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
   const traceTokens = new Map<string, { input: number; output: number }>();
   /** Session window IDs keyed by sessionKey — windowed $ai_session_id */
   const sessionWindows = new Map<string, { sessionId: string; lastOutputAt: number }>();
+  /** Most recent sessionKey from llm_output — fallback for after_tool_call when ctx.sessionKey is missing */
+  let lastActiveSessionKey: string | undefined;
 
   let client: import("posthog-node").PostHog | null = null;
   let unsubscribe: (() => void) | null = null;
@@ -54,6 +56,11 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
       // Reuse trace if it exists and hasn't timed out
       if (existing && lastOutput && Date.now() - lastOutput < timeoutMs) {
         return existing;
+      }
+
+      // Clean up stale token totals from the rotated trace
+      if (existing) {
+        traceTokens.delete(existing);
       }
 
       // Otherwise start a new trace
@@ -137,6 +144,7 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
       lastOutputAt.clear();
       traceTokens.clear();
       sessionWindows.clear();
+      lastActiveSessionKey = undefined;
     },
   });
 
@@ -184,6 +192,7 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
     const sessionKey = ctx.sessionKey;
     if (sessionKey) {
       generationSpans.set(sessionKey, runState.spanId);
+      lastActiveSessionKey = sessionKey;
       // Track lastOutputAt in both modes for session windowing and trace timeout
       const now = Date.now();
       lastOutputAt.set(sessionKey, now);
@@ -219,11 +228,16 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
   api.on("after_tool_call", (event, ctx) => {
     if (!client) return;
 
-    const traceId = ctx.sessionKey ? traces.get(ctx.sessionKey) : undefined;
+    // Upstream after_tool_call emitters may not include sessionKey in context.
+    // Fall back to the most recent sessionKey from llm_output, which is reliable
+    // because tool calls execute synchronously within the same agent invocation.
+    const sessionKey = ctx.sessionKey || lastActiveSessionKey;
+
+    const traceId = sessionKey ? traces.get(sessionKey) : undefined;
     if (!traceId) return;
 
-    const parentSpanId = ctx.sessionKey ? generationSpans.get(ctx.sessionKey) : undefined;
-    const sessionId = ctx.sessionKey ? sessionWindows.get(ctx.sessionKey)?.sessionId : undefined;
+    const parentSpanId = sessionKey ? generationSpans.get(sessionKey) : undefined;
+    const sessionId = sessionKey ? sessionWindows.get(sessionKey)?.sessionId : undefined;
 
     const span = buildAiSpan(traceId, parentSpanId, event, ctx, config.privacyMode, sessionId);
     client.capture({

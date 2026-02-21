@@ -143,7 +143,13 @@ function normalizeMessage(raw: unknown): FormattedMessage[] {
       typeof obj.content === "string"
         ? obj.content
         : truncate(safeStringify(obj.content) ?? "", 2000);
-    return [{ role: "tool", content }];
+    const toolCallId =
+      typeof obj.toolCallId === "string"
+        ? obj.toolCallId
+        : typeof obj.toolUseId === "string"
+          ? obj.toolUseId
+          : undefined;
+    return [{ role: "tool", content, ...(toolCallId ? { tool_call_id: toolCallId } : {}) }];
   }
 
   // Simple string content — pass through directly
