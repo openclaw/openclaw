@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -127,7 +130,7 @@ async function expectMissingScopeAfterConnect(
 }
 
 async function createSignedDevice(params: {
-  token: string;
+  token?: string | null;
   scopes: string[];
   clientId: string;
   clientMode: string;
@@ -148,7 +151,7 @@ async function createSignedDevice(params: {
     role: "operator",
     scopes: params.scopes,
     signedAtMs,
-    token: params.token,
+    token: params.token ?? null,
     nonce: params.nonce,
   });
   return {
@@ -713,6 +716,32 @@ describe("gateway server auth/connect", () => {
       const res = await connectReq(ws, { skipDefaultAuth: true });
       expect(res.ok).toBe(true);
       ws.close();
+    });
+
+    test("does not silently auto-approve cross-origin browser pairing in mode none", async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cross-origin-"));
+      try {
+        const ws = await openWs(port, { origin: "https://evil.example" });
+        const scopes = ["operator.admin"];
+        const { device } = await createSignedDevice({
+          token: null,
+          scopes,
+          clientId: TEST_OPERATOR_CLIENT.id,
+          clientMode: TEST_OPERATOR_CLIENT.mode,
+          identityPath: path.join(tempDir, "device.json"),
+        });
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: TEST_OPERATOR_CLIENT,
+          scopes,
+          device,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+        ws.close();
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     });
   });
 

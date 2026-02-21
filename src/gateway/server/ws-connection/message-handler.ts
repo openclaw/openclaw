@@ -169,6 +169,12 @@ export function attachGatewayWsMessageHandler(params: {
   const hostIsTailscaleServe = hostName.endsWith(".ts.net");
   const hostIsLocalish = hostIsLocal || hostIsTailscaleServe;
   const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
+  const browserOriginTrustedForLocal = requestOrigin
+    ? checkBrowserOrigin({
+        requestHost,
+        origin: requestOrigin,
+      }).ok
+    : true;
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -654,7 +660,9 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              // Prevent cross-origin browser pages from silently pairing while preserving
+              // loopback auto-pairing for non-browser local clients.
+              silent: isLocalClient && reason === "not-paired" && browserOriginTrustedForLocal,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
