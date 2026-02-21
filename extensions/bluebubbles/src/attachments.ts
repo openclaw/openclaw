@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { resolveRequestUrl } from "./request-url.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
@@ -58,17 +59,16 @@ function resolveAccount(params: BlueBubblesAttachmentOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+
+function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
   }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  return String(input);
+  const code = (error as { code?: unknown }).code;
+  return code === "max_bytes" || code === "http_error" || code === "fetch_failed"
+    ? code
+    : undefined;
 }
 
 export async function downloadBlueBubblesAttachment(
@@ -103,10 +103,10 @@ export async function downloadBlueBubblesAttachment(
       contentType: fetched.contentType ?? attachment.mimeType ?? undefined,
     };
   } catch (error) {
-    const text = error instanceof Error ? error.message : String(error);
-    if (/(?:maxBytes|content length|payload exceeds)/i.test(text)) {
+    if (readMediaFetchErrorCode(error) === "max_bytes") {
       throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
     }
+    const text = error instanceof Error ? error.message : String(error);
     throw new Error(`BlueBubbles attachment download failed: ${text}`);
   }
 }
