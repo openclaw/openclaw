@@ -218,6 +218,10 @@ export async function runConfigureWizard(
 
     const snapshot = await readConfigFileSnapshot();
     const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    // Use snapshot.resolved (config after $include and ${ENV} but BEFORE runtime defaults)
+    // as the write base to prevent runtime defaults from leaking into the config file.
+    // baseConfig (snapshot.config with defaults) is still used for display/prompt defaults.
+    const resolvedConfig: OpenClawConfig = snapshot.valid ? snapshot.resolved : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -281,7 +285,7 @@ export async function runConfigureWizard(
     );
 
     if (mode === "remote") {
-      let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
+      let remoteConfig = await promptRemoteGatewayConfig(resolvedConfig, prompter);
       remoteConfig = applyWizardMetadata(remoteConfig, {
         command: opts.command,
         mode,
@@ -292,7 +296,7 @@ export async function runConfigureWizard(
       return;
     }
 
-    let nextConfig = { ...baseConfig };
+    let nextConfig = structuredClone(resolvedConfig);
     let didSetGatewayMode = false;
     if (nextConfig.gateway?.mode !== "local") {
       nextConfig = {
