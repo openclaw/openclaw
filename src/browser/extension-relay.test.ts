@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { captureEnv } from "../test-utils/env.js";
 import {
   ensureChromeExtensionRelayServer,
   getChromeExtensionRelayAuthHeaders,
@@ -124,10 +125,10 @@ async function waitForListMatch<T>(
 describe("chrome extension relay server", () => {
   const TEST_GATEWAY_TOKEN = "test-gateway-token";
   let cdpUrl = "";
-  let previousGatewayToken: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    previousGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
     process.env.OPENCLAW_GATEWAY_TOKEN = TEST_GATEWAY_TOKEN;
   });
 
@@ -136,11 +137,7 @@ describe("chrome extension relay server", () => {
       await stopChromeExtensionRelayServer({ cdpUrl }).catch(() => {});
       cdpUrl = "";
     }
-    if (previousGatewayToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayToken;
-    }
+    envSnapshot.restore();
   });
 
   it("advertises CDP WS only when extension is connected", async () => {
@@ -438,8 +435,6 @@ describe("chrome extension relay server", () => {
       fakeRelay.once("error", reject);
     });
 
-    const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token";
     try {
       cdpUrl = `http://127.0.0.1:${port}`;
       const relay = await ensureChromeExtensionRelayServer({ cdpUrl });
@@ -451,11 +446,6 @@ describe("chrome extension relay server", () => {
       expect(probeToken).toBeTruthy();
       expect(probeToken).not.toBe("test-gateway-token");
     } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prev;
-      }
       await new Promise<void>((resolve) => fakeRelay.close(() => resolve()));
     }
   });
