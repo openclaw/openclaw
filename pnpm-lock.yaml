@@ -485,6 +485,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/security-guard:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/signal:
     devDependencies:
       openclaw:
