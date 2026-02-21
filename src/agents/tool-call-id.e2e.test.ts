@@ -95,6 +95,38 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(result.toolCallId).toBe(toolCall.id);
     });
 
+    it("sanitizes OpenAI tool_calls ids and tool_call_id", () => {
+      const input = [
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "call|item:123",
+              type: "function",
+              function: { name: "read", arguments: "{}" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call|item:123",
+          content: "ok",
+        },
+      ] as unknown as AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as { tool_calls?: Array<{ id?: string }> };
+      expect(assistant.tool_calls?.[0]?.id).toBe("callitem123");
+      expect(isValidCloudCodeAssistToolId(assistant.tool_calls?.[0]?.id ?? "", "strict")).toBe(
+        true,
+      );
+
+      const toolMessage = out[1] as { tool_call_id?: string };
+      expect(toolMessage.tool_call_id).toBe(assistant.tool_calls?.[0]?.id);
+    });
+
     it("avoids collisions when sanitization would produce duplicate IDs", () => {
       const input = buildDuplicateIdCollisionInput();
 

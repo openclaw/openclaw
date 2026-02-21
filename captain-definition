@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "dockerfilePath": "./Dockerfile.captain",
+  "dockerfileBuildDirectory": ".",
+  "volumes": [
+    {
+      "containerPath": "/home/node",
+      "hostPath": "/captain/data/openclaw-home"
+    }
+  ]
+}

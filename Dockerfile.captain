@@ -1,0 +1,58 @@
+FROM node:22-bookworm
+
+# Install Bun (required for build scripts)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN corepack enable
+
+WORKDIR /app
+
+ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
+ENV OPENCLAW_PREFER_PNPM=1
+RUN pnpm ui:build
+
+ENV NODE_ENV=production
+
+# Base tools needed by workspace scripts (kept in image for consistency)
+RUN apt-get update && apt-get install -y --no-install-recommends jq \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Default npm global prefix + PATH for user-level installs (persisted in /home/node volume)
+ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/node/.npm-global/bin:/home/node/.local/bin:${PATH}"
+
+# Pre-create linuxbrew prefix symlink (target lives in persisted /home/node volume)
+RUN mkdir -p /home/linuxbrew /home/node/.linuxbrew /home/node/.npm-global /home/node/.local/bin \
+  && ln -sf /home/node/.linuxbrew /home/linuxbrew/.linuxbrew \
+  && chown -R node:node /home/node/.linuxbrew /home/node/.npm-global /home/node/.local
+
+# Provide an openclaw command in the image for convenience
+RUN printf '%s\n' '#!/bin/sh' 'exec node /app/dist/index.js "$@"' > /usr/local/bin/openclaw \
+  && chmod +x /usr/local/bin/openclaw
+
+# Security hardening: Run as non-root user
+# The node:22-bookworm image includes a 'node' user (uid 1000)
+# This reduces the attack surface by preventing container escape via root privileges
+USER node
+
+# CapRover cannot set a custom start command, so run the gateway directly.
+CMD ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
