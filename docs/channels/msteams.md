@@ -236,7 +236,8 @@ This is often easier than hand-editing JSON manifests.
 2. Find the bot in Teams and send a DM
 3. Check gateway logs for incoming activity
 
-## Setup (minimal text-only)
+## Setup (minimal)
+
 
 1. **Install the Microsoft Teams plugin**
    - From npm: `openclaw plugins install @openclaw/msteams`
