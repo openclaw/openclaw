@@ -89,7 +89,7 @@ describe("resolveMemoryFlushPromptForRun", () => {
     });
     expect(settings?.runDuringHeartbeats).toBe(true);
   });
-});
+  
   it("does not append a duplicate current time line", () => {
     const prompt = resolveMemoryFlushPromptForRun({
       prompt: "Store notes.\nCurrent time: already present",
