@@ -7,10 +7,6 @@ const RUN_SCRIPT = "scripts/run-node.mjs";
 const WINDOWS_WATCH_ARGS = [
   "gateway",
   "run",
-  "--bind",
-  "loopback",
-  "--port",
-  "18789",
   "--allow-unconfigured",
 ];
 const DEFAULT_WATCH_ARGS = ["gateway", "--force"];
