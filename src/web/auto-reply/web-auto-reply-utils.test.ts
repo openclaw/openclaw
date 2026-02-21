@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveSessionStore } from "../../config/sessions.js";
-import { isBotMentionedFromTargets, resolveMentionTargets } from "./mentions.js";
+import {
+  debugMention,
+  isBotMentionedFromTargets,
+  resolveMentionTargets,
+  resolveOwnerList,
+} from "./mentions.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
@@ -36,6 +41,15 @@ async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>):
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
+  function expectMentioned(
+    msg: WebInboundMsg,
+    cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number> },
+    expected: boolean,
+  ) {
+    const targets = resolveMentionTargets(msg);
+    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(expected);
+  }
+
   it("ignores regex matches when other mentions are present", () => {
     const msg = makeMsg({
       body: "@OpenClaw please help",
@@ -43,8 +57,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(false);
+    expectMentioned(msg, mentionCfg, false);
   });
 
   it("matches explicit self mentions", () => {
@@ -54,8 +67,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+    expectMentioned(msg, mentionCfg, true);
   });
 
   it("falls back to regex when no mentions are present", () => {
@@ -64,8 +76,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+    expectMentioned(msg, mentionCfg, true);
   });
 
   it("ignores JID mentions in self-chat mode", () => {
@@ -76,16 +87,14 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(false);
+    expectMentioned(msg, cfg, false);
 
     const msgTextMention = makeMsg({
       body: "openclaw ping",
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
     });
-    const targetsText = resolveMentionTargets(msgTextMention);
-    expect(isBotMentionedFromTargets(msgTextMention, cfg, targetsText)).toBe(true);
+    expectMentioned(msgTextMention, cfg, true);
   });
 
   it("matches fallback number mentions when regexes do not match", () => {
@@ -94,8 +103,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, { mentionRegexes: [] }, targets)).toBe(true);
+    expectMentioned(msg, { mentionRegexes: [] }, true);
   });
 });
 
@@ -173,6 +181,34 @@ describe("getSessionSnapshot", () => {
 });
 
 describe("web auto-reply util", () => {
+  describe("mentions diagnostics", () => {
+    it("returns normalized debug fields and mention outcome", () => {
+      const msg = makeMsg({
+        from: "777@lid",
+        body: "openclaw ping",
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      });
+      const result = debugMention(msg, { mentionRegexes: [/\bopenclaw\b/i] });
+      expect(result.wasMentioned).toBe(true);
+      expect(result.details.bodyClean).toBe("openclaw ping");
+      expect(result.details.normalizedMentionedJids).toBeNull();
+    });
+
+    it("resolves owner list from allowFrom or falls back to self", () => {
+      expect(
+        resolveOwnerList(
+          {
+            mentionRegexes: [],
+            allowFrom: ["*", " +1 555 000 1111 "],
+          },
+          null,
+        ),
+      ).toEqual(["+15550001111"]);
+      expect(resolveOwnerList({ mentionRegexes: [] }, "+1 555 000 2222")).toEqual(["+15550002222"]);
+    });
+  });
+
   describe("elide", () => {
     it("returns undefined for undefined input", () => {
       expect(elide(undefined)).toBe(undefined);
