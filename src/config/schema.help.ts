@@ -267,6 +267,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.sync.onSearch":
     "Lazy sync: schedule a reindex on search after changes.",
   "agents.defaults.memorySearch.sync.watch": "Watch memory files for changes (chokidar).",
+  "agents.defaults.memorySearch.sync.concurrency":
+    "Max concurrent embedding operations during indexing (default: 4). Lower this on memory-constrained servers.",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes":
     "Minimum appended bytes before session transcripts trigger reindex (default: 100000).",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages":
