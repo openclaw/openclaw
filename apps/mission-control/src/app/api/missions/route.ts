@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-listMissions,
+import {
+  listMissions,
   listTasks,
   getMissionWithWorkspace,
   createMission,
@@ -46,9 +47,9 @@ export const GET = withApiGuard(async (_request: NextRequest) => {
     });
 
     const allTasks = listTasks({ workspace_id: query.workspace_id });
-    const missionsWithTasks = missions.map((m: any) => ({
+    const missionsWithTasks = missions.map((m: { id: string; [key: string]: unknown }) => ({
       ...m,
-      tasks: allTasks.filter((t: any) => t.mission_id === m.id)
+      tasks: allTasks.filter((t: { mission_id?: string; [key: string]: unknown }) => t.mission_id === m.id)
     }));
     return NextResponse.json({ missions: missionsWithTasks });
   } catch (error) {
@@ -97,13 +98,13 @@ export const PATCH = withApiGuard(async (request: NextRequest) => {
     }
 
     if (patch.status !== undefined) {
-      if (!isValidStatus(patch.status)) throw new UserError("Invalid status", 400);
+      if (!isValidStatus(patch.status)) {throw new UserError("Invalid status", 400);}
     }
 
     const existing = getMissionWithWorkspace(id, workspace_id);
-    if (!existing) throw new UserError("Mission not found", 404);
+    if (!existing) {throw new UserError("Mission not found", 404);}
 
-    if (patch.name !== undefined) patch.name = sanitizeInput(String(patch.name));
+    if (patch.name !== undefined) {patch.name = sanitizeInput(String(patch.name));}
     if (patch.description !== undefined) {
       patch.description = sanitizeInput(String(patch.description));
     }
@@ -128,7 +129,7 @@ export const DELETE = withApiGuard(async (request: NextRequest) => {
     }
 
     const existing = getMissionWithWorkspace(id, workspace_id);
-    if (!existing) throw new UserError("Mission not found", 404);
+    if (!existing) {throw new UserError("Mission not found", 404);}
 
     deleteMission(id);
     return NextResponse.json({ ok: true });
