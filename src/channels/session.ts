@@ -47,5 +47,8 @@ export async function recordInboundSession(params: {
     },
     ctx,
     groupResolution,
+    // Inbound route updates happen before initSessionState; keep the existing
+    // freshness timestamp so daily/idle reset checks still work.
+    preserveUpdatedAt: true,
   });
 }
