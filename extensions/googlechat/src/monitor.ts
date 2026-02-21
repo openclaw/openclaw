@@ -485,7 +485,7 @@ async function processMessageWithPipeline(params: {
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
-    !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
+    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
       ? await core.channel.pairing.readAllowFromStore("googlechat").catch(() => [])
       : [];
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];

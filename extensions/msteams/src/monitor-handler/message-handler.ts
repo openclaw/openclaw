@@ -124,16 +124,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
-    const storedAllowFrom = await core.channel.pairing
-      .readAllowFromStore("msteams")
-      .catch(() => []);
+    const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
+    const storedAllowFrom =
+      dmPolicy === "allowlist"
+        ? []
+        : await core.channel.pairing.readAllowFromStore("msteams").catch(() => []);
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
     // Check DM policy for direct messages.
     const dmAllowFrom = msteamsCfg?.allowFrom ?? [];
     const effectiveDmAllowFrom = [...dmAllowFrom.map((v) => String(v)), ...storedAllowFrom];
     if (isDirectMessage && msteamsCfg) {
-      const dmPolicy = msteamsCfg.dmPolicy ?? "pairing";
       const allowFrom = dmAllowFrom;
 
       if (dmPolicy === "disabled") {
