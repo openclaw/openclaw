@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeGatewayConnect, resolveGatewayAuth } from "./auth.js";
+import { authorizeGatewayConnect, isLocalDirectRequest, resolveGatewayAuth } from "./auth.js";
 
 function createLimiterSpy(): AuthRateLimiter & {
   check: ReturnType<typeof vi.fn>;
@@ -228,6 +228,36 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("token_mismatch");
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
+  });
+
+  it("treats private gateway host requests as local direct", () => {
+    const req = {
+      socket: { remoteAddress: "192.168.1.55" },
+      headers: { host: "192.168.1.213:18789" },
+    };
+    expect(isLocalDirectRequest(req as never, [])).toBe(true);
+  });
+
+  it("does not treat private gateway host request as local when proxy headers are untrusted", () => {
+    const req = {
+      socket: { remoteAddress: "198.51.100.5" },
+      headers: {
+        host: "192.168.1.213:18789",
+        "x-forwarded-for": "198.51.100.8",
+      },
+    };
+    expect(isLocalDirectRequest(req as never, [])).toBe(false);
+  });
+
+  it("treats private gateway host request as local when proxy headers come from trusted proxy", () => {
+    const req = {
+      socket: { remoteAddress: "203.0.113.1" },
+      headers: {
+        host: "192.168.1.213:18789",
+        "x-forwarded-for": "192.168.1.55",
+      },
+    };
+    expect(isLocalDirectRequest(req as never, ["203.0.113.1"])).toBe(true);
   });
 
   it("passes custom rate-limit scope to limiter operations", async () => {
