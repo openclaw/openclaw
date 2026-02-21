@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -60,10 +61,14 @@ const normalizePathEntries = (value?: string) =>
     .filter(Boolean);
 
 describe("exec PATH login shell merge", () => {
-  const originalPath = process.env.PATH;
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["PATH"]);
+  });
 
   afterEach(() => {
-    process.env.PATH = originalPath;
+    envSnapshot.restore();
   });
 
   it("merges login-shell PATH for host=gateway", async () => {
