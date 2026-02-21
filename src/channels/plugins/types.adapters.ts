@@ -163,6 +163,12 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
+  /**
+   * Optional channel runtime helpers providing access to dispatch, routing, and channel-specific utilities.
+   * This is provided for channel plugins that need advanced functionality like AI response dispatching.
+   * Not all channels may have access to this - check for undefined before using.
+   */
+  channelRuntime?: import("../../plugins/runtime/types.js").PluginRuntime["channel"];
 };
 
 export type ChannelLogoutResult = {
