@@ -351,7 +351,7 @@ function collectGatewayConfigFindings(
       severity: "critical",
       title: "Control UI allows insecure HTTP auth",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
+        "gateway.controlUi.allowInsecureAuth=true is a legacy insecure-auth toggle; Control UI still enforces secure context and device identity unless dangerouslyDisableDeviceAuth is enabled.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }

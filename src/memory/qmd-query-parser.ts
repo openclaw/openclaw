@@ -5,6 +5,7 @@ const log = createSubsystemLogger("memory");
 export type QmdQueryResult = {
   docid?: string;
   score?: number;
+  collection?: string;
   file?: string;
   snippet?: string;
   body?: string;
