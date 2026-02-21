@@ -221,15 +221,23 @@ export async function startGatewayServer(
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
-    try {
-      await writeConfigFile(autoEnable.config);
+    if (isNixMode) {
       log.info(
-        `gateway: auto-enabled plugins:\n${autoEnable.changes
+        `gateway: skipping plugin auto-enable persistence (Nix mode):\n${autoEnable.changes
           .map((entry) => `- ${entry}`)
           .join("\n")}`,
       );
-    } catch (err) {
-      log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+    } else {
+      try {
+        await writeConfigFile(autoEnable.config);
+        log.info(
+          `gateway: auto-enabled plugins:\n${autoEnable.changes
+            .map((entry) => `- ${entry}`)
+            .join("\n")}`,
+        );
+      } catch (err) {
+        log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+      }
     }
   }
 
