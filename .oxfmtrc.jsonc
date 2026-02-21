@@ -11,6 +11,7 @@
   "ignorePatterns": [
     "apps/",
     "assets/",
+    "deploy/helm/",
     "docker-compose.yml",
     "dist/",
     "docs/_layouts/",

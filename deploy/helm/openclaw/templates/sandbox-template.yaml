@@ -1,0 +1,51 @@
+{{- if .Values.sandbox.enabled }}
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: {{ include "openclaw.fullname" . }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  template:
+    spec:
+      containers:
+        - name: sandbox
+          image: {{ .Values.sandbox.image | quote }}
+          {{- with .Values.sandbox.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.vertexAI.enabled }}
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/secrets/google/credentials.json"
+            {{- if .Values.vertexAI.projectId }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.vertexAI.projectId | quote }}
+            {{- end }}
+            {{- if .Values.vertexAI.region }}
+            - name: GOOGLE_CLOUD_LOCATION
+              value: {{ .Values.vertexAI.region | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: gcp-credentials
+              mountPath: /var/secrets/google
+              readOnly: true
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      {{- if .Values.vertexAI.enabled }}
+      volumes:
+        - name: gcp-credentials
+          secret:
+            secretName: {{ include "openclaw.gcpSecretName" . }}
+            items:
+              - key: credentials.json
+                path: credentials.json
+      {{- end }}
+{{- end }}

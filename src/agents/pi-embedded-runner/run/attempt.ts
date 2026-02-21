@@ -72,6 +72,7 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { createVertexAnthropicStreamFn } from "../../vertex-anthropic-stream.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -656,6 +657,16 @@ export async function runEmbeddedAttempt(
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      } else if (
+        params.model.provider === "google-vertex" &&
+        params.model.api === "anthropic-messages"
+      ) {
+        // Vertex AI rawPredict: send Anthropic messages format directly to
+        // Vertex AI's streamRawPredict endpoint, bypassing the Anthropic SDK
+        // which constructs incompatible URLs.
+        const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "";
+        const location = process.env.GOOGLE_CLOUD_LOCATION || "";
+        activeSession.agent.streamFn = createVertexAnthropicStreamFn(project, location);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;

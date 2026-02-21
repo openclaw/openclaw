@@ -1,0 +1,215 @@
+# -- Number of replicas. Keep at 1 when using ReadWriteOnce persistence.
+replicaCount: 1
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/openclaw/openclaw
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to appVersion)
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full release name
+fullnameOverride: ""
+
+# -- Gateway command arguments passed to the container
+command:
+  - node
+  - openclaw.mjs
+  - gateway
+  - --allow-unconfigured
+  - --bind
+  - lan
+  - --port
+  - "18789"
+
+# -- Non-secret environment variables injected via ConfigMap
+config:
+  NODE_ENV: production
+  HOME: /data
+  OPENCLAW_STATE_DIR: /data/.openclaw
+
+# -- Secret values. Set either secrets.create or secrets.existingSecret, not both.
+secrets:
+  # -- Create a Kubernetes Secret managed by this chart
+  create: true
+  # -- Use an existing Secret instead of creating one
+  existingSecret: ""
+  # -- Gateway authentication token
+  gatewayToken: ""
+  # -- Anthropic API key
+  anthropicApiKey: ""
+  # -- Gemini / Google Cloud Vertex API key
+  geminiApiKey: ""
+  # -- OpenAI-compatible API key
+  openaiApiKey: ""
+  # -- Additional secret key-value pairs (added to the managed Secret as-is)
+  extra: {}
+
+serviceAccount:
+  # -- Create a ServiceAccount
+  create: true
+  # -- Annotations for the ServiceAccount
+  annotations: {}
+  # -- ServiceAccount name (auto-generated if empty)
+  name: ""
+  # -- Automount the service account token
+  automountServiceAccountToken: false
+
+# -- Pod-level annotations
+podAnnotations: {}
+# -- Pod-level labels
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Gateway HTTP/WS port
+  port: 18789
+  # -- Bridge port (set to 0 to disable)
+  bridgePort: 18790
+
+ingress:
+  # -- Enable Ingress
+  enabled: false
+  # -- Ingress class name
+  className: ""
+  # -- Ingress annotations (e.g. for WebSocket support)
+  annotations: {}
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+  #   nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+  hosts:
+    - host: openclaw.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration
+  tls: []
+  #  - secretName: openclaw-tls
+  #    hosts:
+  #      - openclaw.local
+
+persistence:
+  # -- Enable persistent storage
+  enabled: true
+  # -- Use an existing PVC
+  existingClaim: ""
+  # -- Storage class (empty = cluster default)
+  storageClass: ""
+  # -- Access modes
+  accessModes:
+    - ReadWriteOnce
+  # -- Volume size
+  size: 5Gi
+
+# -- Resource requests and limits
+resources: {}
+#  requests:
+#    cpu: 250m
+#    memory: 512Mi
+#  limits:
+#    cpu: "1"
+#    memory: 1536Mi
+
+autoscaling:
+  # -- Enable HPA (disabled by default; stateful workload)
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+networkPolicy:
+  # -- Enable NetworkPolicy
+  enabled: false
+
+# -- Node selector constraints
+nodeSelector: {}
+# -- Tolerations
+tolerations: []
+# -- Affinity rules
+affinity: {}
+
+# -- Extra environment variables added directly to the pod spec
+extraEnv: []
+
+# -- Extra volume mounts added to the container
+extraVolumeMounts: []
+
+# -- Extra volumes added to the pod
+extraVolumes: []
+
+# -- OpenClaw application config (rendered as openclaw.json)
+openclawConfig:
+  # -- Enable seeding openclaw.json from Helm values
+  enabled: false
+  # -- Full openclaw.json content as YAML (converted to JSON)
+  content: {}
+  #   agents:
+  #     defaults:
+  #       model:
+  #         primary: "google-vertex/claude-opus-4-6"
+  #   models:
+  #     providers:
+  #       google-vertex:
+  #         baseUrl: "https://us-east5-aiplatform.googleapis.com"
+  #         api: "anthropic-messages"
+  #         auth: "oauth"
+  #         models:
+  #           - id: "claude-opus-4-6"
+  #             name: "Claude Opus 4.6"
+  #             ...
+
+# -- Google Vertex AI configuration (for accessing Claude via Vertex)
+vertexAI:
+  # -- Enable Vertex AI credentials mounting
+  enabled: false
+  # -- Name of a pre-existing Secret containing credentials.json (ignored when credentials.create is true)
+  existingSecret: ""
+  # -- GCP project ID for Vertex AI
+  projectId: ""
+  # -- GCP region for Vertex AI (e.g. us-east5)
+  region: ""
+  credentials:
+    # -- Create a Secret for GCP credentials (alternative to existingSecret)
+    create: false
+    # -- Raw JSON content of the GCP service account key
+    json: ""
+
+# -- kubernetes-sigs/agent-sandbox integration
+sandbox:
+  # -- Enable agent-sandbox CRDs (SandboxTemplate + SandboxWarmPool)
+  enabled: false
+  # -- Container image for sandbox pods
+  image: ghcr.io/openclaw/openclaw:latest
+  # -- Sandbox resource requests
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # -- Warm pool size (pre-created sandbox pods)
+  warmPoolSize: 2

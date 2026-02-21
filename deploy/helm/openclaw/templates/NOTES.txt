@@ -1,0 +1,79 @@
+OpenClaw gateway has been deployed.
+
+1. Get the gateway URL:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "openclaw.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "openclaw.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.service.port }}
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "openclaw.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  echo "Gateway available at http://127.0.0.1:{{ .Values.service.port }}"
+{{- end }}
+
+2. Verify the deployment:
+  kubectl --namespace {{ .Release.Namespace }} get pods -l "{{ include "openclaw.selectorLabels" . | replace "\n" "," | replace ": " "=" }}"
+
+3. Run the built-in connectivity test:
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+{{- if .Values.openclawConfig.enabled }}
+
+4. Model provider configuration:
+  openclaw.json is seeded automatically from Helm values via the
+  openclawConfig.content field. Changes take effect on the next
+  helm upgrade (the pod restarts automatically).
+{{- else }}
+
+4. Model provider configuration:
+  No openclawConfig was provided. To configure a model provider via
+  Helm values (avoiding manual kubectl exec), set openclawConfig.enabled=true
+  and provide openclawConfig.content in your values file. Examples:
+
+  # Anthropic API (direct)
+  openclawConfig:
+    enabled: true
+    content:
+      agents:
+        defaults:
+          model:
+            primary: "anthropic/claude-sonnet-4-20250514"
+
+  # Google Vertex AI
+  openclawConfig:
+    enabled: true
+    content:
+      agents:
+        defaults:
+          model:
+            primary: "google-vertex/claude-opus-4-6"
+      models:
+        providers:
+          google-vertex:
+            baseUrl: "https://us-east5-aiplatform.googleapis.com"
+            api: "anthropic-messages"
+            auth: "oauth"
+
+  # OpenAI-compatible provider
+  openclawConfig:
+    enabled: true
+    content:
+      agents:
+        defaults:
+          model:
+            primary: "openrouter/gpt-4o"
+      models:
+        providers:
+          openrouter:
+            baseUrl: "https://openrouter.ai/api"
+            api: "openai-completions"
+{{- end }}
+{{- if and .Values.vertexAI.enabled .Values.vertexAI.credentials.create }}
+
+  GCP credentials Secret created by this chart: {{ include "openclaw.gcpSecretName" . }}
+{{- end }}

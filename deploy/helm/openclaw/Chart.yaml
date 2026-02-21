@@ -1,0 +1,17 @@
+apiVersion: v2
+name: openclaw
+description: A Helm chart for deploying the OpenClaw gateway on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/openclaw/openclaw
+sources:
+  - https://github.com/openclaw/openclaw
+maintainers:
+  - name: openclaw
+    url: https://github.com/openclaw
+keywords:
+  - openclaw
+  - ai
+  - gateway
+  - llm

@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openclaw.fullname" . }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if and .Values.persistence.enabled (has "ReadWriteOnce" .Values.persistence.accessModes) }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "openclaw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if .Values.openclawConfig.enabled }}
+        checksum/openclaw-config: {{ include (print $.Template.BasePath "/openclaw-config.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "openclaw.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "openclaw.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.openclawConfig.enabled }}
+      initContainers:
+        - name: seed-config
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          command: ["sh", "-c", "mkdir -p /data/.openclaw && cp /etc/openclaw-config/openclaw.json /data/.openclaw/openclaw.json"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: openclaw-config
+              mountPath: /etc/openclaw-config
+              readOnly: true
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.command | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "openclaw.fullname" . }}
+            - secretRef:
+                name: {{ include "openclaw.secretName" . }}
+          {{- if or .Values.vertexAI.enabled .Values.extraEnv }}
+          env:
+            {{- if .Values.vertexAI.enabled }}
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/secrets/google/credentials.json"
+            {{- if .Values.vertexAI.projectId }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.vertexAI.projectId | quote }}
+            {{- end }}
+            {{- if .Values.vertexAI.region }}
+            - name: GOOGLE_CLOUD_LOCATION
+              value: {{ .Values.vertexAI.region | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: gateway
+              containerPort: 18789
+              protocol: TCP
+            {{- if gt (int .Values.service.bridgePort) 0 }}
+            - name: bridge
+              containerPort: 18790
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+            tcpSocket:
+              port: gateway
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: gateway
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            tcpSocket:
+              port: gateway
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: npm-cache
+              mountPath: /home/node/.npm
+            {{- if .Values.vertexAI.enabled }}
+            - name: gcp-credentials
+              mountPath: /var/secrets/google
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "openclaw.pvcName" . }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: npm-cache
+          emptyDir: {}
+        {{- if .Values.vertexAI.enabled }}
+        - name: gcp-credentials
+          secret:
+            secretName: {{ include "openclaw.gcpSecretName" . }}
+            items:
+              - key: credentials.json
+                path: credentials.json
+        {{- end }}
+        {{- if .Values.openclawConfig.enabled }}
+        - name: openclaw-config
+          configMap:
+            name: {{ include "openclaw.fullname" . }}-config
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

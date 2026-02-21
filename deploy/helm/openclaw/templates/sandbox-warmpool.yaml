@@ -1,0 +1,12 @@
+{{- if .Values.sandbox.enabled }}
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxWarmPool
+metadata:
+  name: {{ include "openclaw.fullname" . }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  templateRef:
+    name: {{ include "openclaw.fullname" . }}
+  size: {{ .Values.sandbox.warmPoolSize }}
+{{- end }}
