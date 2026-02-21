@@ -157,7 +157,7 @@ describe("resolveGatewayClientIp", () => {
       forwardedFor: "198.51.100.99, 10.0.0.9, 127.0.0.1",
       trustedProxies: ["127.0.0.1"],
     });
-    expect(ip).toBe("127.0.0.1");
+    expect(ip).toBe("10.0.0.9");
   });
 
   it("fails closed when trusted proxy headers are missing", () => {
