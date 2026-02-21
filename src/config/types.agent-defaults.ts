@@ -162,6 +162,13 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Memory file management settings. */
+  memory?: {
+    /** Warn when MEMORY.md exceeds this many chars (default: 15000). */
+    warnChars?: number;
+    /** Chars to keep in MEMORY.md after pruning (default: 10000). */
+    pruneKeepChars?: number;
+  };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */

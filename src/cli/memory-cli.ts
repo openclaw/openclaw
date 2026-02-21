@@ -10,6 +10,11 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { setVerbose } from "../globals.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
+import {
+  DEFAULT_MEMORY_WARN_CHARS,
+  DEFAULT_MEMORY_PRUNE_KEEP_CHARS,
+  pruneMemoryFile,
+} from "../memory/prune.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -36,6 +41,7 @@ type SourceScan = {
   source: MemorySourceName;
   totalFiles: number | null;
   issues: string[];
+  memoryFileChars?: number;
 };
 
 type MemorySourceScan = {
@@ -239,7 +245,15 @@ async function scanMemoryFiles(
     issues.push(`no memory files found in ${shortenHomePath(workspaceDir)}`);
   }
 
-  return { source: "memory", totalFiles, issues };
+  let memoryFileChars: number | undefined;
+  if (primary.exists) {
+    try {
+      const content = await fs.readFile(memoryFile, "utf-8");
+      memoryFileChars = content.length;
+    } catch {}
+  }
+
+  return { source: "memory", totalFiles, issues, memoryFileChars };
 }
 
 async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
@@ -448,6 +462,20 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
             ? `${entry.files}/? files · ${entry.chunks} chunks`
             : `${entry.files}/${total} files · ${entry.chunks} chunks`;
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+      }
+    }
+    const memoryScan = scan?.sources?.find((s) => s.source === "memory");
+    if (memoryScan?.memoryFileChars !== undefined) {
+      const chars = memoryScan.memoryFileChars;
+      const memoryDefaults = cfg.agents?.defaults?.memory;
+      const warnThreshold = memoryDefaults?.warnChars ?? DEFAULT_MEMORY_WARN_CHARS;
+      const sizeStr = `${chars.toLocaleString()} chars`;
+      if (chars > warnThreshold) {
+        lines.push(
+          `${label("MEMORY.md")} ${warn(sizeStr)} ${warn(`(exceeds ${warnThreshold.toLocaleString()} char threshold — run "openclaw memory prune")`)}`,
+        );
+      } else {
+        lines.push(`${label("MEMORY.md")} ${muted(sizeStr)}`);
       }
     }
     if (status.fallback) {
@@ -757,6 +785,73 @@ export function registerMemoryCli(program: Command) {
             defaultRuntime.log(lines.join("\n").trim());
           },
         });
+      },
+    );
+
+  memory
+    .command("prune")
+    .description("Archive old MEMORY.md content to keep file within size limits")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--dry-run", "Show what would be pruned without writing", false)
+    .option("--json", "Print JSON")
+    .option("--keep-chars <n>", "Chars to keep in MEMORY.md", (v: string) => Number(v))
+    .option("--warn-chars <n>", "Warn threshold in chars", (v: string) => Number(v))
+    .action(
+      async (
+        opts: MemoryCommandOptions & {
+          dryRun?: boolean;
+          keepChars?: number;
+          warnChars?: number;
+        },
+      ) => {
+        const cfg = loadConfig();
+        const agentId = resolveAgent(cfg, opts.agent);
+        const memoryDefaults = cfg.agents?.defaults?.memory;
+        const workspaceDir = cfg.agents?.defaults?.workspace ?? process.cwd();
+        const memoryFilePath = path.join(workspaceDir, "MEMORY.md");
+
+        const result = await pruneMemoryFile({
+          filePath: memoryFilePath,
+          dryRun: opts.dryRun,
+          keepChars:
+            opts.keepChars ?? memoryDefaults?.pruneKeepChars ?? DEFAULT_MEMORY_PRUNE_KEEP_CHARS,
+          warnChars: opts.warnChars ?? memoryDefaults?.warnChars ?? DEFAULT_MEMORY_WARN_CHARS,
+        });
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        const rich = isRich();
+        const info = (text: string) => colorize(rich, theme.info, text);
+        const success = (text: string) => colorize(rich, theme.success, text);
+        const warn = (text: string) => colorize(rich, theme.warn, text);
+        const muted = (text: string) => colorize(rich, theme.muted, text);
+
+        if (!result.pruned) {
+          defaultRuntime.log(
+            `${success("No pruning needed.")} MEMORY.md is ${info(result.originalChars.toLocaleString())} chars ${muted(`(agent: ${agentId})`)}`,
+          );
+          return;
+        }
+
+        if (result.dryRun) {
+          defaultRuntime.log(
+            `${warn("[dry-run]")} Would prune MEMORY.md from ${info(result.originalChars.toLocaleString())} to ${info(result.keptChars.toLocaleString())} chars`,
+          );
+          defaultRuntime.log(
+            `  ${muted("Archive:")} ${result.archivedChars.toLocaleString()} chars → ${info(shortenHomePath(result.archiveFilePath!))}`,
+          );
+          return;
+        }
+
+        defaultRuntime.log(
+          `${success("Pruned")} MEMORY.md from ${info(result.originalChars.toLocaleString())} to ${info(result.keptChars.toLocaleString())} chars`,
+        );
+        defaultRuntime.log(
+          `  ${muted("Archived:")} ${result.archivedChars.toLocaleString()} chars → ${info(shortenHomePath(result.archiveFilePath!))}`,
+        );
       },
     );
 }

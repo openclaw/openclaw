@@ -172,6 +172,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.memory.warnChars":
+    "Warn when MEMORY.md exceeds this many characters (default: 15000, ~75% of 20k bootstrap limit).",
+  "agents.defaults.memory.pruneKeepChars":
+    "Characters to keep in MEMORY.md after pruning (default: 10000, 50% of bootstrap limit).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.sources":
