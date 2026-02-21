@@ -8,7 +8,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  getFollowupQueueDepthByPrefix,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
@@ -604,6 +608,7 @@ function createRun(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  messageProvider?: string;
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -620,6 +625,7 @@ function createRun(params: {
       sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp",
       config: {} as OpenClawConfig,
+      messageProvider: params.messageProvider,
       provider: "openai",
       model: "gpt-test",
       timeoutMs: 10_000,
@@ -806,6 +812,117 @@ describe("followup queue deduplication", () => {
 });
 
 describe("followup queue collect routing", () => {
+  it("reports depth across route-partitioned queue keys", async () => {
+    const baseKey = `test-depth-route-prefix-${Date.now()}`;
+    const keyA = `${baseKey}::route:whatsapp|+1234567890||`;
+    const keyB = `${baseKey}::route:whatsapp|+1987654321||`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const done = createDeferred<void>();
+    let delivered = 0;
+    const runFollowup = async () => {
+      delivered += 1;
+      if (delivered >= 2) {
+        done.resolve();
+      }
+    };
+
+    enqueueFollowupRun(keyA, createRun({ prompt: "one", messageProvider: "whatsapp" }), settings);
+    enqueueFollowupRun(keyB, createRun({ prompt: "two", messageProvider: "whatsapp" }), settings);
+
+    expect(getFollowupQueueDepthByPrefix(baseKey)).toBe(2);
+
+    scheduleFollowupDrain(keyA, runFollowup);
+    scheduleFollowupDrain(keyB, runFollowup);
+    await done.promise;
+  });
+
+  it("does not collect when routing metadata is missing for routable providers", async () => {
+    const key = `test-collect-missing-routing-meta-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        messageProvider: "whatsapp",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        messageProvider: "whatsapp",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    expect(calls[0]?.prompt).toBe("one");
+    expect(calls[1]?.prompt).toBe("two");
+  });
+
+  it("does not collect when keyed and fully unkeyed metadata are mixed", async () => {
+    const key = `test-collect-mixed-unkeyed-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    expect(calls[0]?.prompt).toBe("one");
+    expect(calls[1]?.prompt).toBe("two");
+  });
+
   it("does not collect when destinations differ", async () => {
     const key = `test-collect-diff-to-${Date.now()}`;
     const calls: FollowupRun[] = [];

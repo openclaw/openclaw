@@ -24,7 +24,7 @@ import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
-import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
+import { getFollowupQueueDepthByPrefix, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
 export async function buildStatusReply(params: {
@@ -109,8 +109,8 @@ export async function buildStatusReply(params: {
     channel: command.channel,
     sessionEntry,
   });
-  const queueKey = sessionKey ?? sessionEntry?.sessionId;
-  const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
+  const queueBaseKey = sessionKey ?? sessionEntry?.sessionId;
+  const queueDepth = queueBaseKey ? getFollowupQueueDepthByPrefix(queueBaseKey) : 0;
   const queueOverrides = Boolean(
     sessionEntry?.queueDebounceMs ?? sessionEntry?.queueCap ?? sessionEntry?.queueDrop,
   );

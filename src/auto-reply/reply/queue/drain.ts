@@ -34,7 +34,9 @@ export function scheduleFollowupDrain(
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
-            const channel = item.originatingChannel;
+            const channel =
+              item.originatingChannel ??
+              (item.run.messageProvider?.trim().toLowerCase() as FollowupRun["originatingChannel"]);
             const to = item.originatingTo;
             const accountId = item.originatingAccountId;
             const threadId = item.originatingThreadId;

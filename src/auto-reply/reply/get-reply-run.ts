@@ -42,7 +42,7 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveQueueSettings } from "./queue.js";
-import { routeReply } from "./route-reply.js";
+import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -51,6 +51,25 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function buildFollowupQueueKey(params: {
+  sessionKey?: string;
+  sessionId: string;
+  originatingChannel?: MsgContext["OriginatingChannel"];
+  originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
+}): string {
+  const baseKey = params.sessionKey ?? params.sessionId;
+  const channel = params.originatingChannel;
+  const to = params.originatingTo?.trim();
+  if (!isRoutableChannel(channel) || !to) {
+    return baseKey;
+  }
+  const accountId = params.originatingAccountId?.trim() ?? "";
+  const threadId = params.originatingThreadId != null ? String(params.originatingThreadId) : "";
+  return `${baseKey}::route:${channel}|${to}|${accountId}|${threadId}`;
+}
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;
@@ -373,7 +392,14 @@ export async function runPreparedReply(
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-  const queueKey = sessionKey ?? sessionIdFinal;
+  const queueKey = buildFollowupQueueKey({
+    sessionKey,
+    sessionId: sessionIdFinal,
+    originatingChannel: ctx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo,
+    originatingAccountId: ctx.AccountId,
+    originatingThreadId: ctx.MessageThreadId,
+  });
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";

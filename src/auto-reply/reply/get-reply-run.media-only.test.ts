@@ -64,6 +64,12 @@ vi.mock("./queue.js", () => ({
 
 vi.mock("./route-reply.js", () => ({
   routeReply: vi.fn(),
+  isRoutableChannel: vi.fn().mockImplementation((channel: string | undefined) => {
+    if (!channel) {
+      return false;
+    }
+    return channel !== "webchat";
+  }),
 }));
 
 vi.mock("./session-updates.js", () => ({
@@ -167,6 +173,35 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+    expect(call?.queueKey).toBe("session-key::route:slack|C123||");
+  });
+
+  it("uses the base queue key when routing metadata is incomplete", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+        },
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.queueKey).toBe("session-key");
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {
