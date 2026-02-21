@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -847,12 +848,14 @@ describe("normalizeOutboundPayloadsForJson", () => {
     ];
 
     for (const testCase of cases) {
-      const input = testCase.input.map((payload) => {
-        if ("mediaUrls" in payload && payload.mediaUrls) {
-          return { ...payload, mediaUrls: [...payload.mediaUrls] };
-        }
-        return { ...payload };
-      });
+      const input: ReplyPayload[] = testCase.input.map((payload) =>
+        "mediaUrls" in payload
+          ? ({
+              ...payload,
+              mediaUrls: payload.mediaUrls ? [...payload.mediaUrls] : undefined,
+            } as ReplyPayload)
+          : ({ ...payload } as ReplyPayload),
+      );
       expect(normalizeOutboundPayloadsForJson(input)).toEqual(testCase.expected);
     }
   });
