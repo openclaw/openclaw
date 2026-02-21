@@ -1,3 +1,11 @@
+# Security: exclude sensitive files
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
 .git
 .worktrees
 .bun-cache

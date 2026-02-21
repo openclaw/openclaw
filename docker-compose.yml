@@ -1,19 +1,101 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    # Resource limits for LLM
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: "4"
+        reservations:
+          memory: 4G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    restart: unless-stopped
+
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+    # Security hardening (OWASP A02:2025 - Security Misconfiguration)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Temporary directories
+    tmpfs:
+      - /tmp:mode=1777,size=500M
+
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      NODE_OPTIONS: "--max-old-space-size=2048"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OLLAMA_HOST: http://ollama:11434
+
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - openclaw_agents:/home/node/.openclaw/agents
+
+    # LAN + Tailscale access with Token authentication
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "192.168.50.210:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "192.168.50.210:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+
+    # Health check for monitoring
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:18789').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Resource limits (prevent DoS)
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "4"
+        reservations:
+          memory: 1G
+
+    # Logging configuration (OWASP A09:2025 - Security Logging)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
     init: true
     restart: unless-stopped
     command:
@@ -22,25 +104,43 @@ services:
         "dist/index.js",
         "gateway",
         "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "${OPENCLAW_GATEWAY_BIND:-loopback}",
         "--port",
         "18789",
+        "--allow-unconfigured",
       ]
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    tmpfs:
+      - /tmp:mode=1777,size=500M
+
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - openclaw_agents:/home/node/.openclaw/agents
+
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  ollama_data:
+  openclaw_agents:
