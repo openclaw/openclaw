@@ -306,11 +306,10 @@ export async function startGatewayServer(
           : "Unknown validation issue.";
       throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
     }
-    const prepared = await activateRuntimeSecrets(freshSnapshot.config, {
+    await activateRuntimeSecrets(freshSnapshot.config, {
       reason: "startup",
-      activate: true,
+      activate: false,
     });
-    cfgAtStart = prepared.config;
   }
 
   cfgAtStart = loadConfig();
