@@ -7,6 +7,11 @@ const BADGE = {
   error: { text: '!', color: '#B91C1C' },
 }
 
+// Sticky attach: persist user intent so a service worker restart / relay reconnect
+// does not force the user to click again.
+const STORAGE_KEY_ATTACHED_TABS = 'attachedTabIds'
+const ALARM_RETRY = 'relayRetry'
+
 /** @type {WebSocket|null} */
 let relayWs = null
 /** @type {Promise<void>|null} */
@@ -53,6 +58,51 @@ function setBadge(tabId, kind) {
   void chrome.action.setBadgeText({ tabId, text: cfg.text })
   void chrome.action.setBadgeBackgroundColor({ tabId, color: cfg.color })
   void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
+}
+
+function getStorage() {
+  // Prefer session storage to avoid persisting across browser restarts.
+  return chrome.storage.session || chrome.storage.local
+}
+
+async function loadAttachedTabIds() {
+  try {
+    const stored = await getStorage().get([STORAGE_KEY_ATTACHED_TABS])
+    const raw = stored[STORAGE_KEY_ATTACHED_TABS]
+    if (!Array.isArray(raw)) return []
+    return raw.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+  } catch {
+    return []
+  }
+}
+
+async function saveAttachedTabIds(ids) {
+  const unique = Array.from(new Set(ids)).sort((a, b) => a - b)
+  await getStorage().set({ [STORAGE_KEY_ATTACHED_TABS]: unique })
+}
+
+async function rememberAttached(tabId) {
+  const ids = await loadAttachedTabIds()
+  if (!ids.includes(tabId)) {
+    ids.push(tabId)
+    await saveAttachedTabIds(ids)
+  }
+}
+
+async function forgetAttached(tabId) {
+  const ids = await loadAttachedTabIds()
+  const next = ids.filter((id) => id !== tabId)
+  if (next.length !== ids.length) {
+    await saveAttachedTabIds(next)
+  }
+}
+
+function sendToRelay(payload) {
+  const ws = relayWs
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    throw new Error('Relay not connected')
+  }
+  ws.send(JSON.stringify(payload))
 }
 
 async function ensureRelayConnection() {
@@ -108,6 +158,13 @@ async function ensureRelayConnection() {
       chrome.debugger.onEvent.addListener(onDebuggerEvent)
       chrome.debugger.onDetach.addListener(onDebuggerDetach)
     }
+
+    // Resync already-attached tabs after reconnect.
+    await resyncAttachedToRelay().catch(() => {})
+
+    // Also try restoring sticky (storage-backed) attachments immediately.
+    // This reduces the window where the Gateway sees no attached tabs after an MV3 service worker restart.
+    void restoreStickyAttachments().catch(() => {})
   })()
 
   try {
@@ -124,25 +181,15 @@ function onRelayClosed(reason) {
     p.reject(new Error(`Relay disconnected (${reason})`))
   }
 
+  // Important: do NOT detach debugger or forget intended attachments.
+  // Otherwise a relay disconnect would force a manual re-attach.
   for (const tabId of tabs.keys()) {
-    void chrome.debugger.detach({ tabId }).catch(() => {})
     setBadge(tabId, 'connecting')
     void chrome.action.setTitle({
       tabId,
-      title: 'OpenClaw Browser Relay: disconnected (click to re-attach)',
+      title: 'OpenClaw Browser Relay: disconnected (auto-retrying)…',
     })
   }
-  tabs.clear()
-  tabBySession.clear()
-  childSessionToTab.clear()
-}
-
-function sendToRelay(payload) {
-  const ws = relayWs
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    throw new Error('Relay not connected')
-  }
-  ws.send(JSON.stringify(payload))
 }
 
 async function maybeOpenHelpOnce() {
@@ -238,6 +285,9 @@ async function attachTab(tabId, opts = {}) {
 
   tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
   tabBySession.set(sessionId, tabId)
+
+  await rememberAttached(tabId).catch(() => {})
+
   void chrome.action.setTitle({
     tabId,
     title: 'OpenClaw Browser Relay: attached (click to detach)',
@@ -284,6 +334,8 @@ async function detachTab(tabId, reason) {
     if (parentTabId === tabId) childSessionToTab.delete(childSessionId)
   }
 
+  await forgetAttached(tabId).catch(() => {})
+
   try {
     await chrome.debugger.detach({ tabId })
   } catch {
@@ -326,9 +378,87 @@ async function connectOrToggleForActiveTab() {
       title: 'OpenClaw Browser Relay: relay not running (open options for setup)',
     })
     void maybeOpenHelpOnce()
-    // Extra breadcrumbs in chrome://extensions service worker logs.
     const message = err instanceof Error ? err.message : String(err)
     console.warn('attach failed', message, nowStack())
+  }
+}
+
+async function resyncAttachedToRelay() {
+  const ws = relayWs
+  if (!ws || ws.readyState !== WebSocket.OPEN) return
+
+  // If we still have attached tabs in memory, just resend attached events.
+  for (const [tabId, t] of tabs.entries()) {
+    if (t.state !== 'connected' || !t.sessionId) continue
+    const debuggee = { tabId }
+    let targetInfo
+    try {
+      const info = /** @type {any} */ (await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo'))
+      targetInfo = info?.targetInfo
+    } catch {
+      continue
+    }
+
+    try {
+      sendToRelay({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.attachedToTarget',
+          params: {
+            sessionId: t.sessionId,
+            targetInfo: { ...targetInfo, attached: true },
+            waitingForDebugger: false,
+          },
+        },
+      })
+      setBadge(tabId, 'on')
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function restoreStickyAttachments() {
+  const ids = await loadAttachedTabIds()
+  if (!ids.length) return
+
+  // Mark as connecting while we try.
+  for (const tabId of ids) {
+    setBadge(tabId, 'connecting')
+    void chrome.action.setTitle({
+      tabId,
+      title: 'OpenClaw Browser Relay: restoring attachment…',
+    })
+  }
+
+  try {
+    await ensureRelayConnection()
+  } catch {
+    // Relay down: keep intent, retry via alarm.
+    for (const tabId of ids) setBadge(tabId, 'connecting')
+    return
+  }
+
+  for (const tabId of ids) {
+    const exists = await chrome.tabs.get(tabId).catch(() => null)
+    if (!exists) {
+      await forgetAttached(tabId).catch(() => {})
+      continue
+    }
+
+    // Already attached in-memory?
+    const current = tabs.get(tabId)
+    if (current?.state === 'connected') {
+      setBadge(tabId, 'on')
+      continue
+    }
+
+    try {
+      await attachTab(tabId)
+    } catch {
+      // Keep in storage for retry.
+      setBadge(tabId, 'connecting')
+    }
   }
 }
 
@@ -450,4 +580,18 @@ chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
 chrome.runtime.onInstalled.addListener(() => {
   // Useful: first-time instructions.
   void chrome.runtime.openOptionsPage()
+  void restoreStickyAttachments()
+})
+
+chrome.runtime.onStartup?.addListener(() => {
+  void restoreStickyAttachments()
+})
+
+// Also run on service worker (re)load.
+void restoreStickyAttachments()
+
+chrome.alarms.create(ALARM_RETRY, { periodInMinutes: 1 })
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== ALARM_RETRY) return
+  void restoreStickyAttachments()
 })
