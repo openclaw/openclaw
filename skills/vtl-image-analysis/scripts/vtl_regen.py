@@ -1,25 +1,42 @@
 import sys
 import os
+import ast
 import json
 import math
 import argparse
 from pathlib import Path
 
+# Allowed AST node types for trigger expressions
+_ALLOWED_NODES = (
+    ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
+    ast.Compare, ast.BinOp, ast.Add, ast.Sub, ast.Mult, ast.Div,
+    ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq,
+    ast.Call, ast.Name, ast.Constant, ast.NameConstant, ast.Num,
+)
+_ALLOWED_FUNCS = {"abs", "min", "max"}
+
+def _check_node(node):
+    if not isinstance(node, _ALLOWED_NODES):
+        raise ValueError(f"Disallowed expression node: {type(node).__name__}")
+    if isinstance(node, ast.Call):
+        if not (isinstance(node.func, ast.Name) and node.func.id in _ALLOWED_FUNCS):
+            raise ValueError(f"Disallowed function in trigger: {ast.dump(node.func)}")
+    if isinstance(node, ast.Name) and node.id.startswith("__"):
+        raise ValueError(f"Disallowed name in trigger: {node.id}")
+    for child in ast.iter_child_nodes(node):
+        _check_node(child)
+
 def safe_eval(expr: str, ctx: dict) -> bool:
-    # Very small, safe expression evaluator for triggers like:
+    # AST-based expression evaluator for triggers like:
     # "abs(delta_x) < 0.04 and abs(delta_y) < 0.04"
+    # Validates node types before evaluation — no bytecode inspection.
+    tree = ast.parse(expr, mode="eval")
+    _check_node(tree)
     allowed_names = {
-        "abs": abs,
-        "min": min,
-        "max": max,
-        "math": math,
+        "abs": abs, "min": min, "max": max,
         **{k: v for k, v in ctx.items() if isinstance(v, (int, float))}
     }
-    code = compile(expr, "<trigger>", "eval")
-    for name in code.co_names:
-        if name not in allowed_names:
-            raise ValueError(f"Disallowed name in trigger: {name}")
-    return bool(eval(code, {"__builtins__": {}}, allowed_names))
+    return bool(eval(compile(tree, "<trigger>", "eval"), {"__builtins__": {}}, allowed_names))
 
 def load_latest_metrics(metrics_path: Path) -> dict:
     # Accept JSON (single object) or JSONL (take last non-empty line)
