@@ -42,6 +42,21 @@ struct GatewayDiscoveryHelpersTests {
         #expect(parsed?.port == 2201)
     }
 
+    @Test func sshTargetAllowsMissingResolvedServicePort() {
+        let gateway = self.makeGateway(
+            serviceHost: "resolved.example.ts.net",
+            servicePort: nil,
+            sshPort: 2201)
+
+        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) else {
+            Issue.record("expected ssh target")
+            return
+        }
+        let parsed = CommandResolver.parseSSHTarget(target)
+        #expect(parsed?.host == "resolved.example.ts.net")
+        #expect(parsed?.port == 2201)
+    }
+
     @Test func sshTargetRejectsTxtOnlyGateways() {
         let gateway = self.makeGateway(
             serviceHost: nil,

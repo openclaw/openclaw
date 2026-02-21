@@ -2,6 +2,17 @@ import Foundation
 import OpenClawDiscovery
 
 enum GatewayDiscoveryHelpers {
+    static func resolvedServiceHost(
+        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String?
+    {
+        self.resolvedServiceHost(gateway.serviceHost)
+    }
+
+    static func resolvedServiceHost(_ host: String?) -> String? {
+        guard let host = self.trimmed(host), !host.isEmpty else { return nil }
+        return host
+    }
+
     static func serviceEndpoint(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> (host: String, port: Int)?
     {
@@ -12,15 +23,15 @@ enum GatewayDiscoveryHelpers {
         serviceHost: String?,
         servicePort: Int?) -> (host: String, port: Int)?
     {
-        guard let host = self.trimmed(serviceHost), !host.isEmpty else { return nil }
+        guard let host = self.resolvedServiceHost(serviceHost) else { return nil }
         guard let port = servicePort, port > 0, port <= 65535 else { return nil }
         return (host, port)
     }
 
     static func sshTarget(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        guard let endpoint = self.serviceEndpoint(for: gateway) else { return nil }
+        guard let host = self.resolvedServiceHost(for: gateway) else { return nil }
         let user = NSUserName()
-        var target = "\(user)@\(endpoint.host)"
+        var target = "\(user)@\(host)"
         if gateway.sshPort != 22 {
             target += ":\(gateway.sshPort)"
         }

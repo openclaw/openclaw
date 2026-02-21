@@ -26,16 +26,16 @@ extension OnboardingView {
         GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
 
         if self.state.remoteTransport == .direct {
-            if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
-                self.state.remoteUrl = url
-            }
-        } else if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) {
-            self.state.remoteTarget = target
+            self.state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
+        } else {
+            self.state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
         }
         if let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) {
             OpenClawConfigFile.setRemoteGatewayUrl(
                 host: endpoint.host,
                 port: endpoint.port)
+        } else {
+            OpenClawConfigFile.clearRemoteGatewayUrl()
         }
 
         self.state.connectionMode = .remote
