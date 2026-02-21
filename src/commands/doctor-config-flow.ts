@@ -539,15 +539,22 @@ function maybeRepairDiscordNumericIds(
     return { config: cfg, changes: [] };
   }
 
-  // Build a lookup from lossy Number() → original digit string for bare integers
-  // in the raw config text that exceed MAX_SAFE_INTEGER.
-  const rawLookup = new Map<number, string>();
+  // Build a lookup from lossy Number() → original digit strings for bare integers
+  // in the raw config text that exceed MAX_SAFE_INTEGER.  Multiple distinct IDs
+  // can round to the same Number, so we store an array and shift() during repair
+  // to consume them in file order (which matches JSON parse order).
+  const rawLookup = new Map<number, string[]>();
   if (rawText) {
     for (const m of rawText.matchAll(/(?<!")(\b\d{16,}\b)(?!")/g)) {
       const original = m[1];
       const asNumber = Number(original);
       if (String(asNumber) !== original) {
-        rawLookup.set(asNumber, original);
+        const existing = rawLookup.get(asNumber);
+        if (existing) {
+          existing.push(original);
+        } else {
+          rawLookup.set(asNumber, [original]);
+        }
       }
     }
   }
@@ -565,7 +572,7 @@ function maybeRepairDiscordNumericIds(
     const updated = raw.map((entry) => {
       if (typeof entry === "number") {
         converted += 1;
-        const original = rawLookup.get(entry);
+        const original = rawLookup.get(entry)?.shift();
         if (original) {
           recovered += 1;
         }
