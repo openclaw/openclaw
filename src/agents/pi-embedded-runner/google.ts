@@ -258,10 +258,8 @@ export function sanitizeToolsForGoogle<
   // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
   // AND Claude models.  This field does not support JSON Schema keywords such as
   // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
-  // for every provider that routes through this path.
-  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
-    return params.tools;
-  }
+  // for every provider that routes through this path — including openai-codex
+  // and google/* providers that also route through Cloud Code Assist.
   return params.tools.map((tool) => {
     if (!tool.parameters || typeof tool.parameters !== "object") {
       return tool;
