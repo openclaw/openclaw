@@ -119,6 +119,25 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get(key)).toBe(value);
   });
 
+  it("should enable Brave text_decorations by default", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.("call-1", { query: "test-text-decorations" });
+
+    const firstRequestInput = mockFetch.mock.calls[0]?.[0];
+    const firstRequestUrl =
+      typeof firstRequestInput === "string"
+        ? firstRequestInput
+        : firstRequestInput instanceof URL
+          ? firstRequestInput.toString()
+          : firstRequestInput instanceof Request
+            ? firstRequestInput.url
+            : "";
+    const url = new URL(firstRequestUrl);
+    expect(url.searchParams.get("text_decorations")).toBe("1");
+  });
+
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });

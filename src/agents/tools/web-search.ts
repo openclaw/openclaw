@@ -678,6 +678,7 @@ async function runWebSearch(params: {
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
   }
+  url.searchParams.set("text_decorations", "1");
 
   const res = await fetch(url.toString(), {
     method: "GET",
