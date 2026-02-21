@@ -17,6 +17,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "minimaxApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
+  | "apertisApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
@@ -141,6 +142,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--venice-api-key",
     cliOption: "--venice-api-key <key>",
     description: "Venice API key",
+  },
+  {
+    optionKey: "apertisApiKey",
+    authChoice: "apertis-api-key",
+    cliFlag: "--apertis-api-key",
+    cliOption: "--apertis-api-key <key>",
+    description: "Apertis AI API key",
   },
   {
     optionKey: "togetherApiKey",
