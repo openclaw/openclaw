@@ -831,6 +831,45 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  test("allows control ui without device identity with trusted-proxy auth when device auth is disabled", async () => {
+    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
+    testState.gatewayAuth = {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+      },
+    };
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: {
+        origin: "https://localhost",
+        "x-forwarded-for": "127.0.0.1",
+        "x-forwarded-user": "test@example.com",
+      },
+    });
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    const res = await connectReq(ws, {
+      device: null,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    expect(res.ok).toBe(true);
+    ws.close();
+    await server.close();
+  });
+
   test("accepts device token auth for paired device", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const { deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
