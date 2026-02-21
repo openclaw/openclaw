@@ -198,27 +198,30 @@ describe("promptCustomApiConfig", () => {
 });
 
 describe("applyCustomApiConfig", () => {
-  it("rejects invalid compatibility values at runtime", () => {
-    expect(() =>
-      applyCustomApiConfig({
+  it.each([
+    {
+      name: "invalid compatibility values at runtime",
+      params: {
         config: {},
         baseUrl: "https://llm.example.com/v1",
         modelId: "foo-large",
         compatibility: "invalid" as unknown as "openai",
-      }),
-    ).toThrow('Custom provider compatibility must be "openai" or "anthropic".');
-  });
-
-  it("rejects explicit provider ids that normalize to empty", () => {
-    expect(() =>
-      applyCustomApiConfig({
+      },
+      expectedMessage: 'Custom provider compatibility must be "openai" or "anthropic".',
+    },
+    {
+      name: "explicit provider ids that normalize to empty",
+      params: {
         config: {},
         baseUrl: "https://llm.example.com/v1",
         modelId: "foo-large",
-        compatibility: "openai",
+        compatibility: "openai" as const,
         providerId: "!!!",
-      }),
-    ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
+      },
+      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
+    },
+  ])("rejects $name", ({ params, expectedMessage }) => {
+    expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
   });
 });
 
@@ -240,31 +243,31 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     });
   });
 
-  it("rejects missing required flags", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
-        baseUrl: "https://llm.example.com/v1",
-      }),
-    ).toThrow('Auth choice "custom-api-key" requires a base URL and model ID.');
-  });
-
-  it("rejects invalid compatibility values", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
+  it.each([
+    {
+      name: "missing required flags",
+      flags: { baseUrl: "https://llm.example.com/v1" },
+      expectedMessage: 'Auth choice "custom-api-key" requires a base URL and model ID.',
+    },
+    {
+      name: "invalid compatibility values",
+      flags: {
         baseUrl: "https://llm.example.com/v1",
         modelId: "foo-large",
         compatibility: "xmlrpc",
-      }),
-    ).toThrow('Invalid --custom-compatibility (use "openai" or "anthropic").');
-  });
-
-  it("rejects invalid explicit provider ids", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
+      },
+      expectedMessage: 'Invalid --custom-compatibility (use "openai" or "anthropic").',
+    },
+    {
+      name: "invalid explicit provider ids",
+      flags: {
         baseUrl: "https://llm.example.com/v1",
         modelId: "foo-large",
         providerId: "!!!",
-      }),
-    ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
+      },
+      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
+    },
+  ])("rejects $name", ({ flags, expectedMessage }) => {
+    expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
   });
 });
