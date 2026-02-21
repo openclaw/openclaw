@@ -325,6 +325,72 @@ describe("web_search external content wrapping", () => {
     expect(details.results?.[0]?.published).not.toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
   });
 
+  it("includes Brave structured faq/discussions/infobox results when present", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            web: { results: [] },
+            discussions: {
+              results: [
+                {
+                  title: "Forum thread",
+                  url: "https://forum.example.com/t/1",
+                  data: {
+                    forum_name: "Example Forum",
+                    question: "Best setup?",
+                    top_comment: "Use config A",
+                    num_answers: 2,
+                    score: 9,
+                  },
+                },
+              ],
+            },
+            faq: {
+              results: [
+                {
+                  question: "What is X?",
+                  answer: "X is Y",
+                  title: "FAQ Entry",
+                  url: "https://example.com/faq/x",
+                },
+              ],
+            },
+            infobox: {
+              results: [
+                {
+                  label: "Example Label",
+                  long_desc: "Example Description",
+                  website_url: "https://example.com",
+                  attributes: [["Key1", "Value1"]],
+                },
+              ],
+            },
+          }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.(1, { query: "structured-results-test" });
+    const details = result?.details as {
+      discussions?: Array<{ topComment?: string; url?: string }>;
+      faq?: Array<{ answer?: string; url?: string }>;
+      infobox?: { description?: string; url?: string; attributes?: Array<{ key?: string }> };
+    };
+
+    expect(details.discussions?.[0]?.topComment).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.discussions?.[0]?.url).toBe("https://forum.example.com/t/1");
+    expect(details.faq?.[0]?.answer).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.faq?.[0]?.url).toBe("https://example.com/faq/x");
+    expect(details.infobox?.description).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.infobox?.url).toBe("https://example.com");
+    expect(details.infobox?.attributes?.[0]?.key).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+  });
+
   it("wraps Perplexity content", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     installPerplexityFetch({

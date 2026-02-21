@@ -86,6 +86,35 @@ type BraveSearchResponse = {
   web?: {
     results?: BraveSearchResult[];
   };
+  discussions?: {
+    results?: Array<{
+      title?: string;
+      url?: string;
+      data?: {
+        forum_name?: string;
+        question?: string;
+        top_comment?: string;
+        num_answers?: number;
+        score?: number;
+      };
+    }>;
+  };
+  faq?: {
+    results?: Array<{
+      question?: string;
+      answer?: string;
+      title?: string;
+      url?: string;
+    }>;
+  };
+  infobox?: {
+    results?: Array<{
+      label?: string;
+      long_desc?: string;
+      website_url?: string;
+      attributes?: Array<[string, string]>;
+    }>;
+  };
 };
 
 type PerplexityConfig = {
@@ -710,6 +739,50 @@ async function runWebSearch(params: {
     };
   });
 
+  const formattedDiscussions = Array.isArray(data.discussions?.results)
+    ? data.discussions.results
+        .map((entry) => ({
+          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+          url: entry.url ?? "",
+          forum: entry.data?.forum_name ? wrapWebContent(entry.data.forum_name, "web_search") : "",
+          question: entry.data?.question ? wrapWebContent(entry.data.question, "web_search") : "",
+          topComment: entry.data?.top_comment
+            ? wrapWebContent(entry.data.top_comment, "web_search")
+            : "",
+          answers: entry.data?.num_answers ?? 0,
+          score: entry.data?.score ?? undefined,
+        }))
+        .filter((entry) => entry.topComment)
+    : [];
+
+  const formattedFaq = Array.isArray(data.faq?.results)
+    ? data.faq.results
+        .map((entry) => ({
+          question: entry.question ? wrapWebContent(entry.question, "web_search") : "",
+          answer: entry.answer ? wrapWebContent(entry.answer, "web_search") : "",
+          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+          url: entry.url ?? "",
+        }))
+        .filter((entry) => entry.answer)
+    : [];
+
+  const infoboxRaw = data.infobox?.results?.[0];
+  const formattedInfobox = infoboxRaw
+    ? {
+        label: infoboxRaw.label ? wrapWebContent(infoboxRaw.label, "web_search") : "",
+        description: infoboxRaw.long_desc
+          ? wrapWebContent(infoboxRaw.long_desc, "web_search")
+          : "",
+        attributes: Array.isArray(infoboxRaw.attributes)
+          ? infoboxRaw.attributes.map(([key, value]) => ({
+              key: wrapWebContent(key, "web_search"),
+              value: wrapWebContent(value, "web_search"),
+            }))
+          : [],
+        url: infoboxRaw.website_url ?? "",
+      }
+    : undefined;
+
   const payload = {
     query: params.query,
     provider: params.provider,
@@ -722,6 +795,9 @@ async function runWebSearch(params: {
       wrapped: true,
     },
     results: mapped,
+    ...(formattedDiscussions.length > 0 ? { discussions: formattedDiscussions } : {}),
+    ...(formattedFaq.length > 0 ? { faq: formattedFaq } : {}),
+    ...(formattedInfobox ? { infobox: formattedInfobox } : {}),
   };
   writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
   return payload;
