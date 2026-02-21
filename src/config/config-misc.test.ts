@@ -70,6 +70,27 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts brave baseUrl overrides", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "brave",
+            apiKey: "top-level-key",
+            baseUrl: "https://proxy.example/brave",
+            brave: {
+              apiKey: "provider-key",
+              baseUrl: "https://provider-proxy.example/brave",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("talk.voiceAliases", () => {

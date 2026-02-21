@@ -68,6 +68,58 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("keeps supported web search brave baseUrl keys on repair", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            tools: {
+              web: {
+                search: {
+                  provider: "brave",
+                  apiKey: "top-level-key",
+                  baseUrl: "https://proxy.example/brave",
+                  brave: {
+                    apiKey: "provider-key",
+                    baseUrl: "https://provider-proxy.example/brave",
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const result = await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      const cfg = result.cfg as {
+        tools?: {
+          web?: {
+            search?: {
+              baseUrl?: string;
+              brave?: { apiKey?: string; baseUrl?: string };
+            };
+          };
+        };
+      };
+
+      expect(cfg.tools?.web?.search?.baseUrl).toBe("https://proxy.example/brave");
+      expect(cfg.tools?.web?.search?.brave).toEqual({
+        apiKey: "provider-key",
+        baseUrl: "https://provider-proxy.example/brave",
+      });
+    });
+  });
+
   it("resolves Telegram @username allowFrom entries to numeric IDs on repair", async () => {
     const fetchSpy = vi.fn(async (url: string) => {
       const u = String(url);

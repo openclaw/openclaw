@@ -393,12 +393,21 @@ export type ToolsConfig = {
       provider?: "brave" | "perplexity" | "grok";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
+      /** Brave Search base URL override (default: https://api.search.brave.com). */
+      baseUrl?: string;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search API key override (provider-specific). */
+        apiKey?: string;
+        /** Brave Search base URL override (provider-specific). */
+        baseUrl?: string;
+      };
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
         /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
