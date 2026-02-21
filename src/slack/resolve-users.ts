@@ -60,6 +60,28 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
   return name ? { name } : {};
 }
 
+/**
+ * Returns true if the email string contains glob characters,
+ * indicating it is a pattern like `*@example.com` rather than a literal email.
+ */
+function isEmailPattern(email: string): boolean {
+  return email.includes("*") || email.includes("?");
+}
+
+/**
+ * Tests whether a literal email matches a glob-style pattern.
+ * Supports `*` (any chars) and `?` (single char), case-insensitive.
+ * The pattern is anchored (must match the full string).
+ */
+function emailMatchesPattern(email: string, pattern: string): boolean {
+  const escaped = pattern
+    .toLowerCase()
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp("^" + escaped + "$").test(email.toLowerCase());
+}
+
 async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
   const users: SlackUserLookup[] = [];
   let cursor: string | undefined;
@@ -161,6 +183,34 @@ export async function resolveSlackUserAllowlist(params: {
       continue;
     }
     if (parsed.email) {
+      // Email pattern expansion: entries like "*@example.com" are expanded
+      // at startup by matching against all workspace users' emails.
+      if (isEmailPattern(parsed.email)) {
+        const matched = users.filter(
+          (user) => user.email && emailMatchesPattern(user.email, parsed.email!),
+        );
+        for (const user of matched) {
+          results.push({
+            input,
+            resolved: true,
+            id: user.id,
+            name: user.displayName ?? user.realName ?? user.name,
+            email: user.email,
+            deleted: user.deleted,
+            isBot: user.isBot,
+            note: "matched pattern \"" + parsed.email + "\"",
+          });
+        }
+        if (matched.length === 0) {
+          results.push({
+            input,
+            resolved: false,
+            note: "no users matched pattern \"" + parsed.email + "\"",
+          });
+        }
+        continue;
+      }
+
       const matches = users.filter((user) => user.email === parsed.email);
       if (matches.length > 0) {
         results.push(resolveSlackUserFromMatches(input, matches, parsed));
