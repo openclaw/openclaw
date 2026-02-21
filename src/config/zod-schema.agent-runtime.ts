@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
@@ -124,9 +125,38 @@ export const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    envFile: z.union([z.string(), z.array(z.string())]).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
+    if (data.envFile) {
+      // Track whether the user supplied a scalar string or an array so we can
+      // report errors at the right Zod path (scalar → ["envFile"], array → ["envFile", i]).
+      const isArray = Array.isArray(data.envFile);
+      const files: string[] = isArray ? (data.envFile as string[]) : [data.envFile as string];
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i]?.trim() ?? "";
+        const issuePath = isArray ? ["envFile", i] : ["envFile"];
+        if (!file) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: issuePath,
+            message: "Sandbox security: envFile entry must be a non-empty string.",
+          });
+          continue;
+        }
+        // path.isAbsolute handles both POSIX (/foo) and Windows (C:\foo) paths.
+        if (!path.isAbsolute(file)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: issuePath,
+            message:
+              `Sandbox security: envFile path "${file}" is not an absolute path. ` +
+              "Only absolute paths are supported for sandbox envFile.",
+          });
+        }
+      }
+    }
     if (data.binds) {
       for (let i = 0; i < data.binds.length; i += 1) {
         const bind = data.binds[i]?.trim() ?? "";

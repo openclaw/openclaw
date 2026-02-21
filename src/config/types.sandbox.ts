@@ -42,6 +42,8 @@ export type SandboxDockerSettings = {
   extraHosts?: string[];
   /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
   binds?: string[];
+  /** Extra environment variable file(s) for sandbox. */
+  envFile?: string | string[];
 };
 
 export type SandboxBrowserSettings = {

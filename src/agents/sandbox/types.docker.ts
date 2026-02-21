@@ -19,4 +19,5 @@ export type SandboxDockerConfig = {
   dns?: string[];
   extraHosts?: string[];
   binds?: string[];
+  envFile?: string | string[];
 };

@@ -1,4 +1,9 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import dotenv from "dotenv";
+import { inspectPathPermissions, safeStat } from "../../security/audit-fs.js";
+import { isGroupWritable, isWorldWritable, modeBits } from "../../security/audit-fs.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -385,12 +390,145 @@ function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sess
   return formatCliCommand("openclaw sandbox recreate --all");
 }
 
+/**
+ * Walks from the file's parent directory up to the root, checking that no
+ * ancestor directory is writable by non-root users other than the process owner.
+ * This prevents directory-swap attacks where an attacker replaces an
+ * intermediate directory to point the file path at a malicious file.
+ *
+ * The path is resolved to its canonical form first (via fs.realpath) so that
+ * symlinked parent directories (e.g. path-symmetry symlinks in Docker gateway
+ * containers) are followed transparently. The actual on-disk directories are
+ * then checked for safe ownership and permissions.
+ *
+ * Root-owned directories are considered safe (root uid 0).
+ */
+async function checkParentDirSafety(filePath: string): Promise<void> {
+  const processUid = process.getuid?.() ?? 0;
+  // Resolve symlinks in the path so we check actual on-disk directories.
+  let resolvedPath: string;
+  try {
+    resolvedPath = await fs.realpath(filePath);
+  } catch {
+    // If realpath fails (e.g. broken symlink), fall back to the raw path.
+    resolvedPath = filePath;
+  }
+  let dir = path.dirname(resolvedPath);
+  const seen = new Set<string>();
+  while (dir !== path.dirname(dir)) {
+    if (seen.has(dir)) {
+      break;
+    }
+    seen.add(dir);
+    const st = await safeStat(dir);
+    if (!st.ok) {
+      throw new Error(
+        `Sandbox security: cannot stat parent directory "${dir}" of envFile: ${st.error ?? "unknown error"}`,
+      );
+    }
+    // Root-owned directories (uid 0) are inherently safe.
+    if (st.uid === 0) {
+      dir = path.dirname(dir);
+      continue;
+    }
+    // Directories owned by the current process user are safe.
+    if (st.uid === processUid) {
+      dir = path.dirname(dir);
+      continue;
+    }
+    // Directory owned by another non-root user: check if world/group writable.
+    const bits = modeBits(st.mode);
+    if (isWorldWritable(bits) || isGroupWritable(bits)) {
+      throw new Error(
+        `Sandbox security: parent directory "${dir}" of envFile is writable by ` +
+          "other users. Tighten permissions (e.g. chmod 755) or use a path owned by the current user.",
+      );
+    }
+    dir = path.dirname(dir);
+  }
+}
+
+/**
+ * Reads a single env file with security validation via the shared
+ * `inspectPathPermissions` utility (supports POSIX + Windows ACLs):
+ * - Rejects symlinks to avoid late-stage path substitution attacks.
+ * - Rejects group-readable and world-readable files to prevent secret leakage.
+ * - Rejects world-writable and group-writable files to prevent tampering.
+ * - Rejects paths whose parent directories are writable by non-owner/non-root users.
+ * Returns the parsed key=value pairs from the file.
+ */
+async function readEnvFileSafe(rawPath: string): Promise<Record<string, string>> {
+  const filePath = rawPath.trim();
+  const perms = await inspectPathPermissions(filePath);
+  if (!perms.ok) {
+    throw new Error(
+      `Failed to stat sandbox env file "${filePath}": ${perms.error ?? "unknown error"}`,
+    );
+  }
+  if (perms.isSymlink) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is a symbolic link, which is not permitted.`,
+    );
+  }
+  if (perms.isDir) {
+    throw new Error(`Sandbox security: envFile "${filePath}" is not a regular file.`);
+  }
+  if (perms.worldWritable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is world-writable. ` +
+        "Remove world-write permission before use (e.g. chmod o-w).",
+    );
+  }
+  if (perms.groupWritable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is group-writable. ` +
+        "Remove group-write permission before use (e.g. chmod g-w).",
+    );
+  }
+  if (perms.worldReadable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is world-readable. ` +
+        "Tighten permissions to owner-only (e.g. chmod 600).",
+    );
+  }
+  if (perms.groupReadable) {
+    throw new Error(
+      `Sandbox security: envFile "${filePath}" is group-readable. ` +
+        "Tighten permissions to owner-only (e.g. chmod 600).",
+    );
+  }
+  // Check parent directories for write access by other users.
+  await checkParentDirSafety(filePath);
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    return dotenv.parse(content);
+  } catch (error) {
+    throw new Error(`Failed to read sandbox env file "${filePath}"`, { cause: error });
+  }
+}
+
 export async function ensureSandboxContainer(params: {
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
 }) {
+  const envFile = params.cfg.docker.envFile;
+  if (envFile) {
+    const filePaths = Array.isArray(envFile) ? envFile : [envFile];
+    // Accumulate file-provided vars in iteration order so that later files
+    // override earlier ones on key collisions (standard env_file semantics).
+    // Explicit cfg.docker.env values are merged last so they always win.
+    const fileEnv: Record<string, string> = {};
+    for (const filePath of filePaths) {
+      if (filePath) {
+        const parsed = await readEnvFileSafe(filePath);
+        Object.assign(fileEnv, parsed);
+      }
+    }
+    params.cfg.docker.env = { ...fileEnv, ...params.cfg.docker.env };
+  }
+
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
