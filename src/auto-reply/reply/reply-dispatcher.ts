@@ -133,8 +133,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     // Resolve the current prefix to detect changes from model fallback.
-    const prefixCtx =
-      options.responsePrefixContextProvider?.() ?? options.responsePrefixContext;
+    const prefixCtx = options.responsePrefixContextProvider?.() ?? options.responsePrefixContext;
     const currentResolvedPrefix =
       prefixCtx && options.responsePrefix
         ? resolveResponsePrefixTemplate(options.responsePrefix, prefixCtx)
@@ -153,10 +152,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       return false;
     }
 
-    // Track the prefix that was just applied.
-    if (currentResolvedPrefix) {
-      lastAppliedPrefix = currentResolvedPrefix;
-    }
+    // Track the prefix that was just applied (or cleared).
+    lastAppliedPrefix = currentResolvedPrefix;
     queuedCounts[kind] += 1;
     pending += 1;
 

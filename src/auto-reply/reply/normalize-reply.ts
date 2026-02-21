@@ -92,7 +92,12 @@ export function normalizeReplyPayload(
       opts.previouslyAppliedPrefix !== effectivePrefix &&
       text.startsWith(opts.previouslyAppliedPrefix)
     ) {
-      text = text.slice(opts.previouslyAppliedPrefix.length).trimStart();
+      const afterPrefix = text.slice(opts.previouslyAppliedPrefix.length);
+      // Only strip if the old prefix is followed by whitespace (our separator), the prefix
+      // itself ends with whitespace (it IS the separator), or it consumed the entire text.
+      if (!afterPrefix || /\s$/.test(opts.previouslyAppliedPrefix) || /^\s/.test(afterPrefix)) {
+        text = afterPrefix.trimStart();
+      }
     }
     if (!text.startsWith(effectivePrefix)) {
       const sep = /\s$/.test(effectivePrefix) ? "" : " ";

@@ -168,6 +168,20 @@ describe("normalizeReplyPayload", () => {
     expect(normalized).not.toBeNull();
     expect(normalized?.text).toBe("[anthropic/claude-sonnet]\npong");
   });
+
+  it("does not strip when old prefix is a substring of text prefix", () => {
+    const normalized = normalizeReplyPayload(
+      { text: "[gpt-4] hello" },
+      {
+        responsePrefix: "[{provider}/{model}]",
+        responsePrefixContext: { provider: "anthropic", model: "claude-sonnet" },
+        previouslyAppliedPrefix: "[gpt]",
+      },
+    );
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("[anthropic/claude-sonnet] [gpt-4] hello");
+  });
 });
 
 describe("typing controller", () => {

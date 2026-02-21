@@ -416,17 +416,6 @@ export async function runAgentTurnWithFallback(params: {
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
 
-      // Safety net: re-notify with the actual final provider/model after fallback.
-      // This is a no-op when no failover occurred (same values as the last run callback),
-      // but ensures the context is correct if fallback changed the model.
-      if (fallbackProvider && fallbackModel) {
-        params.opts?.onModelSelected?.({
-          provider: fallbackProvider,
-          model: fallbackModel,
-          thinkLevel: params.followupRun.run.thinkLevel,
-        });
-      }
-
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: String(attempt.provider ?? ""),
