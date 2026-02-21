@@ -855,6 +855,7 @@
               {
                 "group": "Hosting and deployment",
                 "pages": [
+                  "install/hardware",
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",

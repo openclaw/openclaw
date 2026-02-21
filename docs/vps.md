@@ -23,6 +23,12 @@ deployments work at a high level.
 - **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
   [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
+## Dedicated hardware
+
+Prefer to skip the cloud entirely? Run OpenClaw on dedicated hardware for an always-on, fully private setup:
+
+- **[Dedicated hardware guide](/install/hardware)** — Jetson, Raspberry Pi, mini PCs, and pre-built options
+
 ## How cloud setups work
 
 - The **Gateway runs on the VPS** and owns state + workspace.
