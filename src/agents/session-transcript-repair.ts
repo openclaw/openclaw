@@ -21,6 +21,10 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
 }
 
 function hasToolCallInput(block: ToolCallBlock): boolean {
+  // Blocks flagged as partial (interrupted mid-stream) are never complete.
+  if ("partialJson" in block && (block as { partialJson?: unknown }).partialJson === true) {
+    return false;
+  }
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -205,15 +209,27 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
 
-    // Skip tool call extraction for aborted or errored assistant messages.
     // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
-    // (e.g., partialJson: true) and should not have synthetic tool_results created.
-    // Creating synthetic results for incomplete tool calls causes API 400 errors:
-    // "unexpected tool_use_id found in tool_result blocks"
+    // (e.g., partialJson: true). Leaving them in the transcript causes permanent 400
+    // errors from the Anthropic API ("unexpected tool_use_id found in tool_result blocks")
+    // because the incomplete tool_use has no matching tool_result.
+    // Strip tool_use blocks entirely; keep any text/thinking content.
     // See: https://github.com/openclaw/openclaw/issues/4597
+    // See: https://github.com/openclaw/openclaw/issues/14322
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      out.push(msg);
+      if (Array.isArray(assistant.content)) {
+        const nonToolContent = assistant.content.filter((block) => !isToolCallBlock(block));
+        if (nonToolContent.length > 0) {
+          out.push({ ...msg, content: nonToolContent } as AgentMessage);
+          changed = true;
+        } else {
+          // Entire message was tool_use blocks with no text — drop it.
+          changed = true;
+        }
+      } else {
+        out.push(msg);
+      }
       continue;
     }
 

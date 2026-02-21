@@ -106,10 +106,12 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
+  it("strips tool_use blocks from errored assistant messages to prevent 400 loops", () => {
     // When an assistant message has stopReason: "error", its tool_use blocks may be
-    // incomplete/malformed. We should NOT create synthetic tool_results for them,
-    // as this causes API 400 errors: "unexpected tool_use_id found in tool_result blocks"
+    // incomplete (partialJson: true). Leaving them in the transcript causes permanent
+    // 400 errors: "unexpected tool_use_id found in tool_result blocks".
+    // The fix: strip tool_use blocks, keep text content.
+    // See: https://github.com/openclaw/openclaw/issues/14322
     const input = [
       {
         role: "assistant",
@@ -123,15 +125,15 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for errored messages
     expect(result.added).toHaveLength(0);
-    // The assistant message should be passed through unchanged
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
-    expect(result.messages).toHaveLength(2);
+    // The tool-only assistant message should be dropped entirely
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'aborted'", () => {
+  it("strips tool_use blocks from aborted assistant messages to prevent 400 loops", () => {
     // When a request is aborted mid-stream, the assistant message may have incomplete
-    // tool_use blocks (with partialJson). We should NOT create synthetic tool_results.
+    // tool_use blocks (with partialJson). Leaving them causes permanent 400 errors.
+    // See: https://github.com/openclaw/openclaw/issues/14322
     const input = [
       {
         role: "assistant",
@@ -145,9 +147,35 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for aborted messages
     expect(result.added).toHaveLength(0);
-    // Messages should be passed through without synthetic insertions
+    // The tool-only assistant message should be dropped
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
+  });
+
+  it("preserves text content from errored assistant messages while stripping tool_use", () => {
+    // When an errored assistant message contains both text and tool_use blocks,
+    // keep the text (partial reasoning) but strip the tool_use blocks.
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me run that command..." },
+          { type: "toolCall", id: "call_partial", name: "Bash", arguments: {} },
+        ],
+        stopReason: "error",
+      },
+      { role: "user", content: "what happened?" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]?.role).toBe("assistant");
+    // Only text content should remain
+    const content = (result.messages[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
     expect(result.messages[1]?.role).toBe("user");
   });
 
@@ -170,9 +198,8 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("drops orphan tool results that follow an aborted assistant message", () => {
-    // When an assistant message is aborted, any tool results that follow should be
-    // dropped as orphans (since we skip extracting tool calls from aborted messages).
-    // This addresses the edge case where a partial tool result was persisted before abort.
+    // When an assistant message is aborted, tool_use blocks are stripped and any
+    // tool results that follow become orphans and should be dropped.
     const input = [
       {
         role: "assistant",
@@ -191,11 +218,10 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    // The orphan tool result should be dropped
+    // The orphan tool result should be dropped, and the tool-only assistant message too
     expect(result.droppedOrphanCount).toBe(1);
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
     // No synthetic results should be added
     expect(result.added).toHaveLength(0);
   });
@@ -259,5 +285,79 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+
+  it("drops tool calls with partialJson: true even when input is present", () => {
+    // When streaming is interrupted, tool_use blocks may have partialJson: true
+    // and an empty/incomplete input object. These should be treated as incomplete.
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call_partial", name: "Bash", input: {}, partialJson: true },
+        ],
+      },
+      { role: "user", content: "hello" },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+});
+
+describe("issue #14322: corrupted tool_use/tool_result pair from interrupted streaming", () => {
+  it("full scenario: interrupted stream does not poison session permanently", () => {
+    // Reproduces the exact scenario from issue #14322:
+    // 1. Normal tool calls complete successfully
+    // 2. A tool call gets interrupted mid-stream (stopReason: "error", partialJson: true)
+    // 3. User sends another message
+    // Expected: the session should be cleaned up so the next API call works
+    const input = [
+      // Normal completed tool call
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_ok", name: "read", arguments: { path: "a.txt" } }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_ok",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        isError: false,
+      },
+      // Interrupted tool call with partialJson
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me also check..." },
+          { type: "toolUse", id: "call_broken", name: "Bash", input: {}, partialJson: true },
+        ],
+        stopReason: "error",
+      },
+      // User retries
+      { role: "user", content: "please try again" },
+    ] as AgentMessage[];
+
+    // First sanitize tool call inputs (drops partialJson blocks)
+    const afterInputSanitize = sanitizeToolCallInputs(input);
+    // Then repair pairing
+    const result = repairToolUseResultPairing(afterInputSanitize);
+
+    // The normal tool call/result pair should be preserved
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("toolResult");
+    // The errored assistant message should have text content preserved
+    // but no tool_use blocks (they were stripped by sanitizeToolCallInputs
+    // because of partialJson, leaving only text, so errored-stripping
+    // in repairToolUseResultPairing keeps the text-only message)
+    expect(result.messages[2]?.role).toBe("assistant");
+    const content = (result.messages[2] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    // User message preserved
+    expect(result.messages[3]?.role).toBe("user");
+    // No synthetic results added for the broken call
+    expect(result.added).toHaveLength(0);
   });
 });
