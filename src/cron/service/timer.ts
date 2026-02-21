@@ -29,7 +29,7 @@ const MIN_REFIRE_GAP_MS = 2_000;
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
  * from wedging the entire cron lane.
  */
-const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
