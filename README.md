@@ -32,6 +32,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 ## Sponsors
 
+<!-- markdownlint-disable MD033 -->
 <table align="center">
   <tr>
     <td align="center" valign="middle" bgcolor="#111827" width="240" height="72">
@@ -47,6 +48,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
     </td>
   </tr>
 </table>
+<!-- markdownlint-enable MD033 -->
 
 **Subscriptions (OAuth):**
 
