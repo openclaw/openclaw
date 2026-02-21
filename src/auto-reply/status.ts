@@ -11,6 +11,7 @@ import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
@@ -688,10 +689,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
-  if (cfg?.commands?.config === true) {
+  if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }
-  if (cfg?.commands?.debug === true) {
+  if (isCommandFlagEnabled(cfg, "debug")) {
     optionParts.push("/debug");
   }
   lines.push("Options");

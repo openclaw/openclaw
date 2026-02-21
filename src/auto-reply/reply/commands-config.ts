@@ -1,5 +1,6 @@
 import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
+import { isCommandFlagEnabled } from "../../config/commands.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -36,7 +37,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     );
     return { shouldContinue: false };
   }
-  if (params.cfg.commands?.config !== true) {
+  if (!isCommandFlagEnabled(params.cfg, "config")) {
     return {
       shouldContinue: false,
       reply: {
@@ -190,7 +191,7 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
     );
     return { shouldContinue: false };
   }
-  if (params.cfg.commands?.debug !== true) {
+  if (!isCommandFlagEnabled(params.cfg, "debug")) {
     return {
       shouldContinue: false,
       reply: {

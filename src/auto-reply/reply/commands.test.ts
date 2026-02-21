@@ -186,6 +186,30 @@ describe("handleCommands gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("/debug is disabled");
   });
+
+  it("does not enable gated commands from inherited command flags", async () => {
+    const inheritedCommands = Object.create({
+      bash: true,
+      config: true,
+      debug: true,
+    }) as Record<string, unknown>;
+    const cfg = {
+      commands: inheritedCommands as never,
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const bashResult = await handleCommands(buildParams("/bash echo hi", cfg));
+    expect(bashResult.shouldContinue).toBe(false);
+    expect(bashResult.reply?.text).toContain("bash is disabled");
+
+    const configResult = await handleCommands(buildParams("/config show", cfg));
+    expect(configResult.shouldContinue).toBe(false);
+    expect(configResult.reply?.text).toContain("/config is disabled");
+
+    const debugResult = await handleCommands(buildParams("/debug show", cfg));
+    expect(debugResult.shouldContinue).toBe(false);
+    expect(debugResult.reply?.text).toContain("/debug is disabled");
+  });
 });
 
 describe("/approve command", () => {
