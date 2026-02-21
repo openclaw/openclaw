@@ -265,6 +265,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       // ignore; older qmd versions might not support list --json.
     }
 
+    // Migrate legacy unsuffixed collections from older OpenClaw versions.
+    // Before agent-scoped naming was introduced, collections were created as
+    // e.g. "memory-root" instead of "memory-root-main".  If a legacy collection
+    // exists covering the same path, remove it so the new suffixed collection
+    // can be created cleanly.
+    await this.removeLegacyUnsuffixedCollections(existing);
+
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
       if (listed && !this.shouldRebindCollection(collection, listed)) {
@@ -289,6 +296,48 @@ export class QmdMemoryManager implements MemorySearchManager {
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
+      }
+    }
+  }
+
+  /**
+   * Remove legacy collections that were created without the agent-scoped suffix.
+   *
+   * Older OpenClaw versions created default memory collections as "memory-root",
+   * "memory-alt", "memory-dir" (without an agent ID suffix).  When the naming
+   * scheme changed to include the agent ID (e.g. "memory-root-main"), the old
+   * collections would persist in the QMD index — occupying the same filesystem
+   * paths and preventing the new suffixed collections from indexing any files.
+   *
+   * This method detects those legacy names and removes them so that
+   * `ensureCollections` can recreate them with the correct scoped names.
+   */
+  private async removeLegacyUnsuffixedCollections(
+    existing: Map<string, ListedCollection>,
+  ): Promise<void> {
+    const legacyBases = ["memory-root", "memory-alt", "memory-dir"];
+    for (const legacyName of legacyBases) {
+      // Only act if the legacy (unsuffixed) name exists AND the desired
+      // scoped name is different from the legacy name (i.e. agentId is not
+      // empty and actually produces a suffix).
+      const scopedNames = this.qmd.collections
+        .filter((c) => c.kind === "memory")
+        .map((c) => c.name);
+      const isLegacy = existing.has(legacyName) && !scopedNames.includes(legacyName);
+      if (!isLegacy) {
+        continue;
+      }
+      try {
+        await this.removeCollection(legacyName);
+        existing.delete(legacyName);
+        log.info(
+          `removed legacy unsuffixed qmd collection "${legacyName}" (replaced by scoped name)`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!this.isCollectionMissingError(message)) {
+          log.warn(`failed to remove legacy qmd collection "${legacyName}": ${message}`);
+        }
       }
     }
   }
