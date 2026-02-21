@@ -314,7 +314,7 @@ export function renderCron(props: CronProps) {
             `
           : html`
             <div class="list" style="margin-top: 12px;">
-              ${props.jobs.map((job) => renderJob(job, props))}
+              ${renderGroupedJobs(props)}
             </div>
           `
       }
@@ -579,4 +579,40 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
       </div>
     </div>
   `;
+}
+
+function renderGroupedJobs(props: CronProps) {
+  const jobsByGroup = new Map<string, CronJob[]>();
+  for (const job of props.jobs) {
+    const parts = (job.name || "").split("/");
+    const group = parts.length > 1 ? parts[0] : "";
+    if (!jobsByGroup.has(group)) {
+      jobsByGroup.set(group, []);
+    }
+    jobsByGroup.get(group)!.push(job);
+  }
+
+  const groups = Array.from(jobsByGroup.keys()).toSorted((a, b) => {
+    if (a === "") {
+      return 1;
+    }
+    if (b === "") {
+      return -1;
+    }
+    return a.localeCompare(b);
+  });
+
+  return groups.map((group) => {
+    const groupJobs = jobsByGroup.get(group)!;
+    return html`
+      <div class="cron-group" style="margin-bottom: 16px;">
+        <div class="cron-group-header" style="font-weight: 800; font-size: 14px; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">
+          ${group || "Uncategorized"} (${groupJobs.length})
+        </div>
+        <div class="cron-group-list">
+          ${groupJobs.map((job) => renderJob(job, props))}
+        </div>
+      </div>
+    `;
+  });
 }
