@@ -10,7 +10,7 @@ function resolveCronTimezone(tz?: string) {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number, lastRunAtMs?: number): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
     // The store migration should convert atMs→at, but be defensive in case
@@ -32,7 +32,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
 
   if (schedule.kind === "every") {
     const everyMs = Math.max(1, Math.floor(schedule.everyMs));
-    const anchor = Math.max(0, Math.floor(schedule.anchorMs ?? nowMs));
+    const anchor = Math.max(0, Math.floor(lastRunAtMs ?? schedule.anchorMs ?? nowMs))
     if (nowMs < anchor) {
       return anchor;
     }
