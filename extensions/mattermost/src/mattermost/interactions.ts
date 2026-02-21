@@ -121,6 +121,16 @@ export type MattermostAttachment = {
  * callback handler can verify the request originated from a legitimate
  * button click (Mattermost's recommended security pattern).
  */
+/**
+ * Sanitize a button ID so Mattermost's action router can match it.
+ * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
+ * and IDs containing hyphens or underscores break the server-side routing.
+ * See: https://github.com/mattermost/mattermost/issues/25747
+ */
+function sanitizeActionId(id: string): string {
+  return id.replace(/[-_]/g, "");
+}
+
 export function buildButtonAttachments(params: {
   callbackUrl: string;
   buttons: Array<{
@@ -132,13 +142,14 @@ export function buildButtonAttachments(params: {
   text?: string;
 }): MattermostAttachment[] {
   const actions: MattermostButton[] = params.buttons.map((btn) => {
+    const safeId = sanitizeActionId(btn.id);
     const context: Record<string, unknown> = {
-      action_id: btn.id,
+      action_id: safeId,
       ...btn.context,
     };
     const token = generateInteractionToken(context);
     return {
-      id: btn.id,
+      id: safeId,
       type: "button" as const,
       name: btn.name,
       style: btn.style,
