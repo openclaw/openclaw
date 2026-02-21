@@ -14,6 +14,7 @@ export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // l
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB per file
 
 function resolveNodeRequire(): ((id: string) => NodeJS.Require) | null {
   const getBuiltinModule = (
@@ -122,11 +123,35 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     type: "hidden", // no ansi formatting
   });
 
+  // Track file size in memory to enforce a per-file cap without stat() on every write.
+  let currentFileBytes = 0;
+  try {
+    currentFileBytes = fs.statSync(settings.file).size;
+  } catch {
+    // file may not exist yet
+  }
+  let capWarningEmitted = false;
+
   logger.attachTransport((logObj: LogObj) => {
     try {
+      if (currentFileBytes >= MAX_LOG_FILE_BYTES) {
+        if (!capWarningEmitted) {
+          capWarningEmitted = true;
+          const msg = JSON.stringify({
+            _meta: "openclaw",
+            level: "warn",
+            msg: `Log file size cap reached (${MAX_LOG_FILE_BYTES} bytes). Further entries will be suppressed until the next rolling log file.`,
+            time: new Date().toISOString(),
+          });
+          fs.appendFileSync(settings.file, `${msg}\n`, { encoding: "utf8" });
+        }
+        return;
+      }
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
       const line = JSON.stringify({ ...logObj, time });
+      const bytes = Buffer.byteLength(line, "utf8") + 1; // +1 for newline
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
+      currentFileBytes += bytes;
     } catch {
       // never block on logging failures
     }
