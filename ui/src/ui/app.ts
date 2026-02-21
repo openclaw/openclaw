@@ -16,6 +16,7 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  handleLoadOlderChat as handleLoadOlderChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
@@ -133,6 +134,7 @@ export class OpenClawApp extends LitElement {
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
+  @state() chatLoadingOlder = false;
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
@@ -140,6 +142,8 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatCursor: number | null = null;
+  @state() chatHasMore = false;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
@@ -357,6 +361,10 @@ export class OpenClawApp extends LitElement {
   private themeMedia: MediaQueryList | null = null;
   private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
+  onLoadOlderMessages: (() => void) | null = () =>
+    void handleLoadOlderChatInternal(
+      this as unknown as Parameters<typeof handleLoadOlderChatInternal>[0],
+    );
 
   createRenderRoot() {
     return this;

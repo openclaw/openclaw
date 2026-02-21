@@ -45,6 +45,7 @@ function createScrollHost(
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,
+    onLoadOlderMessages: null as (() => void) | null,
   };
 
   return { host, container };

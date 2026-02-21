@@ -68,6 +68,7 @@ export type ChatProps = {
   // Scroll control
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
+  loadingOlder?: boolean;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -265,6 +266,13 @@ export function renderChat(props: ChatProps) {
       aria-live="polite"
       @scroll=${props.onChatScroll}
     >
+      ${
+        props.loadingOlder
+          ? html`
+              <div class="muted">Loading older messages…</div>
+            `
+          : nothing
+      }
       ${
         props.loading
           ? html`
@@ -479,8 +487,6 @@ export function renderChat(props: ChatProps) {
   `;
 }
 
-const CHAT_HISTORY_RENDER_LIMIT = 200;
-
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -526,19 +532,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
-  if (historyStart > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
-  for (let i = historyStart; i < history.length; i++) {
+  for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;

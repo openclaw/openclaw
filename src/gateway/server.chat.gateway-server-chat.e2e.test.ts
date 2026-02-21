@@ -295,7 +295,11 @@ describe("gateway server chat", () => {
       }
       await fs.writeFile(path.join(historyDir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
 
-      const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      const defaultRes = await rpcReq<{
+        messages?: unknown[];
+        cursor?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", {
         sessionKey: "main",
       });
       expect(defaultRes.ok).toBe(true);
@@ -317,6 +321,26 @@ describe("gateway server chat", () => {
       };
       expect(defaultMsgs.length).toBe(200);
       expect(firstContentText(defaultMsgs[0])).toBe("m100");
+      // Verify cursor and hasMore in default response
+      expect(defaultRes.payload?.cursor).toBe(100);
+      expect(defaultRes.payload?.hasMore).toBe(true);
+
+      // Fetch older messages using the before cursor
+      const olderRes = await rpcReq<{
+        messages?: unknown[];
+        cursor?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        before: 100,
+      });
+      expect(olderRes.ok).toBe(true);
+      const olderMsgs = olderRes.payload?.messages ?? [];
+      expect(olderMsgs.length).toBe(100);
+      expect(firstContentText(olderMsgs[0])).toBe("m0");
+      expect(firstContentText(olderMsgs[99])).toBe("m99");
+      expect(olderRes.payload?.cursor).toBe(0);
+      expect(olderRes.payload?.hasMore).toBe(false);
     } finally {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;

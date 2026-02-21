@@ -52,6 +52,7 @@ export type AppViewState = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatLoading: boolean;
+  chatLoadingOlder: boolean;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -60,6 +61,8 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatCursor: number | null;
+  chatHasMore: boolean;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
