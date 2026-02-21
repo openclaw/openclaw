@@ -87,3 +87,49 @@ export function stripInboundMetadata(text: string): string {
 
   return result.join("\n").replace(/^\n+/, "");
 }
+
+export function stripLeadingInboundMetadata(text: string): string {
+  if (!text || !SENTINEL_FAST_RE.test(text)) {
+    return text;
+  }
+
+  const lines = text.split("\n");
+  let index = 0;
+
+  while (index < lines.length && lines[index] === "") {
+    index++;
+  }
+  if (index >= lines.length) {
+    return "";
+  }
+
+  if (!INBOUND_META_SENTINELS.some((s) => lines[index].startsWith(s))) {
+    return text;
+  }
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!INBOUND_META_SENTINELS.some((s) => line.startsWith(s))) {
+      break;
+    }
+
+    index++;
+    if (index < lines.length && lines[index].trim() === "```json") {
+      index++;
+      while (index < lines.length && lines[index].trim() !== "```") {
+        index++;
+      }
+      if (index < lines.length && lines[index].trim() === "```") {
+        index++;
+      }
+    } else {
+      return text;
+    }
+
+    while (index < lines.length && lines[index].trim() === "") {
+      index++;
+    }
+  }
+
+  return lines.slice(index).join("\n");
+}

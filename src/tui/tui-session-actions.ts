@@ -1,5 +1,4 @@
 import type { TUI } from "@mariozechner/pi-tui";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
@@ -327,7 +326,7 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
-            chatLog.addUser(stripInboundMetadata(text));
+            chatLog.addUser(text);
           }
           continue;
         }
