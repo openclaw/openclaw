@@ -123,7 +123,7 @@ describe("callGateway url resolution", () => {
       label: "falls back to loopback when local bind is auto without tailnet IP",
       tailnetIp: undefined,
     },
-  ])("$label", async ({ tailnetIp }) => {
+  ])("local auto-bind: $label", async ({ tailnetIp }) => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "auto" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(tailnetIp);
@@ -218,7 +218,7 @@ describe("callGateway url resolution", () => {
       call: () => callGatewayCli({ method: "health" }),
       expectedScopes: ["operator.admin", "operator.approvals", "operator.pairing"],
     },
-  ])("$label", async ({ call, expectedScopes }) => {
+  ])("scope selection: $label", async ({ call, expectedScopes }) => {
     setLocalLoopbackGatewayConfig();
     await call();
     expect(lastClientOptions?.scopes).toEqual(expectedScopes);
