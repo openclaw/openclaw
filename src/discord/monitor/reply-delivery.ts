@@ -3,31 +3,77 @@ import { Routes } from "discord-api-types/v10";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { logVerbose } from "../../globals.js";
 import { splitMarkdownTables } from "../../markdown/table-split.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
-import { isTableImageRendererAvailable, renderTableImage } from "../../media/table-image.js";
+import { renderTableImage } from "../../media/table-image.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import { buildDiscordMessagePayload, stripUndefinedFields } from "../send.shared.js";
 
 // ---------------------------------------------------------------------------
-// File attachment helper — posts raw buffer data directly so it bypasses the
-// loadWebMedia() path (which can recompress PNGs to JPEG).
+// Helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve a routed target like `channel:123456` to a raw snowflake. */
+/** Resolve a routed target like `channel:123456` or `discord:channel:123456` to a raw snowflake. */
 function resolveRawChannelId(target: string): string {
-  return target.startsWith("channel:") ? target.slice("channel:".length) : target;
+  if (target.startsWith("discord:channel:")) {
+    return target.slice("discord:channel:".length);
+  }
+  if (target.startsWith("channel:")) {
+    return target.slice("channel:".length);
+  }
+  return target;
 }
 
+/** Send chunked text via the standard Discord message path. */
+async function sendChunkedText(
+  text: string,
+  params: {
+    target: string;
+    token: string;
+    accountId?: string;
+    rest?: RequestClient;
+    replyTo?: string;
+    chunkLimit: number;
+    maxLinesPerMessage?: number;
+    chunkMode: ChunkMode;
+  },
+) {
+  const chunks = chunkDiscordTextWithMode(text, {
+    maxChars: params.chunkLimit,
+    maxLines: params.maxLinesPerMessage,
+    chunkMode: params.chunkMode,
+  });
+  if (!chunks.length && text) {
+    chunks.push(text);
+  }
+  for (const chunk of chunks) {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
+      continue;
+    }
+    await sendMessageDiscord(params.target, trimmed, {
+      token: params.token,
+      rest: params.rest,
+      accountId: params.accountId,
+      replyTo: params.replyTo,
+    });
+  }
+}
+
+/**
+ * Post a raw buffer as a file attachment (bypasses loadWebMedia JPEG recompression).
+ * Uses rest.post directly (no RetryRunner) — transient failures fall through to the
+ * text fallback in the caller, which is faster than retrying a file upload.
+ */
 async function sendDiscordFileBuffer(params: {
   rest: RequestClient;
   channelId: string;
   fileName: string;
   contentType: string;
   data: Buffer;
-  caption?: string;
   replyTo?: string;
 }) {
   const rawChannelId = resolveRawChannelId(params.channelId);
@@ -35,7 +81,7 @@ async function sendDiscordFileBuffer(params: {
   new Uint8Array(arrayBuffer).set(params.data);
   const blob = new Blob([arrayBuffer], { type: params.contentType });
   const payload = buildDiscordMessagePayload({
-    text: params.caption ?? "",
+    text: "",
     files: [{ data: blob, name: params.fileName }],
   });
   const messageReference = params.replyTo
@@ -51,8 +97,7 @@ async function sendDiscordFileBuffer(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Image table delivery — split text into segments, render tables as PNG,
-// send text chunks normally and table images as file attachments.
+// Image table delivery
 // ---------------------------------------------------------------------------
 
 async function deliverWithTableImages(params: {
@@ -65,89 +110,47 @@ async function deliverWithTableImages(params: {
   chunkLimit: number;
   maxLinesPerMessage?: number;
   replyTo?: string;
-  chunkMode?: ChunkMode;
+  chunkMode: ChunkMode;
 }): Promise<boolean> {
-  const { rawText, rest, runtime } = params;
+  const { rawText, rest } = params;
   if (!rest) {
     return false;
   }
 
-  const available = await isTableImageRendererAvailable();
-  if (!available) {
-    return false;
-  }
-
   const segments = splitMarkdownTables(rawText);
-
-  // If segmentation found no tables, let the caller fall through to standard delivery.
-  const hasTableSegment = segments.some((s) => s.kind === "table");
-  if (!hasTableSegment) {
+  if (!segments.some((s) => s.kind === "table")) {
     return false;
   }
-
-  const mode = params.chunkMode ?? "length";
 
   for (const segment of segments) {
     if (segment.kind === "text") {
-      // Convert any remaining table-like markup to code as a safety net
       const text = convertMarkdownTables(segment.markdown, "code");
-      const chunks = chunkDiscordTextWithMode(text, {
-        maxChars: params.chunkLimit,
-        maxLines: params.maxLinesPerMessage,
-        chunkMode: mode,
-      });
-      if (!chunks.length && text) {
-        chunks.push(text);
-      }
-      for (const chunk of chunks) {
-        const trimmed = chunk.trim();
-        if (!trimmed) {
-          continue;
-        }
-        await sendMessageDiscord(params.target, trimmed, {
-          token: params.token,
-          rest: params.rest,
-          accountId: params.accountId,
-          replyTo: params.replyTo,
-        });
-      }
+      await sendChunkedText(text, params);
     } else {
-      // Render the table to a PNG image
-      const result = await renderTableImage(segment.markdown, segment.index);
-      if (result) {
+      const png = await renderTableImage(segment.markdown);
+      if (png) {
         try {
           await sendDiscordFileBuffer({
             rest,
             channelId: params.target,
-            fileName: result.fileName,
+            fileName: `table-${segment.index + 1}.png`,
             contentType: "image/png",
-            data: result.png,
+            data: png,
             replyTo: params.replyTo,
           });
         } catch (err) {
-          // Fire-and-forget: log and fall back to text
-          const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
-          runtime.error?.(`discord: table image send failed, falling back to text: ${errMsg}`);
-          const fallback = convertMarkdownTables(result.fallbackMarkdown, "code");
+          logVerbose(
+            `discord: table image send failed, falling back to text: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          const fallback = convertMarkdownTables(segment.markdown, "code");
           if (fallback.trim()) {
-            await sendMessageDiscord(params.target, fallback, {
-              token: params.token,
-              rest: params.rest,
-              accountId: params.accountId,
-              replyTo: params.replyTo,
-            });
+            await sendChunkedText(fallback, params);
           }
         }
       } else {
-        // Renderer returned null — fall back to code table
         const fallback = convertMarkdownTables(segment.markdown, "code");
         if (fallback.trim()) {
-          await sendMessageDiscord(params.target, fallback, {
-            token: params.token,
-            rest: params.rest,
-            accountId: params.accountId,
-            replyTo: params.replyTo,
-          });
+          await sendChunkedText(fallback, params);
         }
       }
     }
@@ -174,14 +177,15 @@ export async function deliverDiscordReply(params: {
   chunkMode?: ChunkMode;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
+  const mode = params.chunkMode ?? "length";
+
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
     const replyTo = params.replyToId?.trim() || undefined;
 
-    // Image table path: when configured, always try segmentation (don't
-    // pre-gate on hasMarkdownTable — let splitMarkdownTables decide).
+    // Image table path: segment text, render tables as PNG, send text normally.
     if (tableMode === "image" && mediaList.length === 0) {
       const delivered = await deliverWithTableImages({
         rawText,
@@ -193,15 +197,14 @@ export async function deliverDiscordReply(params: {
         chunkLimit,
         maxLinesPerMessage: params.maxLinesPerMessage,
         replyTo,
-        chunkMode: params.chunkMode,
+        chunkMode: mode,
       });
       if (delivered) {
         continue;
       }
-      // Fall through to standard text delivery if renderer unavailable
     }
 
-    // Standard text delivery (with text-based table conversion)
+    // Standard text delivery
     const effectiveTableMode = tableMode === "image" ? "code" : tableMode;
     const text = convertMarkdownTables(rawText, effectiveTableMode);
     if (!text && mediaList.length === 0) {
@@ -209,27 +212,16 @@ export async function deliverDiscordReply(params: {
     }
 
     if (mediaList.length === 0) {
-      const mode = params.chunkMode ?? "length";
-      const chunks = chunkDiscordTextWithMode(text, {
-        maxChars: chunkLimit,
-        maxLines: params.maxLinesPerMessage,
+      await sendChunkedText(text, {
+        target: params.target,
+        token: params.token,
+        accountId: params.accountId,
+        rest: params.rest,
+        replyTo,
+        chunkLimit,
+        maxLinesPerMessage: params.maxLinesPerMessage,
         chunkMode: mode,
       });
-      if (!chunks.length && text) {
-        chunks.push(text);
-      }
-      for (const chunk of chunks) {
-        const trimmed = chunk.trim();
-        if (!trimmed) {
-          continue;
-        }
-        await sendMessageDiscord(params.target, trimmed, {
-          token: params.token,
-          rest: params.rest,
-          accountId: params.accountId,
-          replyTo,
-        });
-      }
       continue;
     }
 
@@ -238,7 +230,7 @@ export async function deliverDiscordReply(params: {
       continue;
     }
 
-    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord
+    // Voice message path
     if (payload.audioAsVoice) {
       await sendVoiceMessageDiscord(params.target, firstMedia, {
         token: params.token,
@@ -246,7 +238,6 @@ export async function deliverDiscordReply(params: {
         accountId: params.accountId,
         replyTo,
       });
-      // Voice messages cannot include text; send remaining text separately if present
       if (text.trim()) {
         await sendMessageDiscord(params.target, text, {
           token: params.token,
@@ -255,7 +246,6 @@ export async function deliverDiscordReply(params: {
           replyTo,
         });
       }
-      // Additional media items are sent as regular attachments (voice is single-file only)
       for (const extra of mediaList.slice(1)) {
         await sendMessageDiscord(params.target, "", {
           token: params.token,

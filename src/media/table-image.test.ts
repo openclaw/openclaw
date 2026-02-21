@@ -2,67 +2,60 @@ import { describe, expect, it } from "vitest";
 import { parseGfmTable } from "./table-image.js";
 
 describe("parseGfmTable", () => {
-  it("returns null for empty string", () => {
-    expect(parseGfmTable("")).toBeNull();
-  });
-
   it("returns null for non-table text", () => {
+    expect(parseGfmTable("")).toBeNull();
     expect(parseGfmTable("Hello world\nAnother line")).toBeNull();
+    expect(parseGfmTable("| A | B |\n| 1 | 2 |")).toBeNull(); // missing separator
   });
 
-  it("returns null when separator row is missing", () => {
-    expect(parseGfmTable("| A | B |\n| 1 | 2 |")).toBeNull();
-  });
-
-  it("parses a basic two-column table", () => {
-    const md = "| Name | Value |\n|------|-------|\n| foo  | bar   |";
+  it("parses a table with alignment and multiple rows", () => {
+    const md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n| d | e | f |";
     const result = parseGfmTable(md);
     expect(result).not.toBeNull();
-    expect(result!.headers).toEqual(["Name", "Value"]);
-    expect(result!.rows).toEqual([["foo", "bar"]]);
-    expect(result!.aligns).toEqual(["left", "left"]);
-  });
-
-  it("detects column alignment", () => {
-    const md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |";
-    const result = parseGfmTable(md);
-    expect(result).not.toBeNull();
+    expect(result!.headers).toEqual(["Left", "Center", "Right"]);
     expect(result!.aligns).toEqual(["left", "center", "right"]);
+    expect(result!.rows).toHaveLength(2);
   });
 
-  it("handles multiple rows", () => {
-    const md = [
-      "| A | B | C |",
-      "|---|---|---|",
-      "| 1 | 2 | 3 |",
-      "| 4 | 5 | 6 |",
-      "| 7 | 8 | 9 |",
-    ].join("\n");
+  it("handles escaped pipes in cells", () => {
+    const md = "| A | B |\n|---|---|\n| foo\\|bar | baz |";
     const result = parseGfmTable(md);
     expect(result).not.toBeNull();
-    expect(result!.rows).toHaveLength(3);
+    expect(result!.rows[0]).toEqual(["foo|bar", "baz"]);
   });
 
-  it("handles leading/trailing pipes", () => {
-    const md = "| A | B |\n|---|---|\n| x | y |";
+  it("handles double-backslash before pipe as literal backslash + delimiter", () => {
+    // \\| = literal backslash + pipe delimiter (even number of backslashes)
+    const md = "| A | B |\n|---|---|\n| foo\\\\| baz |";
     const result = parseGfmTable(md);
     expect(result).not.toBeNull();
-    expect(result!.headers).toEqual(["A", "B"]);
-    expect(result!.rows[0]).toEqual(["x", "y"]);
+    expect(result!.rows[0]).toEqual(["foo\\", "baz"]);
   });
 
-  it("handles empty cells", () => {
-    const md = "| A | B |\n|---|---|\n|   |   |";
+  it("pads short rows to header width", () => {
+    const md = "| A | B | C |\n|---|---|---|\n| 1 |";
     const result = parseGfmTable(md);
     expect(result).not.toBeNull();
-    expect(result!.rows[0]).toEqual(["", ""]);
+    expect(result!.rows[0]).toEqual(["1", "", ""]);
   });
 
-  it("strips surrounding whitespace from cells", () => {
-    const md = "|  A  |  B  |\n|-----|-----|\n|  x  |  y  |";
+  it("returns null when table exceeds size limits", () => {
+    const cols = Array.from({ length: 25 }, (_, i) => `C${i}`);
+    const seps = cols.map(() => "---");
+    const md = `| ${cols.join(" | ")} |\n| ${seps.join(" | ")} |\n| ${cols.join(" | ")} |`;
+    expect(parseGfmTable(md)).toBeNull(); // >20 cols
+
+    const header = "| A | B |\n|---|---|";
+    const rows = Array.from({ length: 65 }, (_, i) => `| ${i} | v |`);
+    expect(parseGfmTable(`${header}\n${rows.join("\n")}`)).toBeNull(); // >60 rows
+  });
+
+  it("truncates cells exceeding max length", () => {
+    const longText = "x".repeat(600);
+    const md = `| A |\n|---|\n| ${longText} |`;
     const result = parseGfmTable(md);
     expect(result).not.toBeNull();
-    expect(result!.headers).toEqual(["A", "B"]);
-    expect(result!.rows[0]).toEqual(["x", "y"]);
+    expect(result!.rows[0][0].length).toBeLessThanOrEqual(501);
+    expect(result!.rows[0][0].endsWith("…")).toBe(true);
   });
 });

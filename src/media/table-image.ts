@@ -1,14 +1,15 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type SatoriElement = {
-  type: string;
-  props: Record<string, unknown>;
-};
+type SatoriElement = { type: string; props: Record<string, unknown> };
+type ResvgInstance = { render(): { asPng(): Uint8Array } };
+type SatoriFontEntry = { name: string; data: Buffer; weight: number; style: string };
 
 export type TableData = {
   headers: string[];
@@ -16,14 +17,8 @@ export type TableData = {
   rows: string[][];
 };
 
-export type TableImageResult = {
-  png: Buffer;
-  fileName: string;
-  fallbackMarkdown: string;
-};
-
 // ---------------------------------------------------------------------------
-// Theme (GitHub-dark palette — fits Discord's dark UI)
+// Theme (GitHub-dark — fits Discord's dark UI)
 // ---------------------------------------------------------------------------
 
 const THEME = {
@@ -39,129 +34,31 @@ const FONT_SIZE = 14;
 const CELL_PAD_X = 16;
 const CELL_PAD_Y = 10;
 const MIN_COL_WIDTH = 60;
-/** Approximate width of one monospace character at FONT_SIZE. */
 const CHAR_WIDTH = FONT_SIZE * 0.62;
+const LINE_HEIGHT = FONT_SIZE * 1.4;
+
+// Size guards — prevent OOM from absurdly large tables.
+const MAX_TABLE_ROWS = 60;
+const MAX_TABLE_COLS = 20;
+const MAX_CELL_CHARS = 500;
+const MAX_IMAGE_WIDTH = 2400;
+const MAX_IMAGE_HEIGHT = 4000;
 
 // ---------------------------------------------------------------------------
 // Lazy-loaded modules + font cache
 // ---------------------------------------------------------------------------
 
-let _satori: ((element: SatoriElement, opts: Record<string, unknown>) => Promise<string>) | null =
-  null;
+let _satori: ((el: SatoriElement, opts: Record<string, unknown>) => Promise<string>) | null = null;
 let _Resvg: (new (svg: string, opts?: Record<string, unknown>) => ResvgInstance) | null = null;
-let _fontData: Buffer | null = null;
-let _fontBoldData: Buffer | null = null;
-let _fallbackFontsData: Buffer[] | null = null;
-let _fallbackFontsLoaded = false;
-let _rendererAvailable: boolean | null = null;
-
-/** In-memory cache for fetched Twemoji SVGs (keyed by codepoint string). */
-const _emojiCache = new Map<string, string | null>();
-
-type ResvgInstance = {
-  render(): { asPng(): Uint8Array };
-};
-
-// ---------------------------------------------------------------------------
-// Cross-platform monospace font discovery
-// ---------------------------------------------------------------------------
-
-const FONT_PATHS: Record<string, string[]> = {
-  linux: [
-    "/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-    "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
-  ],
-  darwin: [
-    "/System/Library/Fonts/SFMono-Regular.otf",
-    "/Library/Fonts/SF-Mono-Regular.otf",
-    "/System/Library/Fonts/Courier New.ttf",
-  ],
-  win32: ["C:\\Windows\\Fonts\\consola.ttf", "C:\\Windows\\Fonts\\cour.ttf"],
-};
-
-const FONT_BOLD_PATHS: Record<string, string[]> = {
-  linux: [
-    "/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
-    "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
-    "/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf",
-  ],
-  darwin: ["/System/Library/Fonts/SFMono-Bold.otf", "/Library/Fonts/SF-Mono-Bold.otf"],
-  win32: ["C:\\Windows\\Fonts\\consolab.ttf", "C:\\Windows\\Fonts\\courbd.ttf"],
-};
-
-async function findFont(paths: string[]): Promise<Buffer | null> {
-  for (const p of paths) {
-    try {
-      return await fs.readFile(p);
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-/** Bundled fallback fonts for broad Unicode coverage (Noto Sans family). */
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-// Resolve fonts dir relative to the built entry point (dist/fonts/).
-// In dev (bun/tsx), import.meta.url points to the source file, so we
-// resolve from the project root instead.
-function resolveFontsDir(): string {
-  const thisFile = fileURLToPath(import.meta.url);
-  const thisDir = path.dirname(thisFile);
-  // Built code lives in dist/entry.js → fonts at dist/fonts/
-  // Source code lives in src/media/table-image.ts → fonts at src/media/fonts/
-  const fontsInSameDir = path.join(thisDir, "fonts");
-  try {
-    fsSync.accessSync(fontsInSameDir);
-    return fontsInSameDir;
-  } catch {
-    // Fallback: try dist/fonts relative to the entry point
-    return path.join(thisDir, "..", "fonts");
-  }
-}
-const BUNDLED_FONTS_DIR = resolveFontsDir();
-
-async function loadFonts(): Promise<{ regular: Buffer; bold: Buffer | null } | null> {
-  if (_fontData) {
-    return { regular: _fontData, bold: _fontBoldData };
-  }
-
-  // Honour env override
-  const envFont = process.env.OPENCLAW_TABLE_FONT;
-  if (envFont) {
-    try {
-      _fontData = await fs.readFile(envFont);
-      _fontBoldData = null;
-      return { regular: _fontData, bold: null };
-    } catch {
-      // fall through to platform search
-    }
-  }
-
-  const platform = process.platform;
-  const regular = await findFont(FONT_PATHS[platform] ?? FONT_PATHS.linux);
-  if (!regular) {
-    return null;
-  }
-
-  _fontData = regular;
-  _fontBoldData = await findFont(FONT_BOLD_PATHS[platform] ?? FONT_BOLD_PATHS.linux);
-  return { regular: _fontData, bold: _fontBoldData };
-}
+let _fontsPromise: Promise<SatoriFontEntry[] | null> | null = null;
 
 async function loadSatori() {
   if (_satori) {
     return _satori;
   }
-  const mod = (await import("satori")) as unknown as { default: typeof _satori };
-  _satori = mod.default;
+  // Interop-safe: handle both ESM default and CJS shapes (same pattern as loadSharp in image-ops.ts)
+  const mod = (await import("satori")) as unknown as Record<string, unknown>;
+  _satori = (mod.default ?? mod) as unknown as typeof _satori;
   return _satori!;
 }
 
@@ -169,134 +66,106 @@ async function loadResvg() {
   if (_Resvg) {
     return _Resvg;
   }
-  const mod = (await import("@resvg/resvg-js")) as unknown as { Resvg: typeof _Resvg };
-  _Resvg = mod.Resvg;
+  const mod = (await import("@resvg/resvg-js")) as unknown as Record<string, unknown>;
+  _Resvg = (mod.Resvg ?? mod.default ?? mod) as unknown as typeof _Resvg;
   return _Resvg!;
 }
 
 // ---------------------------------------------------------------------------
-// Emoji & missing glyph support (loadAdditionalAsset callback for satori)
+// Font loading — all bundled, no system font probing needed.
 // ---------------------------------------------------------------------------
 
-const TWEMOJI_BASE = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/";
-
-/** Convert an emoji grapheme cluster to its Twemoji SVG filename. */
-function emojiToCodepoints(emoji: string): string {
-  const codepoints: string[] = [];
-  for (let i = 0; i < emoji.length; ) {
-    const cp = emoji.codePointAt(i)!;
-    codepoints.push(cp.toString(16));
-    i += cp > 0xffff ? 2 : 1;
-  }
-  return codepoints.filter((cp) => cp !== "fe0f").join("-");
-}
-
-/** Fetch a Twemoji SVG and return as data URL, or null on failure. */
-async function fetchTwemojiSvg(codepoints: string): Promise<string | null> {
-  const cached = _emojiCache.get(codepoints);
-  if (cached !== undefined) {
-    return cached;
-  }
-  try {
-    const url = `${TWEMOJI_BASE}${codepoints}.svg`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) {
-      _emojiCache.set(codepoints, null);
-      return null;
-    }
-    const svgText = await res.text();
-    const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svgText).toString("base64")}`;
-    _emojiCache.set(codepoints, dataUrl);
-    return dataUrl;
-  } catch {
-    _emojiCache.set(codepoints, null);
-    return null;
-  }
-}
-
-const BUNDLED_FALLBACK_FONTS = [
-  "NotoSans-Regular.ttf",
-  "NotoSansSymbols-Regular.ttf",
-  "NotoSansSymbols2-Regular.ttf",
+/** Bundled fonts: monospace primary + Noto fallbacks for symbols/scripts. */
+const BUNDLED_FONTS = [
+  { file: "NotoSansMono-Regular.ttf", name: "Mono", weight: 400 },
+  { file: "NotoSans-Regular.ttf", name: "Noto Fallback", weight: 400 },
+  { file: "NotoSansSymbols-Regular.ttf", name: "Noto Fallback", weight: 400 },
+  { file: "NotoSansSymbols2-Regular.ttf", name: "Noto Fallback", weight: 400 },
 ];
 
-/** Load bundled Noto Sans fallback fonts for missing glyphs. */
-async function loadFallbackFonts(): Promise<Buffer[]> {
-  if (_fallbackFontsLoaded) {
-    return _fallbackFontsData ?? [];
-  }
-  _fallbackFontsLoaded = true;
-  const fonts: Buffer[] = [];
-  for (const name of BUNDLED_FALLBACK_FONTS) {
-    try {
-      const fontPath = path.join(BUNDLED_FONTS_DIR, name);
-      fonts.push(await fs.readFile(fontPath));
-    } catch {
-      // Skip missing fonts gracefully
-    }
-  }
-  _fallbackFontsData = fonts.length > 0 ? fonts : null;
-  return fonts;
-}
-
-type FontOptions = { name: string; data: Buffer; weight: number; style: string };
-
-/**
- * Satori `loadAdditionalAsset` callback — handles emojis via Twemoji CDN
- * and missing glyphs via a system fallback font (Noto Sans).
- */
-async function loadAdditionalAsset(
-  code: string,
-  segment: string,
-): Promise<string | FontOptions[] | undefined> {
-  if (code === "emoji") {
-    // Satori passes individual grapheme clusters for emojis
-    const codepoints = emojiToCodepoints(segment);
-    const svg = await fetchTwemojiSvg(codepoints);
-    return svg ?? undefined;
-  }
-
-  // For other missing glyphs (symbols, scripts, math), use bundled Noto fonts
-  const fallbacks = await loadFallbackFonts();
-  if (fallbacks.length > 0) {
-    return fallbacks.map((data) => ({ name: "Noto Fallback", data, weight: 400, style: "normal" }));
-  }
-  return undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Renderer availability
-// ---------------------------------------------------------------------------
-
-/** Returns true when satori, resvg, and at least one font are loadable. */
-export async function isTableImageRendererAvailable(): Promise<boolean> {
-  if (_rendererAvailable !== null) {
-    return _rendererAvailable;
-  }
+function resolveFontsDir(): string {
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const fontsInSameDir = path.join(thisDir, "fonts");
   try {
-    const [fonts] = await Promise.all([loadFonts(), loadSatori(), loadResvg()]);
-    _rendererAvailable = fonts !== null;
+    fsSync.accessSync(fontsInSameDir);
+    return fontsInSameDir;
   } catch {
-    _rendererAvailable = false;
+    return path.join(thisDir, "..", "fonts");
   }
-  return _rendererAvailable;
+}
+const BUNDLED_FONTS_DIR = resolveFontsDir();
+
+/** Load all bundled fonts. Cached as a promise to avoid concurrent races. */
+function loadFonts(): Promise<SatoriFontEntry[] | null> {
+  if (_fontsPromise) {
+    return _fontsPromise;
+  }
+  _fontsPromise = (async () => {
+    const entries: SatoriFontEntry[] = [];
+    for (const { file, name, weight } of BUNDLED_FONTS) {
+      try {
+        const data = await fs.readFile(path.join(BUNDLED_FONTS_DIR, file));
+        entries.push({ name, data, weight, style: "normal" });
+      } catch {
+        // skip missing font
+      }
+    }
+    // Need at least the primary mono font.
+    // Clear cache on failure so transient I/O errors don't permanently disable the renderer.
+    if (entries.length === 0) {
+      _fontsPromise = null;
+      return null;
+    }
+    return entries;
+  })();
+  return _fontsPromise;
 }
 
 // ---------------------------------------------------------------------------
-// GFM table parser (regex-based — fast & simple)
+// GFM table parser
 // ---------------------------------------------------------------------------
 
 const SEPARATOR_RE = /^\|?\s*[-:]+[-| :]*\|?\s*$/;
 
+/** Split a table row on unescaped pipes, handling `\|` as a literal pipe.
+ *  `\\|` produces a literal backslash + pipe delimiter (even count of backslashes). */
 function parseLine(line: string): string[] {
-  return line
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((c) => c.trim());
+  const stripped = line.replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < stripped.length; i++) {
+    if (stripped[i] === "\\") {
+      // Count consecutive backslashes
+      let bsCount = 0;
+      while (i + bsCount < stripped.length && stripped[i + bsCount] === "\\") {
+        bsCount++;
+      }
+      const nextChar = i + bsCount < stripped.length ? stripped[i + bsCount] : "";
+      if (nextChar === "|" && bsCount % 2 === 1) {
+        // Odd backslashes before pipe: emit floor(bsCount/2) literal backslashes + literal pipe
+        current += "\\".repeat(Math.floor(bsCount / 2)) + "|";
+        i += bsCount; // skip past the pipe (loop increments i once more)
+      } else if (nextChar === "|") {
+        // Even backslashes before pipe: collapse pairs, pipe is a delimiter
+        current += "\\".repeat(bsCount / 2);
+        i += bsCount - 1; // position on last backslash; loop increments, then pipe hits delimiter branch
+      } else {
+        // Backslashes not followed by pipe: collapse pairs (GFM escape semantics)
+        current += "\\".repeat(Math.ceil(bsCount / 2));
+        i += bsCount - 1;
+      }
+    } else if (stripped[i] === "|") {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += stripped[i];
+    }
+  }
+  cells.push(current.trim());
+  return cells;
 }
 
-/** Parse a GFM pipe-table into structured data, or null if not a valid table. */
+/** Parse a GFM pipe-table into structured data, or null if invalid/too large. */
 export function parseGfmTable(markdown: string): TableData | null {
   const lines = markdown.split("\n").filter((l) => l.trim().length > 0);
   if (lines.length < 2 || !SEPARATOR_RE.test(lines[1])) {
@@ -304,9 +173,12 @@ export function parseGfmTable(markdown: string): TableData | null {
   }
 
   const headers = parseLine(lines[0]);
-  const separatorCells = parseLine(lines[1]);
+  if (headers.length > MAX_TABLE_COLS) {
+    return null;
+  }
 
-  const aligns: Array<"left" | "center" | "right"> = separatorCells.map((cell) => {
+  const colCount = headers.length;
+  const aligns: Array<"left" | "center" | "right"> = parseLine(lines[1]).map((cell) => {
     const t = cell.trim();
     if (t.startsWith(":") && t.endsWith(":")) {
       return "center";
@@ -317,43 +189,43 @@ export function parseGfmTable(markdown: string): TableData | null {
     return "left";
   });
 
-  const rows = lines
-    .slice(2)
-    .filter((l) => !SEPARATOR_RE.test(l))
-    .map(parseLine);
+  const rawRows = lines.slice(2).filter((l) => !SEPARATOR_RE.test(l));
+  if (rawRows.length > MAX_TABLE_ROWS) {
+    return null;
+  }
+
+  const rows = rawRows.map((l) => {
+    const cells = parseLine(l);
+    return Array.from({ length: colCount }, (_, i) => {
+      const cell = cells[i] ?? "";
+      return cell.length > MAX_CELL_CHARS ? `${cell.slice(0, MAX_CELL_CHARS)}…` : cell;
+    });
+  });
 
   return { headers, aligns, rows };
 }
 
 // ---------------------------------------------------------------------------
-// Inline markdown stripping (for clean canvas text)
+// Layout helpers
 // ---------------------------------------------------------------------------
 
 function stripInline(text: string): string {
   return text
-    .replace(/\*\*(.*?)\*\*/gs, "$1") // bold
-    .replace(/\*(.*?)\*/gs, "$1") // italic
-    .replace(/__(.*?)__/gs, "$1") // bold alt
-    .replace(/_(.*?)_/gs, "$1") // italic alt
-    .replace(/~~(.*?)~~/gs, "$1") // strikethrough
-    .replace(/`([^`]+)`/g, "$1") // inline code
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1") // links → label
+    .replace(/\*\*(.*?)\*\*/gs, "$1")
+    .replace(/\*(.*?)\*/gs, "$1")
+    .replace(/__(.*?)__/gs, "$1")
+    .replace(/_(.*?)_/gs, "$1")
+    .replace(/~~(.*?)~~/gs, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .trim();
 }
 
-// ---------------------------------------------------------------------------
-// Column width estimation
-// ---------------------------------------------------------------------------
-
 function estimateColWidths(table: TableData): number[] {
-  const colCount = table.headers.length;
-  const widths: number[] = Array(colCount).fill(MIN_COL_WIDTH) as number[];
-  const allRows = [table.headers, ...table.rows];
-
-  for (let c = 0; c < colCount; c++) {
-    for (const row of allRows) {
-      const cell = stripInline(row[c] ?? "");
-      const w = cell.length * CHAR_WIDTH + CELL_PAD_X * 2;
+  const widths: number[] = Array(table.headers.length).fill(MIN_COL_WIDTH) as number[];
+  for (let c = 0; c < table.headers.length; c++) {
+    for (const row of [table.headers, ...table.rows]) {
+      const w = stripInline(row[c] ?? "").length * CHAR_WIDTH + CELL_PAD_X * 2;
       if (w > widths[c]) {
         widths[c] = w;
       }
@@ -362,28 +234,14 @@ function estimateColWidths(table: TableData): number[] {
   return widths;
 }
 
-// ---------------------------------------------------------------------------
-// Height estimation (accounts for text wrapping in cells)
-// ---------------------------------------------------------------------------
-
-const LINE_HEIGHT = FONT_SIZE * 1.4;
-
-/** Estimate wrapped line count for a cell string at a given column width. */
-function estimateWrappedLines(text: string, colWidth: number): number {
-  const usable = Math.max(colWidth - CELL_PAD_X * 2, CHAR_WIDTH);
-  const charsPerLine = Math.floor(usable / CHAR_WIDTH);
-  if (charsPerLine <= 0) {
-    return 1;
-  }
-  const stripped = stripInline(text);
-  return Math.max(1, Math.ceil(stripped.length / charsPerLine));
-}
-
-/** Estimate the pixel height of a single row (max wrapped lines across all cells). */
 function estimateRowHeight(cells: string[], colWidths: number[]): number {
   let maxLines = 1;
   for (let i = 0; i < cells.length; i++) {
-    const lines = estimateWrappedLines(cells[i] ?? "", colWidths[i] ?? MIN_COL_WIDTH);
+    const usable = Math.max((colWidths[i] ?? MIN_COL_WIDTH) - CELL_PAD_X * 2, CHAR_WIDTH);
+    const lines = Math.max(
+      1,
+      Math.ceil(stripInline(cells[i] ?? "").length / Math.floor(usable / CHAR_WIDTH)),
+    );
     if (lines > maxLines) {
       maxLines = lines;
     }
@@ -392,17 +250,15 @@ function estimateRowHeight(cells: string[], colWidths: number[]): number {
 }
 
 function estimateTableHeight(table: TableData, colWidths: number[]): number {
-  const headerH = estimateRowHeight(table.headers, colWidths) + 2; // 2px bottom border
-  let bodyH = 0;
+  let h = estimateRowHeight(table.headers, colWidths) + 2;
   for (const row of table.rows) {
-    bodyH += estimateRowHeight(row, colWidths) + 1; // 1px bottom border
+    h += estimateRowHeight(row, colWidths) + 1;
   }
-  // +2 for outer container border (1px top + 1px bottom), +8 for safety margin
-  return Math.max(Math.ceil(headerH + bodyH + 2 + 8), 60);
+  return Math.max(Math.ceil(h + 10), 60);
 }
 
 // ---------------------------------------------------------------------------
-// Satori element tree builder (React.createElement-compatible objects)
+// Satori element tree builder
 // ---------------------------------------------------------------------------
 
 function buildCell(
@@ -414,8 +270,7 @@ function buildCell(
   isHeader: boolean,
 ): SatoriElement {
   const justify = align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start";
-  // Satori crashes on `undefined` style values (.trim() on undefined), so
-  // only include borderRight when it has an actual value.
+  // Satori crashes on undefined style values, so conditionally add borderRight.
   const style: Record<string, unknown> = {
     width: `${colWidths[colIndex]}px`,
     padding: `${CELL_PAD_Y}px ${CELL_PAD_X}px`,
@@ -430,15 +285,11 @@ function buildCell(
   if (colIndex < colCount - 1) {
     style.borderRight = `1px solid ${THEME.border}`;
   }
-  return {
-    type: "div",
-    props: { style, children: stripInline(text) },
-  };
+  return { type: "div", props: { style, children: stripInline(text) } };
 }
 
 function buildTableElement(table: TableData, colWidths: number[]): SatoriElement {
   const colCount = table.headers.length;
-
   const headerRow: SatoriElement = {
     type: "div",
     props: {
@@ -452,7 +303,6 @@ function buildTableElement(table: TableData, colWidths: number[]): SatoriElement
       ),
     },
   };
-
   const bodyRows = table.rows.map(
     (row, rowIdx): SatoriElement => ({
       type: "div",
@@ -470,7 +320,6 @@ function buildTableElement(table: TableData, colWidths: number[]): SatoriElement
       },
     }),
   );
-
   return {
     type: "div",
     props: {
@@ -492,66 +341,36 @@ function buildTableElement(table: TableData, colWidths: number[]): SatoriElement
 // ---------------------------------------------------------------------------
 
 /**
- * Render a GFM markdown table to a PNG image.
- *
- * Returns `null` when the renderer is unavailable or the table cannot be
- * parsed — callers should fall back to text delivery.
+ * Render a GFM markdown table to a PNG buffer.
+ * Returns null when renderer is unavailable or table is invalid — callers
+ * should fall back to text delivery.
  */
-export async function renderTableImage(
-  tableMarkdown: string,
-  index: number,
-): Promise<TableImageResult | null> {
-  const available = await isTableImageRendererAvailable();
-  if (!available) {
-    return null;
-  }
-
-  const table = parseGfmTable(tableMarkdown);
-  if (!table) {
-    return null;
-  }
-
+export async function renderTableImage(tableMarkdown: string): Promise<Buffer | null> {
   try {
-    const satori = await loadSatori();
-    const Resvg = await loadResvg();
-    const fonts = await loadFonts();
+    const table = parseGfmTable(tableMarkdown);
+    if (!table) {
+      return null;
+    }
+    const [satori, Resvg, fonts] = await Promise.all([loadSatori(), loadResvg(), loadFonts()]);
     if (!fonts) {
       return null;
     }
 
     const colWidths = estimateColWidths(table);
-    const totalWidth = Math.max(colWidths.reduce((a, b) => a + b, 0) + 2, 200);
-    const totalHeight = estimateTableHeight(table, colWidths);
+    const totalWidth = Math.min(
+      Math.max(colWidths.reduce((a, b) => a + b, 0) + 2, 200),
+      MAX_IMAGE_WIDTH,
+    );
+    const totalHeight = Math.min(estimateTableHeight(table, colWidths), MAX_IMAGE_HEIGHT);
 
-    const element = buildTableElement(table, colWidths);
-
-    const fontEntries: Array<{
-      name: string;
-      data: Buffer;
-      weight: 400 | 700;
-      style: "normal";
-    }> = [{ name: "Mono", data: fonts.regular, weight: 400, style: "normal" }];
-    if (fonts.bold) {
-      fontEntries.push({ name: "Mono", data: fonts.bold, weight: 700, style: "normal" });
-    }
-
-    const svg = await satori(element, {
+    const svg = await satori(buildTableElement(table, colWidths), {
       width: totalWidth,
       height: totalHeight,
-      fonts: fontEntries,
-      loadAdditionalAsset,
+      fonts,
     });
 
-    const resvg = new Resvg(svg, {
-      fitTo: { mode: "width", value: totalWidth },
-    });
-    const pngBytes = resvg.render().asPng();
-
-    return {
-      png: Buffer.from(pngBytes),
-      fileName: `table-${index + 1}.png`,
-      fallbackMarkdown: tableMarkdown,
-    };
+    const resvg = new Resvg(svg, { fitTo: { mode: "width", value: totalWidth } });
+    return Buffer.from(resvg.render().asPng());
   } catch {
     return null;
   }

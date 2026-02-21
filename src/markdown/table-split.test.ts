@@ -1,34 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasMarkdownTable, splitMarkdownTables } from "./table-split.js";
-
-describe("hasMarkdownTable", () => {
-  it("returns false for empty string", () => {
-    expect(hasMarkdownTable("")).toBe(false);
-  });
-
-  it("returns false for plain text", () => {
-    expect(hasMarkdownTable("Hello world\nThis is some text.")).toBe(false);
-  });
-
-  it("returns true for a simple GFM table", () => {
-    const md = `| A | B |\n|---|---|\n| 1 | 2 |`;
-    expect(hasMarkdownTable(md)).toBe(true);
-  });
-
-  it("returns false for a table inside a fenced code block", () => {
-    const md = "```\n| A | B |\n|---|---|\n| 1 | 2 |\n```";
-    expect(hasMarkdownTable(md)).toBe(false);
-  });
-
-  it("returns true when table is mixed with other content", () => {
-    const md = "Some text\n\n| X | Y |\n|---|---|\n| a | b |\n\nMore text";
-    expect(hasMarkdownTable(md)).toBe(true);
-  });
-
-  it("returns false for pipe characters that are not tables", () => {
-    expect(hasMarkdownTable("a | b | c")).toBe(false);
-  });
-});
+import { splitMarkdownTables } from "./table-split.js";
 
 describe("splitMarkdownTables", () => {
   it("returns empty array for empty string", () => {
@@ -63,44 +34,28 @@ describe("splitMarkdownTables", () => {
     expect(result[2]).toEqual({ kind: "text", markdown: expect.stringContaining("Closing") });
   });
 
-  it("handles multiple tables interleaved with text", () => {
+  it("handles multiple tables with sequential indices", () => {
     const md = [
-      "First text",
+      "First",
       "",
       "| A | B |",
       "|---|---|",
       "| 1 | 2 |",
       "",
-      "Middle text",
+      "Middle",
       "",
       "| X | Y |",
       "|---|---|",
       "| 3 | 4 |",
       "",
-      "End text",
+      "End",
     ].join("\n");
 
     const result = splitMarkdownTables(md);
-    expect(result.filter((s) => s.kind === "table")).toHaveLength(2);
-    expect(result.filter((s) => s.kind === "text")).toHaveLength(3);
-
-    // Table indices should be sequential
     const tables = result.filter((s) => s.kind === "table");
+    expect(tables).toHaveLength(2);
     expect(tables[0]).toHaveProperty("index", 0);
     expect(tables[1]).toHaveProperty("index", 1);
-  });
-
-  it("handles a table at the very start of the markdown", () => {
-    const md = "| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter the table";
-    const result = splitMarkdownTables(md);
-    expect(result[0]).toHaveProperty("kind", "table");
-  });
-
-  it("handles a table at the very end of the markdown", () => {
-    const md = "Before the table\n\n| A | B |\n|---|---|\n| 1 | 2 |";
-    const result = splitMarkdownTables(md);
-    const last = result.at(-1);
-    expect(last).toHaveProperty("kind", "table");
   });
 
   it("does not split tables inside fenced code blocks", () => {
@@ -110,10 +65,9 @@ describe("splitMarkdownTables", () => {
     expect(result[0]).toHaveProperty("kind", "text");
   });
 
-  it("handles table-only content (no surrounding text)", () => {
-    const md = "| A | B |\n|---|---|\n| 1 | 2 |";
+  it("detects pipeless GFM tables (no leading/trailing pipes)", () => {
+    const md = "Intro\n\nA | B\n---|---\n1 | 2\n\nDone";
     const result = splitMarkdownTables(md);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ kind: "table", markdown: md, index: 0 });
+    expect(result.filter((s) => s.kind === "table")).toHaveLength(1);
   });
 });

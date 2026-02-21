@@ -17,9 +17,11 @@ md.enable("table");
 
 // ---------------------------------------------------------------------------
 // Quick heuristic — avoids a full parse when there's obviously no table.
+// Matches both piped (`| A | B |`) and pipeless (`A | B`) GFM table rows,
+// combined with a separator line (e.g. `---|---` or `|:---|---:|`).
 // ---------------------------------------------------------------------------
 
-const PIPE_LINE_RE = /^\|.*\|/m;
+const PIPE_LINE_RE = /^[|].*[|]|^[^|]+[|]/m;
 const SEPARATOR_RE = /^\|?\s*[-:]+[-| :]*\|?\s*$/m;
 
 function mightContainTable(markdown: string): boolean {
@@ -29,15 +31,6 @@ function mightContainTable(markdown: string): boolean {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-/** Fast check: does the markdown contain at least one GFM table? */
-export function hasMarkdownTable(markdown: string): boolean {
-  if (!markdown || !mightContainTable(markdown)) {
-    return false;
-  }
-  const tokens = md.parse(markdown, {});
-  return tokens.some((t) => t.type === "table_open");
-}
 
 /**
  * Split markdown into ordered text / table segments.
