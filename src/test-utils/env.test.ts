@@ -53,4 +53,14 @@ describe("env test utils", () => {
 
     expect(process.env[key]).toBe(prev);
   });
+
+  it("withEnvAsync applies values only inside async callback", async () => {
+    const key = "OPENCLAW_ENV_TEST_ASYNC_OK";
+    const prev = process.env[key];
+
+    const seen = await withEnvAsync({ [key]: "inside" }, async () => process.env[key]);
+
+    expect(seen).toBe("inside");
+    expect(process.env[key]).toBe(prev);
+  });
 });
