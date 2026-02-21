@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neumorphic UI Examples - OpenClaw</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #e0e5ec;
+      padding: 40px 20px;
+      min-height: 100vh;
+    }
+    
+    body.dark {
+      background: #12141a;
+      color: #e4e4e7;
+    }
+    
+    :root {
+      --neu-shadow-light: #ffffff;
+      --neu-shadow-dark: #a3b1c6;
+    }
+    
+    .dark {
+      --neu-shadow-light: rgba(255, 255, 255, 0.05);
+      --neu-shadow-dark: rgba(0, 0, 0, 0.5);
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      text-align: center;
+      margin-bottom: 40px;
+      font-size: 36px;
+      background: linear-gradient(135deg, #ff6b6b, #ff5252);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 30px;
+      margin-bottom: 40px;
+    }
+    
+    .section-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin: 40px 0 20px;
+      color: #71717a;
+    }
+    
+    /* Neumorphic Components */
+    .neu-card {
+      background: #e0e5ec;
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 
+        6px 6px 12px #a3b1c6,
+        -6px -6px 12px #ffffff;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .dark .neu-card {
+      background: #12141a;
+      box-shadow: 
+        6px 6px 12px rgba(0, 0, 0, 0.5),
+        -6px -6px 12px rgba(255, 255, 255, 0.05);
+    }
+    
+    .neu-card:hover {
+      box-shadow: 
+        8px 8px 16px #a3b1c6,
+        -8px -8px 16px #ffffff;
+      transform: translateY(-4px);
+    }
+    
+    .dark .neu-card:hover {
+      box-shadow: 
+        8px 8px 16px rgba(0, 0, 0, 0.5),
+        -8px -8px 16px rgba(255, 255, 255, 0.05);
+    }
+    
+    .neu-btn {
+      background: #e0e5ec;
+      border: none;
+      border-radius: 12px;
+      padding: 14px 28px;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 
+        6px 6px 12px #a3b1c6,
+        -6px -6px 12px #ffffff;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      margin: 8px;
+    }
+    
+    .dark .neu-btn {
+      background: #12141a;
+      color: #e4e4e7;
+      box-shadow: 
+        6px 6px 12px rgba(0, 0, 0, 0.5),
+        -6px -6px 12px rgba(255, 255, 255, 0.05);
+    }
+    
+    .neu-btn:hover {
+      box-shadow: 
+        8px 8px 16px #a3b1c6,
+        -8px -8px 16px #ffffff;
+      transform: translateY(-1px);
+    }
+    
+    .neu-btn:active {
+      box-shadow: 
+        inset 4px 4px 8px #a3b1c6,
+        inset -4px -4px 8px #ffffff;
+      transform: translateY(0);
+    }
+    
+    .neu-btn-primary {
+      background: linear-gradient(145deg, #ff6b6b, #ff5252);
+      color: white;
+      box-shadow: 
+        6px 6px 12px rgba(255, 82, 82, 0.3),
+        -6px -6px 12px rgba(255, 107, 107, 0.3);
+    }
+    
+    .neu-input {
+      background: #e0e5ec;
+      border: none;
+      border-radius: 12px;
+      padding: 14px 20px;
+      font-size: 14px;
+      box-shadow: 
+        inset 6px 6px 12px #a3b1c6,
+        inset -6px -6px 12px #ffffff;
+      width: 100%;
+      margin: 8px 0;
+    }
+    
+    .dark .neu-input {
+      background: #12141a;
+      color: #e4e4e7;
+      box-shadow: 
+        inset 6px 6px 12px rgba(0, 0, 0, 0.5),
+        inset -6px -6px 12px rgba(255, 255, 255, 0.05);
+    }
+    
+    .neu-stat-value {
+      font-size: 48px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #ff6b6b, #ff5252);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    
+    .neu-stat-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #71717a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .theme-toggle {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      width: 60px;
+      height: 32px;
+      background: #e0e5ec;
+      border-radius: 16px;
+      box-shadow: 
+        inset 6px 6px 12px #a3b1c6,
+        inset -6px -6px 12px #ffffff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      padding: 4px;
+    }
+    
+    .dark .theme-toggle {
+      background: #12141a;
+      box-shadow: 
+        inset 6px 6px 12px rgba(0, 0, 0, 0.5),
+        inset -6px -6px 12px rgba(255, 255, 255, 0.05);
+    }
+    
+    .theme-toggle-knob {
+      width: 24px;
+      height: 24px;
+      background: #e0e5ec;
+      border-radius: 50%;
+      box-shadow: 
+        6px 6px 12px #a3b1c6,
+        -6px -6px 12px #ffffff;
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    
+    .dark .theme-toggle-knob {
+      background: #12141a;
+      box-shadow: 
+        6px 6px 12px rgba(0, 0, 0, 0.5),
+        -6px -6px 12px rgba(255, 255, 255, 0.05);
+      transform: translateX(28px);
+    }
+    
+    .buttons-demo {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="theme-toggle" onclick="toggleTheme()">
+    <div class="theme-toggle-knob"></div>
+  </div>
+  
+  <div class="container">
+    <h1>🚀 Neumorphic UI - OpenClaw</h1>
+    
+    <div class="section-title">Stat Cards</div>
+    <div class="grid">
+      <div class="neu-card">
+        <div class="neu-stat-value">1,234</div>
+        <div class="neu-stat-label">Total Users</div>
+      </div>
+      
+      <div class="neu-card">
+        <div class="neu-stat-value">98%</div>
+        <div class="neu-stat-label">Uptime</div>
+      </div>
+      
+      <div class="neu-card">
+        <div class="neu-stat-value">42</div>
+        <div class="neu-stat-label">Active Sessions</div>
+      </div>
+    </div>
+    
+    <div class="section-title">Buttons</div>
+    <div class="neu-card">
+      <div class="buttons-demo">
+        <button class="neu-btn">Default</button>
+        <button class="neu-btn neu-btn-primary">Primary</button>
+        <button class="neu-btn">Secondary</button>
+        <button class="neu-btn">Tertiary</button>
+      </div>
+    </div>
+    
+    <div class="section-title">Form Inputs</div>
+    <div class="neu-card">
+      <input type="text" class="neu-input" placeholder="Username">
+      <input type="email" class="neu-input" placeholder="Email address">
+      <input type="password" class="neu-input" placeholder="Password">
+    </div>
+    
+    <div class="section-title">Information Cards</div>
+    <div class="grid">
+      <div class="neu-card">
+        <h3 style="margin-bottom: 12px; font-size: 18px;">Connection Status</h3>
+        <p style="color: #71717a; line-height: 1.6;">
+          Your OpenClaw instance is connected and running smoothly. 
+          All services are operational.
+        </p>
+      </div>
+      
+      <div class="neu-card">
+        <h3 style="margin-bottom: 12px; font-size: 18px;">Latest Activity</h3>
+        <p style="color: #71717a; line-height: 1.6;">
+          3 new messages received. 2 tasks completed. 
+          All systems nominal.
+        </p>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+    }
+    
+    // Load saved theme
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+  </script>
+</body>
+</html>
