@@ -147,7 +147,11 @@ function stripOptionalPort(ip: string): string {
 }
 
 export function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
-  const raw = forwardedFor?.split(",")[0]?.trim();
+  const entries = forwardedFor
+    ?.split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const raw = entries?.at(-1);
   if (!raw) {
     return undefined;
   }
