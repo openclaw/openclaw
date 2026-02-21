@@ -212,6 +212,28 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.ownerList).toEqual(["123"]);
   });
 
+  it("rejects unquoted numeric owner IDs that lost IEEE-754 precision (fail closed)", () => {
+    // Discord snowflakes exceed Number.MAX_SAFE_INTEGER. Stored as an unquoted JSON
+    // number, 1048693844750901359 rounds to 1048693844750901400. The rounded string
+    // won't match the real sender ID, so auth should fail closed (not grant owner).
+    // A console.warn in resolveOwnerAllowFromList nudges users to quote the value.
+    const realDiscordId = "1048693844750901359";
+
+    const cfg = {
+      commands: { ownerAllowFrom: [Number(realDiscordId)] },
+      channels: { discord: {} },
+    } as unknown as OpenClawConfig;
+
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      SenderId: realDiscordId,
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({ ctx, cfg, commandAuthorized: true });
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
   it("does not infer a provider from channel allowlists for webchat command contexts", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+15551234567"] } },

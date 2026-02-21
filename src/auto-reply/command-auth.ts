@@ -112,6 +112,14 @@ function resolveOwnerAllowFromList(params: {
   }
   const filtered: string[] = [];
   for (const entry of raw) {
+    // Large integers lose IEEE-754 precision silently in JSON (e.g. Discord snowflake
+    // 1048693844750901359 → 1048693844750901400). Warn so users know to quote as a string.
+    if (typeof entry === "number" && !Number.isSafeInteger(entry)) {
+      console.warn(
+        `[command-auth] ownerAllowFrom entry (${entry}) exceeds MAX_SAFE_INTEGER and may have ` +
+          `lost precision. Quote it as a string in your config: "${entry}"`,
+      );
+    }
     const trimmed = String(entry ?? "").trim();
     if (!trimmed) {
       continue;
