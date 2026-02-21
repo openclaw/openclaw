@@ -50,6 +50,7 @@ Minimal config (single account):
       ship: "~sampel-palnet",
       url: "https://your-ship-host",
       code: "lidlut-tabwed-pillex-ridrup",
+      ownerShip: "~your-main-ship", // recommended: your ship, always allowed
     },
   },
 }
@@ -157,6 +158,10 @@ Set an owner ship to receive approval requests when unauthorized users try to in
   },
 }
 ```
+
+The owner ship is **automatically authorized everywhere** — DM invites are auto-accepted and
+channel messages are always allowed. You don't need to add the owner to `dmAllowlist` or
+`defaultAuthorizedShips`.
 
 When set, the owner receives DM notifications for:
 
