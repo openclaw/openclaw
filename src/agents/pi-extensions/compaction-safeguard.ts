@@ -7,6 +7,7 @@ import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  SUMMARIZATION_OVERHEAD_TOKENS,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
@@ -268,7 +269,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 );
                 const droppedMaxChunkTokens = Math.max(
                   1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio),
+                  Math.floor(contextWindowTokens * droppedChunkRatio) -
+                    SUMMARIZATION_OVERHEAD_TOKENS,
                 );
                 droppedSummary = await summarizeInStages({
                   messages: pruned.droppedMessagesList,
@@ -293,10 +295,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
-      // Use adaptive chunk ratio based on message sizes
+      // Use adaptive chunk ratio based on message sizes, reserving headroom for
+      // the summarization prompt, system prompt, previous summary, and reasoning budget
+      // that generateSummary adds on top of the serialized conversation chunk.
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
-      const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
+      const maxChunkTokens = Math.max(
+        1,
+        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+      );
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
       // Feed dropped-messages summary as previousSummary so the main summarization
