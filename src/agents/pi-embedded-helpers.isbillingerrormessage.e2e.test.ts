@@ -35,10 +35,6 @@ describe("isAuthErrorMessage", () => {
       expect(isAuthErrorMessage(sample)).toBe(true);
     }
   });
-  it("ignores unrelated errors", () => {
-    expect(isAuthErrorMessage("rate limit exceeded")).toBe(false);
-    expect(isAuthErrorMessage("billing issue detected")).toBe(false);
-  });
 });
 
 describe("isBillingErrorMessage", () => {
@@ -53,11 +49,6 @@ describe("isBillingErrorMessage", () => {
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
-  });
-  it("ignores unrelated errors", () => {
-    expect(isBillingErrorMessage("rate limit exceeded")).toBe(false);
-    expect(isBillingErrorMessage("invalid api key")).toBe(false);
-    expect(isBillingErrorMessage("context length exceeded")).toBe(false);
   });
   it("does not false-positive on issue IDs or text containing 402", () => {
     const falsePositives = [
@@ -109,14 +100,6 @@ describe("isCloudCodeAssistFormatError", () => {
     for (const sample of samples) {
       expect(isCloudCodeAssistFormatError(sample)).toBe(true);
     }
-  });
-  it("ignores unrelated errors", () => {
-    expect(isCloudCodeAssistFormatError("rate limit exceeded")).toBe(false);
-    expect(
-      isCloudCodeAssistFormatError(
-        '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
-      ),
-    ).toBe(false);
   });
 });
 
@@ -195,19 +178,52 @@ describe("isContextOverflowError", () => {
     }
   });
 
-  it("ignores unrelated errors", () => {
-    expect(isContextOverflowError("rate limit exceeded")).toBe(false);
-    expect(isContextOverflowError("request size exceeds upload limit")).toBe(false);
-    expect(isContextOverflowError("model not found")).toBe(false);
-    expect(isContextOverflowError("authentication failed")).toBe(false);
-  });
-
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
     expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
+  });
+});
+
+describe("error classifiers", () => {
+  it("ignore unrelated errors", () => {
+    const checks: Array<{
+      matcher: (message: string) => boolean;
+      samples: string[];
+    }> = [
+      {
+        matcher: isAuthErrorMessage,
+        samples: ["rate limit exceeded", "billing issue detected"],
+      },
+      {
+        matcher: isBillingErrorMessage,
+        samples: ["rate limit exceeded", "invalid api key", "context length exceeded"],
+      },
+      {
+        matcher: isCloudCodeAssistFormatError,
+        samples: [
+          "rate limit exceeded",
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
+        ],
+      },
+      {
+        matcher: isContextOverflowError,
+        samples: [
+          "rate limit exceeded",
+          "request size exceeds upload limit",
+          "model not found",
+          "authentication failed",
+        ],
+      },
+    ];
+
+    for (const check of checks) {
+      for (const sample of check.samples) {
+        expect(check.matcher(sample)).toBe(false);
+      }
+    }
   });
 });
 
