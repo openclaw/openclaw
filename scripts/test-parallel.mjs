@@ -289,9 +289,13 @@ const runOnce = (entry, extraArgs = []) =>
       : nextNodeOptions;
     let child;
     try {
+      // Remove gateway auth env vars to ensure test isolation
+      const testEnv = { ...process.env };
+      delete testEnv.OPENCLAW_GATEWAY_TOKEN;
+      delete testEnv.OPENCLAW_GATEWAY_PASSWORD;
       child = spawn(pnpm, args, {
         stdio: "inherit",
-        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
+        env: { ...testEnv, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
         shell: isWindows,
       });
     } catch (err) {
@@ -353,9 +357,13 @@ if (passthroughArgs.length > 0) {
   const code = await new Promise((resolve) => {
     let child;
     try {
+      // Remove gateway auth env vars to ensure test isolation
+      const testEnv = { ...process.env };
+      delete testEnv.OPENCLAW_GATEWAY_TOKEN;
+      delete testEnv.OPENCLAW_GATEWAY_PASSWORD;
       child = spawn(pnpm, args, {
         stdio: "inherit",
-        env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
+        env: { ...testEnv, NODE_OPTIONS: nextNodeOptions },
         shell: isWindows,
       });
     } catch (err) {
