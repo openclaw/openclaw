@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FailoverError } from "./failover-error.js";
-import { runWithModelFallback, _probeThrottleInternals } from "./model-fallback.js";
+import { runWithModelFallback } from "./model-fallback.js";
 
 describe("runWithModelFallback", () => {
   it("skips same-provider candidates after a timeout failure", async () => {
@@ -42,7 +42,7 @@ describe("runWithModelFallback", () => {
     // model-a attempted (timeout), model-b SKIPPED (same provider), llama3 succeeded
     expect(callCount).toBe(2);
     expect(calledModels).toEqual(["nim/model-a", "ollama/llama3"]);
-    // Should have 3 attempt records: attempted, skipped, succeeded (but succeeded isn't in attempts)
+    // 2 attempt records: model-a (timeout) + model-b (skipped). llama3 succeeded so not in attempts.
     expect(result.attempts).toHaveLength(2);
     expect(result.attempts[0].reason).toBe("timeout");
     expect(result.attempts[1].reason).toBe("timeout");

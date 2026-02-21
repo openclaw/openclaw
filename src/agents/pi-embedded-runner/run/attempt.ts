@@ -1082,7 +1082,10 @@ export async function runEmbeddedAttempt(
           // Start first-token timeout just before dispatching the prompt.
           // If the provider is unresponsive (TCP connects but no SSE data), this fires
           // much sooner than the full timeoutMs, allowing faster fallback to other models.
-          const firstTokenTimeoutMs = params.firstTokenTimeoutMs ?? 30_000;
+          const firstTokenTimeoutMs = Math.min(
+            params.firstTokenTimeoutMs ?? 30_000,
+            params.timeoutMs,
+          );
           if (firstTokenTimeoutMs > 0) {
             firstTokenTimer = setTimeout(() => {
               if (!isProbeSession) {
