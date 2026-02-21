@@ -1,0 +1,21 @@
+FROM rust:1.83-bullseye
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        pkg-config \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY . .
+
+RUN cargo test
+RUN cargo test --features sqlite-state
+RUN cargo clippy --all-targets -- -D warnings
+RUN cargo clippy --all-targets --features sqlite-state -- -D warnings
+RUN cargo build --release
+RUN cargo build --release --features sqlite-state
+
+CMD ["bash", "-lc", "echo 'openclaw-agent-rs docker parity smoke passed'"]

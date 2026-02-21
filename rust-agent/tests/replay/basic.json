@@ -1,0 +1,61 @@
+{
+  "cases": [
+    {
+      "name": "allow-safe-exec-discord",
+      "frame": {
+        "type": "event",
+        "event": "agent",
+        "payload": {
+          "id": "case-allow-1",
+          "sessionId": "s-replay",
+          "tool": "exec",
+          "channel": "discord",
+          "command": "git status"
+        }
+      },
+      "expect": {
+        "action": "allow",
+        "min_risk": 30,
+        "tags_include": ["tool_risk_bonus", "channel_risk_bonus"]
+      }
+    },
+    {
+      "name": "block-destructive-command",
+      "frame": {
+        "type": "event",
+        "event": "agent",
+        "payload": {
+          "id": "case-block-1",
+          "sessionId": "s-replay",
+          "tool": "exec",
+          "channel": "discord",
+          "command": "rm -rf /"
+        }
+      },
+      "expect": {
+        "action": "block",
+        "min_risk": 90,
+        "tags_include": ["blocked_command_pattern"]
+      }
+    },
+    {
+      "name": "review-policy-browser",
+      "frame": {
+        "type": "event",
+        "event": "agent",
+        "payload": {
+          "id": "case-review-1",
+          "sessionId": "s-replay",
+          "tool": "browser",
+          "channel": "webchat",
+          "message": "open docs home page"
+        }
+      },
+      "expect": {
+        "action": "review",
+        "min_risk": 10,
+        "tags_include": ["tool_policy"]
+      }
+    }
+  ]
+}

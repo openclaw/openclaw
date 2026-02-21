@@ -1,0 +1,16 @@
+FROM rust:1.83-bullseye
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        pkg-config \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY . .
+
+RUN cargo build --release --features sqlite-state
+
+ENTRYPOINT ["/workspace/target/release/openclaw-agent-rs"]

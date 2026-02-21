@@ -1,0 +1,4 @@
+/target
+/.cargo
+tmp_*.log
+/.openclaw-rs

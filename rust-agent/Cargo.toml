@@ -1,0 +1,40 @@
+[package]
+name = "openclaw-agent-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+description = "Rust runtime and defender pipeline for OpenClaw"
+
+[features]
+default = []
+sqlite-state = ["dep:rusqlite"]
+
+[dependencies]
+anyhow = "1.0.97"
+async-trait = "0.1.88"
+base64 = "0.22.1"
+clap = { version = "4.5.40", features = ["derive", "env"] }
+futures-util = "0.3.31"
+regex = "1.11.1"
+reqwest = { version = "0.12.15", default-features = false, features = ["json", "rustls-tls"] }
+ring = "0.17.14"
+rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.8"
+smallvec = "1.15.1"
+tokio = { version = "1.44.2", features = [
+  "fs",
+  "macros",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
+tokio-tungstenite = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
+toml = "0.8.20"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+unicode-normalization = "0.1.24"
+url = "2.5.4"

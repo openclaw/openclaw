@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+RUN pip install --no-cache-dir websockets==12.0
+
+COPY gateway_stub.py /app/gateway_stub.py
+
+ENTRYPOINT ["python", "/app/gateway_stub.py"]
