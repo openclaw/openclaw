@@ -152,6 +152,10 @@ export type ResolvedTtsModelOverrides = {
   allowVoiceSettings: boolean;
   allowNormalization: boolean;
   allowSeed: boolean;
+  /** Set of provider names that are actually configured in the current deployment.
+   * When present, provider directives from LLM output are additionally validated
+   * against this set to prevent injection-based provider hijacking (OC-85). */
+  configuredProviders?: Set<string>;
 };
 
 export type TtsDirectiveOverrides = {
@@ -256,7 +260,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
-  return {
+  const config: ResolvedTtsConfig = {
     auto,
     mode: raw.mode ?? "final",
     provider: raw.provider ?? "edge",
@@ -306,6 +310,18 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
+
+  // Attach the set of actually-configured providers to the model-override policy so
+  // that parseTtsDirectives can reject provider directives injected by LLM output that
+  // name a valid-but-unconfigured provider (OC-85 / GHSA-xwcr-v472-8hhr).
+  if (config.modelOverrides.enabled && config.modelOverrides.allowProvider) {
+    const configuredProviders = new Set<string>(
+      TTS_PROVIDERS.filter((p) => isTtsProviderConfigured(config, p)),
+    );
+    config.modelOverrides = { ...config.modelOverrides, configuredProviders };
+  }
+
+  return config;
 }
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {

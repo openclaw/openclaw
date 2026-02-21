@@ -245,6 +245,79 @@ describe("tts", () => {
       expect(result.cleanedText).toBe(input);
       expect(result.overrides.provider).toBeUndefined();
     });
+
+    describe("configuredProviders validation (OC-85)", () => {
+      it("accepts a provider that is in configuredProviders set", () => {
+        const policy = {
+          ...resolveModelOverridePolicy({ enabled: true }),
+          configuredProviders: new Set(["openai", "elevenlabs"]),
+        };
+        const result = parseTtsDirectives("[[tts:provider=openai]]", policy);
+
+        expect(result.overrides.provider).toBe("openai");
+        expect(result.warnings).toHaveLength(0);
+      });
+
+      it("rejects a known provider NOT in configuredProviders set with 'is not configured' warning", () => {
+        const policy = {
+          ...resolveModelOverridePolicy({ enabled: true }),
+          configuredProviders: new Set(["edge"]),
+        };
+        const result = parseTtsDirectives("[[tts:provider=openai]]", policy);
+
+        expect(result.overrides.provider).toBeUndefined();
+        expect(result.warnings).toContain('provider "openai" is not configured');
+      });
+
+      it("rejects all known providers when configuredProviders is an empty set", () => {
+        const policy = {
+          ...resolveModelOverridePolicy({ enabled: true }),
+          configuredProviders: new Set<string>(),
+        };
+
+        const openaiResult = parseTtsDirectives("[[tts:provider=openai]]", policy);
+        expect(openaiResult.overrides.provider).toBeUndefined();
+        expect(openaiResult.warnings).toContain('provider "openai" is not configured');
+
+        const elevenlabsResult = parseTtsDirectives("[[tts:provider=elevenlabs]]", policy);
+        expect(elevenlabsResult.overrides.provider).toBeUndefined();
+        expect(elevenlabsResult.warnings).toContain('provider "elevenlabs" is not configured');
+
+        const edgeResult = parseTtsDirectives("[[tts:provider=edge]]", policy);
+        expect(edgeResult.overrides.provider).toBeUndefined();
+        expect(edgeResult.warnings).toContain('provider "edge" is not configured');
+      });
+
+      it("accepts any configured provider when configuredProviders is undefined (no restriction)", () => {
+        const policy = {
+          ...resolveModelOverridePolicy({ enabled: true }),
+          configuredProviders: undefined,
+        };
+
+        const openaiResult = parseTtsDirectives("[[tts:provider=openai]]", policy);
+        expect(openaiResult.overrides.provider).toBe("openai");
+        expect(openaiResult.warnings).toHaveLength(0);
+
+        const elevenlabsResult = parseTtsDirectives("[[tts:provider=elevenlabs]]", policy);
+        expect(elevenlabsResult.overrides.provider).toBe("elevenlabs");
+        expect(elevenlabsResult.warnings).toHaveLength(0);
+
+        const edgeResult = parseTtsDirectives("[[tts:provider=edge]]", policy);
+        expect(edgeResult.overrides.provider).toBe("edge");
+        expect(edgeResult.warnings).toHaveLength(0);
+      });
+
+      it("still rejects unknown providers regardless of configuredProviders", () => {
+        const policy = {
+          ...resolveModelOverridePolicy({ enabled: true }),
+          configuredProviders: new Set(["openai", "elevenlabs", "edge", "malicious"]),
+        };
+        const result = parseTtsDirectives("[[tts:provider=malicious]]", policy);
+
+        expect(result.overrides.provider).toBeUndefined();
+        expect(result.warnings).toContain('unsupported provider "malicious"');
+      });
+    });
   });
 
   describe("summarizeText", () => {

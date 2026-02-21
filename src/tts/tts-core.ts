@@ -139,8 +139,19 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
+            // Validate provider against the static known-provider allowlist AND the
+            // configured-providers set (if provided). This prevents LLM-injected directives
+            // from switching to a provider that is not configured in the current deployment
+            // (CWE-74, CWE-20 / GHSA-xwcr-v472-8hhr).
             if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
-              overrides.provider = rawValue;
+              if (
+                policy.configuredProviders == null ||
+                policy.configuredProviders.has(rawValue)
+              ) {
+                overrides.provider = rawValue;
+              } else {
+                warnings.push(`provider "${rawValue}" is not configured`);
+              }
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
             }
