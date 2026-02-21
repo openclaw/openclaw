@@ -259,6 +259,7 @@ jobs:
       - name: Check types and lint and oxfmt
         run: pnpm check
 
+
   # Report-only dead-code scans. Runs after scope detection and stores machine-readable
   # results as artifacts for later triage before we enable hard gates.
   # Temporarily disabled in CI while we process initial findings.
@@ -298,7 +299,7 @@ jobs:
           name: dead-code-${{ matrix.tool }}-${{ github.run_id }}
           path: .artifacts/deadcode
 
-  # Validate docs (format, lint, broken links) only when docs files changed.
+  # Validate docs (spellcheck, format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_changed == 'true'
@@ -316,6 +317,9 @@ jobs:
 
       - name: Check docs
         run: pnpm check:docs
+
+      - name: Spellcheck docs
+        run: pnpm docs:spellcheck
 
   secrets:
     runs-on: blacksmith-16vcpu-ubuntu-2404
