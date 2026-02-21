@@ -6,10 +6,10 @@
 {
   const args = process.argv.slice(2);
   const hasFlag = (f) => args.includes(f);
-  const isVersionRequest = hasFlag("--version") || hasFlag("-V");
+  const isVersionRequest = hasFlag("--version") || hasFlag("-V") || hasFlag("-v");
   const isHelpRequest = hasFlag("--help") || hasFlag("-h") || args.length === 0;
   // Collect subcommand tokens (non-flag args) for cache key
-  const subcommands = args.filter((a) => a[0] !== "-");
+  const subcommands = args.filter((a) => a[0] !== "-").map((a) => a.replace(/[/\\]/g, "_"));
 
   if (isVersionRequest || isHelpRequest) {
     const { readFileSync, existsSync, writeFileSync, mkdirSync } = await import("node:fs");
@@ -29,7 +29,9 @@
     // Examples: help-2026.2.9.txt, help-2026.2.9-gateway.txt
     const cacheDir = join(homedir(), ".openclaw", ".cache");
     const suffix = subcommands.length > 0 ? `-${subcommands.join("-")}` : "";
-    const cacheFile = join(cacheDir, `help-${pkg.version}${suffix}.txt`);
+    const noColor = !process.stdout.isTTY || process.env.NO_COLOR !== undefined;
+    const colorSuffix = noColor ? "-nocolor" : "";
+    const cacheFile = join(cacheDir, `help-${pkg.version}${suffix}${colorSuffix}.txt`);
 
     if (existsSync(cacheFile)) {
       process.stdout.write(readFileSync(cacheFile, "utf8"));
@@ -40,12 +42,15 @@
     const originalWrite = process.stdout.write.bind(process.stdout);
     let captured = "";
     process.stdout.write = (chunk, ...rest) => {
-      if (typeof chunk === "string") captured += chunk;
-      else captured += chunk.toString();
+      if (typeof chunk === "string") {
+        captured += chunk;
+      } else {
+        captured += chunk.toString();
+      }
       return originalWrite(chunk, ...rest);
     };
-    process.on("exit", () => {
-      if (captured.length > 100) {
+    process.on("exit", (code) => {
+      if (code === 0 && captured.length > 100) {
         try {
           mkdirSync(cacheDir, { recursive: true });
           writeFileSync(cacheFile, captured);
