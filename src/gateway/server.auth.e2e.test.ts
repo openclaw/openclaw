@@ -743,6 +743,33 @@ describe("gateway server auth/connect", () => {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
     });
+
+    test("allows cross-origin browser silent pairing in mode none when unsafe override is enabled", async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cross-origin-unsafe-"));
+      try {
+        await withEnvAsync({ OPENCLAW_ALLOW_UNSAFE_CROSS_ORIGIN_SILENT_PAIRING: "1" }, async () => {
+          const ws = await openWs(port, { origin: "https://evil.example" });
+          const scopes = ["operator.admin"];
+          const { device } = await createSignedDevice({
+            token: null,
+            scopes,
+            clientId: TEST_OPERATOR_CLIENT.id,
+            clientMode: TEST_OPERATOR_CLIENT.mode,
+            identityPath: path.join(tempDir, "device.json"),
+          });
+          const res = await connectReq(ws, {
+            skipDefaultAuth: true,
+            client: TEST_OPERATOR_CLIENT,
+            scopes,
+            device,
+          });
+          expect(res.ok).toBe(true);
+          ws.close();
+        });
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("tailscale auth", () => {

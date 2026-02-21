@@ -15,6 +15,7 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
+import { isTruthyEnvValue } from "../../../infra/env.js";
 import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
@@ -175,6 +176,9 @@ export function attachGatewayWsMessageHandler(params: {
         origin: requestOrigin,
       }).ok
     : true;
+  const allowUnsafeCrossOriginSilentPairing =
+    resolvedAuth.mode === "none" &&
+    isTruthyEnvValue(process.env.OPENCLAW_ALLOW_UNSAFE_CROSS_ORIGIN_SILENT_PAIRING);
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -194,6 +198,12 @@ export function attachGatewayWsMessageHandler(params: {
       "Loopback connection with non-local Host header. " +
         "Treating it as remote. If you're behind a reverse proxy, " +
         "set gateway.trustedProxies and forward X-Forwarded-For/X-Real-IP.",
+    );
+  }
+  if (allowUnsafeCrossOriginSilentPairing) {
+    logWsControl.warn(
+      "OPENCLAW_ALLOW_UNSAFE_CROSS_ORIGIN_SILENT_PAIRING is enabled. " +
+        "Cross-origin local browser pages can silently auto-pair when gateway auth mode is none.",
     );
   }
 
@@ -662,7 +672,11 @@ export function attachGatewayWsMessageHandler(params: {
               remoteIp: reportedClientIp,
               // Prevent cross-origin browser pages from silently pairing while preserving
               // loopback auto-pairing for non-browser local clients.
-              silent: isLocalClient && reason === "not-paired" && browserOriginTrustedForLocal,
+              // A break-glass env flag can explicitly restore this in auth mode none.
+              silent:
+                isLocalClient &&
+                reason === "not-paired" &&
+                (browserOriginTrustedForLocal || allowUnsafeCrossOriginSilentPairing),
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
