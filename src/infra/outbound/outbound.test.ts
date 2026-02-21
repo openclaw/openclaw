@@ -188,6 +188,12 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
     };
+    const setEntryRetryCount = (id: string, retryCount: number) => {
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      entry.retryCount = retryCount;
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+    };
     const runRecovery = async ({
       deliver,
       log = createLog(),
@@ -232,10 +238,7 @@ describe("delivery-queue", () => {
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
-      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      entry.retryCount = MAX_RETRIES;
-      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+      setEntryRetryCount(id, MAX_RETRIES);
 
       const deliver = vi.fn();
       const { result } = await runRecovery({ deliver });
@@ -336,10 +339,7 @@ describe("delivery-queue", () => {
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
-      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      entry.retryCount = 3;
-      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+      setEntryRetryCount(id, 3);
 
       const deliver = vi.fn().mockResolvedValue([]);
       const delay = vi.fn(async () => {});
@@ -422,30 +422,15 @@ describe("DirectoryCache", () => {
 });
 
 describe("buildOutboundResultEnvelope", () => {
-  it("flattens delivery-only payloads by default", () => {
-    const delivery: OutboundDeliveryJson = {
+  it("formats envelope variants", () => {
+    const whatsappDelivery: OutboundDeliveryJson = {
       channel: "whatsapp",
       via: "gateway",
       to: "+1",
       messageId: "m1",
       mediaUrl: null,
     };
-    expect(buildOutboundResultEnvelope({ delivery })).toEqual(delivery);
-  });
-
-  it("keeps payloads and meta in the envelope", () => {
-    const envelope = buildOutboundResultEnvelope({
-      payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
-      meta: { foo: "bar" },
-    });
-    expect(envelope).toEqual({
-      payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
-      meta: { foo: "bar" },
-    });
-  });
-
-  it("includes delivery when payloads are present", () => {
-    const delivery: OutboundDeliveryJson = {
+    const telegramDelivery: OutboundDeliveryJson = {
       channel: "telegram",
       via: "direct",
       to: "123",
@@ -453,20 +438,7 @@ describe("buildOutboundResultEnvelope", () => {
       mediaUrl: null,
       chatId: "c1",
     };
-    const envelope = buildOutboundResultEnvelope({
-      payloads: [],
-      delivery,
-      meta: { ok: true },
-    });
-    expect(envelope).toEqual({
-      payloads: [],
-      meta: { ok: true },
-      delivery,
-    });
-  });
-
-  it("can keep delivery wrapped when requested", () => {
-    const delivery: OutboundDeliveryJson = {
+    const discordDelivery: OutboundDeliveryJson = {
       channel: "discord",
       via: "gateway",
       to: "channel:C1",
@@ -474,11 +446,41 @@ describe("buildOutboundResultEnvelope", () => {
       mediaUrl: null,
       channelId: "C1",
     };
-    const envelope = buildOutboundResultEnvelope({
-      delivery,
-      flattenDelivery: false,
-    });
-    expect(envelope).toEqual({ delivery });
+    const cases = [
+      {
+        name: "flatten delivery by default",
+        input: { delivery: whatsappDelivery },
+        expected: whatsappDelivery,
+      },
+      {
+        name: "keep payloads + meta",
+        input: {
+          payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
+          meta: { foo: "bar" },
+        },
+        expected: {
+          payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
+          meta: { foo: "bar" },
+        },
+      },
+      {
+        name: "include delivery when payloads exist",
+        input: { payloads: [], delivery: telegramDelivery, meta: { ok: true } },
+        expected: {
+          payloads: [],
+          meta: { ok: true },
+          delivery: telegramDelivery,
+        },
+      },
+      {
+        name: "keep wrapped delivery when flatten disabled",
+        input: { delivery: discordDelivery, flattenDelivery: false },
+        expected: { delivery: discordDelivery },
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(buildOutboundResultEnvelope(testCase.input), testCase.name).toEqual(testCase.expected);
+    }
   });
 });
 
@@ -668,50 +670,9 @@ describe("outbound policy", () => {
 describe("resolveOutboundSessionRoute", () => {
   const baseConfig = {} as OpenClawConfig;
 
-  it("builds Slack thread session keys", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "slack",
-      agentId: "main",
-      target: "channel:C123",
-      replyToId: "456",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:slack:channel:c123:thread:456");
-    expect(route?.from).toBe("slack:channel:C123");
-    expect(route?.to).toBe("channel:C123");
-    expect(route?.threadId).toBe("456");
-  });
-
-  it("uses Telegram topic ids in group session keys", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "telegram",
-      agentId: "main",
-      target: "-100123456:topic:42",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:telegram:group:-100123456:topic:42");
-    expect(route?.from).toBe("telegram:group:-100123456:topic:42");
-    expect(route?.to).toBe("telegram:-100123456");
-    expect(route?.threadId).toBe(42);
-  });
-
-  it("treats Telegram usernames as DMs when unresolved", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "telegram",
-      agentId: "main",
-      target: "@alice",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:telegram:direct:@alice");
-    expect(route?.chatType).toBe("direct");
-  });
-
-  it("honors dmScope identity links", async () => {
-    const cfg = {
+  it("resolves provider-specific session routes", async () => {
+    const perChannelPeerCfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
+    const identityLinksCfg = {
       session: {
         dmScope: "per-peer",
         identityLinks: {
@@ -719,44 +680,7 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
     } as OpenClawConfig;
-
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "discord",
-      agentId: "main",
-      target: "user:123",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:direct:alice");
-  });
-
-  it("strips chat_* prefixes for BlueBubbles group session keys", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: baseConfig,
-      channel: "bluebubbles",
-      agentId: "main",
-      target: "chat_guid:ABC123",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:bluebubbles:group:abc123");
-    expect(route?.from).toBe("group:ABC123");
-  });
-
-  it("treats Zalo Personal DM targets as direct sessions", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "zalouser",
-      agentId: "main",
-      target: "123456",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:zalouser:direct:123456");
-    expect(route?.chatType).toBe("direct");
-  });
-
-  it("uses group session keys for Slack mpim allowlist entries", async () => {
-    const cfg = {
+    const slackMpimCfg = {
       channels: {
         slack: {
           dm: {
@@ -765,16 +689,118 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
     } as OpenClawConfig;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      channel: string;
+      target: string;
+      replyToId?: string;
+      expected: {
+        sessionKey: string;
+        from?: string;
+        to?: string;
+        threadId?: string | number;
+        chatType?: "direct" | "group";
+      };
+    }> = [
+      {
+        name: "Slack thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C123",
+        replyToId: "456",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c123:thread:456",
+          from: "slack:channel:C123",
+          to: "channel:C123",
+          threadId: "456",
+        },
+      },
+      {
+        name: "Telegram topic group",
+        cfg: baseConfig,
+        channel: "telegram",
+        target: "-100123456:topic:42",
+        expected: {
+          sessionKey: "agent:main:telegram:group:-100123456:topic:42",
+          from: "telegram:group:-100123456:topic:42",
+          to: "telegram:-100123456",
+          threadId: 42,
+        },
+      },
+      {
+        name: "Telegram unresolved username DM",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "@alice",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:@alice",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "identity-links per-peer",
+        cfg: identityLinksCfg,
+        channel: "discord",
+        target: "user:123",
+        expected: {
+          sessionKey: "agent:main:direct:alice",
+        },
+      },
+      {
+        name: "BlueBubbles chat_* prefix stripping",
+        cfg: baseConfig,
+        channel: "bluebubbles",
+        target: "chat_guid:ABC123",
+        expected: {
+          sessionKey: "agent:main:bluebubbles:group:abc123",
+          from: "group:ABC123",
+        },
+      },
+      {
+        name: "Zalo Personal DM target",
+        cfg: perChannelPeerCfg,
+        channel: "zalouser",
+        target: "123456",
+        expected: {
+          sessionKey: "agent:main:zalouser:direct:123456",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack mpim allowlist -> group key",
+        cfg: slackMpimCfg,
+        channel: "slack",
+        target: "channel:G123",
+        expected: {
+          sessionKey: "agent:main:slack:group:g123",
+          from: "slack:group:G123",
+        },
+      },
+    ];
 
-    const route = await resolveOutboundSessionRoute({
-      cfg,
-      channel: "slack",
-      agentId: "main",
-      target: "channel:G123",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:slack:group:g123");
-    expect(route?.from).toBe("slack:group:G123");
+    for (const testCase of cases) {
+      const route = await resolveOutboundSessionRoute({
+        cfg: testCase.cfg,
+        channel: testCase.channel,
+        agentId: "main",
+        target: testCase.target,
+        replyToId: testCase.replyToId,
+      });
+      expect(route?.sessionKey, testCase.name).toBe(testCase.expected.sessionKey);
+      if (testCase.expected.from !== undefined) {
+        expect(route?.from, testCase.name).toBe(testCase.expected.from);
+      }
+      if (testCase.expected.to !== undefined) {
+        expect(route?.to, testCase.name).toBe(testCase.expected.to);
+      }
+      if (testCase.expected.threadId !== undefined) {
+        expect(route?.threadId, testCase.name).toBe(testCase.expected.threadId);
+      }
+      if (testCase.expected.chatType !== undefined) {
+        expect(route?.chatType, testCase.name).toBe(testCase.expected.chatType);
+      }
+    }
   });
 });
 
