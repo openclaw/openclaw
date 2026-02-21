@@ -127,9 +127,10 @@ positional file args and path-like tokens, so they can only operate on the incom
 Validation is deterministic from argv shape only (no host filesystem existence checks), which
 prevents file-existence oracle behavior from allow/deny differences.
 File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
-`sort --files0-from`, `wc --files0-from`, `jq -f/--from-file`, `grep -f/--file`).
+`sort --files0-from`, `sort --compress-program`, `wc --files0-from`, `jq -f/--from-file`,
+`grep -f/--file`).
 Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
-behavior (for example `sort -o/--output` and grep recursive flags).
+behavior (for example `sort -o/--output/--compress-program` and grep recursive flags).
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
 used to smuggle file reads.
@@ -141,11 +142,16 @@ Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfi
 (including safe bins or skill auto-allow). Redirections remain unsupported in allowlist mode.
 Command substitution (`$()` / backticks) is rejected during allowlist parsing, including inside
 double quotes; use single quotes if you need literal `$()` text.
+On macOS companion-app approvals, raw shell text containing shell control or expansion syntax
+(`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss unless
+the shell binary itself is allowlisted.
 
 Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 `grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
 their non-stdin workflows.
+For `grep` in safe-bin mode, provide the pattern with `-e`/`--regexp`; positional pattern form is
+rejected so file operands cannot be smuggled as ambiguous positionals.
 
 ## Control UI editing
 

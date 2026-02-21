@@ -146,20 +146,51 @@ function stripOptionalPort(ip: string): string {
   return ip;
 }
 
-export function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
-  const raw = forwardedFor?.split(",")[0]?.trim();
-  if (!raw) {
+function parseIpLiteral(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
     return undefined;
   }
-  return normalizeIp(stripOptionalPort(raw));
+  const stripped = stripOptionalPort(trimmed);
+  const normalized = normalizeIp(stripped);
+  if (!normalized || net.isIP(normalized) === 0) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function parseRealIp(realIp?: string): string | undefined {
-  const raw = realIp?.trim();
-  if (!raw) {
+  return parseIpLiteral(realIp);
+}
+
+function resolveForwardedClientIp(params: {
+  forwardedFor?: string;
+  trustedProxies?: string[];
+}): string | undefined {
+  const { forwardedFor, trustedProxies } = params;
+  if (!trustedProxies?.length) {
     return undefined;
   }
-  return normalizeIp(stripOptionalPort(raw));
+
+  const forwardedChain: string[] = [];
+  for (const entry of forwardedFor?.split(",") ?? []) {
+    const normalized = parseIpLiteral(entry);
+    if (normalized) {
+      forwardedChain.push(normalized);
+    }
+  }
+  if (forwardedChain.length === 0) {
+    return undefined;
+  }
+
+  // Walk right-to-left and return the first untrusted hop.
+  for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
+    const hop = forwardedChain[index];
+    if (!isTrustedProxyAddress(hop, trustedProxies)) {
+      return hop;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -227,11 +258,13 @@ export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: s
   });
 }
 
-export function resolveGatewayClientIp(params: {
+export function resolveClientIp(params: {
   remoteAddr?: string;
   forwardedFor?: string;
   realIp?: string;
   trustedProxies?: string[];
+  /** Default false: only trust X-Real-IP when explicitly enabled. */
+  allowRealIpFallback?: boolean;
 }): string | undefined {
   const remote = normalizeIp(params.remoteAddr);
   if (!remote) {
@@ -243,7 +276,17 @@ export function resolveGatewayClientIp(params: {
   // Fail closed when traffic comes from a trusted proxy but client-origin headers
   // are missing or invalid. Falling back to the proxy's own IP can accidentally
   // treat unrelated requests as local/trusted.
-  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp);
+  const forwardedIp = resolveForwardedClientIp({
+    forwardedFor: params.forwardedFor,
+    trustedProxies: params.trustedProxies,
+  });
+  if (forwardedIp) {
+    return forwardedIp;
+  }
+  if (params.allowRealIpFallback) {
+    return parseRealIp(params.realIp);
+  }
+  return undefined;
 }
 
 export function isLocalGatewayAddress(ip: string | undefined): boolean {

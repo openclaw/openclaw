@@ -47,7 +47,16 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
+- Deployments where mutually untrusted/adversarial operators share one gateway host and config
 - Prompt injection attacks
+
+## Deployment Assumptions
+
+OpenClaw security guidance assumes:
+
+- The host where OpenClaw runs is within a trusted OS/admin boundary.
+- Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
+- A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
 
 ## Plugin Trust Boundary
 

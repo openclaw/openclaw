@@ -67,6 +67,37 @@ pnpm ios:open
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Share extension deep-link forwarding into the connected gateway session.
 
+## Location Automation Use Case (Testing)
+
+Use this for automation signals ("I moved", "I arrived", "I left"), not as a keep-awake mechanism.
+
+- Product intent:
+  - movement-aware automations driven by iOS location events
+  - example: arrival/exit geofence, significant movement, visit detection
+- Non-goal:
+  - continuous GPS polling just to keep the app alive
+
+Test path to include in QA runs:
+
+1. Enable location permission in app:
+   - set `Always` permission
+   - verify background location capability is enabled in the build profile
+2. Background the app and trigger movement:
+   - walk/drive enough for a significant location update, or cross a configured geofence
+3. Validate gateway side effects:
+   - node reconnect/wake if needed
+   - expected location/movement event arrives at gateway
+   - automation trigger executes once (no duplicate storm)
+4. Validate resource impact:
+   - no sustained high thermal state
+   - no excessive background battery drain over a short observation window
+
+Pass criteria:
+
+- movement events are delivered reliably enough for automation UX
+- no location-driven reconnect spam loops
+- app remains stable after repeated background/foreground transitions
+
 ## Known Issues / Limitations / Problems
 
 - Foreground-first: iOS can suspend sockets in background; reconnect recovery is still being tuned.

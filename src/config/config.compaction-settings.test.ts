@@ -38,10 +38,41 @@ describe("config compaction settings", () => {
 
       expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
       expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBeUndefined();
+      expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBeUndefined();
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(false);
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe("Write notes.");
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
+    });
+  });
+
+  it("preserves pi compaction override values", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  reserveTokens: 15_000,
+                  keepRecentTokens: 12_000,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+      expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBe(15_000);
+      expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBe(12_000);
     });
   });
 

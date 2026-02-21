@@ -88,14 +88,11 @@ export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
   ssrfPolicy?: SsrFPolicy;
-  navigationChecked?: boolean;
 }): Promise<{ targetId: string }> {
-  if (!opts.navigationChecked) {
-    await assertBrowserNavigationAllowed({
-      url: opts.url,
-      ...withBrowserNavigationPolicy(opts.ssrfPolicy),
-    });
-  }
+  await assertBrowserNavigationAllowed({
+    url: opts.url,
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  });
 
   const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
     appendCdpPath(opts.cdpUrl, "/json/version"),

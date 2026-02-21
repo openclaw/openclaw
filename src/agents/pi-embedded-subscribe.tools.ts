@@ -4,6 +4,7 @@ import { MEDIA_TOKEN_RE } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
@@ -127,6 +128,58 @@ export function extractToolResultText(result: unknown): string | undefined {
     return undefined;
   }
   return texts.join("\n");
+}
+
+// Core tool names that are allowed to emit local MEDIA: paths.
+// Plugin/MCP tools are intentionally excluded to prevent untrusted file reads.
+const TRUSTED_TOOL_RESULT_MEDIA = new Set([
+  "agents_list",
+  "apply_patch",
+  "browser",
+  "canvas",
+  "cron",
+  "edit",
+  "exec",
+  "gateway",
+  "image",
+  "memory_get",
+  "memory_search",
+  "message",
+  "nodes",
+  "process",
+  "read",
+  "session_status",
+  "sessions_history",
+  "sessions_list",
+  "sessions_send",
+  "sessions_spawn",
+  "subagents",
+  "tts",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
+const HTTP_URL_RE = /^https?:\/\//i;
+
+export function isToolResultMediaTrusted(toolName?: string): boolean {
+  if (!toolName) {
+    return false;
+  }
+  const normalized = normalizeToolName(toolName);
+  return TRUSTED_TOOL_RESULT_MEDIA.has(normalized);
+}
+
+export function filterToolResultMediaUrls(
+  toolName: string | undefined,
+  mediaUrls: string[],
+): string[] {
+  if (mediaUrls.length === 0) {
+    return mediaUrls;
+  }
+  if (isToolResultMediaTrusted(toolName)) {
+    return mediaUrls;
+  }
+  return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
 }
 
 /**

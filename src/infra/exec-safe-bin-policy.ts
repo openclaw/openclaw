@@ -91,7 +91,10 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     ],
   },
   grep: {
-    maxPositional: 1,
+    // Keep grep stdin-only: pattern must come from -e/--regexp.
+    // Allowing one positional is ambiguous because -e consumes the pattern and
+    // frees the positional slot for a filename.
+    maxPositional: 0,
     valueFlags: [
       "--regexp",
       "--file",
@@ -148,7 +151,6 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--field-separator",
       "--buffer-size",
       "--temporary-directory",
-      "--compress-program",
       "--parallel",
       "--batch-size",
       "--random-source",
@@ -160,7 +162,8 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-T",
       "-o",
     ],
-    blockedFlags: ["--files0-from", "--output", "-o"],
+    // --compress-program can invoke an external executable and breaks stdin-only guarantees.
+    blockedFlags: ["--compress-program", "--files0-from", "--output", "-o"],
   },
   uniq: {
     maxPositional: 0,

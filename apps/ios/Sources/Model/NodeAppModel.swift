@@ -42,6 +42,8 @@ private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
 final class NodeAppModel {
     private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
     private let pushWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "PushWake")
+    private let locationWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "LocationWake")
+    private let watchReplyLogger = Logger(subsystem: "ai.openclaw.ios", category: "WatchReply")
     enum CameraHUDKind {
         case photo
         case recording
@@ -103,6 +105,13 @@ final class NodeAppModel {
     private var backgroundTalkKeptActive = false
     private var backgroundedAt: Date?
     private var reconnectAfterBackgroundArmed = false
+    private var backgroundGraceTaskID: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var backgroundGraceTaskTimer: Task<Void, Never>?
+    private var backgroundReconnectSuppressed = false
+    private var backgroundReconnectLeaseUntil: Date?
+    private var lastSignificantLocationWakeAt: Date?
+    private var queuedWatchReplies: [WatchQuickReplyEvent] = []
+    private var seenWatchReplyIds = Set<String>()
 
     private var gatewayConnected = false
     private var operatorConnected = false
@@ -149,6 +158,11 @@ final class NodeAppModel {
         self.talkMode = talkMode
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         GatewayDiagnostics.bootstrap()
+        self.watchMessagingService.setReplyHandler { [weak self] event in
+            Task { @MainActor in
+                await self?.handleWatchQuickReply(event)
+            }
+        }
 
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
@@ -271,6 +285,7 @@ final class NodeAppModel {
             self.stopGatewayHealthMonitor()
             self.backgroundedAt = Date()
             self.reconnectAfterBackgroundArmed = true
+            self.beginBackgroundConnectionGracePeriod()
             // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
@@ -278,6 +293,8 @@ final class NodeAppModel {
             self.backgroundTalkSuspended = self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
         case .active, .inactive:
             self.isBackgrounded = false
+            self.endBackgroundConnectionGracePeriod(reason: "scene_foreground")
+            self.clearBackgroundReconnectSuppression(reason: "scene_foreground")
             if self.operatorConnected {
                 self.startGatewayHealthMonitor()
             }
@@ -329,7 +346,96 @@ final class NodeAppModel {
             }
         @unknown default:
             self.isBackgrounded = false
+            self.endBackgroundConnectionGracePeriod(reason: "scene_unknown")
+            self.clearBackgroundReconnectSuppression(reason: "scene_unknown")
         }
+    }
+
+    private func beginBackgroundConnectionGracePeriod(seconds: TimeInterval = 25) {
+        self.grantBackgroundReconnectLease(seconds: seconds, reason: "scene_background_grace")
+        self.endBackgroundConnectionGracePeriod(reason: "restart")
+        let taskID = UIApplication.shared.beginBackgroundTask(withName: "gateway-background-grace") { [weak self] in
+            Task { @MainActor in
+                self?.suppressBackgroundReconnect(
+                    reason: "background_grace_expired",
+                    disconnectIfNeeded: true)
+                self?.endBackgroundConnectionGracePeriod(reason: "expired")
+            }
+        }
+        guard taskID != .invalid else {
+            self.pushWakeLogger.info("Background grace unavailable: beginBackgroundTask returned invalid")
+            return
+        }
+        self.backgroundGraceTaskID = taskID
+        self.pushWakeLogger.info("Background grace started seconds=\(seconds, privacy: .public)")
+        self.backgroundGraceTaskTimer = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            await MainActor.run {
+                self.suppressBackgroundReconnect(reason: "background_grace_timer", disconnectIfNeeded: true)
+                self.endBackgroundConnectionGracePeriod(reason: "timer")
+            }
+        }
+    }
+
+    private func endBackgroundConnectionGracePeriod(reason: String) {
+        self.backgroundGraceTaskTimer?.cancel()
+        self.backgroundGraceTaskTimer = nil
+        guard self.backgroundGraceTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(self.backgroundGraceTaskID)
+        self.backgroundGraceTaskID = .invalid
+        self.pushWakeLogger.info("Background grace ended reason=\(reason, privacy: .public)")
+    }
+
+    private func grantBackgroundReconnectLease(seconds: TimeInterval, reason: String) {
+        guard self.isBackgrounded else { return }
+        let leaseSeconds = max(5, seconds)
+        let leaseUntil = Date().addingTimeInterval(leaseSeconds)
+        if let existing = self.backgroundReconnectLeaseUntil, existing > leaseUntil {
+            // Keep the longer lease if one is already active.
+        } else {
+            self.backgroundReconnectLeaseUntil = leaseUntil
+        }
+        let wasSuppressed = self.backgroundReconnectSuppressed
+        self.backgroundReconnectSuppressed = false
+        self.pushWakeLogger.info(
+            "Background reconnect lease reason=\(reason, privacy: .public) seconds=\(leaseSeconds, privacy: .public) wasSuppressed=\(wasSuppressed, privacy: .public)")
+    }
+
+    private func suppressBackgroundReconnect(reason: String, disconnectIfNeeded: Bool) {
+        guard self.isBackgrounded else { return }
+        let hadLease = self.backgroundReconnectLeaseUntil != nil
+        let changed = hadLease || !self.backgroundReconnectSuppressed
+        self.backgroundReconnectLeaseUntil = nil
+        self.backgroundReconnectSuppressed = true
+        guard changed else { return }
+        self.pushWakeLogger.info(
+            "Background reconnect suppressed reason=\(reason, privacy: .public) disconnect=\(disconnectIfNeeded, privacy: .public)")
+        guard disconnectIfNeeded else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.operatorGateway.disconnect()
+            await self.nodeGateway.disconnect()
+            await MainActor.run {
+                self.operatorConnected = false
+                self.gatewayConnected = false
+                self.talkMode.updateGatewayConnected(false)
+                if self.isBackgrounded {
+                    self.gatewayStatusText = "Background idle"
+                    self.gatewayServerName = nil
+                    self.gatewayRemoteAddress = nil
+                    self.showLocalCanvasOnDisconnect()
+                }
+            }
+        }
+    }
+
+    private func clearBackgroundReconnectSuppression(reason: String) {
+        let changed = self.backgroundReconnectSuppressed || self.backgroundReconnectLeaseUntil != nil
+        self.backgroundReconnectSuppressed = false
+        self.backgroundReconnectLeaseUntil = nil
+        guard changed else { return }
+        self.pushWakeLogger.info("Background reconnect cleared reason=\(reason, privacy: .public)")
     }
 
     func setVoiceWakeEnabled(_ enabled: Bool) {
@@ -568,7 +674,7 @@ final class NodeAppModel {
                 } catch {
                     if let gatewayError = error as? GatewayResponseError {
                         let lower = gatewayError.message.lowercased()
-                        if lower.contains("unauthorized role") {
+                        if lower.contains("unauthorized role") || lower.contains("missing scope") {
                             await self.setGatewayHealthMonitorDisabled(true)
                             return true
                         }
@@ -601,7 +707,7 @@ final class NodeAppModel {
         } catch {
             if let gatewayError = error as? GatewayResponseError {
                 let lower = gatewayError.message.lowercased()
-                if lower.contains("unauthorized role") {
+                if lower.contains("unauthorized role") || lower.contains("missing scope") {
                     await self.setGatewayHealthMonitorDisabled(true)
                     return
                 }
@@ -1510,9 +1616,16 @@ private extension NodeAppModel {
             do {
                 let result = try await self.watchMessagingService.sendNotification(
                     id: req.id,
-                    title: title,
-                    body: body,
-                    priority: params.priority)
+                    params: params)
+                if result.queuedForDelivery || !result.deliveredImmediately {
+                    let invokeID = req.id
+                    Task { @MainActor in
+                        await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
+                            invokeID: invokeID,
+                            params: params,
+                            sendResult: result)
+                    }
+                }
                 let payload = OpenClawWatchNotifyPayload(
                     deliveredImmediately: result.deliveredImmediately,
                     queuedForDelivery: result.queuedForDelivery,
@@ -1725,6 +1838,23 @@ private extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
     }
 
+    func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
+        guard self.isBackgrounded else { return }
+        guard !self.backgroundReconnectSuppressed else { return }
+        guard let leaseUntil = self.backgroundReconnectLeaseUntil else {
+            self.suppressBackgroundReconnect(reason: "\(source):no_lease", disconnectIfNeeded: true)
+            return
+        }
+        if Date() >= leaseUntil {
+            self.suppressBackgroundReconnect(reason: "\(source):lease_expired", disconnectIfNeeded: true)
+        }
+    }
+
+    func shouldPauseReconnectLoopInBackground(source: String) -> Bool {
+        self.refreshBackgroundReconnectSuppressionIfNeeded(source: source)
+        return self.isBackgrounded && self.backgroundReconnectSuppressed
+    }
+
     func startOperatorGatewayLoop(
         url: URL,
         stableID: String,
@@ -1747,6 +1877,7 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
+                if self.shouldPauseReconnectLoopInBackground(source: "operator_loop") { try? await Task.sleep(nanoseconds: 2_000_000_000); continue }
                 if await self.isOperatorConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1773,6 +1904,7 @@ private extension NodeAppModel {
                             }
                             GatewayDiagnostics.log(
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
+                            await self.talkMode.reloadConfig()
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
@@ -1834,6 +1966,7 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
+                if self.shouldPauseReconnectLoopInBackground(source: "node_loop") { try? await Task.sleep(nanoseconds: 2_000_000_000); continue }
                 if await self.isGatewayConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1883,7 +2016,15 @@ private extension NodeAppModel {
                             }
                             await self.showA2UIOnConnectIfNeeded()
                             await self.onNodeGatewayConnected()
-                            await MainActor.run { SignificantLocationMonitor.startIfNeeded(locationService: self.locationService, locationMode: self.locationMode(), gateway: self.nodeGateway) }
+                            await MainActor.run {
+                                SignificantLocationMonitor.startIfNeeded(
+                                    locationService: self.locationService,
+                                    locationMode: self.locationMode(),
+                                    gateway: self.nodeGateway,
+                                    beforeSend: { [weak self] in
+                                        await self?.handleSignificantLocationWakeIfNeeded()
+                                    })
+                            }
                         },
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
@@ -2015,9 +2156,7 @@ private extension NodeAppModel {
             clientId: clientId,
             clientMode: "ui",
             clientDisplayName: displayName,
-            // Operator traffic should authenticate via shared gateway auth only.
-            // Including device identity here can trigger duplicate pairing flows.
-            includeDeviceIdentity: false)
+            includeDeviceIdentity: true)
     }
 
     func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
@@ -2132,15 +2271,146 @@ extension NodeAppModel {
     /// Back-compat hook retained for older gateway-connect flows.
     func onNodeGatewayConnected() async {
         await self.registerAPNsTokenIfNeeded()
+        await self.flushQueuedWatchRepliesIfConnected()
+    }
+
+    private func handleWatchQuickReply(_ event: WatchQuickReplyEvent) async {
+        let replyId = event.replyId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let actionId = event.actionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if replyId.isEmpty || actionId.isEmpty {
+            self.watchReplyLogger.info("watch reply dropped: missing replyId/actionId")
+            return
+        }
+
+        if self.seenWatchReplyIds.contains(replyId) {
+            self.watchReplyLogger.debug(
+                "watch reply deduped replyId=\(replyId, privacy: .public)")
+            return
+        }
+        self.seenWatchReplyIds.insert(replyId)
+
+        if await !self.isGatewayConnected() {
+            self.queuedWatchReplies.append(event)
+            self.watchReplyLogger.info(
+                "watch reply queued replyId=\(replyId, privacy: .public) action=\(actionId, privacy: .public)")
+            return
+        }
+
+        await self.forwardWatchReplyToAgent(event)
+    }
+
+    private func flushQueuedWatchRepliesIfConnected() async {
+        guard await self.isGatewayConnected() else { return }
+        guard !self.queuedWatchReplies.isEmpty else { return }
+
+        let pending = self.queuedWatchReplies
+        self.queuedWatchReplies.removeAll()
+        for event in pending {
+            await self.forwardWatchReplyToAgent(event)
+        }
+    }
+
+    private func forwardWatchReplyToAgent(_ event: WatchQuickReplyEvent) async {
+        let sessionKey = event.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveSessionKey = (sessionKey?.isEmpty == false) ? sessionKey : self.mainSessionKey
+        let message = Self.makeWatchReplyAgentMessage(event)
+        let link = AgentDeepLink(
+            message: message,
+            sessionKey: effectiveSessionKey,
+            thinking: "low",
+            deliver: false,
+            to: nil,
+            channel: nil,
+            timeoutSeconds: nil,
+            key: event.replyId)
+        do {
+            try await self.sendAgentRequest(link: link)
+            self.watchReplyLogger.info(
+                "watch reply forwarded replyId=\(event.replyId, privacy: .public) action=\(event.actionId, privacy: .public)")
+            self.openChatRequestID &+= 1
+        } catch {
+            self.watchReplyLogger.error(
+                "watch reply forwarding failed replyId=\(event.replyId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            self.queuedWatchReplies.insert(event, at: 0)
+        }
+    }
+
+    private static func makeWatchReplyAgentMessage(_ event: WatchQuickReplyEvent) -> String {
+        let actionLabel = event.actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptId = event.promptId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transport = event.transport.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = actionLabel?.isEmpty == false ? actionLabel! : event.actionId
+        var lines: [String] = []
+        lines.append("Watch reply: \(summary)")
+        lines.append("promptId=\(promptId.isEmpty ? "unknown" : promptId)")
+        lines.append("actionId=\(event.actionId)")
+        lines.append("replyId=\(event.replyId)")
+        if !transport.isEmpty {
+            lines.append("transport=\(transport)")
+        }
+        if let sentAtMs = event.sentAtMs {
+            lines.append("sentAtMs=\(sentAtMs)")
+        }
+        if let note = event.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            lines.append("note=\(note)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func handleSilentPushWake(_ userInfo: [AnyHashable: Any]) async -> Bool {
+        let wakeId = Self.makePushWakeAttemptID()
         guard Self.isSilentPushPayload(userInfo) else {
-            self.pushWakeLogger.info("Ignored APNs payload: not silent push")
+            self.pushWakeLogger.info("Ignored APNs payload wakeId=\(wakeId, privacy: .public): not silent push")
             return false
         }
-        self.pushWakeLogger.info("Silent push received; attempting reconnect if needed")
-        return await self.reconnectGatewaySessionsForSilentPushIfNeeded()
+        let pushKind = Self.openclawPushKind(userInfo)
+        self.pushWakeLogger.info(
+            "Silent push received wakeId=\(wakeId, privacy: .public) kind=\(pushKind, privacy: .public) backgrounded=\(self.isBackgrounded, privacy: .public) autoReconnect=\(self.gatewayAutoReconnectEnabled, privacy: .public)")
+        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        self.pushWakeLogger.info(
+            "Silent push outcome wakeId=\(wakeId, privacy: .public) applied=\(result.applied, privacy: .public) reason=\(result.reason, privacy: .public) durationMs=\(result.durationMs, privacy: .public)")
+        return result.applied
+    }
+
+    func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
+        let wakeId = Self.makePushWakeAttemptID()
+        self.pushWakeLogger.info(
+            "Background refresh wake received wakeId=\(wakeId, privacy: .public) trigger=\(trigger, privacy: .public) backgrounded=\(self.isBackgrounded, privacy: .public) autoReconnect=\(self.gatewayAutoReconnectEnabled, privacy: .public)")
+        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        self.pushWakeLogger.info(
+            "Background refresh wake outcome wakeId=\(wakeId, privacy: .public) applied=\(result.applied, privacy: .public) reason=\(result.reason, privacy: .public) durationMs=\(result.durationMs, privacy: .public)")
+        return result.applied
+    }
+
+    func handleSignificantLocationWakeIfNeeded() async {
+        let wakeId = Self.makePushWakeAttemptID()
+        let now = Date()
+        let throttleWindowSeconds: TimeInterval = 180
+
+        if await self.isGatewayConnected() {
+            self.locationWakeLogger.info(
+                "Location wake no-op wakeId=\(wakeId, privacy: .public): already connected")
+            return
+        }
+        if let last = self.lastSignificantLocationWakeAt,
+           now.timeIntervalSince(last) < throttleWindowSeconds
+        {
+            self.locationWakeLogger.info(
+                "Location wake throttled wakeId=\(wakeId, privacy: .public) elapsedSec=\(now.timeIntervalSince(last), privacy: .public)")
+            return
+        }
+        self.lastSignificantLocationWakeAt = now
+
+        self.locationWakeLogger.info(
+            "Location wake begin wakeId=\(wakeId, privacy: .public) backgrounded=\(self.isBackgrounded, privacy: .public) autoReconnect=\(self.gatewayAutoReconnectEnabled, privacy: .public)")
+        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        self.locationWakeLogger.info(
+            "Location wake trigger wakeId=\(wakeId, privacy: .public) applied=\(result.applied, privacy: .public) reason=\(result.reason, privacy: .public) durationMs=\(result.durationMs, privacy: .public)")
+
+        guard result.applied else { return }
+        let connected = await self.waitForGatewayConnection(timeoutMs: 5000, pollMs: 250)
+        self.locationWakeLogger.info(
+            "Location wake post-check wakeId=\(wakeId, privacy: .public) connected=\(connected, privacy: .public)")
     }
 
     func updateAPNsDeviceToken(_ tokenData: Data) {
@@ -2210,28 +2480,89 @@ extension NodeAppModel {
         return false
     }
 
-    private func reconnectGatewaySessionsForSilentPushIfNeeded() async -> Bool {
-        guard self.isBackgrounded else {
-            self.pushWakeLogger.info("Wake no-op: app not backgrounded")
-            return false
+    private static func makePushWakeAttemptID() -> String {
+        let raw = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        return String(raw.prefix(8))
+    }
+
+    private static func openclawPushKind(_ userInfo: [AnyHashable: Any]) -> String {
+        if let payload = userInfo["openclaw"] as? [String: Any],
+           let kind = payload["kind"] as? String
+        {
+            let trimmed = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
         }
-        guard self.gatewayAutoReconnectEnabled else {
-            self.pushWakeLogger.info("Wake no-op: auto reconnect disabled")
-            return false
+        if let payload = userInfo["openclaw"] as? [AnyHashable: Any],
+           let kind = payload["kind"] as? String
+        {
+            let trimmed = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
         }
-        guard self.activeGatewayConnectConfig != nil else {
-            self.pushWakeLogger.info("Wake no-op: no active gateway config")
-            return false
+        return "unknown"
+    }
+
+    private struct SilentPushWakeAttemptResult {
+        var applied: Bool
+        var reason: String
+        var durationMs: Int
+    }
+
+    private func waitForGatewayConnection(timeoutMs: Int, pollMs: Int) async -> Bool {
+        let clampedTimeoutMs = max(0, timeoutMs)
+        let pollIntervalNs = UInt64(max(50, pollMs)) * 1_000_000
+        let deadline = Date().addingTimeInterval(Double(clampedTimeoutMs) / 1000.0)
+        while Date() < deadline {
+            if await self.isGatewayConnected() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: pollIntervalNs)
+        }
+        return await self.isGatewayConnected()
+    }
+
+    private func reconnectGatewaySessionsForSilentPushIfNeeded(
+        wakeId: String
+    ) async -> SilentPushWakeAttemptResult {
+        let startedAt = Date()
+        let makeResult: (Bool, String) -> SilentPushWakeAttemptResult = { applied, reason in
+            let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            return SilentPushWakeAttemptResult(
+                applied: applied,
+                reason: reason,
+                durationMs: max(0, durationMs))
         }
 
+        guard self.isBackgrounded else {
+            self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): app not backgrounded")
+            return makeResult(false, "not_backgrounded")
+        }
+        guard self.gatewayAutoReconnectEnabled else {
+            self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): auto reconnect disabled")
+            return makeResult(false, "auto_reconnect_disabled")
+        }
+        guard let cfg = self.activeGatewayConnectConfig else {
+            self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
+            return makeResult(false, "no_active_gateway_config")
+        }
+
+        self.pushWakeLogger.info(
+            "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
+        self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
         await self.operatorGateway.disconnect()
         await self.nodeGateway.disconnect()
         self.operatorConnected = false
         self.gatewayConnected = false
         self.gatewayStatusText = "Reconnecting…"
         self.talkMode.updateGatewayConnected(false)
-        self.pushWakeLogger.info("Wake reconnect trigger applied")
-        return true
+        self.applyGatewayConnectConfig(cfg)
+        self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
+        return makeResult(true, "reconnect_triggered")
+    }
+}
+
+extension NodeAppModel {
+    func _bridgeConsumeMirroredWatchReply(_ event: WatchQuickReplyEvent) async {
+        await self.handleWatchQuickReply(event)
     }
 }
 
@@ -2271,6 +2602,10 @@ extension NodeAppModel {
 
     func _test_applyTalkModeSync(enabled: Bool, phase: String? = nil) {
         self.applyTalkModeSync(enabled: enabled, phase: phase)
+    }
+
+    func _test_queuedWatchReplyCount() -> Int {
+        self.queuedWatchReplies.count
     }
 }
 #endif
