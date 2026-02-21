@@ -261,6 +261,139 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         return route.sessionKey;
       },
+      dispatchButtonClick: async (opts) => {
+        const channelInfo = await resolveChannelInfo(opts.channelId);
+        const kind = channelKind(channelInfo?.type);
+        const chatType = channelChatType(kind);
+        const teamId = channelInfo?.team_id ?? undefined;
+        const channelName = channelInfo?.name ?? undefined;
+        const channelDisplay = channelInfo?.display_name ?? channelName ?? opts.channelId;
+        const route = core.channel.routing.resolveAgentRoute({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+          teamId,
+          peer: {
+            kind,
+            id: kind === "direct" ? botUserId : opts.channelId,
+          },
+        });
+        const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
+        const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
+        const ctxPayload = core.channel.reply.finalizeInboundContext({
+          Body: bodyText,
+          BodyForAgent: bodyText,
+          RawBody: bodyText,
+          CommandBody: bodyText,
+          From:
+            kind === "direct"
+              ? `mattermost:${opts.userId}`
+              : kind === "group"
+                ? `mattermost:group:${opts.channelId}`
+                : `mattermost:channel:${opts.channelId}`,
+          To: to,
+          SessionKey: route.sessionKey,
+          AccountId: route.accountId,
+          ChatType: chatType,
+          ConversationLabel: `mattermost:${opts.userName}`,
+          GroupSubject: kind !== "direct" ? channelDisplay : undefined,
+          GroupChannel: channelName ? `#${channelName}` : undefined,
+          GroupSpace: teamId,
+          SenderName: opts.userName,
+          SenderId: opts.userId,
+          Provider: "mattermost" as const,
+          Surface: "mattermost" as const,
+          MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
+          WasMentioned: true,
+          CommandAuthorized: true,
+          OriginatingChannel: "mattermost" as const,
+          OriginatingTo: to,
+        });
+
+        const textLimit = core.channel.text.resolveTextChunkLimit(
+          cfg,
+          "mattermost",
+          account.accountId,
+          { fallbackLimit: account.textChunkLimit ?? 4000 },
+        );
+        const tableMode = core.channel.text.resolveMarkdownTableMode({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+        });
+        const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+          cfg,
+          agentId: route.agentId,
+          channel: "mattermost",
+          accountId: account.accountId,
+        });
+        const typingCallbacks = createTypingCallbacks({
+          start: () => sendTypingIndicator(opts.channelId),
+          onStartError: (err) => {
+            logTypingFailure({
+              log: (message) => logger.debug?.(message),
+              channel: "mattermost",
+              target: opts.channelId,
+              error: err,
+            });
+          },
+        });
+        const { dispatcher, replyOptions, markDispatchIdle } =
+          core.channel.reply.createReplyDispatcherWithTyping({
+            ...prefixOptions,
+            humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+            deliver: async (payload: ReplyPayload) => {
+              const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+              const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+              if (mediaUrls.length === 0) {
+                const chunkMode = core.channel.text.resolveChunkMode(
+                  cfg,
+                  "mattermost",
+                  account.accountId,
+                );
+                const chunks = core.channel.text.chunkMarkdownTextWithMode(
+                  text,
+                  textLimit,
+                  chunkMode,
+                );
+                for (const chunk of chunks.length > 0 ? chunks : [text]) {
+                  if (!chunk) continue;
+                  await sendMessageMattermost(to, chunk, {
+                    accountId: account.accountId,
+                  });
+                }
+              } else {
+                let first = true;
+                for (const mediaUrl of mediaUrls) {
+                  const caption = first ? text : "";
+                  first = false;
+                  await sendMessageMattermost(to, caption, {
+                    accountId: account.accountId,
+                    mediaUrl,
+                  });
+                }
+              }
+              runtime.log?.(`delivered button-click reply to ${to}`);
+            },
+            onError: (err, info) => {
+              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
+            },
+            onReplyStart: typingCallbacks.onReplyStart,
+          });
+
+        await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            onModelSelected,
+          },
+        });
+        markDispatchIdle();
+      },
       log: (msg) => runtime.log?.(msg),
     }),
     pluginId: "mattermost",
