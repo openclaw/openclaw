@@ -145,6 +145,25 @@ export async function readDockerContainerLabel(
   return raw;
 }
 
+export async function readDockerContainerEnvVar(
+  containerName: string,
+  envVar: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.startsWith(`${envVar}=`)) {
+      return line.slice(envVar.length + 1);
+    }
+  }
+  return null;
+}
+
 export async function readDockerPort(containerName: string, port: number) {
   const result = await execDocker(["port", containerName, `${port}/tcp`], {
     allowFailure: true,

@@ -95,13 +95,15 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Enable live stream preview via message edits (default: true). */
+  streaming?: boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for Telegram stream previews in `streamMode: "block"`. */
+  /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Telegram stream preview mode (off|partial|block). Default: partial. */
+  /** @deprecated Legacy key; migrated automatically to `streaming` boolean. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */

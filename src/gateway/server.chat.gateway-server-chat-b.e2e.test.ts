@@ -150,6 +150,7 @@ describe("gateway server chat", () => {
         let capturedOpts: GetReplyOptions | undefined;
         spy.mockImplementationOnce(async (_ctx: unknown, opts?: GetReplyOptions) => {
           capturedOpts = opts;
+          return undefined;
         });
 
         const sendRes = await rpcReq(ws, "chat.send", {
@@ -314,6 +315,7 @@ describe("gateway server chat", () => {
             { once: true },
           );
         });
+        return undefined;
       });
 
       const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 8_000);

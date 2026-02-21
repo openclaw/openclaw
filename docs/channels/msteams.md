@@ -38,7 +38,7 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
-## Quick setup (beginner)
+## Onboarding
 
 1. Install the Microsoft Teams plugin.
 2. Create an **Azure Bot** (App ID + client secret + tenant ID).
@@ -236,7 +236,7 @@ This is often easier than hand-editing JSON manifests.
 2. Find the bot in Teams and send a DM
 3. Check gateway logs for incoming activity
 
-## Setup (minimal text-only)
+## Onboarding (minimal)
 
 1. **Install the Microsoft Teams plugin**
    - From npm: `openclaw plugins install @openclaw/msteams`

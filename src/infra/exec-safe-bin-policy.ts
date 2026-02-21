@@ -91,7 +91,10 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     ],
   },
   grep: {
-    maxPositional: 1,
+    // Keep grep stdin-only: pattern must come from -e/--regexp.
+    // Allowing one positional is ambiguous because -e consumes the pattern and
+    // frees the positional slot for a filename.
+    maxPositional: 0,
     valueFlags: [
       "--regexp",
       "--file",
