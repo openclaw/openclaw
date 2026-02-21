@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { logInfo } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -8,6 +9,9 @@ import {
   registerAutoUpdateOptions,
   handleAutoUpdateOptions,
   displayAutoUpdateStatus,
+  loadAutoUpdateConfig,
+  recordUpdateCheck,
+  getNextCheckTime,
 } from "./update-cli/auto-update.js";
 import {
   type UpdateCommandOptions,
@@ -94,6 +98,21 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         if (autoUpdateHandled) {
           return;
         }
+
+        const config = await loadAutoUpdateConfig();
+
+        if (config.enabled && config.interval !== "manual") {
+          const nextCheck = await getNextCheckTime();
+          if (nextCheck && new Date() < nextCheck) {
+            logInfo(
+              `Auto-update not due yet (interval: ${config.interval}). Skipping check.`,
+              defaultRuntime,
+            );
+            await displayAutoUpdateStatus();
+            return;
+          }
+        }
+
         await updateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
@@ -102,6 +121,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: opts.timeout as string | undefined,
           yes: Boolean(opts.yes),
         });
+
+        await recordUpdateCheck();
+        await displayAutoUpdateStatus();
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

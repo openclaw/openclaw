@@ -12,11 +12,12 @@
  * src/cli/update-cli/shared.ts
  */
 
-import { existsSync, mkdirSync } from "fs";
 import fs from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { Option, type Command } from "commander";
 import { resolveStateDir } from "../../config/paths.js";
+import { logInfo, logSuccess, logWarn } from "../../logger.js";
+import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 
 // Auto-update config file
@@ -38,8 +39,9 @@ export async function loadAutoUpdateConfig(): Promise<AutoUpdateConfig> {
   } catch (err) {
     const error = err as Error & { code?: string };
     if (error && error.code !== "ENOENT") {
-      console.warn(
-        theme.warn(`Failed to load auto-update config: ${error.message}. Using defaults.`),
+      logWarn(
+        `Failed to load auto-update config: ${error.message}. Using defaults.`,
+        defaultRuntime,
       );
     }
   }
@@ -61,8 +63,10 @@ export async function saveAutoUpdateConfig(config: AutoUpdateConfig): Promise<vo
   const configPath = getAutoUpdateConfigPath();
   const dir = dirname(configPath);
 
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  try {
+    await fs.access(dir);
+  } catch {
+    await fs.mkdir(dir, { recursive: true });
   }
 
   await fs.writeFile(configPath, JSON.stringify(config, null, 2));
@@ -116,27 +120,25 @@ export async function handleAutoUpdateOptions(
 
   if (options.auto !== undefined) {
     config.enabled = options.auto === "on";
-    console.log(theme.success("✓ ") + `Auto-update ${config.enabled ? "enabled" : "disabled"}`);
+    logSuccess(`Auto-update ${config.enabled ? "enabled" : "disabled"}`, defaultRuntime);
     changed = true;
   }
 
   if (options.interval !== undefined) {
     config.interval = options.interval;
-    console.log(theme.success("✓ ") + `Check interval set to ${config.interval}`);
+    logSuccess(`Check interval set to ${config.interval}`, defaultRuntime);
     changed = true;
   }
 
   if (options.skip !== undefined) {
     config.skipVersions = options.skip.split(",").map((v) => v.trim());
-    console.log(theme.success("✓ ") + `Skip versions: ${config.skipVersions.join(", ")}`);
+    logSuccess(`Skip versions: ${config.skipVersions.join(", ")}`, defaultRuntime);
     changed = true;
   }
 
   if (options.notify !== undefined) {
     config.notifyOnUpdate = options.notify === "on";
-    console.log(
-      theme.success("✓ ") + `Notifications ${config.notifyOnUpdate ? "enabled" : "disabled"}`,
-    );
+    logSuccess(`Notifications ${config.notifyOnUpdate ? "enabled" : "disabled"}`, defaultRuntime);
     changed = true;
   }
 
@@ -151,15 +153,22 @@ export async function handleAutoUpdateOptions(
 export async function displayAutoUpdateStatus(): Promise<void> {
   const config = await loadAutoUpdateConfig();
 
-  console.log("\n" + theme.heading("Auto-Update Settings"));
-  console.log("─".repeat(40));
-  console.log(`  Enabled:    ${config.enabled ? theme.success("ON") : theme.warn("OFF")}`);
-  console.log(`  Interval:  ${config.interval}`);
-  console.log(
-    `  Skip:      ${config.skipVersions.length ? config.skipVersions.join(", ") : "none"}`,
+  logInfo("\n" + theme.heading("Auto-Update Settings"), defaultRuntime);
+  logInfo("─".repeat(40), defaultRuntime);
+  logInfo(
+    `  Enabled:    ${config.enabled ? theme.success("ON") : theme.warn("OFF")}`,
+    defaultRuntime,
   );
-  console.log(`  Notify:    ${config.notifyOnUpdate ? theme.success("ON") : theme.warn("OFF")}`);
-  console.log("─".repeat(40) + "\n");
+  logInfo(`  Interval:  ${config.interval}`, defaultRuntime);
+  logInfo(
+    `  Skip:      ${config.skipVersions.length ? config.skipVersions.join(", ") : "none"}`,
+    defaultRuntime,
+  );
+  logInfo(
+    `  Notify:    ${config.notifyOnUpdate ? theme.success("ON") : theme.warn("OFF")}`,
+    defaultRuntime,
+  );
+  logInfo("─".repeat(40) + "\n", defaultRuntime);
 }
 
 // Check if should skip version
