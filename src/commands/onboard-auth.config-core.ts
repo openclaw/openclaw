@@ -60,6 +60,7 @@ import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  XAI_EXTRA_MODELS,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_ID,
@@ -378,6 +379,15 @@ export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
   return applyAgentDefaultModelPrimary(next, HUGGINGFACE_DEFAULT_MODEL_REF);
 }
 
+/**
+ * Apply xAI provider configuration using the chat completions API mode.
+ * xAI supports two API modes:
+ * - openai-completions (default, chat completions API)
+ * - openai-responses (Responses API with native web_search, x_search, code_execution tools)
+ *
+ * Registers grok-4 (default), grok-3, grok-3-fast, grok-3-mini, grok-3-mini-fast,
+ * and grok-2-1212 so all Grok generations work in sub-agents without silent crashes.
+ */
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[XAI_DEFAULT_MODEL_REF] = {
@@ -387,12 +397,12 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 
   const defaultModel = buildXaiModelDefinition();
 
-  return applyProviderConfigWithDefaultModel(cfg, {
+  return applyProviderConfigWithDefaultModels(cfg, {
     agentModels: models,
     providerId: "xai",
     api: "openai-completions",
     baseUrl: XAI_BASE_URL,
-    defaultModel,
+    defaultModels: [defaultModel, ...XAI_EXTRA_MODELS],
     defaultModelId: XAI_DEFAULT_MODEL_ID,
   });
 }
@@ -400,6 +410,30 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXaiProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, XAI_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply xAI provider configuration using the Responses API mode.
+ * This enables native xAI server-side tools (web_search, x_search, code_execution).
+ * Registers the same full set of Grok models as applyXaiProviderConfig.
+ */
+export function applyXaiResponsesApiConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[XAI_DEFAULT_MODEL_REF] = {
+    ...models[XAI_DEFAULT_MODEL_REF],
+    alias: models[XAI_DEFAULT_MODEL_REF]?.alias ?? "Grok",
+  };
+
+  const defaultModel = buildXaiModelDefinition();
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "xai",
+    api: "openai-responses",
+    baseUrl: XAI_BASE_URL,
+    defaultModels: [defaultModel, ...XAI_EXTRA_MODELS],
+    defaultModelId: XAI_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyAuthProfileConfig(

@@ -180,3 +180,51 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
   };
 }
+
+export const XAI_EXTRA_MODELS: ModelDefinitionConfig[] = [
+  {
+    id: "grok-3",
+    name: "Grok 3",
+    reasoning: false,
+    input: ["text"],
+    cost: XAI_DEFAULT_COST,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "grok-3-fast",
+    name: "Grok 3 Fast",
+    reasoning: false,
+    input: ["text"],
+    cost: XAI_DEFAULT_COST,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "grok-3-mini",
+    name: "Grok 3 Mini",
+    reasoning: false,
+    input: ["text"],
+    cost: XAI_DEFAULT_COST,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "grok-3-mini-fast",
+    name: "Grok 3 Mini Fast",
+    reasoning: false,
+    input: ["text"],
+    cost: XAI_DEFAULT_COST,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "grok-2-1212",
+    name: "Grok 2",
+    reasoning: false,
+    input: ["text"],
+    cost: XAI_DEFAULT_COST,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  },
+];
