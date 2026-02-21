@@ -114,4 +114,67 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+
+  // Slack SDK wrapper pattern tests
+  describe("Slack SDK .original wrapper", () => {
+    it("returns true for Slack SDK RequestError wrapping ENOTFOUND", () => {
+      // This is exactly how @slack/web-api wraps network errors
+      const originalError = Object.assign(new Error("getaddrinfo ENOTFOUND slack.com"), {
+        code: "ENOTFOUND",
+      });
+      const slackError = Object.assign(
+        new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
+        {
+          code: "slack_webapi_request_error",
+          original: originalError,
+        },
+      );
+      expect(isTransientNetworkError(slackError)).toBe(true);
+    });
+
+    it("returns true for Slack SDK RequestError wrapping EAI_AGAIN", () => {
+      const originalError = Object.assign(new Error("getaddrinfo EAI_AGAIN slack.com"), {
+        code: "EAI_AGAIN",
+      });
+      const slackError = Object.assign(
+        new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"),
+        {
+          code: "slack_webapi_request_error",
+          original: originalError,
+        },
+      );
+      expect(isTransientNetworkError(slackError)).toBe(true);
+    });
+
+    it("returns true for Slack SDK RequestError wrapping ETIMEDOUT", () => {
+      const originalError = Object.assign(new Error("connect ETIMEDOUT"), {
+        code: "ETIMEDOUT",
+      });
+      const slackError = Object.assign(new Error("A request error occurred: connect ETIMEDOUT"), {
+        code: "slack_webapi_request_error",
+        original: originalError,
+      });
+      expect(isTransientNetworkError(slackError)).toBe(true);
+    });
+
+    it("returns false for Slack SDK error without transient original", () => {
+      // Slack platform error (not a network issue)
+      const slackError = Object.assign(new Error("An API error occurred: invalid_auth"), {
+        code: "slack_webapi_platform_error",
+        data: { error: "invalid_auth" },
+      });
+      expect(isTransientNetworkError(slackError)).toBe(false);
+    });
+
+    it("returns false for Slack SDK RequestError with non-network original", () => {
+      const originalError = Object.assign(new Error("Some other error"), {
+        code: "SOME_OTHER_CODE",
+      });
+      const slackError = Object.assign(new Error("A request error occurred: Some other error"), {
+        code: "slack_webapi_request_error",
+        original: originalError,
+      });
+      expect(isTransientNetworkError(slackError)).toBe(false);
+    });
+  });
 });

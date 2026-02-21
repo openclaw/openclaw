@@ -89,6 +89,13 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
+        // Slack SDK wrapper pattern - ENOTFOUND wrapped in .original
+        Object.assign(new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"), {
+          code: "slack_webapi_request_error",
+          original: Object.assign(new Error("getaddrinfo ENOTFOUND slack.com"), {
+            code: "ENOTFOUND",
+          }),
+        }),
       ];
 
       for (const transientErr of transientCases) {
@@ -100,6 +107,30 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         expect.stringContaining("fetch failed"),
+      );
+    });
+
+    it("does not exit on Slack SDK wrapped network errors and logs inner code", () => {
+      // Simulates exactly what @slack/web-api does when DNS fails
+      const originalError = Object.assign(new Error("getaddrinfo ENOTFOUND slack.com"), {
+        code: "ENOTFOUND",
+      });
+      const slackError = Object.assign(
+        new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
+        {
+          code: "slack_webapi_request_error",
+          original: originalError,
+        },
+      );
+
+      exitCalls = [];
+      process.emit("unhandledRejection", slackError, Promise.resolve());
+
+      expect(exitCalls).toEqual([]);
+      // Should log with the inner code visible
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing) [ENOTFOUND]:",
+        expect.stringContaining("A request error occurred"),
       );
     });
 

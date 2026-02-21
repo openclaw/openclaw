@@ -90,6 +90,12 @@ export function isTransientNetworkError(err: unknown): boolean {
   }
 
   const code = extractErrorCodeWithCause(err);
+
+  // Never suppress Slack platform errors (auth failures, etc.) even if wrapped
+  if (code === "slack_webapi_platform_error") {
+    return false;
+  }
+
   if (code && TRANSIENT_NETWORK_CODES.has(code)) {
     return true;
   }
@@ -109,12 +115,54 @@ export function isTransientNetworkError(err: unknown): boolean {
     return isTransientNetworkError(cause);
   }
 
+  // Check .original (used by @slack/web-api to wrap underlying errors)
+  if (typeof err === "object" && err !== null && "original" in err) {
+    const original = (err as { original?: unknown }).original;
+    if (original && original !== err) {
+      return isTransientNetworkError(original);
+    }
+  }
+
   // AggregateError may wrap multiple causes
   if (err instanceof AggregateError && err.errors?.length) {
     return err.errors.some((e) => isTransientNetworkError(e));
   }
 
   return false;
+}
+
+/**
+ * Extracts the transient network error code from an error, including wrapped errors.
+ * Returns the first matching code found in the error chain.
+ */
+function extractTransientNetworkCode(err: unknown): string | undefined {
+  if (!err) {
+    return undefined;
+  }
+
+  const code = extractErrorCodeWithCause(err);
+  if (code && TRANSIENT_NETWORK_CODES.has(code)) {
+    return code;
+  }
+
+  // Check .cause
+  const cause = getErrorCause(err);
+  if (cause && cause !== err) {
+    const causeCode = extractTransientNetworkCode(cause);
+    if (causeCode) {
+      return causeCode;
+    }
+  }
+
+  // Check .original (Slack SDK)
+  if (typeof err === "object" && err !== null && "original" in err) {
+    const original = (err as { original?: unknown }).original;
+    if (original && original !== err) {
+      return extractTransientNetworkCode(original);
+    }
+  }
+
+  return undefined;
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
@@ -166,8 +214,9 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     if (isTransientNetworkError(reason)) {
+      const innerCode = extractTransientNetworkCode(reason);
       console.warn(
-        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        `[openclaw] Non-fatal unhandled rejection (continuing)${innerCode ? ` [${innerCode}]` : ""}:`,
         formatUncaughtError(reason),
       );
       return;
