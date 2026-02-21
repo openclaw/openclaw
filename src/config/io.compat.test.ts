@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
@@ -68,6 +68,59 @@ describe("config io paths", () => {
       });
       expect(io.configPath).toBe(customPath);
       expect(io.loadConfig().gateway?.port).toBe(20002);
+    });
+  });
+
+  it("falls back to valid .bak config when primary config is invalid", async () => {
+    await withTempHome(async (home) => {
+      const warn = vi.fn();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const backupPath = `${configPath}.bak`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        backupPath,
+        JSON.stringify(
+          {
+            gateway: {
+              port: 19999,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  mode: "auto",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: {
+          warn,
+          error: vi.fn(),
+        },
+      });
+      const cfg = io.loadConfig();
+      expect(cfg.gateway?.port).toBe(19999);
+      expect(warn).toHaveBeenCalledWith(
+        `Primary config invalid at ${configPath}; loaded backup config from ${backupPath}.`,
+      );
     });
   });
 });

@@ -526,6 +526,136 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
+  const applyRuntimeConfigPipeline = (config: OpenClawConfig): OpenClawConfig => {
+    warnIfConfigFromFuture(config, deps.logger);
+    const cfg = applyModelDefaults(
+      applyCompactionDefaults(
+        applyContextPruningDefaults(
+          applyAgentDefaults(
+            applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(config))),
+          ),
+        ),
+      ),
+    );
+    normalizeConfigPaths(cfg);
+
+    const duplicates = findDuplicateAgentDirs(cfg, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
+    if (duplicates.length > 0) {
+      throw new DuplicateAgentDirError(duplicates);
+    }
+
+    applyConfigEnvVars(cfg, deps.env);
+    const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
+    if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
+      loadShellEnvFallback({
+        enabled: true,
+        env: deps.env,
+        expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+        logger: deps.logger,
+        timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
+      });
+    }
+
+    return applyConfigOverrides(cfg);
+  };
+
+  const readAndValidateConfig = (targetPath: string): OpenClawConfig => {
+    const raw = deps.fs.readFileSync(targetPath, "utf-8");
+    const parsed = deps.json5.parse(raw);
+    const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
+      resolveConfigIncludesForRead(parsed, targetPath, deps),
+      deps.env,
+    );
+    warnOnConfigMiskeys(resolvedConfig, deps.logger);
+    if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
+      return {};
+    }
+    const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
+    if (preValidationDuplicates.length > 0) {
+      throw new DuplicateAgentDirError(preValidationDuplicates);
+    }
+    const validated = validateConfigObjectWithPlugins(resolvedConfig);
+    if (!validated.ok) {
+      const details = validated.issues
+        .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+        .join("\n");
+      const error = new Error("Invalid config");
+      (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
+      (error as { code?: string; details?: string }).details = details;
+      throw error;
+    }
+    if (validated.warnings.length > 0) {
+      const details = validated.warnings
+        .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+        .join("\n");
+      deps.logger.warn(`Config warnings:\\n${details}`);
+    }
+    return applyRuntimeConfigPipeline(validated.config);
+  };
+
+  const listBackupCandidates = (): string[] => {
+    const dir = path.dirname(configPath);
+    const base = path.basename(configPath);
+    let names: string[] = [];
+    try {
+      names = deps.fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
+    const prefix = `${base}.bak`;
+    const candidates = names
+      .filter((name) => name === prefix || name.startsWith(`${prefix}.`))
+      .map((name) => path.join(dir, name));
+    const safeMtimeMs = (candidate: string): number => {
+      try {
+        return deps.fs.statSync(candidate).mtimeMs;
+      } catch {
+        // Backup files can disappear between directory scan and stat.
+        return Number.NEGATIVE_INFINITY;
+      }
+    };
+    candidates.sort((a, b) => {
+      const aTime = safeMtimeMs(a);
+      const bTime = safeMtimeMs(b);
+      return bTime - aTime;
+    });
+    return candidates;
+  };
+
+  const loadFromBackupOnInvalidPrimary = (primaryErrorDetails?: string): OpenClawConfig | null => {
+    for (const candidate of listBackupCandidates()) {
+      try {
+        const loaded = readAndValidateConfig(candidate);
+        deps.logger.warn(
+          `Primary config invalid at ${configPath}; loaded backup config from ${candidate}.`,
+        );
+        return loaded;
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code === "INVALID_CONFIG") {
+          continue;
+        }
+        if (err instanceof DuplicateAgentDirError) {
+          throw err;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        deps.logger.warn(`Failed to load backup config candidate ${candidate}: ${message}`);
+      }
+    }
+    if (primaryErrorDetails) {
+      deps.logger.error(
+        `No valid config backup found for ${configPath}. Last validation error:\n${primaryErrorDetails}`,
+      );
+    }
+    return null;
+  };
+
   function loadConfig(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -541,84 +671,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
         return {};
       }
-      const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const parsed = deps.json5.parse(raw);
-      const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
-        resolveConfigIncludesForRead(parsed, configPath, deps),
-        deps.env,
-      );
-      warnOnConfigMiskeys(resolvedConfig, deps.logger);
-      if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
-        return {};
-      }
-      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
-        env: deps.env,
-        homedir: deps.homedir,
-      });
-      if (preValidationDuplicates.length > 0) {
-        throw new DuplicateAgentDirError(preValidationDuplicates);
-      }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig);
-      if (!validated.ok) {
-        const details = validated.issues
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
-          .join("\n");
-        if (!loggedInvalidConfigs.has(configPath)) {
-          loggedInvalidConfigs.add(configPath);
-          deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
-        }
-        const error = new Error("Invalid config");
-        (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
-        (error as { code?: string; details?: string }).details = details;
-        throw error;
-      }
-      if (validated.warnings.length > 0) {
-        const details = validated.warnings
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
-          .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
-      }
-      warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = applyModelDefaults(
-        applyCompactionDefaults(
-          applyContextPruningDefaults(
-            applyAgentDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
-            ),
-          ),
-        ),
-      );
-      normalizeConfigPaths(cfg);
-
-      const duplicates = findDuplicateAgentDirs(cfg, {
-        env: deps.env,
-        homedir: deps.homedir,
-      });
-      if (duplicates.length > 0) {
-        throw new DuplicateAgentDirError(duplicates);
-      }
-
-      applyConfigEnvVars(cfg, deps.env);
-
-      const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
-      if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
-        loadShellEnvFallback({
-          enabled: true,
-          env: deps.env,
-          expectedKeys: SHELL_ENV_EXPECTED_KEYS,
-          logger: deps.logger,
-          timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
-        });
-      }
-
-      return applyConfigOverrides(cfg);
+      return readAndValidateConfig(configPath);
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);
         throw err;
       }
-      const error = err as { code?: string };
+      const error = err as { code?: string; details?: string };
       if (error?.code === "INVALID_CONFIG") {
+        if (!loggedInvalidConfigs.has(configPath)) {
+          loggedInvalidConfigs.add(configPath);
+          deps.logger.error(`Invalid config at ${configPath}:\n${error.details ?? "(no details)"}`);
+        }
+        const fromBackup = loadFromBackupOnInvalidPrimary(error.details);
+        if (fromBackup) {
+          return fromBackup;
+        }
         return {};
       }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
