@@ -63,7 +63,7 @@ import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
-import { createThreadBindingManager } from "./thread-bindings.js";
+import { createNoopThreadBindingManager, createThreadBindingManager } from "./thread-bindings.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -116,6 +116,24 @@ function resolveThreadBindingSessionTtlMs(params: {
     normalizeThreadBindingTtlHours(params.sessionTtlHoursRaw) ??
     DEFAULT_THREAD_BINDING_TTL_HOURS;
   return Math.floor(ttlHours * 60 * 60 * 1000);
+}
+
+function normalizeThreadBindingsEnabled(raw: unknown): boolean | undefined {
+  if (typeof raw !== "boolean") {
+    return undefined;
+  }
+  return raw;
+}
+
+function resolveThreadBindingsEnabled(params: {
+  channelEnabledRaw: unknown;
+  sessionEnabledRaw: unknown;
+}): boolean {
+  return (
+    normalizeThreadBindingsEnabled(params.channelEnabledRaw) ??
+    normalizeThreadBindingsEnabled(params.sessionEnabledRaw) ??
+    true
+  );
 }
 
 function formatThreadBindingSessionTtlLabel(ttlMs: number): string {
@@ -228,6 +246,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const discordCfg = account.config;
+  const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
+  const discordAccountThreadBindings =
+    cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(discordCfg.proxy, runtime);
   const dmConfig = discordCfg.dm;
   let guildEntries = discordCfg.guilds;
@@ -258,8 +279,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
   const threadBindingSessionTtlMs = resolveThreadBindingSessionTtlMs({
-    channelTtlHoursRaw: discordCfg.threadBindings?.ttlHours,
+    channelTtlHoursRaw:
+      discordAccountThreadBindings?.ttlHours ?? discordRootThreadBindings?.ttlHours,
     sessionTtlHoursRaw: cfg.session?.threadBindings?.ttlHours,
+  });
+  const threadBindingsEnabled = resolveThreadBindingsEnabled({
+    channelEnabledRaw: discordAccountThreadBindings?.enabled ?? discordRootThreadBindings?.enabled,
+    sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
   });
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
@@ -295,7 +321,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadSessionTtl=${formatThreadBindingSessionTtlLabel(threadBindingSessionTtlMs)}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadSessionTtl=${formatThreadBindingSessionTtlLabel(threadBindingSessionTtlMs)}`,
     );
   }
 
@@ -330,11 +356,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
-  const threadBindings = createThreadBindingManager({
-    accountId: account.accountId,
-    token,
-    sessionTtlMs: threadBindingSessionTtlMs,
-  });
+  const threadBindings = threadBindingsEnabled
+    ? createThreadBindingManager({
+        accountId: account.accountId,
+        token,
+        sessionTtlMs: threadBindingSessionTtlMs,
+      })
+    : createNoopThreadBindingManager(account.accountId);
   const commands: BaseCommand[] = commandSpecs.map((spec) =>
     createDiscordNativeCommand({
       command: spec,
@@ -587,4 +615,5 @@ export const __testing = {
   createDiscordGatewayPlugin,
   dedupeSkillCommandsForDiscord,
   resolveDiscordRestFetch,
+  resolveThreadBindingsEnabled,
 };

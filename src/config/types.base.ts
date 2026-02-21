@@ -86,6 +86,11 @@ export type SessionResetByTypeConfig = {
 
 export type SessionThreadBindingsConfig = {
   /**
+   * Master switch for thread-bound session routing features.
+   * Channel/provider keys can override this default.
+   */
+  enabled?: boolean;
+  /**
    * Auto-unfocus TTL for thread-bound sessions (hours).
    * Set to 0 to disable. Default: 24.
    */

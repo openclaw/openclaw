@@ -144,6 +144,12 @@ export type DiscordUiConfig = {
 
 export type DiscordThreadBindingsConfig = {
   /**
+   * Enable Discord thread binding features (/focus, thread-bound delivery, and
+   * thread-bound subagent session flows). Overrides session.threadBindings.enabled
+   * when set.
+   */
+  enabled?: boolean;
+  /**
    * Auto-unfocus TTL for thread-bound sessions in hours.
    * Set to 0 to disable TTL. Default: 24.
    */

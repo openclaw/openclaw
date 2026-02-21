@@ -68,6 +68,7 @@ export const SessionSchema = z
       .optional(),
     threadBindings: z
       .object({
+        enabled: z.boolean().optional(),
         ttlHours: z.number().nonnegative().optional(),
       })
       .strict()
