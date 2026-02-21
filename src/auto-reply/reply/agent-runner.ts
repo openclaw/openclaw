@@ -63,6 +63,25 @@ const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
+const TRANSIENT_STATUS_PATTERNS: RegExp[] = [
+  /^\s*(?:running|checking|verifying|testing|attempting|executing|restarting|syncing|deploying|validating|loading|processing)\b/i,
+  /^\s*(?:正在|检查中|验证中|测试中|尝试中|执行中|重启中|同步中|部署中|加载中|处理中)/,
+];
+
+function isLikelyTransientStatusText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 120) {
+    return false;
+  }
+  if (/\.{3}$|…$/.test(trimmed)) {
+    return true;
+  }
+  if (/[。！？.!?]$/.test(trimmed)) {
+    return false;
+  }
+  return TRANSIENT_STATUS_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
 function hasUnbackedReminderCommitment(text: string): boolean {
   const normalized = text.toLowerCase();
   if (!normalized.trim()) {
@@ -696,7 +715,16 @@ export async function runReplyAgent(params: {
     if (verboseNotices.length > 0) {
       finalPayloads = [...verboseNotices, ...finalPayloads];
     }
-    if (responseUsageLine) {
+    // Show usage for normal final replies (even short ones), but suppress it for
+    // transient operational status blurbs like "Running..." / "Checking...".
+    const shouldAppendUsageLine = guardedReplyPayloads.some((payload) => {
+      const text = payload.text?.trim();
+      if (!text) {
+        return false;
+      }
+      return !isLikelyTransientStatusText(text);
+    });
+    if (responseUsageLine && shouldAppendUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
