@@ -61,6 +61,12 @@
       },
       "allowInsecureHttp": {
         "type": "boolean"
+      },
+      "digestPublishSessionKeys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       }
     }
   },
@@ -93,6 +99,9 @@
     },
     "allowInsecureHttp": {
       "label": "Allow Insecure HTTP"
+    },
+    "digestPublishSessionKeys": {
+      "label": "Academic Digest Publish Session Keys"
     }
   }
 }
