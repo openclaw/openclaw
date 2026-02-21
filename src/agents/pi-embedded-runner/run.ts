@@ -592,12 +592,61 @@ export async function runEmbeddedPiAgent(
               const { ConsolidationService } =
                 await import("../../services/memory/ConsolidationService.js");
               const { GraphService } = await import("../../services/memory/GraphService.js");
+              const { SubconsciousService } =
+                await import("../../services/memory/SubconsciousService.js");
               const { SessionManager } = await import("@mariozechner/pi-coding-agent");
 
               const gUrl = mindConfig?.config?.graphiti?.baseUrl || "http://localhost:8001";
               const gs = new GraphService(gUrl, debug);
               const cons = new ConsolidationService(gs, debug);
               const globalSessionId = "global-user-memory";
+
+              // Resolve narrative model from config or fallback to chat model
+              const narrativeProvider = mindConfig?.config?.narrative?.provider || params.provider;
+              const narrativeModel = mindConfig?.config?.narrative?.model || params.model;
+
+              let narrativeLLM = model;
+
+              // If a different model is configured for narratives, resolve it
+              if (narrativeProvider !== params.provider || narrativeModel !== params.model) {
+                if (debug) {
+                  process.stderr.write(
+                    `🎨 [MIND] Narrative uses custom model: ${narrativeProvider}/${narrativeModel} (chat: ${params.provider}/${params.model})\n`,
+                  );
+                }
+
+                const { resolveModel } = await import("./model.js");
+                const narrativeProviderParam = narrativeProvider || params.provider || "";
+                const narrativeModelParam = narrativeModel || params.model || "";
+                const resolved = resolveModel(
+                  narrativeProviderParam,
+                  narrativeModelParam,
+                  params.agentDir ?? resolveOpenClawAgentDir(),
+                  params.config,
+                );
+
+                if (resolved.model) {
+                  narrativeLLM = resolved.model;
+                } else if (debug) {
+                  process.stderr.write(
+                    `⚠️ [MIND] Could not resolve narrative model: ${resolved.error}. Using chat model.\n`,
+                  );
+                }
+              } else if (debug) {
+                process.stderr.write(
+                  `🤖 [MIND] Using chat model for narrative: ${params.provider}/${params.model}\n`,
+                );
+              }
+
+              // Create subconscious agent using the factory
+              const { createSubconsciousAgent } = await import("./subconscious-agent.js");
+              const subconsciousAgent = createSubconsciousAgent({
+                model: narrativeLLM,
+                authStorage,
+                modelRegistry,
+                debug,
+                autoBootstrapHistory: mindConfig?.config?.narrative?.autoBootstrapHistory ?? false,
+              });
 
               // 1. Bootstrap historical episodes from legacy memory files
               try {
@@ -621,55 +670,6 @@ export async function runEmbeddedPiAgent(
                   await import("../../config/sessions/paths.js");
                 const sessionsDir = resolveSessionTranscriptsDir();
                 const safeTokenLimit = Math.floor((ctxInfo.tokens || 50000) * 0.5);
-
-                // Resolve narrative model from config or fallback to chat model
-                const narrativeProvider =
-                  mindConfig?.config?.narrative?.provider || params.provider;
-                const narrativeModel = mindConfig?.config?.narrative?.model || params.model;
-
-                let narrativeLLM = model;
-
-                // If a different model is configured for narratives, resolve it
-                if (narrativeProvider !== params.provider || narrativeModel !== params.model) {
-                  if (debug) {
-                    process.stderr.write(
-                      `🎨 [MIND] Narrative uses custom model: ${narrativeProvider}/${narrativeModel} (chat: ${params.provider}/${params.model})\n`,
-                    );
-                  }
-
-                  const { resolveModel } = await import("./model.js");
-                  const narrativeProviderParam = narrativeProvider || params.provider || "";
-                  const narrativeModelParam = narrativeModel || params.model || "";
-                  const resolved = resolveModel(
-                    narrativeProviderParam,
-                    narrativeModelParam,
-                    params.agentDir ?? resolveOpenClawAgentDir(),
-                    params.config,
-                  );
-
-                  if (resolved.model) {
-                    narrativeLLM = resolved.model;
-                  } else if (debug) {
-                    process.stderr.write(
-                      `⚠️ [MIND] Could not resolve narrative model: ${resolved.error}. Using chat model.\n`,
-                    );
-                  }
-                } else if (debug) {
-                  process.stderr.write(
-                    `🤖 [MIND] Using chat model for narrative: ${params.provider}/${params.model}\n`,
-                  );
-                }
-
-                // Create subconscious agent using the factory
-                const { createSubconsciousAgent } = await import("./subconscious-agent.js");
-                const subconsciousAgent = createSubconsciousAgent({
-                  model: narrativeLLM,
-                  authStorage,
-                  modelRegistry,
-                  debug,
-                  autoBootstrapHistory:
-                    mindConfig?.config?.narrative?.autoBootstrapHistory ?? false,
-                });
 
                 await cons.syncGlobalNarrative(
                   sessionsDir,
@@ -715,30 +715,20 @@ export async function runEmbeddedPiAgent(
               const skipResonance = process.env.MIND_SKIP_RESONANCE === "1";
               if (!skipResonance) {
                 try {
-                  // Search for relevant memories (nodes in the knowledge graph)
-                  const flashbacks = await gs.searchNodes(globalSessionId, params.prompt);
+                  const subsvc = new SubconsciousService(gs, debug);
+                  const flashbackText = await subsvc.getFlashback(
+                    globalSessionId,
+                    params.prompt,
+                    subconsciousAgent,
+                  );
 
-                  if (flashbacks && flashbacks.length > 0) {
-                    const flashbacksText = flashbacks
-                      .map((fb: unknown, idx: number) => {
-                        const record =
-                          fb && typeof fb === "object"
-                            ? (fb as { content?: unknown; text?: unknown })
-                            : undefined;
-                        const text =
-                          typeof record?.content === "string"
-                            ? record.content
-                            : typeof record?.text === "string"
-                              ? record.text
-                              : "";
-                        return `[Flashback ${idx + 1}] ${text}`;
-                      })
-                      .join("\n\n");
-
-                    mindExtraSystemPrompt = `\n\n# Resonant Memories\n\nThese are relevant memories from your past that resonate with the current conversation:\n\n${flashbacksText}\n\nUse these memories to inform your response, but don't explicitly mention them unless directly relevant.`;
+                  if (flashbackText) {
+                    mindExtraSystemPrompt = `\n\n${flashbackText}\n\nUse these impressions to inform your response if they resonate, but don't explicitly mention them unless directly relevant.`;
 
                     if (debug) {
-                      process.stderr.write(`✨ [MIND] ${flashbacks.length} flashbacks retrieved\n`);
+                      process.stderr.write(
+                        `🌠 [MIND] Resonance injected (${flashbackText.length} chars)\n`,
+                      );
                     }
                   } else if (debug) {
                     process.stderr.write(`🔍 [MIND] No relevant flashbacks found\n`);

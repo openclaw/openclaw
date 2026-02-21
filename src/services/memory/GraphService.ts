@@ -363,15 +363,26 @@ export class GraphService {
   }
 
   /**
+   * Sanitizes queries to prevent RediSearch syntax errors on punctuation.
+   */
+  private sanitizeQuery(query: string): string {
+    return query
+      .replace(/[^\p{L}\p{N}\s\-_]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
    * Breadth-First Search (BFS) using search_nodes tool.
    * This retrieves node-level summaries and context.
    */
   async searchNodes(sessionId: string | string[], query: string): Promise<MemoryResult[]> {
     const groupIds = Array.isArray(sessionId) ? sessionId : [sessionId];
+    const safeQuery = this.sanitizeQuery(query);
 
     try {
       const data = await this.callMcpTool("search_nodes", {
-        query,
+        query: safeQuery,
         group_ids: groupIds,
         max_nodes: 50,
       });
@@ -450,10 +461,11 @@ export class GraphService {
    */
   async searchFacts(sessionId: string | string[], query: string): Promise<MemoryResult[]> {
     const groupIds = Array.isArray(sessionId) ? sessionId : [sessionId];
+    const safeQuery = this.sanitizeQuery(query);
 
     try {
       const data = await this.callMcpTool("search_memory_facts", {
-        query,
+        query: safeQuery,
         group_ids: groupIds,
       });
 

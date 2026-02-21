@@ -474,7 +474,7 @@ Text: "${currentPrompt}"`;
     const seenContent = new Set<string>();
 
     for (const r of deduplicated) {
-      if (finalLines.length >= 3) {
+      if (finalLines.length >= 5) {
         break;
       }
       let content = r.message?.content || r.text || r.content || "";
