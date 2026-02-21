@@ -34,7 +34,7 @@ private fun CameraFlash(token: Long) {
     alpha = 0f
   }
 
-  if(alpha > 0f){
+  if (alpha > 0f){
     Box(
       modifier =
         Modifier
