@@ -49,6 +49,7 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      '402 "Insufficient USD or Diem balance to complete request"',
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -91,6 +92,7 @@ describe("isBillingErrorMessage", () => {
       '{"status":402,"type":"error"}',
       '{"code":402,"message":"payment required"}',
       '{"error":{"code":402,"message":"billing hard limit reached"}}',
+      '402 "Insufficient USD or Diem balance to complete request"',
     ];
     for (const sample of realErrors) {
       expect(isBillingErrorMessage(sample)).toBe(true);

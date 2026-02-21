@@ -600,12 +600,13 @@ const ERROR_PATTERNS = {
     /\bunhandled stop reason:\s*abort\b/i,
   ],
   billing: [
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
+    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment|^\s*402\s*["'{[]/i,
     "payment required",
     "insufficient credits",
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    "insufficient usd or diem balance",
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
