@@ -22,6 +22,15 @@ interface EmailConfig {
   };
   checkInterval?: number;
   allowedSenders?: string[];
+  maxAttachmentSize?: number; // Maximum attachment size in bytes (default: 10MB)
+}
+
+export interface EmailAttachment {
+  filename: string;
+  contentType: string;
+  size: number;
+  content: Buffer;
+  contentId?: string;
 }
 
 interface EmailProcessorState {
@@ -47,6 +56,7 @@ class EmailAccountRuntime {
     body: string,
     messageId: string,
     uid: number,
+    attachments: EmailAttachment[],
   ) => Promise<void>;
 
   private imapConnection: Imap | null = null;
@@ -69,6 +79,7 @@ class EmailAccountRuntime {
       body: string,
       messageId: string,
       uid: number,
+      attachments: EmailAttachment[],
     ) => Promise<void>,
   ) {
     this.accountId = accountId;
@@ -192,7 +203,7 @@ class EmailAccountRuntime {
   }
 
   private createSmtpTransporter(): nodemailer.Transporter {
-    return nodemailer.createTransport({
+    const transporter = nodemailer.createTransport({
       host: this.config.smtp.host,
       port: this.config.smtp.port,
       secure: this.config.smtp.secure,
@@ -200,7 +211,10 @@ class EmailAccountRuntime {
         user: this.config.smtp.user,
         pass: this.config.smtp.password,
       },
-    });
+    } as any);
+
+    // Set timeout via socket option
+    return transporter;
   }
 
   private openInbox(cb: (err: Error | null, box?: any) => void): void {
@@ -330,6 +344,20 @@ class EmailAccountRuntime {
             const body = parsed.text || parsed.html || "";
             const messageId = parsed.messageId || "";
 
+            // Extract attachments
+            const attachments: EmailAttachment[] = [];
+            if (parsed.attachments && parsed.attachments.length > 0) {
+              for (const att of parsed.attachments) {
+                attachments.push({
+                  filename: att.filename || "unknown",
+                  contentType: att.contentType,
+                  size: att.content.length,
+                  content: att.content,
+                  contentId: (att as any).contentId, // Type cast as mailparser types may not include this
+                });
+              }
+            }
+
             // Skip if already processed
             if (this.isMessageProcessed(messageId)) {
               console.log(
@@ -377,6 +405,65 @@ class EmailAccountRuntime {
             console.log(`[EMAIL PLUGIN] [${this.accountId}] Message-ID: ${messageId}`);
             console.log(`[EMAIL PLUGIN] [${this.accountId}] UID: ${uid}`);
             console.log(`[EMAIL PLUGIN] [${this.accountId}] Date: ${parsed.date?.toISOString()}`);
+            console.log(`[EMAIL PLUGIN] [${this.accountId}] Attachments: ${attachments.length}`);
+
+            // Check attachment sizes
+            const maxAttachmentSize = this.config.maxAttachmentSize || 10 * 1024 * 1024; // Default: 10MB
+            const oversizedAttachments = attachments.filter((att) => att.size > maxAttachmentSize);
+
+            if (oversizedAttachments.length > 0) {
+              console.log(
+                `[EMAIL PLUGIN] [${this.accountId}] ⚠️  Oversized attachments detected: ${oversizedAttachments.map((a) => `${a.filename} (${(a.size / 1024 / 1024).toFixed(2)}MB)`).join(", ")}`,
+              );
+
+              // Mark as in-progress to prevent duplicate processing
+              this.messagesInProgress.add(messageId);
+
+              // Process through sender queue to send rejection message
+              if (uid !== null) {
+                const messageUid = uid;
+                this.processEmailWithSenderQueue(fromEmail, async () => {
+                  try {
+                    // Send rejection email
+                    const rejectionMessage = `Your email contains attachments that exceed the size limit.\n\nOversized attachment(s):\n${oversizedAttachments.map((a) => `- ${a.filename} (${(a.size / 1024 / 1024).toFixed(2)}MB, limit: ${(maxAttachmentSize / 1024 / 1024).toFixed(2)}MB)`).join("\n")}\n\nPlease resend your email with smaller attachments or use a file sharing service.\n\nYour request has not been processed.`;
+
+                    await this.sendRejectionEmail(fromEmail, subject, rejectionMessage);
+
+                    // Mark as processed after sending rejection
+                    this.markMessageAsProcessed(messageId);
+
+                    // Mark email as \Seen
+                    this.imapConnection!.addFlags(messageUid, ["\\Seen"], (err: Error | null) => {
+                      if (err) {
+                        console.error(
+                          `[EMAIL PLUGIN] [${this.accountId}] Failed to mark email as seen:`,
+                          err,
+                        );
+                      } else {
+                        console.log(
+                          `[EMAIL PLUGIN] [${this.accountId}] ✓ Marked UID ${messageUid} as seen (oversized attachment)`,
+                        );
+                      }
+                    });
+                  } catch (error) {
+                    console.error(
+                      `[EMAIL PLUGIN] [${this.accountId}] Error sending rejection email:`,
+                      error,
+                    );
+                  } finally {
+                    this.messagesInProgress.delete(messageId);
+                  }
+                });
+              }
+              return; // Skip normal processing
+            }
+
+            // Log attachments info if present
+            if (attachments.length > 0) {
+              console.log(
+                `[EMAIL PLUGIN] [${this.accountId}] Attachment details: ${attachments.map((a) => `${a.filename} (${(a.size / 1024).toFixed(2)}KB, ${a.contentType})`).join(", ")}`,
+              );
+            }
 
             // Mark as in-progress to prevent duplicate processing during handler execution
             this.messagesInProgress.add(messageId);
@@ -388,24 +475,34 @@ class EmailAccountRuntime {
               const messageUid = uid; // Capture uid to ensure it's not null in closure
               this.processEmailWithSenderQueue(fromEmail, async () => {
                 try {
-                  await this.messageHandler(from, fromEmail, subject, body, messageId, messageUid);
+                  await this.messageHandler(
+                    from,
+                    fromEmail,
+                    subject,
+                    body,
+                    messageId,
+                    messageUid,
+                    attachments,
+                  );
 
                   // Mark as processed only after successful handler completion
                   this.markMessageAsProcessed(messageId);
 
                   // Mark email as \Seen after successful processing
-                  this.imapConnection!.addFlags(messageUid, ["\\Seen"], (err: Error | null) => {
-                    if (err) {
-                      console.error(
-                        `[EMAIL PLUGIN] [${this.accountId}] Failed to mark email as seen:`,
-                        err,
-                      );
-                    } else {
-                      console.log(
-                        `[EMAIL PLUGIN] [${this.accountId}] ✓ Marked UID ${messageUid} as seen`,
-                      );
-                    }
-                  });
+                  if (this.imapConnection) {
+                    this.imapConnection.addFlags(messageUid, ["\\Seen"], (err: Error | null) => {
+                      if (err) {
+                        console.error(
+                          `[EMAIL PLUGIN] [${this.accountId}] Failed to mark email as seen:`,
+                          err,
+                        );
+                      } else {
+                        console.log(
+                          `[EMAIL PLUGIN] [${this.accountId}] ✓ Marked UID ${messageUid} as seen`,
+                        );
+                      }
+                    });
+                  }
 
                   // Clean up old Message-IDs periodically
                   this.cleanupOldMessageIds();
@@ -498,6 +595,7 @@ class EmailAccountRuntime {
     subject: string,
     body: string,
     inReplyTo?: string,
+    attachments?: Array<{ path: string; filename?: string; contentType?: string }>,
   ): Promise<boolean> {
     if (!this.smtpTransporter) {
       console.error(`[EMAIL PLUGIN] [${this.accountId}] SMTP transporter not initialized`);
@@ -517,12 +615,34 @@ class EmailAccountRuntime {
         mailOptions.references = inReplyTo;
       }
 
+      // Add attachments if provided
+      if (attachments && attachments.length > 0) {
+        (mailOptions as any).attachments = attachments.map((att) => ({
+          path: att.path,
+          filename: att.filename || att.path.split("/").pop() || "attachment",
+          contentType: att.contentType,
+        }));
+        console.log(
+          `[EMAIL PLUGIN] [${this.accountId}] Sending email with ${attachments.length} attachment(s)`,
+        );
+      }
+
       await this.smtpTransporter.sendMail(mailOptions);
       console.log(`[EMAIL PLUGIN] [${this.accountId}] Email sent to ${to}`);
       return true;
     } catch (error) {
       console.error(`[EMAIL PLUGIN] [${this.accountId}] Error sending email:`, error);
       return false;
+    }
+  }
+
+  private async sendRejectionEmail(to: string, subject: string, body: string): Promise<void> {
+    console.log(
+      `[EMAIL PLUGIN] [${this.accountId}] Sending rejection email to ${to} for oversized attachments`,
+    );
+    const success = await this.sendEmail(to, subject, body);
+    if (!success) {
+      throw new Error("Failed to send rejection email");
     }
   }
 
@@ -569,6 +689,7 @@ export function startEmail(
     body: string,
     messageId: string,
     uid: number,
+    attachments: EmailAttachment[],
   ) => Promise<void>,
 ): void {
   // Stop existing runtime if any
@@ -588,13 +709,14 @@ export async function sendEmail(
   subject: string,
   body: string,
   inReplyTo?: string,
+  attachments?: Array<{ path: string; filename?: string; contentType?: string }>,
 ): Promise<boolean> {
   const runtime = accountRuntimes.get(accountId);
   if (!runtime) {
     console.error(`[EMAIL PLUGIN] No runtime found for account: ${accountId}`);
     return false;
   }
-  return runtime.sendEmail(to, subject, body, inReplyTo);
+  return runtime.sendEmail(to, subject, body, inReplyTo, attachments);
 }
 
 export function stopEmail(accountId: string): void {
