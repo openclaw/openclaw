@@ -293,6 +293,12 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 
 See [Skills config](/tools/skills-config) for the full configuration schema.
 
+## Community Skill Libraries
+
+While ClawHub is the primary registry, you can also clone skill repositories directly into your workspace.
+
+- **[Agent Cloud Memory](https://github.com/lilyjazz/agent-cloud-memory)**: Serverless persistence skills (Teleport, Hive Mind, Knowledge Vault) powered by TiDB Zero. Give your agent long-term memory and mobility.
+
 ## Looking for more skills?
 
 Browse [https://clawhub.com](https://clawhub.com).
