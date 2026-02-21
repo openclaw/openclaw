@@ -7,8 +7,8 @@ import type { MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 
-const embedBatch = vi.fn(async () => []);
-const embedQuery = vi.fn(async () => [0.2, 0.2, 0.2]);
+const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
+const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () =>
