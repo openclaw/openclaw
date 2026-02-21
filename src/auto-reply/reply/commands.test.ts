@@ -136,33 +136,40 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
 }
 
 describe("handleCommands gating", () => {
-  it("blocks /bash when disabled", async () => {
+  it("blocks /bash when disabled or not elevated-allowlisted", async () => {
     resetBashChatCommandForTests();
-    const cfg = {
-      commands: { bash: false, text: true },
-      whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
-    const params = buildParams("/bash echo hi", cfg);
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("bash is disabled");
-  });
-
-  it("blocks /bash when elevated is not allowlisted", async () => {
-    resetBashChatCommandForTests();
-    const cfg = {
-      commands: { bash: true, text: true },
-      whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
-    const params = buildParams("/bash echo hi", cfg);
-    params.elevated = {
-      enabled: true,
-      allowed: false,
-      failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
-    };
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("elevated is not available");
+    const cases = [
+      {
+        name: "disabled bash command",
+        cfg: {
+          commands: { bash: false, text: true },
+          whatsapp: { allowFrom: ["*"] },
+        } as OpenClawConfig,
+        expectedText: "bash is disabled",
+      },
+      {
+        name: "missing elevated allowlist",
+        cfg: {
+          commands: { bash: true, text: true },
+          whatsapp: { allowFrom: ["*"] },
+        } as OpenClawConfig,
+        applyParams: (params: ReturnType<typeof buildParams>) => {
+          params.elevated = {
+            enabled: true,
+            allowed: false,
+            failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
+          };
+        },
+        expectedText: "elevated is not available",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const params = buildParams("/bash echo hi", testCase.cfg);
+      testCase.applyParams?.(params);
+      const result = await handleCommands(params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
+    }
   });
 
   it("blocks /config and /debug when disabled", async () => {
@@ -193,17 +200,16 @@ describe("handleCommands gating", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
 
-    const bashResult = await handleCommands(buildParams("/bash echo hi", cfg));
-    expect(bashResult.shouldContinue).toBe(false);
-    expect(bashResult.reply?.text).toContain("bash is disabled");
-
-    const configResult = await handleCommands(buildParams("/config show", cfg));
-    expect(configResult.shouldContinue).toBe(false);
-    expect(configResult.reply?.text).toContain("/config is disabled");
-
-    const debugResult = await handleCommands(buildParams("/debug show", cfg));
-    expect(debugResult.shouldContinue).toBe(false);
-    expect(debugResult.reply?.text).toContain("/debug is disabled");
+    const cases = [
+      { commandBody: "/bash echo hi", expectedText: "bash is disabled" },
+      { commandBody: "/config show", expectedText: "/config is disabled" },
+      { commandBody: "/debug show", expectedText: "/debug is disabled" },
+    ] as const;
+    for (const testCase of cases) {
+      const result = await handleCommands(buildParams(testCase.commandBody, cfg));
+      expect(result.shouldContinue, testCase.commandBody).toBe(false);
+      expect(result.reply?.text, testCase.commandBody).toContain(testCase.expectedText);
+    }
   });
 });
 
