@@ -69,19 +69,25 @@ export function isLocalPath(url: string): boolean {
     return true;
   }
 
-  // Windows rooted path on current drive (e.g. \tmp\file.txt)
-  if (url.startsWith("\\") && !url.startsWith("\\\\")) {
-    return true;
-  }
-
   // Windows drive-letter absolute path (e.g. C:\foo\bar.txt or C:/foo/bar.txt)
   if (/^[a-zA-Z]:[\\/]/.test(url)) {
     return true;
   }
 
-  // Windows UNC path (e.g. \\server\share\file.txt)
-  if (url.startsWith("\\\\")) {
+  // Windows UNC path or rooted path (e.g. \\server\share or \tmp\file.txt)
+  if (url.startsWith("\\")) {
     return true;
+  }
+
+  // If it parses as a URL with a non-file protocol, it's not a local path
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol && parsed.protocol !== "file:") {
+      return false;
+    }
+  } catch {
+    // Not a valid URL — treat as a local path if it looks absolute on the current OS
+    return path.isAbsolute(url);
   }
 
   return false;

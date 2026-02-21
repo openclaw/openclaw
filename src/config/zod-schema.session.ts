@@ -86,7 +86,9 @@ export const SessionSchema = z
       .superRefine((val, ctx) => {
         if (val.pruneAfter !== undefined) {
           try {
-            parseDurationMs(String(val.pruneAfter).trim(), { defaultUnit: "d" });
+            parseDurationMs(String(val.pruneAfter).trim(), {
+              defaultUnit: "d",
+            });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -120,7 +122,9 @@ export const MessagesSchema = z
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
     ackReaction: z.string().optional(),
-    ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
+    ackReactionScope: z
+      .enum(["group-mentions", "group-all", "direct", "all"])
+      .optional(),
     removeAckAfterReply: z.boolean().optional(),
     statusReactions: z
       .object({

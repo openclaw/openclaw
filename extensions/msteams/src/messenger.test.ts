@@ -8,23 +8,6 @@ const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
 }));
 
-const loadWebMediaMock = vi.hoisted(() =>
-  vi.fn(async (_url: string) => ({
-    buffer: Buffer.from("hello"),
-    contentType: "text/plain",
-    kind: "document" as const,
-    fileName: "note.txt",
-  })),
-);
-
-vi.mock("openclaw/plugin-sdk", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk")>("openclaw/plugin-sdk");
-  return {
-    ...actual,
-    loadWebMedia: loadWebMediaMock,
-  };
-});
-
 vi.mock("./graph-upload.js", async () => {
   const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
   return {
@@ -226,12 +209,7 @@ describe("msteams messenger", () => {
             },
           },
           context: ctx,
-          messages: [
-            {
-              text: "Hello @[John](29:08q2j2o3jc09au90eucae)",
-              mediaUrl: localFile,
-            },
-          ],
+          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl: localFile }],
           tokenProvider: {
             getAccessToken: async () => "token",
           },
