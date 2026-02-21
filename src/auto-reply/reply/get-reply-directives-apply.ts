@@ -1,7 +1,9 @@
+import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel } from "../thinking.js";
+import type { ElevatedLevel, ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildStatusReply } from "./commands.js";
 import {
@@ -17,6 +19,30 @@ import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+
+/**
+ * Resolve thinking default for the currently active model (accounting for overrides).
+ * Used by both directive-only and inline-with-content paths.
+ */
+async function resolveThinkingForActiveModel(params: {
+  sessionEntry: SessionEntry;
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+}): Promise<ThinkLevel> {
+  const activeProvider = params.sessionEntry.providerOverride ?? params.provider;
+  const activeModel = params.sessionEntry.modelOverride ?? params.model;
+  const catalog = await loadModelCatalog({ config: params.cfg });
+  return (
+    (params.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: activeProvider,
+      model: activeModel,
+      catalog,
+    })
+  );
+}
 
 export type ApplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -123,7 +149,7 @@ export async function applyInlineDirectiveOverrides(params: {
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }
-    const {
+    let {
       currentThinkLevel: resolvedDefaultThinkLevel,
       currentVerboseLevel,
       currentReasoningLevel,
@@ -161,6 +187,13 @@ export async function applyInlineDirectiveOverrides(params: {
       currentElevatedLevel,
       surface: ctx.Surface,
     });
+    resolvedDefaultThinkLevel = await resolveThinkingForActiveModel({
+      sessionEntry,
+      provider,
+      model,
+      cfg,
+    });
+
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       statusReply = await buildStatusReply({
@@ -231,7 +264,8 @@ export async function applyInlineDirectiveOverrides(params: {
       formatModelSwitchEvent,
       agentCfg,
       modelState: {
-        resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+        resolveDefaultThinkingLevel: () =>
+          resolveThinkingForActiveModel({ sessionEntry, provider, model, cfg }),
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         resetModelOverride: modelState.resetModelOverride,

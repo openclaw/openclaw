@@ -132,6 +132,21 @@ export async function handleDirectiveOnly(
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
 
+  if (
+    directives.hasThinkDirective &&
+    !directives.thinkLevel &&
+    directives.rawThinkLevel?.toLowerCase() === "default"
+  ) {
+    delete sessionEntry.thinkingLevel;
+    sessionEntry.updatedAt = Date.now();
+    sessionStore[sessionKey] = sessionEntry;
+    if (storePath) {
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = sessionEntry;
+      });
+    }
+    return { text: "Thinking level reset to default." };
+  }
   if (directives.hasThinkDirective && !directives.thinkLevel) {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveMemoryFlushPromptForRun } from "./memory-flush.js";
+import {
+  resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushPromptForRun,
+} from "./memory-flush.js";
 
 describe("resolveMemoryFlushPromptForRun", () => {
   const cfg = {
@@ -33,5 +36,41 @@ describe("resolveMemoryFlushPromptForRun", () => {
 
     expect(prompt).toContain("Current time: already present");
     expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
+  });
+
+  it("uses config cap when model lookup returns undefined", () => {
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        modelId: undefined,
+        agentCfgContextTokens: 300_000,
+      }),
+    ).toBe(300_000);
+  });
+
+  it("uses config cap when it is smaller than native model window", async () => {
+    // Mock lookupContextTokens to simulate a model with 1M native context
+    const memoryFlush = await import("./memory-flush.js");
+    const contextModule = await import("../../agents/context.js");
+    const spy = vi.spyOn(contextModule, "lookupContextTokens").mockReturnValue(1_000_000);
+
+    const result = memoryFlush.resolveMemoryFlushContextWindowTokens({
+      modelId: "google/gemini-3-flash-preview",
+      agentCfgContextTokens: 300_000,
+    });
+    expect(result).toBe(300_000);
+    spy.mockRestore();
+  });
+
+  it("uses native model window when config cap is larger", async () => {
+    const contextModule = await import("../../agents/context.js");
+    const spy = vi.spyOn(contextModule, "lookupContextTokens").mockReturnValue(200_000);
+
+    const memoryFlush = await import("./memory-flush.js");
+    const result = memoryFlush.resolveMemoryFlushContextWindowTokens({
+      modelId: "anthropic/claude-haiku-4-5",
+      agentCfgContextTokens: 500_000,
+    });
+    expect(result).toBe(200_000);
+    spy.mockRestore();
   });
 });

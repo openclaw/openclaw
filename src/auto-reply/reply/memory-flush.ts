@@ -105,9 +105,15 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   agentCfgContextTokens?: number;
 }): number {
-  return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
-  );
+  const nativeTokens = lookupContextTokens(params.modelId);
+  const configTokens = params.agentCfgContextTokens;
+  // Per-model contextTokens config acts as a cap: use the smaller of the
+  // configured cap and the native model context window so compaction triggers
+  // before the configured limit, not the (potentially much larger) native one.
+  if (configTokens != null && configTokens > 0) {
+    return nativeTokens != null ? Math.min(configTokens, nativeTokens) : configTokens;
+  }
+  return nativeTokens ?? DEFAULT_CONTEXT_TOKENS;
 }
 
 export function shouldRunMemoryFlush(params: {
