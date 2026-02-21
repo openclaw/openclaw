@@ -17,6 +17,23 @@ type ImageBlock = {
   alt?: string;
 };
 
+// Supported image extensions
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+const IMAGE_PATH_REGEX = new RegExp(
+  `(\/[\w\/.\-_]+\.(${IMAGE_EXTENSIONS.join("|")}))`,
+  "gi"
+);
+
+// Extract image paths from text content
+function extractImagePathsFromText(text: string): string[] {
+  const matches = text.matchAll(IMAGE_PATH_REGEX);
+  const paths = new Set<string>();
+  for (const match of matches) {
+    paths.add(match[1]);
+  }
+  return Array.from(paths);
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -46,6 +63,14 @@ function extractImages(message: unknown): ImageBlock[] {
           images.push({ url: imageUrl.url });
         }
       }
+    }
+  }
+
+  // Also extract image paths from text content
+  if (typeof content === "string") {
+    const paths = extractImagePathsFromText(content);
+    for (const path of paths) {
+      images.push({ url: `/api/file?path=${encodeURIComponent(path)}` });
     }
   }
 
