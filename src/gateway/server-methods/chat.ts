@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -19,7 +20,11 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatFileContent,
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -750,6 +755,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
+    let parsedFiles: ChatFileContent[] = [];
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
@@ -758,6 +764,31 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
+        parsedFiles = parsed.files;
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
+
+    // Save non-image file attachments to disk so the agent can access them via Read tool.
+    // This mirrors how Telegram/Signal channels handle document attachments.
+    const savedFilePaths: string[] = [];
+    const savedFileTypes: string[] = [];
+    if (parsedFiles.length > 0) {
+      try {
+        for (const file of parsedFiles) {
+          const buffer = Buffer.from(file.data, "base64");
+          const saved = await saveMediaBuffer(
+            buffer,
+            file.mimeType,
+            "inbound",
+            5_000_000,
+            file.fileName,
+          );
+          savedFilePaths.push(saved.path);
+          savedFileTypes.push(file.mimeType);
+        }
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
@@ -860,6 +891,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        // File attachments saved to disk — agent sees these as [media attached: ...] notes
+        ...(savedFilePaths.length > 0
+          ? {
+              MediaPaths: savedFilePaths,
+              MediaTypes: savedFileTypes,
+              ...(savedFilePaths.length === 1
+                ? { MediaPath: savedFilePaths[0], MediaType: savedFileTypes[0] }
+                : {}),
+            }
+          : {}),
       };
 
       const agentId = resolveSessionAgentId({

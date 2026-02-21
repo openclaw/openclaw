@@ -14,9 +14,17 @@ export type ChatImageContent = {
   mimeType: string;
 };
 
+export type ChatFileContent = {
+  type: "file";
+  data: string;
+  mimeType: string;
+  fileName: string;
+};
+
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  files: ChatFileContent[];
 };
 
 type AttachmentLog = {
@@ -102,10 +110,11 @@ export async function parseMessageWithAttachments(
   const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
   const log = opts?.log;
   if (!attachments || attachments.length === 0) {
-    return { message, images: [] };
+    return { message, images: [], files: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const files: ChatFileContent[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -121,11 +130,24 @@ export async function parseMessageWithAttachments(
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
     if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
+      // Non-image attachment: collect as file for disk-based processing
+      files.push({
+        type: "file",
+        data: b64,
+        mimeType: sniffedMime,
+        fileName: label,
+      });
       continue;
     }
     if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+      // Unknown mime and not declared as image: collect as file
+      const resolvedMime = providedMime ?? "application/octet-stream";
+      files.push({
+        type: "file",
+        data: b64,
+        mimeType: resolvedMime,
+        fileName: label,
+      });
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {
@@ -141,7 +163,7 @@ export async function parseMessageWithAttachments(
     });
   }
 
-  return { message, images };
+  return { message, images, files };
 }
 
 /**
