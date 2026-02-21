@@ -1,6 +1,7 @@
 import {
   listAgentIds,
   resolveAgentDir,
+  resolveEffectiveModelRecoveryProbeIntervalMs,
   resolveEffectiveModelFallbacks,
   resolveAgentModelPrimary,
   resolveAgentSkillsFilter,
@@ -529,6 +530,10 @@ export async function agentCommand(
         agentId: sessionAgentId,
         hasSessionModelOverride: Boolean(storedModelOverride),
       });
+      const primaryRecoveryProbeIntervalMs = resolveEffectiveModelRecoveryProbeIntervalMs(
+        cfg,
+        sessionAgentId,
+      );
 
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
@@ -538,6 +543,7 @@ export async function agentCommand(
         provider,
         model,
         agentDir,
+        primaryRecoveryProbeIntervalMs,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;

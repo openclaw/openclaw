@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -173,6 +174,41 @@ export function resolveEffectiveModelFallbacks(params: {
       ? (params.cfg.agents.defaults.model.fallbacks ?? [])
       : [];
   return agentFallbacksOverride ?? defaultFallbacks;
+}
+
+function parseModelRecoveryProbeEvery(raw: unknown): number | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return parseDurationMs(trimmed, { defaultUnit: "m" });
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveEffectiveModelRecoveryProbeIntervalMs(
+  cfg: OpenClawConfig,
+  agentId: string,
+): number | undefined {
+  const agentModel = resolveAgentConfig(cfg, agentId)?.model;
+  if (
+    agentModel &&
+    typeof agentModel === "object" &&
+    Object.hasOwn(agentModel, "primaryRecoveryProbeEvery")
+  ) {
+    return parseModelRecoveryProbeEvery(agentModel.primaryRecoveryProbeEvery);
+  }
+
+  const defaultsModel = cfg.agents?.defaults?.model;
+  if (!defaultsModel || typeof defaultsModel === "string") {
+    return undefined;
+  }
+  return parseModelRecoveryProbeEvery(defaultsModel.primaryRecoveryProbeEvery);
 }
 
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {

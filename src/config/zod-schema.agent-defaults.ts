@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { AgentModelSchema, AgentModelObjectSchema } from "./zod-schema.agent-model.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
-  AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
@@ -14,13 +14,7 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
-    model: z
-      .object({
-        primary: z.string().optional(),
-        fallbacks: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
+    model: z.lazy(() => AgentModelObjectSchema).optional(),
     imageModel: z
       .object({
         primary: z.string().optional(),
