@@ -7,14 +7,14 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 
-const embedBatch = vi.fn(async () => []);
-const embedQuery = vi.fn(async () => [0.2, 0.2, 0.2]);
+const embedBatch = vi.fn(async (_input: string[]) => [] as number[][]);
+const embedQuery = vi.fn(async (_input: string) => [0.2, 0.2, 0.2] as number[]);
 
 vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () =>
+  createEmbeddingProvider: async (_options: unknown) =>
     createOpenAIEmbeddingProviderMock({
-      embedQuery,
-      embedBatch,
+      embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
+      embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
     }),
 }));
 
@@ -78,7 +78,7 @@ describe("memory search async sync", () => {
 
   it("waits for in-flight search sync during close", async () => {
     const cfg = buildConfig();
-    let releaseSync: (() => void) | null = null;
+    let releaseSync!: (value?: void) => void;
     const syncGate = new Promise<void>((resolve) => {
       releaseSync = resolve;
     });
@@ -98,7 +98,7 @@ describe("memory search async sync", () => {
     await Promise.resolve();
     expect(closed).toBe(false);
 
-    releaseSync?.();
+    releaseSync();
     await closePromise;
     manager = null;
 
