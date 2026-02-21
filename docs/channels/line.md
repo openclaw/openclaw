@@ -31,7 +31,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/line
 ```
 
-## Setup
+## Onboarding
 
 1. Create a LINE Developers account and open the Console:
    [https://developers.line.biz/console/](https://developers.line.biz/console/)
@@ -48,7 +48,7 @@ The gateway responds to LINE’s webhook verification (GET) and inbound events (
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
-## Configure
+## Configuration
 
 Minimal config:
 
