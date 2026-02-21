@@ -195,7 +195,27 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    const model = ctx.model;
+    let model = ctx.model;
+    
+    // Fallback: Try to get model from runtime if ctx.model is undefined
+    if (!model) {
+      const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+      if (runtime?.model) {
+        model = runtime.model;
+        console.warn(
+          'Compaction safeguard: ctx.model was undefined, using model from runtime:',
+          model,
+        );
+      } else {
+        // Log diagnostic info to help debug why model is missing
+        console.error('Compaction safeguard: No model available', {
+          'ctx.model': ctx.model,
+          'ctx keys': Object.keys(ctx),
+          'hasSessionManager': !!ctx.sessionManager,
+          'runtime.model': runtime?.model,
+        });
+      }
+    }
     if (!model) {
       return {
         compaction: {
