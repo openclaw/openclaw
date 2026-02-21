@@ -30,6 +30,7 @@ const MISTRAL_MODEL_HINTS = [
   "ministral",
   "mistralai",
 ];
+const MINIMAX_MODEL_HINTS = ["minimax"];
 const OPENAI_MODEL_APIS = new Set([
   "openai",
   "openai-completions",
@@ -57,7 +58,6 @@ function isAnthropicApi(modelApi?: string | null, provider?: string | null): boo
     return true;
   }
   const normalized = normalizeProviderId(provider ?? "");
-  // MiniMax now uses openai-completions API, not anthropic-messages
   return normalized === "anthropic";
 }
 
@@ -73,6 +73,18 @@ function isMistralModel(params: { provider?: string | null; modelId?: string | n
   return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
 }
 
+function isMinimaxModel(params: { provider?: string | null; modelId?: string | null }): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (provider === "minimax" || provider === "minimax-cn") {
+    return true;
+  }
+  const modelId = (params.modelId ?? "").toLowerCase();
+  if (!modelId) {
+    return false;
+  }
+  return MINIMAX_MODEL_HINTS.some((hint) => modelId.includes(hint));
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -84,6 +96,7 @@ export function resolveTranscriptPolicy(params: {
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
   const isMistral = isMistralModel({ provider, modelId });
+  const isMinimax = isMinimaxModel({ provider, modelId });
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
     modelId.toLowerCase().includes("gemini");
@@ -101,7 +114,7 @@ export function resolveTranscriptPolicy(params: {
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
+  const repairToolUseResultPairing = isGoogle || isAnthropic || isMinimax;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }
     : undefined;
@@ -118,6 +131,6 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
-    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic || isMinimax),
   };
 }
