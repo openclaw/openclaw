@@ -1,0 +1,3240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Line Balancing & Capacity Planning</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #273449;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent2: #818cf8;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --orange: #fb923c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    font-size: 14px;
+  }
+  header {
+    background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    text-align: center;
+  }
+  header h1 { font-size: 1.4rem; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  header p { color: var(--muted); font-size: 0.85rem; }
+  .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; }
+  .tab-btn {
+    padding: 10px 20px; background: var(--surface); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 8px 8px 0 0; cursor: pointer; font-size: 0.85rem;
+    font-weight: 600; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: var(--surface2); color: var(--text); }
+  .tab-btn.active { background: var(--accent); color: #0f172a; border-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Section */
+  .section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 1rem; font-weight: 700; color: var(--accent);
+    margin-bottom: 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-title .badge {
+    font-size: 0.7rem; background: var(--accent); color: #0f172a;
+    padding: 2px 8px; border-radius: 4px;
+  }
+
+  /* Form table */
+  .form-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .form-table th {
+    background: var(--surface2); color: var(--accent); padding: 10px 8px;
+    text-align: left; font-weight: 600; border-bottom: 2px solid var(--border);
+    white-space: nowrap; position: sticky; top: 0; z-index: 10;
+  }
+  .form-table td { padding: 6px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .form-table tr:hover td { background: rgba(56,189,248,0.05); }
+  .form-table input, .form-table select {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 8px; font-size: 0.8rem;
+  }
+  .form-table input:focus, .form-table select:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .form-table input[type="number"] { text-align: right; }
+  .form-table .readonly {
+    background: var(--surface2); color: var(--muted);
+    border-color: transparent; text-align: right;
+  }
+  .form-table .readonly.calc {
+    background: rgba(56,189,248,0.15); color: var(--accent);
+    border-color: transparent; text-align: right;
+  }
+  .form-table th.input-col { background: rgba(74,222,128,0.2); }
+  .form-table th.calc-col { background: rgba(56,189,248,0.2); }
+  .form-table .row-num { color: var(--muted); text-align: center; width: 30px; }
+  .form-table .actions { white-space: nowrap; }
+  .form-table .actions button {
+    padding: 4px 8px; margin: 0 2px; font-size: 0.75rem; border-radius: 4px;
+  }
+  .btn-delete { background: var(--red); color: #fff; border: none; cursor: pointer; }
+  .btn-up, .btn-down { background: var(--surface2); color: var(--text); border: 1px solid var(--border); cursor: pointer; }
+  .btn-add {
+    margin-top: 12px; padding: 8px 16px; background: var(--green); color: #0f172a;
+    border: none; border-radius: 6px; cursor: pointer; font-weight: 600;
+  }
+  .table-scroll { max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+  /* Controls */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    padding: 16px; background: var(--surface); border-radius: 12px;
+    border: 1px solid var(--border); margin-bottom: 20px;
+  }
+  .control-group { display: flex; align-items: center; gap: 8px; }
+  .control-group label { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+  .control-group select, .control-group input {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 0.8rem;
+  }
+  .control-group input[type="range"] { width: 100px; accent-color: var(--accent); }
+  button {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #0f172a; font-weight: 600; border: none; border-radius: 6px;
+    padding: 8px 16px; cursor: pointer; font-size: 0.8rem;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(56,189,248,0.3); }
+  button:active { transform: translateY(0); }
+  button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  /* KPI Cards */
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .kpi-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; text-align: center;
+  }
+  .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+  .kpi-card .kpi-label { font-size: 0.65rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .kpi-card.highlight { border-color: var(--green); background: rgba(74,222,128,0.1); }
+  .kpi-card.highlight .kpi-value { color: var(--green); }
+  .kpi-card.cost { border-color: var(--orange); background: rgba(251,146,60,0.1); }
+  .kpi-card.cost .kpi-value { color: var(--orange); }
+
+  /* Bar chart */
+  .chart-wrapper { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow: visible; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 320px; padding-top: 40px; position: relative; }
+  .bar-chart .grid-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border); pointer-events: none; }
+  .bar-chart .grid-label { position: absolute; left: -4px; transform: translateX(-100%); color: var(--muted); font-size: 0.65rem; }
+  .station-col { flex: 1; min-width: 70px; max-width: 120px; display: flex; flex-direction: column; align-items: center; }
+  .station-bar-stack { width: 100%; display: flex; flex-direction: column-reverse; align-items: stretch; }
+  .task-segment {
+    border-radius: 4px; margin-bottom: 2px; display: flex; align-items: center; justify-content: center;
+    font-size: 0.6rem; font-weight: 600; color: #fff; cursor: pointer; position: relative;
+    transition: height 0.6s ease;
+  }
+  .task-segment:hover { filter: brightness(1.2); z-index: 10; }
+  .task-segment .tooltip {
+    display: none; position: absolute; background: #0f172a; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px; font-size: 0.7rem; color: var(--text);
+    white-space: nowrap; z-index: 1000; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 200px; text-align: left; pointer-events: none;
+    left: 100%; top: 50%; transform: translateY(-50%); margin-left: 10px;
+  }
+  .task-segment:hover .tooltip { display: block; }
+  .station-label { margin-top: 6px; font-size: 0.7rem; color: var(--muted); font-weight: 600; }
+  .station-time { font-size: 0.65rem; color: var(--accent); font-weight: 700; }
+  .takt-line { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--red); z-index: 5; }
+  .takt-label { position: absolute; right: 0; transform: translateY(-100%); background: var(--red); color: #fff; font-size: 0.6rem; font-weight: 700; padding: 2px 6px; border-radius: 4px 4px 0 0; }
+
+  /* Resource cards */
+  .resource-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .resource-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .resource-card:hover { border-color: var(--accent); }
+  .resource-card .rc-header { display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .resource-card .rc-title { font-size: 0.8rem; font-weight: 700; color: var(--accent); }
+  .resource-card .rc-time { font-size: 0.7rem; color: var(--muted); }
+  .resource-card .rc-tasks { font-size: 0.65rem; color: var(--muted); margin-bottom: 8px; max-height: 50px; overflow-y: auto; line-height: 1.4; }
+  .resource-card .rc-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .resource-card .rc-row-label { font-size: 0.75rem; color: var(--text); font-weight: 600; }
+  .rc-counter { display: flex; align-items: center; gap: 4px; }
+  .rc-counter button { width: 24px; height: 24px; padding: 0; font-size: 0.9rem; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+  .rc-counter input { width: 50px; text-align: center; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px; font-size: 0.8rem; }
+  .rc-machines { margin-top: 4px; }
+  .rc-machine-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+  .rc-machine-row select { flex: 1; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px; font-size: 0.7rem; }
+  .rc-machine-row input { width: 36px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px; font-size: 0.7rem; text-align: center; }
+  .rc-machine-row button.rc-remove { width: 20px; height: 20px; padding: 0; font-size: 0.7rem; background: var(--red); color: #fff; border-radius: 4px; }
+  .rc-add-machine { margin-top: 4px; font-size: 0.65rem; padding: 4px 8px; background: var(--surface); color: var(--accent); border: 1px dashed var(--accent); border-radius: 4px; cursor: pointer; width: 100%; }
+  .rc-effective { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
+  .rc-effective .rc-eff-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; }
+  .rc-effective .rc-eff-value { font-size: 0.9rem; font-weight: 700; }
+
+  /* Two column layout */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  @media (max-width: 1000px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Gantt */
+  .gantt-row { display: flex; align-items: center; margin-bottom: 4px; gap: 6px; }
+  .gantt-label { width: 90px; font-size: 0.7rem; color: var(--muted); font-weight: 600; text-align: right; flex-shrink: 0; }
+  .gantt-bar-track { flex: 1; height: 24px; background: var(--bg); border-radius: 4px; position: relative; overflow: hidden; }
+  .gantt-bar { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 600; color: #fff; }
+
+  /* Gauge */
+  .gauge-container { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 16px; }
+  .gauge-ring { width: 120px; height: 120px; position: relative; }
+  .gauge-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .gauge-ring .bg-ring { fill: none; stroke: var(--border); stroke-width: 10; }
+  .gauge-ring .fg-ring { fill: none; stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset 1s ease, stroke 0.5s; }
+  .gauge-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; }
+  .gauge-center .value { font-size: 1.4rem; font-weight: 700; }
+  .gauge-center .label { font-size: 0.65rem; color: var(--muted); }
+
+  /* Worker schedule */
+  .schedule-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+  .schedule-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .schedule-card h4 { font-size: 0.8rem; color: var(--accent); margin-bottom: 8px; }
+  .schedule-card .stat { display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 4px; }
+  .schedule-card .stat-label { color: var(--muted); }
+  .schedule-card .stat-value { color: var(--text); font-weight: 600; }
+
+  footer { text-align: center; padding: 20px; color: var(--muted); font-size: 0.7rem; border-top: 1px solid var(--border); margin-top: 20px; }
+  /* Hourly rate visibility toggle */
+  body:not(.rate-visible) #defaultRateControl { opacity: 0.3; pointer-events: none; }
+  body:not(.rate-visible) .hourly-rate-col { display: none; }
+  #rateToggle { cursor: pointer; user-select: none; transition: color 0.2s; }
+  #rateToggle:hover { color: var(--text); }
+  body.rate-visible #rateToggle { color: var(--accent); }
+
+  /* Shift Planning Styles */
+  .skill-checkbox { width: 20px; height: 20px; cursor: pointer; accent-color: var(--green); }
+  .skill-matrix-cell { text-align: center !important; }
+  .worker-assignment-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  .worker-assignment-card.warning { border-color: var(--yellow); background: rgba(251,191,36,0.05); }
+  .worker-assignment-card.error { border-color: var(--red); background: rgba(248,113,113,0.05); }
+  .worker-assignment-card.complete { border-color: var(--green); background: rgba(74,222,128,0.05); }
+  .worker-assignment-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .worker-assignment-header h4 { font-size: 0.9rem; color: var(--accent); margin: 0; }
+  .worker-assignment-header .total { font-size: 0.85rem; font-weight: 600; }
+  .worker-assignment-header .total.complete { color: var(--green); }
+  .worker-assignment-header .total.incomplete { color: var(--yellow); }
+  .worker-assignment-header .total.over { color: var(--red); }
+  .assignment-row {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    padding: 8px; background: var(--surface); border-radius: 6px;
+  }
+  .assignment-row select { flex: 1; max-width: 200px; }
+  .assignment-row input[type="range"] { flex: 2; max-width: 200px; }
+  .assignment-row .percent-display { width: 50px; text-align: right; font-weight: 600; color: var(--accent); }
+  .assignment-row .btn-remove { padding: 4px 8px; background: var(--red); color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  .btn-add-assignment { padding: 6px 12px; background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  .btn-add-assignment:hover { background: var(--accent); color: #0f172a; }
+  .worker-assignments-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  @media (max-width: 1200px) { .worker-assignments-grid { grid-template-columns: 1fr; } }
+  .station-assignment-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  .station-assignment-card .station-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .station-assignment-card .station-header h4 { font-size: 0.9rem; color: var(--green); margin: 0; }
+  .station-worker-row {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    padding: 6px 8px; background: var(--surface); border-radius: 4px; font-size: 0.8rem;
+  }
+  .station-worker-row .worker-color { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+  .station-worker-row .worker-name { flex: 1; }
+  .station-worker-row input[type="range"] { width: 80px; }
+  .station-worker-row .hours-display { color: var(--accent); font-weight: 600; min-width: 50px; text-align: right; }
+  .filter-dropdown { padding: 6px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; }
+  .process-cards-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+  .process-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .process-card h5 { font-size: 0.8rem; color: var(--accent); margin-bottom: 8px; }
+  .process-card ul { list-style: none; font-size: 0.7rem; color: var(--muted); }
+  .process-card li { margin-bottom: 4px; padding-left: 8px; border-left: 2px solid var(--border); }
+  .coverage-status { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .coverage-status.full { background: rgba(74,222,128,0.2); color: var(--green); }
+  .coverage-status.under { background: rgba(251,191,36,0.2); color: var(--yellow); }
+  .coverage-status.over { background: rgba(56,189,248,0.2); color: var(--accent); }
+  .coverage-status.empty { background: rgba(248,113,113,0.2); color: var(--red); }
+  .worker-fill-bar {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .worker-fill-stack {
+    width: 100%; display: flex; flex-direction: column-reverse;
+    border-radius: 6px; overflow: hidden; border: 1px solid var(--border);
+  }
+  .worker-fill-segment {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.65rem; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    min-height: 20px; transition: all 0.3s;
+  }
+  .worker-fill-segment:hover { filter: brightness(1.2); }
+  .worker-fill-gap {
+    background: repeating-linear-gradient(45deg, var(--surface), var(--surface) 5px, var(--bg) 5px, var(--bg) 10px);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.6rem; color: var(--red); min-height: 20px;
+  }
+
+  /* Timeline Coverage View */
+  .timeline-container {
+    overflow-x: auto; overflow-y: visible;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .timeline-grid {
+    display: grid; min-width: max-content;
+  }
+  .timeline-header-cell {
+    background: var(--surface2); color: var(--accent);
+    font-size: 0.7rem; font-weight: 600;
+    padding: 6px 4px; text-align: center;
+    border-bottom: 2px solid var(--border);
+    border-right: 1px solid var(--border); white-space: nowrap;
+  }
+  .timeline-station-label {
+    background: var(--surface2); color: var(--text);
+    font-size: 0.75rem; font-weight: 600;
+    padding: 6px 10px; display: flex; align-items: center;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    position: sticky; left: 0; z-index: 5; min-width: 110px;
+  }
+  .timeline-cell {
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    padding: 2px 3px; min-width: 54px; min-height: 32px;
+    position: relative; vertical-align: top;
+  }
+  .timeline-worker-bar {
+    border-radius: 3px; padding: 1px 4px;
+    font-size: 0.6rem; font-weight: 600;
+    color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-bottom: 1px; line-height: 1.6; cursor: default;
+    transition: filter 0.2s;
+  }
+  .timeline-worker-bar:hover { filter: brightness(1.15); }
+  .timeline-worker-bar.on-break {
+    background-image: repeating-linear-gradient(
+      45deg, transparent, transparent 3px,
+      rgba(0,0,0,0.35) 3px, rgba(0,0,0,0.35) 6px
+    ) !important;
+  }
+  .timeline-worker-bar.partial-participation { border: 1px dashed rgba(255,255,255,0.65); }
+  .timeline-total-label {
+    background: var(--surface2); color: var(--accent);
+    font-size: 0.7rem; font-weight: 700;
+    padding: 6px 10px; display: flex; align-items: center;
+    border-right: 1px solid var(--border);
+    position: sticky; left: 0; z-index: 5;
+  }
+  .timeline-total-cell {
+    border-right: 1px solid var(--border);
+    padding: 4px 2px; text-align: center;
+    font-size: 0.7rem; font-weight: 600;
+    min-width: 54px;
+  }
+  .timeline-total-cell.coverage-full  { background: rgba(74,222,128,0.15); color: var(--green); }
+  .timeline-total-cell.coverage-partial { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .timeline-total-cell.coverage-none  { background: rgba(248,113,113,0.15); color: var(--red); }
+  .timeline-header-cell.hour-boundary,
+  .timeline-cell.hour-boundary,
+  .timeline-total-cell.hour-boundary { border-left: 2px solid rgba(56,189,248,0.35); }
+
+  .worker-legend-item {
+    display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+    background: var(--surface); border-radius: 4px; font-size: 0.75rem;
+  }
+  .worker-legend-color { width: 16px; height: 16px; border-radius: 3px; }
+
+  /* Colors for workers */
+  .worker-color-0 { background: #38bdf8; } .worker-color-1 { background: #818cf8; }
+  .worker-color-2 { background: #f472b6; } .worker-color-3 { background: #4ade80; }
+  .worker-color-4 { background: #fbbf24; } .worker-color-5 { background: #f87171; }
+  .worker-color-6 { background: #2dd4bf; } .worker-color-7 { background: #e879f9; }
+  .worker-color-8 { background: #fb923c; } .worker-color-9 { background: #a78bfa; }
+  .worker-color-10 { background: #94a3b8; } .worker-color-11 { background: #67e8f9; }
+
+  /* Colors for tasks */
+  .color-0 { background: #38bdf8; } .color-1 { background: #818cf8; } .color-2 { background: #a78bfa; }
+  .color-3 { background: #f472b6; } .color-4 { background: #fb923c; } .color-5 { background: #4ade80; }
+  .color-6 { background: #fbbf24; } .color-7 { background: #f87171; } .color-8 { background: #2dd4bf; }
+  .color-9 { background: #e879f9; } .color-10 { background: #94a3b8; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Line Balancing & Capacity Planning <span style="font-size:0.7rem;background:var(--surface);padding:4px 10px;border-radius:4px;color:var(--muted);margin-left:8px;">V1.0.0</span></h1>
+  <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;margin-top:12px;align-items:center;">
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="color:var(--muted);font-size:0.8rem;">SAP No.:</label>
+      <input type="text" id="headerSapNo" placeholder="e.g., 12345678" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:0.8rem;width:120px;" onchange="saveHeaderFields()">
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="color:var(--muted);font-size:0.8rem;">Product No.:</label>
+      <input type="text" id="headerProductNo" placeholder="e.g., PN-001" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:0.8rem;width:180px;" onchange="saveHeaderFields()">
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="color:var(--muted);font-size:0.8rem;">Product Description:</label>
+      <input type="text" id="headerProductDesc" placeholder="e.g., M12 Cable Assembly" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:0.8rem;width:330px;" onchange="saveHeaderFields()">
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="color:var(--muted);font-size:0.8rem;">Calculation By:</label>
+      <input type="text" id="headerCalcBy" placeholder="e.g., John Doe" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:0.8rem;width:140px;" onchange="saveHeaderFields()">
+    </div>
+    <div style="display:flex;gap:8px;margin-left:auto;">
+      <button class="secondary" onclick="exportAllDataExcel()" style="font-size:0.75rem;padding:6px 12px;">📥 Export All (Excel)</button>
+      <button class="secondary" onclick="document.getElementById('importAllExcel').click()" style="font-size:0.75rem;padding:6px 12px;">📤 Import All</button>
+      <input type="file" id="importAllExcel" accept=".xlsx,.xls" style="display:none" onchange="importAllDataExcel(this)">
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="setup">📋 Process Setup</button>
+    <button class="tab-btn" data-tab="workers">👷 Workforce</button>
+    <button class="tab-btn" data-tab="balance">⚖️ Line Balancing</button>
+    <button class="tab-btn" data-tab="planning">📅 Shift Planning</button>
+    <button class="tab-btn" data-tab="analysis">📊 Analysis & Output</button>
+  </div>
+
+  <!-- TAB: Process Setup -->
+  <div id="tab-setup" class="tab-content active">
+    <div class="section">
+      <div class="section-title">Production Process Definition <span class="badge">CRUD</span></div>
+      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="secondary" onclick="exportProcessesCSV()">📥 Export CSV</button>
+        <button class="secondary" onclick="document.getElementById('importProcessCSV').click()">📤 Import CSV</button>
+        <input type="file" id="importProcessCSV" accept=".csv" style="display:none" onchange="importProcessesCSV(this)">
+        <button class="secondary" onclick="clearProcessData()" style="margin-left:auto;">🗑️ Clear All</button>
+      </div>
+      <div style="border: 1px solid var(--border); border-radius: 8px; overflow-x: auto;">
+        <table class="form-table" id="processTable">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th style="width:90px">SAP No.</th>
+              <th style="min-width:200px">Description</th>
+              <th style="width:80px">Cycle Time (s)</th>
+              <th style="width:70px">Efficiency %</th>
+              <th style="width:60px">2-Side Mult.</th>
+              <th style="width:80px">Adj. Cycle</th>
+              <th style="width:70px">Total (s)</th>
+              <th style="width:70px">P-OPH</th>
+              <th style="width:100px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="processTableBody"></tbody>
+        </table>
+      </div>
+      <button class="btn-add" onclick="addProcess()">+ Add Process</button>
+      <p style="font-size:0.7rem;color:var(--muted);margin-top:12px;">💾 Data is auto-saved to browser storage and persists after refresh.</p>
+    </div>
+  </div>
+
+  <!-- TAB: Workforce -->
+  <div id="tab-workers" class="tab-content">
+    <div class="section">
+      <div class="section-title">Worker Roster & Schedule</div>
+      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="secondary" onclick="exportWorkersCSV()">📥 Export CSV</button>
+        <button class="secondary" onclick="document.getElementById('importWorkerCSV').click()">📤 Import CSV</button>
+        <input type="file" id="importWorkerCSV" accept=".csv" style="display:none" onchange="importWorkersCSV(this)">
+        <button class="secondary" onclick="clearWorkerData()">🗑️ Clear All</button>
+        <div class="control-group" id="defaultRateControl" style="margin-left:auto;">
+          <label>Default Hourly Rate (€/hr):</label>
+          <input type="number" id="defaultHourlyRate" value="33.435" min="0" step="0.001" style="width:100px" onchange="updateWorkerCosts()">
+        </div>
+      </div>
+      <div style="border: 1px solid var(--border); border-radius: 8px; overflow-x: auto;">
+        <table class="form-table" id="workerTable">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th class="input-col" style="width:90px">Employee Code</th>
+              <th class="input-col" style="min-width:140px">Name</th>
+              <th class="input-col" style="width:75px">Shift Start</th>
+              <th class="input-col" style="width:75px">Shift End</th>
+              <th class="input-col" style="width:70px">Break (min)</th>
+              <th class="calc-col" style="width:70px">Hours/Day</th>
+              <th class="calc-col" style="width:75px">Hours/Week</th>
+              <th class="input-col" style="width:80px">Participation %</th>
+              <th class="calc-col" style="width:85px">Daily Part. Hrs</th>
+              <th class="input-col" style="width:70px">Work Days/Yr</th>
+              <th class="calc-col" style="width:80px">Net Work Hrs</th>
+              <th class="input-col hourly-rate-col" style="width:80px">Hourly Rate</th>
+              <th style="width:60px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="workerTableBody"></tbody>
+        </table>
+      </div>
+      <p style="font-size:0.65rem;color:var(--muted);margin-top:8px;">
+        <span style="display:inline-block;width:12px;height:12px;background:rgba(74,222,128,0.3);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>User Input
+        <span style="display:inline-block;width:12px;height:12px;background:rgba(56,189,248,0.3);border-radius:2px;margin-left:12px;margin-right:4px;vertical-align:middle;"></span>Auto-Calculated
+      </p>
+      <button class="btn-add" onclick="addWorker()">+ Add Worker</button>
+
+      <div class="schedule-summary" id="scheduleSummary"></div>
+    </div>
+  </div>
+
+  <!-- TAB: Line Balancing -->
+  <div id="tab-balance" class="tab-content">
+    <div class="controls">
+      <div class="control-group">
+        <label>Target Stations:</label>
+        <input type="range" id="stationSlider" min="2" max="15" value="5">
+        <span id="stationCount" style="min-width:20px;text-align:center;">5</span>
+      </div>
+      <div class="control-group">
+        <label>Algorithm:</label>
+        <select id="algoSelect">
+          <option value="lct">Largest Candidate Time</option>
+          <option value="rpw">Ranked Positional Weight</option>
+          <option value="killbridge">Kilbridge & Wester</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Speed:</label>
+        <select id="speedSelect">
+          <option value="1200">Slow</option>
+          <option value="600" selected>Normal</option>
+          <option value="300">Fast</option>
+        </select>
+      </div>
+      <button id="balanceBtn" onclick="runBalance()">▶ Balance Line</button>
+      <button class="secondary" onclick="resetBalance()">Reset</button>
+    </div>
+
+    <!-- KPIs -->
+    <div class="kpi-row" id="kpiRow"></div>
+
+    <!-- Chart -->
+    <div class="section">
+      <div class="section-title">Station Workload Chart <span class="badge" id="chartBadge">UNBALANCED</span></div>
+      <div class="chart-wrapper">
+        <div class="bar-chart" id="barChart"></div>
+      </div>
+    </div>
+
+    <!-- Resources -->
+    <div class="section">
+      <div class="section-title">Station Resources — Workers & Machines</div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        💡 Tip: Worker values can be decimals (e.g., 0.5 = shared worker across 2 stations). Values are retained during balancing.
+      </p>
+      <div class="resource-grid" id="resourceGrid"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="section">
+        <div class="section-title">Line Efficiency</div>
+        <div class="gauge-container">
+          <div class="gauge-ring">
+            <svg viewBox="0 0 160 160">
+              <circle class="bg-ring" cx="80" cy="80" r="65"></circle>
+              <circle class="fg-ring" id="gaugeRing" cx="80" cy="80" r="65" stroke-dasharray="408.4" stroke-dashoffset="408.4"></circle>
+            </svg>
+            <div class="gauge-center">
+              <div class="value" id="gaugeValue">0%</div>
+              <div class="label">Efficiency</div>
+            </div>
+          </div>
+          <div style="font-size:0.75rem;">
+            <div style="color:var(--muted);margin-bottom:6px;">Targets:</div>
+            <div style="margin-bottom:3px;"><span style="color:var(--green);">●</span> &gt;85% Excellent</div>
+            <div style="margin-bottom:3px;"><span style="color:var(--yellow);">●</span> 70-85% Good</div>
+            <div><span style="color:var(--red);">●</span> &lt;70% Needs Work</div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">Station Timeline (Gantt)</div>
+        <div id="ganttChart"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Shift Planning -->
+  <div id="tab-planning" class="tab-content">
+    <div class="section">
+      <div class="section-title">📋 Station Requirements <span class="badge">FROM LINE BALANCING</span></div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        These requirements are pulled from the Line Balancing tab. Assign workers below to meet these targets.
+      </p>
+      <div class="kpi-row" id="planningRequirementsKPIs"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🎯 Skill Matrix <span class="badge" style="background:var(--green);">WORKER QUALIFICATIONS</span></div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        Define which workers are qualified to work at each station. Check the boxes to indicate skills.
+        <span style="color:var(--yellow);">⚠️ Specialized stations (e.g., Overmolding) may require certified operators.</span>
+      </p>
+      <div class="table-scroll">
+        <table class="form-table" id="skillMatrixTable">
+          <thead id="skillMatrixHead"></thead>
+          <tbody id="skillMatrixBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">👷 Worker Assignments <span class="badge" style="background:var(--accent2);">ALLOCATE TIME</span></div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        Assign workers to stations with percentage of their time. Total must equal 100% per worker.
+        Only qualified stations (from skill matrix) can be assigned.
+      </p>
+      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <label style="font-size:0.8rem;color:var(--muted);">View:</label>
+        <select class="filter-dropdown" id="assignmentViewFilter" onchange="renderWorkerAssignments()">
+          <option value="worker">By Worker</option>
+          <option value="station">By Station</option>
+        </select>
+        <button class="secondary" onclick="autoAssignWorkers()">🤖 Auto-Assign</button>
+        <button class="secondary" onclick="clearAllAssignments()">🗑️ Clear All Assignments</button>
+      </div>
+      <div id="workerAssignmentsContainer" class="worker-assignments-grid"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">✅ Coverage Validation <span class="badge" style="background:var(--green);">STATUS CHECK</span></div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        Compares station requirements (from Line Balancing) with actual worker assignments.
+      </p>
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:0.8rem;color:var(--muted);">View:</label>
+        <select class="filter-dropdown" id="coverageViewFilter" onchange="renderCoverageTable()">
+          <option value="station">By Station</option>
+          <option value="worker">By Worker</option>
+          <option value="timeline">Timeline</option>
+        </select>
+        <label id="timelineResolutionLabel" style="display:none;font-size:0.8rem;color:var(--muted);margin-left:4px;">Resolution:</label>
+        <select class="filter-dropdown" id="timelineResolution" style="display:none;" onchange="renderCoverageTable()">
+          <option value="60">1 Hour</option>
+          <option value="30" selected>30 Min</option>
+          <option value="15">15 Min</option>
+          <option value="5">5 Min</option>
+        </select>
+      </div>
+      <div class="table-scroll">
+        <table class="form-table" id="coverageTable">
+          <thead id="coverageTableHead">
+            <tr>
+              <th>Station</th>
+              <th>Processes</th>
+              <th style="text-align:right">Required</th>
+              <th style="text-align:right">Assigned</th>
+              <th style="text-align:right">Gap</th>
+              <th>Status</th>
+              <th>Assigned Workers</th>
+            </tr>
+          </thead>
+          <tbody id="coverageTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section" style="border: 2px solid var(--accent2); background: rgba(129,140,248,0.05);">
+      <div class="section-title" style="color:var(--accent2);">📊 Worker Coverage Chart <span class="badge" style="background:var(--accent2);">VISUAL FILL</span></div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        Visual representation of how workers fill each station's capacity. Each color represents a different worker.
+      </p>
+      <div id="workerLegend" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;"></div>
+      <div class="chart-wrapper" style="overflow:visible;">
+        <div class="bar-chart" id="workerFillChart" style="min-width:auto;"></div>
+      </div>
+      <div class="section-title" style="margin-top:20px;font-size:0.85rem;">📋 Station Process Reference</div>
+      <div id="processCardsContainer" class="process-cards-container"></div>
+    </div>
+  </div>
+
+  <!-- TAB: Analysis -->
+  <div id="tab-analysis" class="tab-content">
+    <div class="section">
+      <div class="section-title">Production Output & Cost Analysis</div>
+      <div class="kpi-row" id="analysisKPIs"></div>
+      <div class="schedule-summary" id="analysisSummary"></div>
+    </div>
+
+    <div class="section" style="border: 2px solid var(--green); background: rgba(74,222,128,0.05);">
+      <div class="section-title" style="color:var(--green);">📊 Capacity Calculation <span class="badge" style="background:var(--green);">BASED ON LINE BALANCING</span></div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:16px;">
+        Theoretical capacity is calculated based on the bottleneck time after line balancing and the total net working hours from the workforce roster.
+      </p>
+      <div class="kpi-row" id="capacityKPIs"></div>
+      <div class="schedule-summary" id="capacitySummary"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Process Summary Table</div>
+      <div class="table-scroll">
+        <table class="form-table" id="summaryTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>SAP No.</th>
+              <th>Description</th>
+              <th>Station</th>
+              <th>Raw Time (s)</th>
+              <th>Workers</th>
+              <th>Eff. Time (s)</th>
+              <th>OPH</th>
+              <th>Utilization %</th>
+            </tr>
+          </thead>
+          <tbody id="summaryTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  Line Balancing <span id="rateToggle" onclick="toggleRateVisibility()" title="Toggle hourly rate visibility">&amp;</span> Capacity Planning V1.0.0
+</footer>
+
+<!-- SheetJS for Excel export/import -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script>
+  if (typeof XLSX === 'undefined') {
+    // Fallback CDN if primary fails
+    document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/script>');
+  }
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// DATA MODELS
+// ══════════════════════════════════════════════════════════════
+
+let processes = [
+  { uid: 'p1', sapNo: 'PP000001', desc: 'Cable Cutting (5 Meter) and Binding', cycle: 45.0, eff: 80, mult: 1 },
+  { uid: 'p2', sapNo: 'PP000002', desc: 'Removal of Fillers', cycle: 12.0, eff: 80, mult: 2 },
+  { uid: 'p3', sapNo: 'PP000003', desc: 'Stripping & Crimping Brown/Blue Wires – 18 AWG Short Contact', cycle: 19.6, eff: 80, mult: 2 },
+  { uid: 'p4', sapNo: 'PP000004', desc: 'Stripping & Crimping Black/White Wires – 22 AWG Short Contact', cycle: 35.0, eff: 80, mult: 2 },
+  { uid: 'p5', sapNo: 'PP000005', desc: 'Stripping & Crimping Gray Wire – 22 AWG Long Contact', cycle: 26.2, eff: 80, mult: 2 },
+  { uid: 'p6', sapNo: 'PP000006', desc: 'Wire Guide Assembly & Pressing to Contact Holder', cycle: 69.0, eff: 80, mult: 2 },
+  { uid: 'p7', sapNo: 'PP000007', desc: 'Overmolding (One Side)', cycle: 25.6, eff: 80, mult: 2 },
+  { uid: 'p8', sapNo: 'PP000008', desc: 'Electrical Testing Male or Female', cycle: 12.0, eff: 80, mult: 1 },
+  { uid: 'p9', sapNo: 'PP000009', desc: 'O-ring Mounting to Female M12', cycle: 5.0, eff: 80, mult: 2 },
+  { uid: 'p10', sapNo: 'PP000014', desc: 'Printing', cycle: 12.0, eff: 80, mult: 2 },
+  { uid: 'p11', sapNo: 'PP000013', desc: 'Packaging', cycle: 7.0, eff: 80, mult: 1 },
+];
+
+let workers = [
+  { uid: 'w1', code: 'M01 - MC', name: 'Muhitdin Cagin', shiftStart: '06:00', shiftEnd: '11:15', breakMin: 15, participationRate: 60, workingDaysPerYear: 210, hourlyRate: 33.435, skills: [], assignments: [] },
+  { uid: 'w2', code: 'M02 - PK', name: 'Petra Krause', shiftStart: '06:00', shiftEnd: '14:00', breakMin: 30, participationRate: 30, workingDaysPerYear: 210, hourlyRate: 33.435, skills: [], assignments: [] },
+  { uid: 'w3', code: 'M03 - DM', name: 'Diana Menger', shiftStart: '07:00', shiftEnd: '12:15', breakMin: 15, participationRate: 97, workingDaysPerYear: 210, hourlyRate: 33.435, skills: [], assignments: [] },
+  { uid: 'w4', code: 'M04 - JN', name: 'Jonas Nickel', shiftStart: '06:00', shiftEnd: '13:30', breakMin: 30, participationRate: 97, workingDaysPerYear: 210, hourlyRate: 33.435, skills: [], assignments: [] },
+  { uid: 'w5', code: 'M05 - SA', name: 'Saeideh Alinezhad', shiftStart: '07:00', shiftEnd: '15:30', breakMin: 30, participationRate: 97, workingDaysPerYear: 210, hourlyRate: 33.435, skills: [], assignments: [] },
+];
+
+// Global capacity settings
+const WORKING_DAYS_PER_YEAR = 210;
+const DAYS_PER_YEAR = 365;
+
+const MACHINE_CATALOGUE = [
+  'Cutting Machine', 'Stripping Machine', 'Crimping Machine (Manual)', 'Crimping Machine (Auto)',
+  'Wire Guide Fixture', 'Pressing Tool', 'Overmolding Machine', 'Electrical Tester',
+  'O-ring Assembly Fixture', 'Inkjet Printer', 'Label Printer', 'Packaging Station',
+  'Conveyor', 'Soldering Station', 'Heat Shrink Tool', 'Microscope / Inspection',
+];
+
+const DEFAULT_MACHINES = {
+  'PP000001': [{ name: 'Cutting Machine', qty: 1 }],
+  'PP000003': [{ name: 'Stripping Machine', qty: 1 }, { name: 'Crimping Machine (Auto)', qty: 1 }],
+  'PP000004': [{ name: 'Stripping Machine', qty: 1 }, { name: 'Crimping Machine (Auto)', qty: 1 }],
+  'PP000005': [{ name: 'Stripping Machine', qty: 1 }, { name: 'Crimping Machine (Manual)', qty: 1 }],
+  'PP000006': [{ name: 'Wire Guide Fixture', qty: 1 }, { name: 'Pressing Tool', qty: 1 }],
+  'PP000007': [{ name: 'Overmolding Machine', qty: 1 }],
+  'PP000008': [{ name: 'Electrical Tester', qty: 1 }],
+  'PP000009': [{ name: 'O-ring Assembly Fixture', qty: 1 }],
+  'PP000014': [{ name: 'Inkjet Printer', qty: 1 }],
+  'PP000013': [{ name: 'Packaging Station', qty: 1 }],
+};
+
+// ══════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════
+
+let stations = [];
+let taskResources = {}; // uid -> { workers, machines }
+let stationResources = {}; // stationIdx -> { workers, machines }
+let animating = false;
+let uidCounter = 100;
+
+function genUid() { return 'u' + (++uidCounter); }
+
+// ══════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ══════════════════════════════════════════════════════════════
+
+function calcProcess(p) {
+  const effFactor = 1 + (1 - p.eff / 100);
+  p.adjCycle = +(p.cycle * effFactor).toFixed(4);
+  p.total = +(p.adjCycle * p.mult).toFixed(4);
+  p.poph = p.total > 0 ? +(3600 / p.total).toFixed(2) : 0;
+}
+
+function recalcAllProcesses() {
+  processes.forEach(calcProcess);
+}
+
+function getTotalTime() {
+  return processes.reduce((s, p) => s + p.total, 0);
+}
+
+function getWorkerHoursPerDay(w) {
+  // Calculate Hours/Day = (Shift End - Shift Start) - Break
+  const [sh, sm] = w.shiftStart.split(':').map(Number);
+  const [eh, em] = w.shiftEnd.split(':').map(Number);
+  const totalMin = (eh * 60 + em) - (sh * 60 + sm) - w.breakMin;
+  return Math.max(0, totalMin / 60);
+}
+
+function getWorkerHoursPerWeek(w) {
+  // Assuming 5-day work week based on Hours/Day
+  return getWorkerHoursPerDay(w) * 5;
+}
+
+function getWorkerDailyParticipationHours(w) {
+  // Daily Participation Hours = Hours/Day × Participation%
+  return getWorkerHoursPerDay(w) * ((w.participationRate || 0) / 100);
+}
+
+function getWorkerNetWorkingHours(w) {
+  // Net Working Hours = Daily Part. Hrs × (Working Days/Year / 365)
+  const workingDays = w.workingDaysPerYear || WORKING_DAYS_PER_YEAR;
+  return getWorkerDailyParticipationHours(w) * (workingDays / DAYS_PER_YEAR);
+}
+
+function getWorkingDaysPerYearPercent() {
+  return (WORKING_DAYS_PER_YEAR / DAYS_PER_YEAR * 100);
+}
+
+function getWorkerDailyCost(w) {
+  return +(getWorkerHoursPerDay(w) * w.hourlyRate).toFixed(2);
+}
+
+function getTotalDailyWorkHours() {
+  return workers.reduce((s, w) => s + getWorkerHoursPerDay(w), 0);
+}
+
+function getTotalNetWorkingHours() {
+  return workers.reduce((s, w) => s + getWorkerNetWorkingHours(w), 0);
+}
+
+function getTotalDailyLaborCost() {
+  return workers.reduce((s, w) => s + getWorkerDailyCost(w), 0);
+}
+
+function getAvgWorkHoursPerWorker() {
+  if (workers.length === 0) return 0;
+  return getTotalDailyWorkHours() / workers.length;
+}
+
+function getAvgNetWorkHoursPerWorker() {
+  if (workers.length === 0) return 0;
+  return getTotalNetWorkingHours() / workers.length;
+}
+
+// ══════════════════════════════════════════════════════════════
+// PROCESS CRUD
+// ══════════════════════════════════════════════════════════════
+
+function renderProcessTable() {
+  recalcAllProcesses();
+  const tbody = document.getElementById('processTableBody');
+  let html = '';
+  processes.forEach((p, i) => {
+    html += `<tr>
+      <td class="row-num">${i + 1}</td>
+      <td><input type="text" value="${p.sapNo}" onchange="updateProcess(${i},'sapNo',this.value)"></td>
+      <td><input type="text" value="${p.desc}" onchange="updateProcess(${i},'desc',this.value)"></td>
+      <td><input type="number" value="${p.cycle}" min="0" step="0.1" onchange="updateProcess(${i},'cycle',parseFloat(this.value)||0)"></td>
+      <td><input type="number" value="${p.eff}" min="1" max="200" step="1" onchange="updateProcess(${i},'eff',parseFloat(this.value)||80)"></td>
+      <td><input type="number" value="${p.mult}" min="1" max="10" step="1" onchange="updateProcess(${i},'mult',parseInt(this.value)||1)"></td>
+      <td><input type="text" class="readonly" value="${p.adjCycle.toFixed(2)}" readonly></td>
+      <td><input type="text" class="readonly" value="${p.total.toFixed(2)}" readonly></td>
+      <td><input type="text" class="readonly" value="${p.poph.toFixed(1)}" readonly></td>
+      <td class="actions">
+        <button class="btn-up" onclick="moveProcess(${i},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn-down" onclick="moveProcess(${i},1)" ${i === processes.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn-delete" onclick="deleteProcess(${i})">✕</button>
+      </td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+}
+
+function updateProcess(idx, field, value) {
+  processes[idx][field] = value;
+  recalcAllProcesses();
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+function addProcess() {
+  processes.push({
+    uid: genUid(),
+    sapNo: 'PP' + String(processes.length + 1).padStart(6, '0'),
+    desc: 'New Process',
+    cycle: 10,
+    eff: 80,
+    mult: 1
+  });
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+function deleteProcess(idx) {
+  if (processes.length <= 1) return alert('Must have at least one process.');
+  const uid = processes[idx].uid;
+  delete taskResources[uid];
+  processes.splice(idx, 1);
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+function moveProcess(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= processes.length) return;
+  [processes[idx], processes[newIdx]] = [processes[newIdx], processes[idx]];
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// WORKER CRUD
+// ══════════════════════════════════════════════════════════════
+
+function renderWorkerTable() {
+  const tbody = document.getElementById('workerTableBody');
+  let html = '';
+
+  workers.forEach((w, i) => {
+    const hoursPerDay = getWorkerHoursPerDay(w);
+    const hoursPerWeek = getWorkerHoursPerWeek(w);
+    const dailyParticipation = getWorkerDailyParticipationHours(w);
+    const netWorkHrs = getWorkerNetWorkingHours(w);
+    const participationRate = w.participationRate || 0;
+    const workingDays = w.workingDaysPerYear || WORKING_DAYS_PER_YEAR;
+
+    html += `<tr>
+      <td class="row-num">${i + 1}</td>
+      <td><input type="text" value="${w.code}" onchange="updateWorker(${i},'code',this.value)"></td>
+      <td><input type="text" value="${w.name}" onchange="updateWorker(${i},'name',this.value)"></td>
+      <td><input type="time" value="${w.shiftStart}" onchange="updateWorker(${i},'shiftStart',this.value)"></td>
+      <td><input type="time" value="${w.shiftEnd}" onchange="updateWorker(${i},'shiftEnd',this.value)"></td>
+      <td><input type="number" value="${w.breakMin}" min="0" step="5" onchange="updateWorker(${i},'breakMin',parseInt(this.value)||0)"></td>
+      <td><input type="text" class="readonly calc" value="${hoursPerDay.toFixed(2)}" readonly></td>
+      <td><input type="text" class="readonly calc" value="${hoursPerWeek.toFixed(0)}" readonly></td>
+      <td><input type="number" value="${participationRate}" min="0" max="100" step="1" onchange="updateWorker(${i},'participationRate',parseFloat(this.value)||0)"></td>
+      <td><input type="text" class="readonly calc" value="${dailyParticipation.toFixed(2)}" readonly></td>
+      <td><input type="number" value="${workingDays}" min="1" max="365" step="1" onchange="updateWorker(${i},'workingDaysPerYear',parseInt(this.value)||210)"></td>
+      <td><input type="text" class="readonly calc" value="${netWorkHrs.toFixed(2)}" readonly></td>
+      <td class="hourly-rate-col"><input type="number" value="${w.hourlyRate.toFixed(3)}" min="0" step="0.001" onchange="updateWorker(${i},'hourlyRate',parseFloat(this.value)||0)"></td>
+      <td class="actions">
+        <button class="btn-delete" onclick="deleteWorker(${i})">✕</button>
+      </td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+  renderScheduleSummary();
+}
+
+function updateWorker(idx, field, value) {
+  workers[idx][field] = value;
+  renderWorkerTable();
+  renderAll();
+}
+
+function addWorker() {
+  const rate = parseFloat(document.getElementById('defaultHourlyRate').value) || 33.435;
+  workers.push({
+    uid: genUid(),
+    code: 'EMP' + String(workers.length + 1).padStart(3, '0'),
+    name: 'New Worker',
+    shiftStart: '06:00',
+    shiftEnd: '14:00',
+    breakMin: 30,
+    participationRate: 97,
+    workingDaysPerYear: WORKING_DAYS_PER_YEAR,
+    hourlyRate: rate,
+    skills: [],
+    assignments: []
+  });
+  renderWorkerTable();
+  renderAll();
+}
+
+function deleteWorker(idx) {
+  workers.splice(idx, 1);
+  renderWorkerTable();
+  renderAll();
+}
+
+function updateWorkerCosts() {
+  renderWorkerTable();
+}
+
+function toggleRateVisibility() {
+  document.body.classList.toggle('rate-visible');
+}
+
+function renderScheduleSummary() {
+  const totalHrs = getTotalDailyWorkHours();
+  const totalNetHrs = getTotalNetWorkingHours();
+  const totalCost = getTotalDailyLaborCost();
+  const avgHrs = getAvgWorkHoursPerWorker();
+  const avgNetHrs = getAvgNetWorkHoursPerWorker();
+  const avgRate = workers.length > 0 && totalHrs > 0 ? totalCost / totalHrs : 0;
+  const avgParticipation = workers.length > 0
+    ? workers.reduce((s, w) => s + (w.participationRate || 0), 0) / workers.length
+    : 0;
+
+  document.getElementById('scheduleSummary').innerHTML = `
+    <div class="schedule-card">
+      <h4>Workforce Summary</h4>
+      <div class="stat"><span class="stat-label">Total Workers:</span><span class="stat-value">${workers.length}</span></div>
+      <div class="stat"><span class="stat-label">Total Hours/Day:</span><span class="stat-value">${totalHrs.toFixed(1)} hrs</span></div>
+      <div class="stat"><span class="stat-label">Total Net Work Hrs:</span><span class="stat-value">${totalNetHrs.toFixed(2)} hrs</span></div>
+      <div class="stat"><span class="stat-label">Avg Participation:</span><span class="stat-value">${avgParticipation.toFixed(0)}%</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Labor Cost</h4>
+      <div class="stat"><span class="stat-label">Total Daily Cost:</span><span class="stat-value">€${totalCost.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Avg Rate:</span><span class="stat-value">€${avgRate.toFixed(2)}/hr</span></div>
+      <div class="stat"><span class="stat-label">Working Days/Year:</span><span class="stat-value">${WORKING_DAYS_PER_YEAR}</span></div>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════════════
+// STATIONS & RESOURCES
+// ══════════════════════════════════════════════════════════════
+
+function initStations() {
+  stations = processes.map((p, i) => ({ tasks: [i] }));
+  buildStationResourcesFromTasks();
+}
+
+function buildStationResourcesFromTasks() {
+  stationResources = {};
+  stations.forEach((st, si) => {
+    let maxWorkers = 1;
+    const machMap = {};
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      const tr = taskResources[p.uid];
+      if (tr) {
+        maxWorkers = Math.max(maxWorkers, tr.workers);
+        (tr.machines || []).forEach(m => {
+          machMap[m.name] = Math.max(machMap[m.name] || 0, m.qty);
+        });
+      } else {
+        // Default machines
+        const dm = DEFAULT_MACHINES[p.sapNo] || [];
+        dm.forEach(m => {
+          machMap[m.name] = Math.max(machMap[m.name] || 0, m.qty);
+        });
+      }
+    });
+    stationResources[si] = {
+      workers: maxWorkers,
+      machines: Object.entries(machMap).map(([name, qty]) => ({ name, qty }))
+    };
+  });
+}
+
+function saveStationResourcesToTasks() {
+  stations.forEach((st, si) => {
+    const res = stationResources[si];
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      taskResources[p.uid] = {
+        workers: res.workers,
+        machines: JSON.parse(JSON.stringify(res.machines))
+      };
+    });
+  });
+}
+
+function rawStationTime(st) {
+  return st.tasks.reduce((s, ti) => s + processes[ti].total, 0);
+}
+
+function effectiveStationTime(si) {
+  const raw = rawStationTime(stations[si]);
+  const w = (stationResources[si] && stationResources[si].workers) || 1;
+  return raw / w;
+}
+
+// ══════════════════════════════════════════════════════════════
+// BALANCING ALGORITHMS
+// ══════════════════════════════════════════════════════════════
+
+function balanceLCT(numStations) {
+  recalcAllProcesses();
+  const totalTime = getTotalTime();
+  const takt = totalTime / numStations;
+  const maxTakt = Math.max(takt, Math.max(...processes.map(p => p.total)));
+  const sorted = processes.map((_, i) => i).sort((a, b) => processes[b].total - processes[a].total);
+  const result = [{ tasks: [] }];
+  let stIdx = 0, remaining = maxTakt;
+  for (const ti of sorted) {
+    if (processes[ti].total <= remaining + 0.01) {
+      result[stIdx].tasks.push(ti);
+      remaining -= processes[ti].total;
+    } else {
+      stIdx++;
+      result.push({ tasks: [ti] });
+      remaining = maxTakt - processes[ti].total;
+    }
+  }
+  result.forEach(s => s.tasks.sort((a, b) => a - b));
+  return enforceStationCount(result, numStations);
+}
+
+function balanceRPW(numStations) {
+  recalcAllProcesses();
+  const n = processes.length;
+  const weights = processes.map((_, i) => {
+    let w = 0;
+    for (let j = i; j < n; j++) w += processes[j].total;
+    return w;
+  });
+  const sorted = processes.map((_, i) => i).sort((a, b) => weights[b] - weights[a]);
+  const totalTime = getTotalTime();
+  const takt = totalTime / numStations;
+  const maxTakt = Math.max(takt, Math.max(...processes.map(p => p.total)));
+  const result = [{ tasks: [] }];
+  let remaining = maxTakt;
+  for (const ti of sorted) {
+    if (processes[ti].total <= remaining + 0.01) {
+      result[result.length - 1].tasks.push(ti);
+      remaining -= processes[ti].total;
+    } else {
+      result.push({ tasks: [ti] });
+      remaining = maxTakt - processes[ti].total;
+    }
+  }
+  result.forEach(s => s.tasks.sort((a, b) => a - b));
+  return enforceStationCount(result, numStations);
+}
+
+function balanceKillbridge(numStations) {
+  recalcAllProcesses();
+  const totalTime = getTotalTime();
+  const takt = totalTime / numStations;
+  const maxTakt = Math.max(takt, Math.max(...processes.map(p => p.total)));
+  const result = [{ tasks: [] }];
+  let remaining = maxTakt;
+  for (let i = 0; i < processes.length; i++) {
+    if (processes[i].total <= remaining + 0.01) {
+      result[result.length - 1].tasks.push(i);
+      remaining -= processes[i].total;
+    } else {
+      result.push({ tasks: [i] });
+      remaining = maxTakt - processes[i].total;
+    }
+  }
+  return enforceStationCount(result, numStations);
+}
+
+// Enforce exact target station count by merging or splitting stations
+function enforceStationCount(stations, target) {
+  // Cannot have more stations than processes
+  target = Math.min(target, processes.length);
+  // Must have at least 1 station
+  target = Math.max(target, 1);
+
+  // Helper to calculate station time
+  const stationTime = (st) => st.tasks.reduce((s, ti) => s + processes[ti].total, 0);
+
+  // If too many stations, merge the two smallest repeatedly
+  while (stations.length > target) {
+    // Find the two stations with smallest combined time
+    let minCombined = Infinity;
+    let mergeI = 0, mergeJ = 1;
+    for (let i = 0; i < stations.length; i++) {
+      for (let j = i + 1; j < stations.length; j++) {
+        const combined = stationTime(stations[i]) + stationTime(stations[j]);
+        if (combined < minCombined) {
+          minCombined = combined;
+          mergeI = i;
+          mergeJ = j;
+        }
+      }
+    }
+    // Merge station j into station i
+    stations[mergeI].tasks = [...stations[mergeI].tasks, ...stations[mergeJ].tasks].sort((a, b) => a - b);
+    stations.splice(mergeJ, 1);
+  }
+
+  // If too few stations, split the largest station repeatedly
+  while (stations.length < target) {
+    // Find station with most tasks (must have at least 2 tasks to split)
+    let maxTasks = 0;
+    let splitIdx = -1;
+    for (let i = 0; i < stations.length; i++) {
+      if (stations[i].tasks.length > maxTasks && stations[i].tasks.length >= 2) {
+        maxTasks = stations[i].tasks.length;
+        splitIdx = i;
+      }
+    }
+
+    // If no station can be split, we've reached the limit
+    if (splitIdx === -1) break;
+
+    // Split station into two - try to balance the time
+    const tasks = stations[splitIdx].tasks;
+    const totalT = stationTime(stations[splitIdx]);
+    const targetHalf = totalT / 2;
+
+    // Greedy split: accumulate tasks until we pass half
+    let sum = 0;
+    let splitPoint = 1;
+    for (let i = 0; i < tasks.length - 1; i++) {
+      sum += processes[tasks[i]].total;
+      if (sum >= targetHalf) {
+        splitPoint = i + 1;
+        break;
+      }
+      splitPoint = i + 1;
+    }
+
+    const firstHalf = tasks.slice(0, splitPoint);
+    const secondHalf = tasks.slice(splitPoint);
+
+    stations[splitIdx] = { tasks: firstHalf };
+    stations.splice(splitIdx + 1, 0, { tasks: secondHalf });
+  }
+
+  return stations;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ANIMATION
+// ══════════════════════════════════════════════════════════════
+
+async function runBalance() {
+  if (animating) return;
+  animating = true;
+  document.getElementById('balanceBtn').disabled = true;
+  document.getElementById('chartBadge').textContent = 'BALANCING...';
+  document.getElementById('chartBadge').style.background = 'var(--yellow)';
+
+  // Save current resources to tasks before balancing
+  saveStationResourcesToTasks();
+
+  const numStations = parseInt(document.getElementById('stationSlider').value);
+  const algo = document.getElementById('algoSelect').value;
+  let target;
+  switch (algo) {
+    case 'rpw': target = balanceRPW(numStations); break;
+    case 'killbridge': target = balanceKillbridge(numStations); break;
+    default: target = balanceLCT(numStations);
+  }
+
+  const speed = parseInt(document.getElementById('speedSelect').value);
+  const snapshots = buildSnapshots(target);
+
+  for (const snap of snapshots) {
+    stations = snap;
+    buildStationResourcesFromTasks();
+    renderAll();
+    await sleep(speed);
+  }
+
+  stations = target;
+  buildStationResourcesFromTasks();
+  document.getElementById('chartBadge').textContent = 'BALANCED';
+  document.getElementById('chartBadge').style.background = 'var(--green)';
+  renderAll();
+  animating = false;
+  document.getElementById('balanceBtn').disabled = false;
+}
+
+function buildSnapshots(target) {
+  const snapshots = [];
+  let current = processes.map((_, i) => ({ tasks: [i] }));
+  for (const ts of target) {
+    if (ts.tasks.length <= 1) continue;
+    for (let k = 1; k < ts.tasks.length; k++) {
+      const taskToMerge = ts.tasks[k];
+      const destIdx = current.findIndex(s => s.tasks.includes(ts.tasks[0]));
+      const srcIdx = current.findIndex(s => s.tasks.includes(taskToMerge));
+      if (destIdx === -1 || srcIdx === -1 || destIdx === srcIdx) continue;
+      current[srcIdx].tasks = current[srcIdx].tasks.filter(t => t !== taskToMerge);
+      current[destIdx].tasks.push(taskToMerge);
+      current[destIdx].tasks.sort((a, b) => a - b);
+      current = current.filter(s => s.tasks.length > 0);
+      snapshots.push(current.map(s => ({ tasks: [...s.tasks] })));
+    }
+  }
+  return snapshots;
+}
+
+function resetBalance() {
+  if (animating) return;
+  // Clear task resources to start fresh from Process Setup
+  taskResources = {};
+  saveToLocalStorage();
+  initStations();
+  document.getElementById('chartBadge').textContent = 'UNBALANCED';
+  document.getElementById('chartBadge').style.background = 'var(--red)';
+  renderAll();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ══════════════════════════════════════════════════════════════
+// RESOURCE MUTATIONS
+// ══════════════════════════════════════════════════════════════
+
+function changeWorkerCount(si, val) {
+  if (animating) return;
+  stationResources[si].workers = Math.max(0.25, val);
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+function addMachine(si) {
+  if (animating) return;
+  stationResources[si].machines.push({ name: MACHINE_CATALOGUE[0], qty: 1 });
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+function removeMachine(si, mi) {
+  if (animating) return;
+  stationResources[si].machines.splice(mi, 1);
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+function changeMachine(si, mi, name) {
+  if (animating) return;
+  stationResources[si].machines[mi].name = name;
+  saveStationResourcesToTasks();
+}
+
+function changeMachineQty(si, mi, qty) {
+  if (animating) return;
+  stationResources[si].machines[mi].qty = Math.max(1, qty);
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// SHIFT PLANNING FUNCTIONS
+// ══════════════════════════════════════════════════════════════
+
+const WORKER_COLORS = [
+  '#38bdf8', '#818cf8', '#f472b6', '#4ade80', '#fbbf24', '#f87171',
+  '#2dd4bf', '#e879f9', '#fb923c', '#a78bfa', '#94a3b8', '#67e8f9'
+];
+
+function getWorkerColor(workerIndex) {
+  return WORKER_COLORS[workerIndex % WORKER_COLORS.length];
+}
+
+function ensureWorkerFields(w) {
+  if (!w.skills) w.skills = [];
+  if (!w.assignments) w.assignments = [];
+}
+
+function toggleWorkerSkill(workerIdx, stationIdx) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  const idx = w.skills.indexOf(stationIdx);
+  if (idx >= 0) {
+    w.skills.splice(idx, 1);
+    // Also remove any assignments to this station
+    w.assignments = w.assignments.filter(a => a.station !== stationIdx);
+  } else {
+    w.skills.push(stationIdx);
+  }
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+function addWorkerAssignment(workerIdx) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  // Check remaining capacity before adding
+  const { remainingPercent } = getWorkerRemainingHours(workerIdx);
+  if (remainingPercent < 5) {
+    alert(`${w.code} has no remaining capacity (${remainingPercent}% available). Cannot add another assignment.`);
+    return;
+  }
+  // Find first available station (that worker is skilled for and not already assigned)
+  const assignedStations = w.assignments.map(a => a.station);
+  const availableStation = w.skills.find(s => !assignedStations.includes(s));
+  if (availableStation !== undefined) {
+    const defaultPercent = Math.min(25, remainingPercent);
+    w.assignments.push({ station: availableStation, percent: defaultPercent });
+    renderShiftPlanning();
+    saveToLocalStorage();
+  }
+}
+
+function removeWorkerAssignment(workerIdx, assignmentIdx) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  w.assignments.splice(assignmentIdx, 1);
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+function updateAssignmentStation(workerIdx, assignmentIdx, newStation) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  w.assignments[assignmentIdx].station = parseInt(newStation);
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+function updateAssignmentPercent(workerIdx, assignmentIdx, newPercent) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  w.assignments[assignmentIdx].percent = parseInt(newPercent);
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+function clearAllAssignments() {
+  workers.forEach(w => {
+    ensureWorkerFields(w);
+    w.assignments = [];
+  });
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+function autoAssignWorkers() {
+  // First, ensure all workers have all skills (for auto-assign to work)
+  // Then distribute workers to meet station requirements
+  const requirements = stations.map((st, si) => ({
+    station: si,
+    required: stationResources[si]?.workers || 1,
+    assigned: 0
+  }));
+
+  // Clear existing assignments
+  workers.forEach(w => {
+    ensureWorkerFields(w);
+    w.assignments = [];
+    // Auto-grant all skills if none set
+    if (w.skills.length === 0) {
+      w.skills = stations.map((_, i) => i);
+    }
+  });
+
+  // Sort workers by available hours (descending)
+  const sortedWorkers = workers.map((w, i) => ({ worker: w, index: i, hours: getWorkerNetWorkHours(w) }))
+    .sort((a, b) => b.hours - a.hours);
+
+  // Assign workers to stations
+  for (const { worker, index } of sortedWorkers) {
+    let remaining = 100; // percentage to assign
+
+    // Sort requirements by gap (most understaffed first)
+    requirements.sort((a, b) => (a.required - a.assigned) - (b.required - b.assigned)).reverse();
+
+    for (const req of requirements) {
+      if (remaining <= 0) break;
+      if (!worker.skills.includes(req.station)) continue;
+
+      const gap = req.required - req.assigned;
+      if (gap <= 0) continue;
+
+      // How much can this worker contribute?
+      const contribution = Math.min(remaining / 100, gap);
+      const percent = Math.round(contribution * 100);
+
+      if (percent >= 5) { // minimum 5% assignment
+        worker.assignments.push({ station: req.station, percent });
+        req.assigned += contribution;
+        remaining -= percent;
+      }
+    }
+
+    // If still has remaining time, assign to least covered station they're skilled for
+    if (remaining > 0) {
+      const availableStations = worker.skills.filter(s =>
+        !worker.assignments.some(a => a.station === s)
+      );
+      if (availableStations.length > 0) {
+        const station = availableStations[0];
+        worker.assignments.push({ station, percent: remaining });
+      }
+    }
+  }
+
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+function getWorkerNetWorkHours(w) {
+  const hoursPerDay = getWorkerHoursPerDay(w);
+  return hoursPerDay * (w.participationRate / 100);
+}
+
+function getStationAssignedWorkers(stationIdx) {
+  let total = 0;
+  const assignedWorkers = [];
+  workers.forEach((w, wi) => {
+    ensureWorkerFields(w);
+    w.assignments.forEach(a => {
+      if (a.station === stationIdx) {
+        total += a.percent / 100;
+        assignedWorkers.push({ worker: w, workerIndex: wi, percent: a.percent });
+      }
+    });
+  });
+  return { total, workers: assignedWorkers };
+}
+
+function renderShiftPlanning() {
+  renderPlanningRequirements();
+  renderSkillMatrix();
+  renderWorkerAssignments();
+  renderCoverageTable();
+  renderWorkerFillChart();
+  renderProcessCards();
+}
+
+function renderPlanningRequirements() {
+  const container = document.getElementById('planningRequirementsKPIs');
+  if (!container) return;
+
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const totalRequired = Object.values(stationResources).reduce((s, r) => s + r.workers, 0);
+
+  let html = '';
+  stations.forEach((st, si) => {
+    const required = stationResources[si]?.workers || 1;
+    const { total } = getStationAssignedWorkers(si);
+    const status = total >= required ? 'full' : total > 0 ? 'under' : 'empty';
+    const statusIcon = status === 'full' ? '✅' : status === 'under' ? '⚠️' : '❌';
+    html += `<div class="kpi-card"><div class="kpi-value">${required.toFixed(2)}</div><div class="kpi-label">Stn ${si + 1} Required ${statusIcon}</div></div>`;
+  });
+  html += `<div class="kpi-card highlight"><div class="kpi-value">${totalRequired.toFixed(2)}</div><div class="kpi-label">Total Workers Needed</div></div>`;
+
+  container.innerHTML = html;
+}
+
+function renderSkillMatrix() {
+  const headEl = document.getElementById('skillMatrixHead');
+  const bodyEl = document.getElementById('skillMatrixBody');
+  if (!headEl || !bodyEl) return;
+
+  // Header row
+  let headHtml = '<tr><th>Worker</th><th>Code</th>';
+  stations.forEach((st, si) => {
+    const stName = `Stn ${si + 1}`;
+    headHtml += `<th class="skill-matrix-cell" style="width:70px;">${stName}</th>`;
+  });
+  headHtml += '<th style="width:80px;">Skills Count</th></tr>';
+  headEl.innerHTML = headHtml;
+
+  // Body rows
+  let bodyHtml = '';
+  workers.forEach((w, wi) => {
+    ensureWorkerFields(w);
+    bodyHtml += `<tr>
+      <td>${w.name}</td>
+      <td>${w.code}</td>`;
+    stations.forEach((st, si) => {
+      const isSkilled = w.skills.includes(si);
+      bodyHtml += `<td class="skill-matrix-cell">
+        <input type="checkbox" class="skill-checkbox"
+          ${isSkilled ? 'checked' : ''}
+          onchange="toggleWorkerSkill(${wi}, ${si})">
+      </td>`;
+    });
+    bodyHtml += `<td style="text-align:center;font-weight:600;color:var(--accent);">${w.skills.length}</td></tr>`;
+  });
+  bodyEl.innerHTML = bodyHtml;
+}
+
+function renderWorkerAssignments() {
+  const container = document.getElementById('workerAssignmentsContainer');
+  if (!container) return;
+
+  const viewFilter = document.getElementById('assignmentViewFilter')?.value || 'worker';
+
+  if (viewFilter === 'worker') {
+    renderAssignmentsByWorker(container);
+  } else {
+    renderAssignmentsByStation(container);
+  }
+}
+
+function renderAssignmentsByWorker(container) {
+  let html = '';
+  workers.forEach((w, wi) => {
+    ensureWorkerFields(w);
+    const totalPercent = w.assignments.reduce((s, a) => s + a.percent, 0);
+    const statusClass = totalPercent === 100 ? 'complete' : totalPercent > 100 ? 'error' : totalPercent > 0 ? 'warning' : '';
+    const totalClass = totalPercent === 100 ? 'complete' : totalPercent > 100 ? 'over' : 'incomplete';
+    const dailyPartHours = getWorkerDailyParticipationHours(w);
+    const totalHours = (dailyPartHours * totalPercent / 100).toFixed(2);
+
+    html += `<div class="worker-assignment-card ${statusClass}">
+      <div class="worker-assignment-header">
+        <h4><span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:${getWorkerColor(wi)};margin-right:8px;vertical-align:middle;"></span>${w.code} - ${w.name} (${dailyPartHours.toFixed(2)}h/day)</h4>
+        <span class="total ${totalClass}">${totalPercent}% = ${totalHours}h</span>
+      </div>`;
+
+    // Assignment rows
+    w.assignments.forEach((a, ai) => {
+      const assignedHours = (dailyPartHours * a.percent / 100).toFixed(2);
+      // Calculate remaining capacity excluding current assignment
+      const { remainingPercent } = getWorkerRemainingHours(wi, a.station);
+      const maxPercent = Math.min(100, a.percent + remainingPercent);
+      const availableHours = (dailyPartHours * remainingPercent / 100).toFixed(2);
+      const isOverAllocated = totalPercent > 100;
+
+      html += `<div class="assignment-row" style="${isOverAllocated ? 'border:1px solid var(--red);border-radius:4px;padding:4px;' : ''}">
+        <select onchange="updateAssignmentStation(${wi}, ${ai}, this.value)">`;
+      w.skills.forEach(si => {
+        const selected = a.station === si ? 'selected' : '';
+        html += `<option value="${si}" ${selected}>Station ${si + 1}</option>`;
+      });
+      html += `</select>
+        <input type="range" min="5" max="${maxPercent}" step="5" value="${a.percent}"
+          oninput="updateAssignmentSliderDisplay(${wi}, ${ai}, this.value, ${dailyPartHours})"
+          onchange="updateAssignmentPercent(${wi}, ${ai}, this.value)">
+        <span class="percent-display" id="pct-${wi}-${ai}">${a.percent}%</span>
+        <span class="hours-display" id="hrs-${wi}-${ai}">→ ${assignedHours}h</span>
+        <span style="font-size:0.7rem;color:${remainingPercent > 0 ? 'var(--muted)' : 'var(--yellow)'};">(${availableHours}h avail)</span>
+        <button class="btn-remove" onclick="removeWorkerAssignment(${wi}, ${ai})">×</button>
+      </div>`;
+    });
+
+    // Add button (only if skilled for more stations AND has remaining capacity)
+    const assignedStations = w.assignments.map(a => a.station);
+    const canAddMore = w.skills.some(s => !assignedStations.includes(s));
+    const workerRemaining = getWorkerRemainingHours(wi);
+    const hasCapacity = workerRemaining.remainingPercent >= 5;
+    if (canAddMore && w.skills.length > 0 && hasCapacity) {
+      html += `<button class="btn-add-assignment" onclick="addWorkerAssignment(${wi})">+ Add Station Assignment (${workerRemaining.remainingHours.toFixed(2)}h avail)</button>`;
+    } else if (w.skills.length === 0) {
+      html += `<p style="color:var(--muted);font-size:0.8rem;">⚠️ No skills assigned. Check skill matrix above.</p>`;
+    } else if (!hasCapacity && canAddMore) {
+      html += `<p style="color:var(--yellow);font-size:0.8rem;">⚠️ No remaining capacity (100% allocated)</p>`;
+    }
+
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+function renderAssignmentsByStation(container) {
+  let html = '';
+  stations.forEach((st, si) => {
+    const required = stationResources[si]?.workers || 1;
+    const { total, workers: assignedList } = getStationAssignedWorkers(si);
+    const gap = total - required;
+    const statusClass = total >= required ? 'complete' : total > 0 ? 'warning' : '';
+    const processNames = st.tasks.map(ti => processes[ti]?.sapNo || `P${ti+1}`).join(', ');
+
+    html += `<div class="station-assignment-card ${statusClass}">
+      <div class="station-header">
+        <h4>Station ${si + 1} <span style="font-weight:400;color:var(--muted);font-size:0.75rem;">(${processNames})</span></h4>
+        <span style="font-size:0.8rem;color:${total >= required ? 'var(--green)' : 'var(--yellow)'};">${total.toFixed(2)} / ${required.toFixed(2)} workers</span>
+      </div>`;
+
+    // Show assigned workers
+    assignedList.forEach(({ worker, workerIndex, percent }) => {
+      const dailyPartHours = getWorkerDailyParticipationHours(worker);
+      const assignedHours = (dailyPartHours * percent / 100).toFixed(2);
+      const assignmentIdx = worker.assignments.findIndex(a => a.station === si);
+
+      // Calculate max allowed for this slider (current + remaining from other stations)
+      const { remainingPercent } = getWorkerRemainingHours(workerIndex, si);
+      const maxPercent = Math.min(100, percent + remainingPercent);
+      const availableHours = (dailyPartHours * remainingPercent / 100).toFixed(2);
+      const isOverAllocated = getWorkerTotalAssigned(workerIndex) > 100;
+
+      html += `<div class="station-worker-row" style="${isOverAllocated ? 'border:1px solid var(--red);' : ''}">
+        <div class="worker-color" style="background:${getWorkerColor(workerIndex)};"></div>
+        <span class="worker-name">${worker.code}</span>
+        <input type="range" min="5" max="${maxPercent}" step="5" value="${percent}"
+          oninput="updateAssignmentSliderDisplay(${workerIndex}, ${assignmentIdx}, this.value, ${dailyPartHours})"
+          onchange="updateAssignmentPercent(${workerIndex}, ${assignmentIdx}, this.value)">
+        <span class="percent-display" id="pct-${workerIndex}-${assignmentIdx}">${percent}%</span>
+        <span class="hours-display" id="hrs-${workerIndex}-${assignmentIdx}">→ ${assignedHours}h</span>
+        <span style="font-size:0.7rem;color:${remainingPercent > 0 ? 'var(--muted)' : 'var(--yellow)'};">(${availableHours}h avail)</span>
+        <button class="btn-remove" onclick="removeWorkerAssignment(${workerIndex}, ${assignmentIdx})">×</button>
+      </div>`;
+    });
+
+    // Show workers who are skilled but not assigned (and have remaining hours)
+    const skilledWorkers = workers.filter((w, wi) => {
+      ensureWorkerFields(w);
+      const { remainingPercent } = getWorkerRemainingHours(wi);
+      return w.skills.includes(si) && !w.assignments.some(a => a.station === si) && remainingPercent > 0;
+    });
+
+    if (skilledWorkers.length > 0) {
+      html += `<div style="margin-top:8px;">
+        <select id="addWorkerToStation-${si}" class="filter-dropdown" style="width:auto;">
+          <option value="">+ Add worker...</option>`;
+      skilledWorkers.forEach((w, idx) => {
+        const wi = workers.indexOf(w);
+        const { remainingHours } = getWorkerRemainingHours(wi);
+        html += `<option value="${wi}">${w.code} (${remainingHours.toFixed(2)}h avail)</option>`;
+      });
+      html += `</select>
+        <button class="btn-add-assignment" style="margin-left:4px;" onclick="addWorkerToStation(${si})">Add</button>
+      </div>`;
+    } else {
+      // Check if there are workers with no remaining hours
+      const fullyAssignedWorkers = workers.filter((w, wi) => {
+        ensureWorkerFields(w);
+        const { remainingPercent } = getWorkerRemainingHours(wi);
+        return w.skills.includes(si) && !w.assignments.some(a => a.station === si) && remainingPercent <= 0;
+      });
+      if (fullyAssignedWorkers.length > 0) {
+        html += `<p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">⚠️ ${fullyAssignedWorkers.length} skilled worker(s) fully assigned elsewhere</p>`;
+      }
+    }
+
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+function updateAssignmentSliderDisplay(wi, ai, value, dailyPartHours) {
+  const pctEl = document.getElementById(`pct-${wi}-${ai}`);
+  const hrsEl = document.getElementById(`hrs-${wi}-${ai}`);
+  if (pctEl) pctEl.textContent = value + '%';
+  if (hrsEl) hrsEl.textContent = '→ ' + (dailyPartHours * value / 100).toFixed(2) + 'h';
+}
+
+function addWorkerToStation(stationIdx) {
+  const select = document.getElementById(`addWorkerToStation-${stationIdx}`);
+  if (!select || !select.value) return;
+  const workerIdx = parseInt(select.value);
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  // Default to remaining percentage (capped at 25% minimum if available)
+  const { remainingPercent } = getWorkerRemainingHours(workerIdx);
+  if (remainingPercent < 5) {
+    alert(`${w.code} has no remaining capacity (${remainingPercent}% available). Cannot add to station.`);
+    return;
+  }
+  const defaultPercent = Math.min(25, remainingPercent);
+  w.assignments.push({ station: stationIdx, percent: defaultPercent });
+  renderShiftPlanning();
+  saveToLocalStorage();
+}
+
+// Calculate worker's remaining available hours (excluding a specific station if provided)
+function getWorkerRemainingHours(workerIdx, excludeStation = null) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  const dailyPartHours = getWorkerDailyParticipationHours(w);
+  let usedPercent = 0;
+  w.assignments.forEach(a => {
+    if (excludeStation === null || a.station !== excludeStation) {
+      usedPercent += a.percent;
+    }
+  });
+  const remainingPercent = Math.max(0, 100 - usedPercent);
+  const remainingHours = dailyPartHours * remainingPercent / 100;
+  return { remainingPercent, remainingHours, usedPercent, dailyPartHours };
+}
+
+// Calculate worker's total assigned percentage across all stations
+function getWorkerTotalAssigned(workerIdx) {
+  const w = workers[workerIdx];
+  ensureWorkerFields(w);
+  return w.assignments.reduce((sum, a) => sum + a.percent, 0);
+}
+
+function renderCoverageTable() {
+  const viewFilter = document.getElementById('coverageViewFilter')?.value || 'station';
+  const thead = document.getElementById('coverageTableHead');
+  const tbody = document.getElementById('coverageTableBody');
+  if (!thead || !tbody) return;
+
+  // Toggle resolution dropdown visibility (only for Timeline view)
+  const resLabel  = document.getElementById('timelineResolutionLabel');
+  const resSelect = document.getElementById('timelineResolution');
+  if (resLabel && resSelect) {
+    const show = viewFilter === 'timeline';
+    resLabel.style.display  = show ? '' : 'none';
+    resSelect.style.display = show ? '' : 'none';
+  }
+
+  if (viewFilter === 'station') {
+    renderCoverageByStation(thead, tbody);
+  } else if (viewFilter === 'timeline') {
+    renderCoverageTimeline();
+  } else {
+    renderCoverageByWorker(thead, tbody);
+  }
+}
+
+function renderCoverageByStation(thead, tbody) {
+  // Header
+  thead.innerHTML = `<tr>
+    <th>Station</th>
+    <th>Processes</th>
+    <th style="text-align:right">Required</th>
+    <th style="text-align:right">Assigned</th>
+    <th style="text-align:right">Gap</th>
+    <th>Status</th>
+    <th>Assigned Workers</th>
+  </tr>`;
+
+  let html = '';
+  let totalRequired = 0;
+  let totalAssigned = 0;
+
+  stations.forEach((st, si) => {
+    const required = stationResources[si]?.workers || 1;
+    const { total, workers: assignedList } = getStationAssignedWorkers(si);
+    const gap = total - required;
+    const gapStr = gap >= 0 ? `+${gap.toFixed(2)}` : gap.toFixed(2);
+
+    totalRequired += required;
+    totalAssigned += total;
+
+    let statusClass, statusText;
+    if (total >= required - 0.01) {
+      statusClass = 'full';
+      statusText = total > required + 0.01 ? 'OVERSTAFFED' : 'FULLY STAFFED';
+    } else if (total > 0) {
+      statusClass = 'under';
+      statusText = 'UNDERSTAFFED';
+    } else {
+      statusClass = 'empty';
+      statusText = 'NO COVERAGE';
+    }
+
+    const processNames = st.tasks.map(ti => processes[ti]?.sapNo || `P${ti+1}`).join(', ');
+    const workerNames = assignedList.map(w => `${w.worker.code.split(' ')[0]}(${w.percent}%)`).join(', ') || '-';
+
+    html += `<tr>
+      <td><strong>Station ${si + 1}</strong></td>
+      <td style="font-size:0.75rem;color:var(--muted);">${processNames}</td>
+      <td style="text-align:right;font-weight:600;">${required.toFixed(2)}</td>
+      <td style="text-align:right;font-weight:600;color:${total >= required ? 'var(--green)' : 'var(--yellow)'};">${total.toFixed(2)}</td>
+      <td style="text-align:right;color:${gap >= 0 ? 'var(--green)' : 'var(--red)'};">${gapStr}</td>
+      <td><span class="coverage-status ${statusClass}">${statusText}</span></td>
+      <td style="font-size:0.75rem;">${workerNames}</td>
+    </tr>`;
+  });
+
+  // Total row
+  const totalGap = totalAssigned - totalRequired;
+  html += `<tr style="background:var(--surface2);font-weight:600;">
+    <td colspan="2">TOTAL</td>
+    <td style="text-align:right;">${totalRequired.toFixed(2)}</td>
+    <td style="text-align:right;">${totalAssigned.toFixed(2)}</td>
+    <td style="text-align:right;color:${totalGap >= 0 ? 'var(--green)' : 'var(--red)'};">${totalGap >= 0 ? '+' : ''}${totalGap.toFixed(2)}</td>
+    <td colspan="2"></td>
+  </tr>`;
+
+  tbody.innerHTML = html;
+}
+
+function renderCoverageByWorker(thead, tbody) {
+  // Header
+  thead.innerHTML = `<tr>
+    <th>Worker</th>
+    <th>Daily Part. Hrs</th>
+    <th style="text-align:right">Assigned %</th>
+    <th style="text-align:right">Assigned Hrs</th>
+    <th style="text-align:right">Remaining</th>
+    <th>Status</th>
+    <th>Station Assignments</th>
+  </tr>`;
+
+  let html = '';
+  let totalDailyHrs = 0;
+  let totalAssignedHrs = 0;
+
+  workers.forEach((w, wi) => {
+    ensureWorkerFields(w);
+    const dailyPartHours = getWorkerDailyParticipationHours(w);
+    const totalPercent = w.assignments.reduce((s, a) => s + a.percent, 0);
+    const assignedHours = dailyPartHours * totalPercent / 100;
+    const remainingHours = dailyPartHours - assignedHours;
+
+    totalDailyHrs += dailyPartHours;
+    totalAssignedHrs += Math.min(assignedHours, dailyPartHours); // Cap at daily max
+
+    let statusClass, statusText;
+    if (totalPercent === 100) {
+      statusClass = 'full';
+      statusText = 'FULLY ASSIGNED';
+    } else if (totalPercent > 100) {
+      statusClass = 'empty'; // Use red for over-allocation
+      statusText = 'OVER-ALLOCATED';
+    } else if (totalPercent > 0) {
+      statusClass = 'under';
+      statusText = 'PARTIAL';
+    } else {
+      statusClass = 'empty';
+      statusText = 'UNASSIGNED';
+    }
+
+    const stationList = w.assignments.map(a => {
+      const hrs = (dailyPartHours * a.percent / 100).toFixed(2);
+      return `Stn${a.station + 1}(${a.percent}%→${hrs}h)`;
+    }).join(', ') || '-';
+
+    html += `<tr>
+      <td><span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${getWorkerColor(wi)};margin-right:6px;vertical-align:middle;"></span><strong>${w.code}</strong></td>
+      <td style="text-align:center;">${dailyPartHours.toFixed(2)}h</td>
+      <td style="text-align:right;font-weight:600;color:${totalPercent <= 100 ? 'var(--green)' : 'var(--red)'};">${totalPercent}%</td>
+      <td style="text-align:right;font-weight:600;">${assignedHours.toFixed(2)}h</td>
+      <td style="text-align:right;color:${remainingHours >= 0 ? 'var(--muted)' : 'var(--red)'};">${remainingHours.toFixed(2)}h</td>
+      <td><span class="coverage-status ${statusClass}">${statusText}</span></td>
+      <td style="font-size:0.75rem;">${stationList}</td>
+    </tr>`;
+  });
+
+  // Total row
+  const totalRemainingHrs = totalDailyHrs - totalAssignedHrs;
+  html += `<tr style="background:var(--surface2);font-weight:600;">
+    <td>TOTAL (${workers.length} workers)</td>
+    <td style="text-align:center;">${totalDailyHrs.toFixed(2)}h</td>
+    <td style="text-align:right;">-</td>
+    <td style="text-align:right;">${totalAssignedHrs.toFixed(2)}h</td>
+    <td style="text-align:right;">${totalRemainingHrs.toFixed(2)}h</td>
+    <td colspan="2"></td>
+  </tr>`;
+
+  tbody.innerHTML = html;
+}
+
+// ── Timeline Coverage helpers ──────────────────────────────────────────────
+
+function parseTimeToMinutes(timeStr) {
+  if (!timeStr || !String(timeStr).includes(':')) return 0;
+  const [h, m] = String(timeStr).split(':').map(Number);
+  return (h * 60) + (m || 0);
+}
+
+function minutesToTimeLabel(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+function getTimelineRange() {
+  let minStart = Infinity, maxEnd = 0;
+  workers.forEach(w => {
+    const s = parseTimeToMinutes(w.shiftStart);
+    const e = parseTimeToMinutes(w.shiftEnd);
+    if (s < minStart) minStart = s;
+    if (e > maxEnd)   maxEnd = e;
+  });
+  if (minStart === Infinity) { minStart = 360; maxEnd = 960; } // fallback 06:00-16:00
+  return { minStart: Math.floor(minStart / 60) * 60, maxEnd: Math.ceil(maxEnd / 60) * 60 };
+}
+
+function generateTimeSlots(minStart, maxEnd, resolutionMin) {
+  const slots = [];
+  for (let t = minStart; t < maxEnd; t += resolutionMin) {
+    slots.push({ start: t, end: t + resolutionMin, label: minutesToTimeLabel(t) });
+  }
+  return slots;
+}
+
+// Break period is placed at the midpoint of the shift (only breakMin is known)
+function getWorkerBreakInterval(w) {
+  const s = parseTimeToMinutes(w.shiftStart);
+  const e = parseTimeToMinutes(w.shiftEnd);
+  const mid = Math.floor((s + e) / 2);
+  const half = Math.floor((w.breakMin || 0) / 2);
+  return { breakStart: mid - half, breakEnd: mid - half + (w.breakMin || 0) };
+}
+
+function isWorkerActiveInSlot(w, slotStart, slotEnd) {
+  const s = parseTimeToMinutes(w.shiftStart);
+  const e = parseTimeToMinutes(w.shiftEnd);
+  if (slotStart >= e || slotEnd <= s) return { active: false, onBreak: false };
+  const { breakStart, breakEnd } = getWorkerBreakInterval(w);
+  return { active: true, onBreak: (slotStart < breakEnd && slotEnd > breakStart) };
+}
+
+function renderCoverageTimeline() {
+  const thead = document.getElementById('coverageTableHead');
+  const tbody = document.getElementById('coverageTableBody');
+  if (!thead || !tbody) return;
+
+  thead.innerHTML = '';   // hide normal column headers
+
+  const resolutionMin = parseInt(document.getElementById('timelineResolution')?.value || '30');
+  const { minStart, maxEnd } = getTimelineRange();
+  const slots = generateTimeSlots(minStart, maxEnd, resolutionMin);
+  const numCols = slots.length + 1; // +1 for station label
+
+  // Build CSS grid column definition
+  const gridCols = `110px repeat(${slots.length}, minmax(54px, 1fr))`;
+
+  let html = `<tr><td colspan="${numCols}" style="padding:0;border:0;">`;
+  html += `<div class="timeline-container">`;
+  html += `<div class="timeline-grid" style="grid-template-columns:${gridCols};">`;
+
+  // ── Header row ─────────────────────────────────
+  html += `<div class="timeline-header-cell" style="position:sticky;left:0;z-index:6;background:var(--surface2);">Station</div>`;
+  slots.forEach(slot => {
+    const hourBound = slot.start % 60 === 0 ? ' hour-boundary' : '';
+    html += `<div class="timeline-header-cell${hourBound}">${slot.label}</div>`;
+  });
+
+  // ── Station rows ────────────────────────────────
+  stations.forEach((st, si) => {
+    const { workers: assignedList } = getStationAssignedWorkers(si);
+    const required = stationResources[si]?.workers || 1;
+
+    html += `<div class="timeline-station-label">Stn ${si + 1}<br><span style="font-size:0.65rem;color:var(--muted);font-weight:400;">req ${required.toFixed(1)}</span></div>`;
+
+    slots.forEach(slot => {
+      const hourBound = slot.start % 60 === 0 ? ' hour-boundary' : '';
+      let cellHtml = `<div class="timeline-cell${hourBound}">`;
+
+      assignedList.forEach(({ worker, workerIndex, percent }) => {
+        const { active, onBreak } = isWorkerActiveInSlot(worker, slot.start, slot.end);
+        if (!active) return;
+
+        const color = getWorkerColor(workerIndex);
+        const isPartial = (worker.participationRate || 100) < 100;
+        const classes = ['timeline-worker-bar'];
+        if (onBreak) classes.push('on-break');
+        if (isPartial) classes.push('partial-participation');
+
+        const code = String(worker.code).split(' ')[0];
+        const tipBreak = onBreak ? ' | BREAK' : '';
+        const tipPart  = isPartial ? ` | ${worker.participationRate}% part.` : '';
+        const title    = `${worker.code} (${percent}%${tipBreak}${tipPart})`;
+
+        cellHtml += `<div class="${classes.join(' ')}" style="background-color:${color};" title="${title}">${code} ${percent}%</div>`;
+      });
+
+      cellHtml += `</div>`;
+      html += cellHtml;
+    });
+  });
+
+  // ── Total coverage summary row ──────────────────
+  html += `<div class="timeline-total-label">Total<br><span style="font-size:0.6rem;font-weight:400;">all stations</span></div>`;
+
+  slots.forEach(slot => {
+    const hourBound = slot.start % 60 === 0 ? ' hour-boundary' : '';
+    let totalCoverage = 0, totalRequired = 0;
+
+    stations.forEach((_, si) => {
+      const { workers: assignedList } = getStationAssignedWorkers(si);
+      const required = stationResources[si]?.workers || 1;
+      totalRequired += required;
+
+      let cover = 0;
+      assignedList.forEach(({ worker, percent }) => {
+        const { active, onBreak } = isWorkerActiveInSlot(worker, slot.start, slot.end);
+        if (active && !onBreak) {
+          // weight by assignment% and participation rate
+          cover += (percent / 100) * ((worker.participationRate || 100) / 100);
+        }
+      });
+      totalCoverage += Math.min(cover, required);
+    });
+
+    const ratio = totalRequired > 0 ? totalCoverage / totalRequired : 0;
+    let cls, icon;
+    if (ratio >= 0.99)       { cls = 'coverage-full';    icon = '✓'; }
+    else if (ratio > 0.001)  { cls = 'coverage-partial'; icon = '⚠'; }
+    else                     { cls = 'coverage-none';    icon = '✗'; }
+
+    const pct = (ratio * 100).toFixed(0);
+    html += `<div class="timeline-total-cell ${cls}${hourBound}" title="Coverage: ${pct}% (${totalCoverage.toFixed(1)} / ${totalRequired.toFixed(1)})">${icon} ${totalCoverage.toFixed(1)}</div>`;
+  });
+
+  html += `</div></div></td></tr>`;
+  tbody.innerHTML = html;
+}
+
+function renderWorkerFillChart() {
+  const chartEl = document.getElementById('workerFillChart');
+  const legendEl = document.getElementById('workerLegend');
+  if (!chartEl || !legendEl) return;
+
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const maxTime = Math.max(...effTimes, 1);
+  const chartHeight = 280;
+  const topPadding = 30;
+
+  // Legend
+  let legendHtml = '';
+  workers.forEach((w, wi) => {
+    ensureWorkerFields(w);
+    if (w.assignments.length > 0) {
+      legendHtml += `<div class="worker-legend-item">
+        <div class="worker-legend-color" style="background:${getWorkerColor(wi)};"></div>
+        <span>${w.code.split(' ')[0]}</span>
+      </div>`;
+    }
+  });
+  legendEl.innerHTML = legendHtml;
+
+  // Chart bars
+  let chartHtml = '';
+  stations.forEach((st, si) => {
+    const required = stationResources[si]?.workers || 1;
+    const effTime = effTimes[si];
+    const barHeight = (effTime / maxTime) * (chartHeight - topPadding);
+    const { total, workers: assignedList } = getStationAssignedWorkers(si);
+
+    // Build stack segments for workers
+    let stackHtml = '';
+    let usedPercent = 0;
+
+    assignedList.forEach(({ worker, workerIndex, percent }) => {
+      const segmentPercent = percent / 100 / required; // relative to requirement
+      const segmentHeight = Math.max(20, barHeight * segmentPercent);
+      usedPercent += percent / 100;
+
+      stackHtml += `<div class="worker-fill-segment worker-color-${workerIndex % 12}"
+        style="height:${segmentHeight}px;"
+        title="${worker.code} - ${percent}%">
+        ${worker.code.split(' ')[0]}
+      </div>`;
+    });
+
+    // Add gap if understaffed
+    const gap = required - total;
+    if (gap > 0.01) {
+      const gapPercent = gap / required;
+      const gapHeight = Math.max(20, barHeight * gapPercent);
+      stackHtml += `<div class="worker-fill-gap" style="height:${gapHeight}px;" title="Gap: ${gap.toFixed(2)} workers">
+        -${gap.toFixed(2)}
+      </div>`;
+    }
+
+    const statusColor = total >= required ? 'var(--green)' : total > 0 ? 'var(--yellow)' : 'var(--red)';
+
+    chartHtml += `<div class="worker-fill-bar" style="flex:1;max-width:120px;">
+      <div class="worker-fill-stack" style="height:${barHeight}px;">
+        ${stackHtml}
+      </div>
+      <div style="text-align:center;margin-top:8px;">
+        <div style="font-weight:600;color:var(--accent);">Stn ${si + 1}</div>
+        <div style="font-size:0.75rem;color:var(--muted);">${effTime.toFixed(1)}s</div>
+        <div style="font-size:0.75rem;color:${statusColor};">${total.toFixed(2)} / ${required.toFixed(2)}</div>
+      </div>
+    </div>`;
+  });
+
+  chartEl.innerHTML = chartHtml;
+  chartEl.style.height = (chartHeight + 60) + 'px';
+  chartEl.style.display = 'flex';
+  chartEl.style.alignItems = 'flex-end';
+  chartEl.style.justifyContent = 'space-around';
+  chartEl.style.gap = '12px';
+  chartEl.style.paddingTop = topPadding + 'px';
+}
+
+function renderProcessCards() {
+  const container = document.getElementById('processCardsContainer');
+  if (!container) return;
+
+  let html = '';
+  stations.forEach((st, si) => {
+    const effTime = effectiveStationTime(si);
+    const required = stationResources[si]?.workers || 1;
+
+    html += `<div class="process-card">
+      <h5>Station ${si + 1} <span style="color:var(--muted);font-weight:400;">(${effTime.toFixed(1)}s, ${required.toFixed(2)}W)</span></h5>
+      <ul>`;
+
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      if (p) {
+        html += `<li><strong>${p.sapNo}</strong> - ${p.desc}</li>`;
+      }
+    });
+
+    html += `</ul></div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════════════════════
+
+function renderAll() {
+  renderKPIs();
+  renderBarChart();
+  renderGantt();
+  renderResources();
+  renderGauge();
+  renderAnalysis();
+  renderShiftPlanning();
+}
+
+function renderKPIs() {
+  const numStations = stations.length;
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const totalEffTime = effTimes.reduce((s, t) => s + t, 0);
+  const efficiency = (totalEffTime / (numStations * bottleneck)) * 100;
+  const oph = 3600 / bottleneck;
+  const idleTime = (numStations * bottleneck) - totalEffTime;
+  const totalWorkers = Object.values(stationResources).reduce((s, r) => s + r.workers, 0);
+  const totalMachines = Object.values(stationResources).reduce((s, r) => s + r.machines.reduce((ms, m) => ms + m.qty, 0), 0);
+
+  // Calculate labor cost per unit
+  const avgHourlyRate = workers.length > 0 ? getTotalDailyLaborCost() / getTotalDailyWorkHours() : 33.435;
+  const laborCostPerUnit = totalWorkers > 0 ? (totalWorkers * avgHourlyRate * (bottleneck / 3600)) : 0;
+
+  const effColor = efficiency > 85 ? 'var(--green)' : efficiency > 70 ? 'var(--yellow)' : 'var(--red)';
+
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="kpi-card"><div class="kpi-value">${getTotalTime().toFixed(1)}s</div><div class="kpi-label">Total Cycle Time</div></div>
+    <div class="kpi-card"><div class="kpi-value">${numStations}</div><div class="kpi-label">Stations</div></div>
+    <div class="kpi-card"><div class="kpi-value">${bottleneck.toFixed(1)}s</div><div class="kpi-label">Bottleneck</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:${effColor}">${efficiency.toFixed(1)}%</div><div class="kpi-label">Line Efficiency</div></div>
+    <div class="kpi-card highlight"><div class="kpi-value">${oph.toFixed(1)}</div><div class="kpi-label">Output / Hour</div></div>
+    <div class="kpi-card"><div class="kpi-value">${idleTime.toFixed(1)}s</div><div class="kpi-label">Idle Time</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalWorkers.toFixed(2)}</div><div class="kpi-label">Total Workers</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalMachines}</div><div class="kpi-label">Total Machines</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">€${laborCostPerUnit.toFixed(3)}</div><div class="kpi-label">Labor Cost/Unit</div></div>
+  `;
+}
+
+function renderBarChart() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const maxTime = Math.max(...effTimes, 1);
+  const chartHeight = 260; // Usable height for bars
+  const topPadding = 40;   // Space at top for bars that reach 100%
+
+  let html = '';
+  for (let pct = 0; pct <= 100; pct += 25) {
+    const y = chartHeight - (pct / 100) * chartHeight;
+    html += `<div class="grid-line" style="top:${y + topPadding}px;"></div>`;
+    html += `<div class="grid-label" style="top:${y + topPadding - 6}px;">${(pct / 100 * maxTime).toFixed(0)}s</div>`;
+  }
+
+  if (stations.length > 1) {
+    html += `<div class="takt-line" style="top:${topPadding}px;"><span class="takt-label">Bottleneck: ${maxTime.toFixed(1)}s</span></div>`;
+  }
+
+  stations.forEach((st, si) => {
+    const effT = effectiveStationTime(si);
+    const workersCount = stationResources[si]?.workers || 1;
+    let stackHtml = '';
+    st.tasks.forEach((ti, taskIdx) => {
+      const p = processes[ti];
+      const segTime = p.total / workersCount;
+      const h = Math.max(2, (segTime / maxTime) * chartHeight);
+      const oph = segTime > 0 ? (3600 / segTime).toFixed(1) : 0;
+      stackHtml += `<div class="task-segment color-${ti % 11}" style="height:${h}px;" data-tooltip-content="${p.sapNo}|${p.desc}|${p.cycle}|${p.eff}|${p.total.toFixed(2)}|${workersCount}|${segTime.toFixed(2)}|${oph}">
+        ${p.sapNo.slice(-3)}
+        <div class="tooltip">
+          <strong>${p.sapNo}</strong><br>${p.desc}<br>
+          Cycle: ${p.cycle}s | Eff: ${p.eff}%<br>
+          Total: ${p.total.toFixed(2)}s | Workers: ${workersCount}<br>
+          Effective: ${segTime.toFixed(2)}s<br>
+          <strong style="color:var(--green);">OPH: ${oph}</strong>
+        </div>
+      </div>`;
+    });
+
+    const utilPct = (effT / maxTime * 100);
+    const utilColor = utilPct > 85 ? 'var(--green)' : utilPct > 70 ? 'var(--yellow)' : 'var(--red)';
+
+    // Calculate station OPH
+    const stationOPH = effT > 0 ? (3600 / effT).toFixed(0) : 0;
+    html += `<div class="station-col">
+      <div class="station-bar-stack">${stackHtml}</div>
+      <div class="station-label">Stn ${si + 1}</div>
+      <div class="station-time">${effT.toFixed(1)}s</div>
+      <div style="font-size:0.6rem;color:${utilColor};">${utilPct.toFixed(0)}%</div>
+      <div style="font-size:0.55rem;color:var(--muted);">${workersCount}W</div>
+      <div style="font-size:0.55rem;color:var(--green);">${stationOPH}/hr</div>
+    </div>`;
+  });
+
+  document.getElementById('barChart').innerHTML = html;
+  document.getElementById('barChart').style.paddingLeft = '36px';
+
+  // Add tooltip positioning event listeners
+  setupTooltipPositioning();
+}
+
+function setupTooltipPositioning() {
+  // Tooltips now use pure CSS positioning (position: absolute)
+  // This function is kept for future enhancements if needed
+}
+
+function renderGantt() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const maxTime = Math.max(...effTimes, 1);
+  let html = '';
+
+  stations.forEach((st, si) => {
+    const workers = stationResources[si]?.workers || 1;
+    let barHtml = '', offset = 0;
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      const segT = p.total / workers;
+      const left = (offset / maxTime) * 100;
+      const width = (segT / maxTime) * 100;
+      barHtml += `<div class="gantt-bar color-${ti % 11}" style="left:${left}%;width:${Math.max(1, width)}%;">${p.sapNo.slice(-3)}</div>`;
+      offset += segT;
+    });
+    html += `<div class="gantt-row">
+      <div class="gantt-label">Stn ${si + 1} (${workers}W)</div>
+      <div class="gantt-bar-track">${barHtml}</div>
+    </div>`;
+  });
+  document.getElementById('ganttChart').innerHTML = html;
+}
+
+function renderResources() {
+  let html = '';
+  stations.forEach((st, si) => {
+    const res = stationResources[si] || { workers: 1, machines: [] };
+    const raw = rawStationTime(st);
+    const eff = raw / res.workers;
+    const effCol = eff <= 60 ? 'var(--green)' : eff <= 120 ? 'var(--yellow)' : 'var(--red)';
+    const taskList = st.tasks.map(ti => processes[ti].sapNo + ' ' + processes[ti].desc.substring(0, 25)).join('<br>');
+
+    let machHtml = '';
+    res.machines.forEach((m, mi) => {
+      machHtml += `<div class="rc-machine-row">
+        <select onchange="changeMachine(${si},${mi},this.value)">
+          ${MACHINE_CATALOGUE.map(c => `<option value="${c}" ${c === m.name ? 'selected' : ''}>${c}</option>`).join('')}
+        </select>
+        <input type="number" value="${m.qty}" min="1" max="20" onchange="changeMachineQty(${si},${mi},parseInt(this.value)||1)">
+        <button class="rc-remove" onclick="removeMachine(${si},${mi})">✕</button>
+      </div>`;
+    });
+
+    html += `<div class="resource-card">
+      <div class="rc-header">
+        <span class="rc-title">Station ${si + 1}</span>
+        <span class="rc-time">${raw.toFixed(1)}s raw</span>
+      </div>
+      <div class="rc-tasks">${taskList}</div>
+      <div class="rc-row">
+        <span class="rc-row-label">Workers</span>
+        <div class="rc-counter">
+          <button onclick="changeWorkerCount(${si},${res.workers - 0.25})">−</button>
+          <input type="number" value="${res.workers}" min="0.25" step="0.25" onchange="changeWorkerCount(${si},parseFloat(this.value)||1)">
+          <button onclick="changeWorkerCount(${si},${res.workers + 0.25})">+</button>
+        </div>
+      </div>
+      <div class="rc-row" style="align-items:flex-start;">
+        <span class="rc-row-label">Machines</span>
+        <span style="font-size:0.65rem;color:var(--muted);">${res.machines.reduce((s, m) => s + m.qty, 0)} total</span>
+      </div>
+      <div class="rc-machines">${machHtml}</div>
+      <button class="rc-add-machine" onclick="addMachine(${si})">+ Add Machine</button>
+      <div class="rc-effective">
+        <span class="rc-eff-label">Effective Time</span>
+        <span class="rc-eff-value" style="color:${effCol};">${eff.toFixed(1)}s</span>
+      </div>
+    </div>`;
+  });
+  document.getElementById('resourceGrid').innerHTML = html;
+}
+
+function renderGauge() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const totalEffTime = effTimes.reduce((s, t) => s + t, 0);
+  const efficiency = Math.min(100, (totalEffTime / (stations.length * bottleneck)) * 100);
+  const circumference = 2 * Math.PI * 65;
+  const offset = circumference - (efficiency / 100) * circumference;
+  const color = efficiency > 85 ? 'var(--green)' : efficiency > 70 ? 'var(--yellow)' : 'var(--red)';
+
+  const ring = document.getElementById('gaugeRing');
+  ring.style.strokeDashoffset = offset;
+  ring.style.stroke = color;
+
+  const valEl = document.getElementById('gaugeValue');
+  valEl.textContent = efficiency.toFixed(1) + '%';
+  valEl.style.color = color;
+}
+
+function renderAnalysis() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const oph = 3600 / bottleneck;
+
+  // Daily production based on workforce
+  const totalWorkHours = getTotalDailyWorkHours();
+  const totalNetWorkHours = getTotalNetWorkingHours();
+  const avgWorkHours = getAvgWorkHoursPerWorker();
+  const avgNetWorkHours = getAvgNetWorkHoursPerWorker();
+
+  // Costs
+  const totalDailyCost = getTotalDailyLaborCost();
+  const totalWorkers = Object.values(stationResources).reduce((s, r) => s + r.workers, 0);
+  const avgHourlyRate = workers.length > 0 && totalWorkHours > 0 ? totalDailyCost / totalWorkHours : 33.435;
+  const laborCostPerUnit = totalWorkers > 0 ? (totalWorkers * avgHourlyRate * (bottleneck / 3600)) : 0;
+
+  // Capacity calculation based on average net working hours per worker
+  // (total combined hours / number of workers = actual available production hours)
+  const avgNetHrsPerWorker = workers.length > 0 ? totalNetWorkHours / workers.length : 0;
+  const theoreticalDailyOutput = Math.floor(avgNetHrsPerWorker * 3600 / bottleneck);
+  const theoreticalWeeklyOutput = theoreticalDailyOutput * 5;
+  const theoreticalYearlyOutput = theoreticalDailyOutput * WORKING_DAYS_PER_YEAR;
+  const totalDailyLaborCost = theoreticalDailyOutput * laborCostPerUnit;
+
+  document.getElementById('analysisKPIs').innerHTML = `
+    <div class="kpi-card"><div class="kpi-value">${oph.toFixed(1)}</div><div class="kpi-label">Output/Hour</div></div>
+    <div class="kpi-card"><div class="kpi-value">${bottleneck.toFixed(2)}s</div><div class="kpi-label">Bottleneck Time</div></div>
+    <div class="kpi-card"><div class="kpi-value">${workers.length}</div><div class="kpi-label">Workers in Roster</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalWorkers.toFixed(2)}</div><div class="kpi-label">Workers Assigned</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalNetWorkHours.toFixed(2)}h</div><div class="kpi-label">Total Net Work Hrs</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">€${laborCostPerUnit.toFixed(3)}</div><div class="kpi-label">Labor Cost/Unit</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">€${totalDailyCost.toFixed(2)}</div><div class="kpi-label">Daily Wages</div></div>
+  `;
+
+  document.getElementById('analysisSummary').innerHTML = `
+    <div class="schedule-card">
+      <h4>Production Metrics</h4>
+      <div class="stat"><span class="stat-label">Bottleneck Time:</span><span class="stat-value">${bottleneck.toFixed(2)}s</span></div>
+      <div class="stat"><span class="stat-label">Units per Hour:</span><span class="stat-value">${oph.toFixed(1)}</span></div>
+      <div class="stat"><span class="stat-label">Stations:</span><span class="stat-value">${stations.length}</span></div>
+      <div class="stat"><span class="stat-label">Total Cycle:</span><span class="stat-value">${getTotalTime().toFixed(1)}s</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Cost Analysis</h4>
+      <div class="stat"><span class="stat-label">Workers Assigned:</span><span class="stat-value">${totalWorkers.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Avg Hourly Rate:</span><span class="stat-value">€${avgHourlyRate.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Labor/Unit:</span><span class="stat-value">€${laborCostPerUnit.toFixed(4)}</span></div>
+      <div class="stat"><span class="stat-label">Daily Labor Cost:</span><span class="stat-value">€${totalDailyLaborCost.toFixed(2)}</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Efficiency Metrics</h4>
+      <div class="stat"><span class="stat-label">Line Efficiency:</span><span class="stat-value">${((effTimes.reduce((s, t) => s + t, 0) / (stations.length * bottleneck)) * 100).toFixed(1)}%</span></div>
+      <div class="stat"><span class="stat-label">Idle Time:</span><span class="stat-value">${((stations.length * bottleneck) - effTimes.reduce((s, t) => s + t, 0)).toFixed(1)}s</span></div>
+    </div>
+  `;
+
+  // Capacity Calculation Section
+  document.getElementById('capacityKPIs').innerHTML = `
+    <div class="kpi-card highlight"><div class="kpi-value">${theoreticalDailyOutput.toLocaleString()}</div><div class="kpi-label">Daily Capacity (units)</div></div>
+    <div class="kpi-card highlight"><div class="kpi-value">${theoreticalWeeklyOutput.toLocaleString()}</div><div class="kpi-label">Weekly Capacity (units)</div></div>
+    <div class="kpi-card highlight"><div class="kpi-value">${theoreticalYearlyOutput.toLocaleString()}</div><div class="kpi-label">Yearly Capacity (units)</div></div>
+    <div class="kpi-card"><div class="kpi-value">${avgNetHrsPerWorker.toFixed(2)}h</div><div class="kpi-label">Avg Net Hrs/Worker</div></div>
+    <div class="kpi-card"><div class="kpi-value">${WORKING_DAYS_PER_YEAR}</div><div class="kpi-label">Working Days/Year</div></div>
+  `;
+
+  document.getElementById('capacitySummary').innerHTML = `
+    <div class="schedule-card">
+      <h4>Capacity Formula</h4>
+      <div class="stat"><span class="stat-label">Total Net Work Hours:</span><span class="stat-value">${totalNetWorkHours.toFixed(2)} hrs (${workers.length} workers)</span></div>
+      <div class="stat"><span class="stat-label">Avg Hrs/Worker:</span><span class="stat-value">${totalNetWorkHours.toFixed(2)} / ${workers.length} = ${avgNetHrsPerWorker.toFixed(2)} hrs</span></div>
+      <div class="stat"><span class="stat-label">Bottleneck:</span><span class="stat-value">${bottleneck.toFixed(2)} seconds</span></div>
+      <div class="stat"><span class="stat-label">Formula:</span><span class="stat-value">AvgHrs × 3600 / Bottleneck</span></div>
+      <div class="stat"><span class="stat-label">Daily:</span><span class="stat-value">${avgNetHrsPerWorker.toFixed(2)} × 3600 / ${bottleneck.toFixed(2)} = ${theoreticalDailyOutput}</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Weekly Projection</h4>
+      <div class="stat"><span class="stat-label">Work Days/Week:</span><span class="stat-value">5 days</span></div>
+      <div class="stat"><span class="stat-label">Daily Output:</span><span class="stat-value">${theoreticalDailyOutput.toLocaleString()} units</span></div>
+      <div class="stat"><span class="stat-label">Weekly Output:</span><span class="stat-value">${theoreticalWeeklyOutput.toLocaleString()} units</span></div>
+      <div class="stat"><span class="stat-label">Weekly Labor Cost:</span><span class="stat-value">€${(totalDailyLaborCost * 5).toFixed(2)}</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Yearly Projection</h4>
+      <div class="stat"><span class="stat-label">Working Days/Year:</span><span class="stat-value">${WORKING_DAYS_PER_YEAR} days</span></div>
+      <div class="stat"><span class="stat-label">Yearly Output:</span><span class="stat-value">${theoreticalYearlyOutput.toLocaleString()} units</span></div>
+      <div class="stat"><span class="stat-label">Yearly Labor Cost:</span><span class="stat-value">€${(totalDailyLaborCost * WORKING_DAYS_PER_YEAR).toFixed(2)}</span></div>
+    </div>
+  `;
+
+  // Summary table
+  const assignment = new Array(processes.length).fill(0);
+  stations.forEach((st, si) => st.tasks.forEach(ti => assignment[ti] = si));
+
+  let tableHtml = '';
+  processes.forEach((p, i) => {
+    const si = assignment[i];
+    const workersInStation = stationResources[si]?.workers || 1;
+    const effTime = p.total / workersInStation;
+    const processOPH = effTime > 0 ? (3600 / effTime).toFixed(1) : 0;
+    const util = (effTime / bottleneck * 100);
+    tableHtml += `<tr>
+      <td style="color:var(--muted)">${i + 1}</td>
+      <td>${p.sapNo}</td>
+      <td>${p.desc}</td>
+      <td>Station ${si + 1}</td>
+      <td>${p.total.toFixed(2)}</td>
+      <td>${workersInStation}</td>
+      <td>${effTime.toFixed(2)}</td>
+      <td style="color:var(--green)">${processOPH}</td>
+      <td style="color:${util > 85 ? 'var(--green)' : util > 70 ? 'var(--yellow)' : 'var(--red)'}">${util.toFixed(1)}%</td>
+    </tr>`;
+  });
+  document.getElementById('summaryTableBody').innerHTML = tableHtml;
+}
+
+// ══════════════════════════════════════════════════════════════
+// TABS
+// ══════════════════════════════════════════════════════════════
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+document.getElementById('stationSlider').addEventListener('input', function() {
+  document.getElementById('stationCount').textContent = this.value;
+});
+
+// ══════════════════════════════════════════════════════════════
+// CSV EXPORT/IMPORT - PROCESSES
+// ══════════════════════════════════════════════════════════════
+
+function exportProcessesCSV() {
+  const headers = ['SAP No','Description','Cycle Time (s)','Efficiency %','2-Side Mult'];
+  const rows = processes.map(p => [
+    p.sapNo,
+    '"' + p.desc.replace(/"/g, '""') + '"',
+    p.cycle,
+    p.eff,
+    p.mult
+  ].join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  downloadCSV(csv, 'process-setup.csv');
+}
+
+function importProcessesCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    if (rows.length < 2) {
+      alert('CSV file is empty or invalid.');
+      return;
+    }
+    // Skip header row
+    const newProcesses = [];
+    for (let i = 1; i < rows.length; i++) {
+      const cols = rows[i];
+      if (cols.length < 5) continue;
+      newProcesses.push({
+        uid: genUid(),
+        sapNo: cols[0] || '',
+        desc: cols[1] || '',
+        cycle: parseFloat(cols[2]) || 0,
+        eff: parseFloat(cols[3]) || 80,
+        mult: parseInt(cols[4]) || 1
+      });
+    }
+    if (newProcesses.length > 0) {
+      processes = newProcesses;
+      taskResources = {}; // Clear task resources for fresh import
+      saveToLocalStorage();
+      recalcAllProcesses();
+      renderProcessTable();
+      initStations();
+      renderAll();
+      alert(`Imported ${newProcesses.length} processes successfully.`);
+    } else {
+      alert('No valid processes found in CSV.');
+    }
+    input.value = ''; // Reset file input
+  };
+  reader.readAsText(file);
+}
+
+function clearProcessData() {
+  if (!confirm('Are you sure you want to clear all process data?')) return;
+  processes = [{
+    uid: genUid(),
+    sapNo: 'PP000001',
+    desc: 'New Process',
+    cycle: 10,
+    eff: 80,
+    mult: 1
+  }];
+  taskResources = {};
+  saveToLocalStorage();
+  recalcAllProcesses();
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CSV EXPORT/IMPORT - WORKERS
+// ══════════════════════════════════════════════════════════════
+
+function exportWorkersCSV() {
+  const headers = ['Employee Code','Name','Shift Start','Shift End','Break (min)','Participation %','Hourly Rate'];
+  const rows = workers.map(w => [
+    w.code,
+    '"' + w.name.replace(/"/g, '""') + '"',
+    w.shiftStart,
+    w.shiftEnd,
+    w.breakMin,
+    w.participationRate || 0,
+    w.hourlyRate.toFixed(2)
+  ].join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  downloadCSV(csv, 'workforce.csv');
+}
+
+function importWorkersCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    if (rows.length < 2) {
+      alert('CSV file is empty or invalid.');
+      return;
+    }
+    // Skip header row
+    const newWorkers = [];
+    for (let i = 1; i < rows.length; i++) {
+      const cols = rows[i];
+      if (cols.length < 5) continue;
+      newWorkers.push({
+        uid: genUid(),
+        code: cols[0] || '',
+        name: cols[1] || '',
+        shiftStart: cols[2] || '06:00',
+        shiftEnd: cols[3] || '14:00',
+        breakMin: parseInt(cols[4]) || 30,
+        participationRate: parseFloat(cols[5]) || 97,
+        hourlyRate: parseFloat(cols[6]) || 33.435
+      });
+    }
+    if (newWorkers.length > 0) {
+      workers = newWorkers;
+      saveToLocalStorage();
+      renderWorkerTable();
+      renderAll();
+      alert(`Imported ${newWorkers.length} workers successfully.`);
+    } else {
+      alert('No valid workers found in CSV.');
+    }
+    input.value = ''; // Reset file input
+  };
+  reader.readAsText(file);
+}
+
+function clearWorkerData() {
+  if (!confirm('Are you sure you want to clear all worker data?')) return;
+  workers = [];
+  saveToLocalStorage();
+  renderWorkerTable();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CSV UTILITIES
+// ══════════════════════════════════════════════════════════════
+
+function downloadCSV(csv, filename) {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let currentRow = [];
+  let currentField = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentField += '"';
+        i++; // Skip the next quote
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentField += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        currentRow.push(currentField.trim());
+        currentField = '';
+      } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+        currentRow.push(currentField.trim());
+        if (currentRow.length > 0 && currentRow.some(f => f !== '')) {
+          rows.push(currentRow);
+        }
+        currentRow = [];
+        currentField = '';
+        if (char === '\r') i++; // Skip \n after \r
+      } else if (char !== '\r') {
+        currentField += char;
+      }
+    }
+  }
+
+  // Don't forget the last field/row
+  if (currentField || currentRow.length > 0) {
+    currentRow.push(currentField.trim());
+    if (currentRow.some(f => f !== '')) {
+      rows.push(currentRow);
+    }
+  }
+
+  return rows;
+}
+
+// ══════════════════════════════════════════════════════════════
+// LOCAL STORAGE PERSISTENCE
+// ══════════════════════════════════════════════════════════════
+
+const STORAGE_KEY_PROCESSES = 'lineBalancing_processes';
+const STORAGE_KEY_WORKERS = 'lineBalancing_workers';
+const STORAGE_KEY_TASK_RESOURCES = 'lineBalancing_taskResources';
+const STORAGE_KEY_HEADER = 'lineBalancing_header';
+const STORAGE_KEY_STATIONS = 'lineBalancing_stations';
+const STORAGE_KEY_STATION_RESOURCES = 'lineBalancing_stationResources';
+
+// Header field data
+let headerData = {
+  sapNo: '',
+  productNo: '',
+  productDesc: '',
+  calcBy: ''
+};
+
+function saveHeaderFields() {
+  headerData.sapNo = document.getElementById('headerSapNo')?.value || '';
+  headerData.productNo = document.getElementById('headerProductNo')?.value || '';
+  headerData.productDesc = document.getElementById('headerProductDesc')?.value || '';
+  headerData.calcBy = document.getElementById('headerCalcBy')?.value || '';
+  try {
+    localStorage.setItem(STORAGE_KEY_HEADER, JSON.stringify(headerData));
+  } catch (e) {
+    console.warn('Failed to save header to localStorage:', e);
+  }
+}
+
+function loadHeaderFields() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_HEADER);
+    if (saved) {
+      headerData = JSON.parse(saved);
+      if (document.getElementById('headerSapNo')) document.getElementById('headerSapNo').value = headerData.sapNo || '';
+      if (document.getElementById('headerProductNo')) document.getElementById('headerProductNo').value = headerData.productNo || '';
+      if (document.getElementById('headerProductDesc')) document.getElementById('headerProductDesc').value = headerData.productDesc || '';
+      if (document.getElementById('headerCalcBy')) document.getElementById('headerCalcBy').value = headerData.calcBy || '';
+    }
+  } catch (e) {
+    console.warn('Failed to load header from localStorage:', e);
+  }
+}
+
+function saveToLocalStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY_PROCESSES, JSON.stringify(processes));
+    localStorage.setItem(STORAGE_KEY_WORKERS, JSON.stringify(workers));
+    localStorage.setItem(STORAGE_KEY_TASK_RESOURCES, JSON.stringify(taskResources));
+    localStorage.setItem(STORAGE_KEY_STATIONS, JSON.stringify(stations));
+    localStorage.setItem(STORAGE_KEY_STATION_RESOURCES, JSON.stringify(stationResources));
+  } catch (e) {
+    console.warn('Failed to save to localStorage:', e);
+  }
+}
+
+let stationsLoadedFromStorage = false;
+
+function loadFromLocalStorage() {
+  try {
+    const savedProcesses = localStorage.getItem(STORAGE_KEY_PROCESSES);
+    const savedWorkers = localStorage.getItem(STORAGE_KEY_WORKERS);
+    const savedTaskResources = localStorage.getItem(STORAGE_KEY_TASK_RESOURCES);
+    const savedStations = localStorage.getItem(STORAGE_KEY_STATIONS);
+    const savedStationResources = localStorage.getItem(STORAGE_KEY_STATION_RESOURCES);
+
+    if (savedProcesses) {
+      const parsed = JSON.parse(savedProcesses);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        processes = parsed;
+      }
+    }
+    if (savedWorkers) {
+      const parsed = JSON.parse(savedWorkers);
+      if (Array.isArray(parsed)) {
+        workers = parsed;
+      }
+    }
+    if (savedTaskResources) {
+      const parsed = JSON.parse(savedTaskResources);
+      if (parsed && typeof parsed === 'object') {
+        taskResources = parsed;
+      }
+    }
+    if (savedStations) {
+      const parsed = JSON.parse(savedStations);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        stations = parsed;
+        stationsLoadedFromStorage = true;
+      }
+    }
+    if (savedStationResources) {
+      const parsed = JSON.parse(savedStationResources);
+      if (parsed && typeof parsed === 'object') {
+        stationResources = parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load from localStorage:', e);
+  }
+}
+
+// Wrap existing update functions to auto-save
+const originalUpdateProcess = updateProcess;
+updateProcess = function(idx, field, value) {
+  originalUpdateProcess(idx, field, value);
+  saveToLocalStorage();
+};
+
+const originalAddProcess = addProcess;
+addProcess = function() {
+  originalAddProcess();
+  saveToLocalStorage();
+};
+
+const originalDeleteProcess = deleteProcess;
+deleteProcess = function(idx) {
+  originalDeleteProcess(idx);
+  saveToLocalStorage();
+};
+
+const originalMoveProcess = moveProcess;
+moveProcess = function(idx, dir) {
+  originalMoveProcess(idx, dir);
+  saveToLocalStorage();
+};
+
+const originalUpdateWorker = updateWorker;
+updateWorker = function(idx, field, value) {
+  originalUpdateWorker(idx, field, value);
+  saveToLocalStorage();
+};
+
+const originalAddWorker = addWorker;
+addWorker = function() {
+  originalAddWorker();
+  saveToLocalStorage();
+};
+
+const originalDeleteWorker = deleteWorker;
+deleteWorker = function(idx) {
+  originalDeleteWorker(idx);
+  saveToLocalStorage();
+};
+
+const originalSaveStationResourcesToTasks = saveStationResourcesToTasks;
+saveStationResourcesToTasks = function() {
+  originalSaveStationResourcesToTasks();
+  saveToLocalStorage();
+};
+
+// ══════════════════════════════════════════════════════════════
+// EXCEL EXPORT / IMPORT (Complete Data)
+// ══════════════════════════════════════════════════════════════
+
+const DATA_VERSION = '1.0.0';
+
+function getTimestamp() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}_${hh}${min}${ss}`;
+}
+
+function exportAllDataExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library not loaded. Please refresh the page and try again.');
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: Header Info
+  const headerInfo = [
+    ['Line Balancing & Capacity Planning', '', '', 'Version:', DATA_VERSION],
+    [''],
+    ['SAP No.', headerData.sapNo || ''],
+    ['Product No.', headerData.productNo || ''],
+    ['Product Description', headerData.productDesc || ''],
+    ['Calculation By', headerData.calcBy || ''],
+    ['Export Date', new Date().toLocaleString()]
+  ];
+  const wsHeader = XLSX.utils.aoa_to_sheet(headerInfo);
+  XLSX.utils.book_append_sheet(wb, wsHeader, 'Info');
+
+  // Sheet 2: Processes
+  const processHeaders = ['#', 'UID', 'SAP No.', 'Description', 'Cycle Time (s)', 'Efficiency %', '2-Side Multiplier', 'Machines'];
+  const processData = processes.map((p, i) => {
+    const machines = (taskResources[i]?.machines || []).map(m => `${m.name}(${m.qty})`).join('; ');
+    return [i + 1, p.uid, p.sapNo, p.desc, p.cycle, p.eff, p.mult, machines];
+  });
+  const wsProcesses = XLSX.utils.aoa_to_sheet([processHeaders, ...processData]);
+  XLSX.utils.book_append_sheet(wb, wsProcesses, 'Processes');
+
+  // Sheet 3: Workers
+  const workerHeaders = ['#', 'UID', 'Employee Code', 'Name', 'Shift Start', 'Shift End', 'Break (min)', 'Participation %', 'Work Days/Yr', 'Hourly Rate', 'Skills (Station Indexes)', 'Assignments (Station:Percent)'];
+  const workerData = workers.map((w, i) => {
+    ensureWorkerFields(w);
+    const skills = (w.skills || []).join(', ');
+    const assignments = (w.assignments || []).map(a => `${a.station}:${a.percent}%`).join('; ');
+    return [i + 1, w.uid, w.code, w.name, w.shiftStart, w.shiftEnd, w.breakMin, w.participationRate, w.workingDaysPerYear, w.hourlyRate, skills, assignments];
+  });
+  const wsWorkers = XLSX.utils.aoa_to_sheet([workerHeaders, ...workerData]);
+  XLSX.utils.book_append_sheet(wb, wsWorkers, 'Workers');
+
+  // Sheet 4: Line Balancing (Stations)
+  const stationHeaders = ['Station #', 'Processes (Indexes)', 'Process SAP Nos', 'Total Time (s)', 'Workers Required', 'Machines'];
+  const stationData = stations.map((st, si) => {
+    const processIndexes = st.tasks.join(', ');
+    const processSapNos = st.tasks.map(ti => processes[ti]?.sapNo || '').join(', ');
+    const totalTime = st.tasks.reduce((sum, ti) => sum + (processes[ti]?.total || 0), 0);
+    const workers = stationResources[si]?.workers || 1;
+    const machines = (stationResources[si]?.machines || []).map(m => `${m.name}(${m.qty})`).join('; ');
+    return [si + 1, processIndexes, processSapNos, totalTime.toFixed(2), workers, machines];
+  });
+  const wsStations = XLSX.utils.aoa_to_sheet([stationHeaders, ...stationData]);
+  XLSX.utils.book_append_sheet(wb, wsStations, 'LineBalancing');
+
+  // Sheet 5: Analysis Settings
+  const totalTime = getTotalTime();
+  const numSt = stations.length || 1;
+  const calculatedTakt = totalTime / numSt;
+  const analysisData = [
+    ['Setting', 'Value'],
+    ['Target Stations', document.getElementById('stationSlider')?.value || numSt],
+    ['Algorithm', document.getElementById('algoSelect')?.value || 'lct'],
+    ['Takt Time (s)', calculatedTakt.toFixed(2)],
+    ['Total Cycle Time (s)', totalTime.toFixed(2)],
+    ['Number of Stations', numSt],
+    ['Working Days/Year', WORKING_DAYS_PER_YEAR]
+  ];
+  const wsAnalysis = XLSX.utils.aoa_to_sheet(analysisData);
+  XLSX.utils.book_append_sheet(wb, wsAnalysis, 'Analysis');
+
+  // Generate filename with version and timestamp
+  const filename = `Line Balancing Data V${DATA_VERSION}_${getTimestamp()}.xlsx`;
+
+  // Write and download
+  XLSX.writeFile(wb, filename);
+}
+
+// Convert Excel time serial number (e.g., 0.25 = 06:00) to HH:MM string
+function excelTimeToString(val) {
+  if (typeof val === 'string' && val.includes(':')) return val;
+  if (typeof val === 'number' && val >= 0 && val < 1) {
+    const totalMinutes = Math.round(val * 24 * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
+  }
+  if (val instanceof Date) {
+    return String(val.getHours()).padStart(2, '0') + ':' + String(val.getMinutes()).padStart(2, '0');
+  }
+  return String(val || '08:00');
+}
+
+function importAllDataExcel(input) {
+  if (!input.files || !input.files[0]) return;
+
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library not loaded. Please check your internet connection and refresh the page.');
+    return;
+  }
+
+  const file = input.files[0];
+  const reader = new FileReader();
+
+  reader.onerror = function() {
+    alert('Failed to read the file. Please try again.');
+  };
+
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array', cellDates: false, raw: false });
+
+      // Read Processes sheet
+      const wsProcesses = wb.Sheets['Processes'];
+      if (wsProcesses) {
+        const processRows = XLSX.utils.sheet_to_json(wsProcesses, { header: 1, defval: '' });
+        if (processRows.length > 1) {
+          processes = [];
+          taskResources = {};
+          for (let i = 1; i < processRows.length; i++) {
+            const row = processRows[i];
+            if (!row || !row[2]) continue;
+            const p = {
+              uid: String(row[1] || `p${i}`),
+              sapNo: String(row[2] || ''),
+              desc: String(row[3] || ''),
+              cycle: parseFloat(row[4]) || 0,
+              eff: parseFloat(row[5]) || 80,
+              mult: parseFloat(row[6]) || 1
+            };
+            processes.push(p);
+
+            // Parse machines
+            const machineStr = String(row[7] || '');
+            const machines = [];
+            if (machineStr) {
+              const parts = machineStr.split(';');
+              parts.forEach(part => {
+                const match = part.trim().match(/^(.+)\((\d+)\)$/);
+                if (match) {
+                  machines.push({ name: match[1].trim(), qty: parseInt(match[2]) });
+                }
+              });
+            }
+            taskResources[processes.length - 1] = { machines };
+          }
+        }
+      }
+
+      // Read Workers sheet
+      const wsWorkers = wb.Sheets['Workers'];
+      if (wsWorkers) {
+        const workerRows = XLSX.utils.sheet_to_json(wsWorkers, { header: 1, defval: '' });
+        if (workerRows.length > 1) {
+          workers = [];
+          for (let i = 1; i < workerRows.length; i++) {
+            const row = workerRows[i];
+            if (!row || !row[2]) continue;
+
+            // Parse skills
+            const skillsStr = String(row[10] || '');
+            const skills = skillsStr.length > 0 ? skillsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+
+            // Parse assignments
+            const assignStr = String(row[11] || '');
+            const assignments = [];
+            if (assignStr.length > 0) {
+              const parts = assignStr.split(';');
+              parts.forEach(part => {
+                const match = part.trim().match(/^(\d+):(\d+)%?$/);
+                if (match) {
+                  assignments.push({ station: parseInt(match[1]), percent: parseInt(match[2]) });
+                }
+              });
+            }
+
+            const w = {
+              uid: String(row[1] || `w${i}`),
+              code: String(row[2] || ''),
+              name: String(row[3] || ''),
+              shiftStart: excelTimeToString(row[4]),
+              shiftEnd: excelTimeToString(row[5]),
+              breakMin: parseInt(row[6]) || 30,
+              participationRate: parseFloat(row[7]) || 100,
+              workingDaysPerYear: parseInt(row[8]) || 210,
+              hourlyRate: parseFloat(row[9]) || 33.435,
+              skills: skills,
+              assignments: assignments
+            };
+            workers.push(w);
+          }
+        }
+      }
+
+      // Read Info sheet for header
+      const wsInfo = wb.Sheets['Info'];
+      if (wsInfo) {
+        const infoRows = XLSX.utils.sheet_to_json(wsInfo, { header: 1, defval: '' });
+        infoRows.forEach(row => {
+          if (row[0] === 'SAP No.') headerData.sapNo = String(row[1] || '');
+          if (row[0] === 'Product No.') headerData.productNo = String(row[1] || '');
+          if (row[0] === 'Product Description') headerData.productDesc = String(row[1] || '');
+          if (row[0] === 'Calculation By') headerData.calcBy = String(row[1] || '');
+        });
+        if (document.getElementById('headerSapNo')) document.getElementById('headerSapNo').value = headerData.sapNo;
+        if (document.getElementById('headerProductNo')) document.getElementById('headerProductNo').value = headerData.productNo;
+        if (document.getElementById('headerProductDesc')) document.getElementById('headerProductDesc').value = headerData.productDesc;
+        if (document.getElementById('headerCalcBy')) document.getElementById('headerCalcBy').value = headerData.calcBy;
+        localStorage.setItem(STORAGE_KEY_HEADER, JSON.stringify(headerData));
+      }
+
+      // Read LineBalancing sheet to restore station configuration
+      const wsLineBalancing = wb.Sheets['LineBalancing'];
+      if (wsLineBalancing) {
+        const lbRows = XLSX.utils.sheet_to_json(wsLineBalancing, { header: 1, defval: '' });
+        if (lbRows.length > 1) {
+          stations = [];
+          stationResources = {};
+          for (let i = 1; i < lbRows.length; i++) {
+            const row = lbRows[i];
+            if (!row || row[0] === '') continue;
+
+            // Parse process indexes from column B (e.g., "0, 1, 2")
+            const processIndexStr = String(row[1] || '');
+            const tasks = processIndexStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+
+            if (tasks.length > 0) {
+              stations.push({ tasks: tasks });
+
+              // Parse workers required from column E
+              const workersRequired = parseFloat(row[4]) || 1;
+
+              // Parse machines from column F (e.g., "Cutting Machine(1); Stripping Machine(1)")
+              const machineStr = String(row[5] || '');
+              const machines = [];
+              if (machineStr) {
+                const parts = machineStr.split(';');
+                parts.forEach(part => {
+                  const match = part.trim().match(/^(.+)\((\d+)\)$/);
+                  if (match) {
+                    machines.push({ name: match[1].trim(), qty: parseInt(match[2]) });
+                  }
+                });
+              }
+
+              stationResources[stations.length - 1] = {
+                workers: workersRequired,
+                machines: machines
+              };
+            }
+          }
+        }
+      }
+
+      // If no stations were imported, initialize fresh
+      if (stations.length === 0) {
+        stations = processes.map((p, i) => ({ tasks: [i] }));
+        buildStationResourcesFromTasks();
+      }
+
+      // Read Analysis sheet
+      const wsAnalysis = wb.Sheets['Analysis'];
+      if (wsAnalysis) {
+        const analysisRows = XLSX.utils.sheet_to_json(wsAnalysis, { header: 1, defval: '' });
+        analysisRows.forEach(row => {
+          if (row[0] === 'Target Stations' && document.getElementById('stationSlider')) {
+            document.getElementById('stationSlider').value = row[1];
+            document.getElementById('stationCount').textContent = row[1];
+          }
+          if (row[0] === 'Algorithm' && document.getElementById('algoSelect')) {
+            document.getElementById('algoSelect').value = row[1];
+          }
+        });
+      }
+
+      // Save to localStorage then reload to ensure all views refresh
+      saveToLocalStorage();
+      saveHeaderFields();
+
+      const pCount = processes.length;
+      const wCount = workers.length;
+      const sCount = stations.length;
+      alert('Data imported successfully! Loaded ' + pCount + ' processes, ' + wCount + ' workers, and ' + sCount + ' stations. Page will reload.');
+      location.reload();
+    } catch (err) {
+      console.error('Import error:', err);
+      alert('Import failed: ' + err.message);
+    }
+  };
+
+  reader.readAsArrayBuffer(file);
+  input.value = '';
+}
+
+// ══════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════
+
+// Load data from localStorage first
+loadFromLocalStorage();
+loadHeaderFields();
+
+recalcAllProcesses();
+renderProcessTable();
+renderWorkerTable();
+
+// Only init stations if not loaded from storage (preserves balanced configuration)
+if (!stationsLoadedFromStorage) {
+  initStations();
+}
+renderAll();
+</script>
+</body>
+</html>
