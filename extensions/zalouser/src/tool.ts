@@ -56,13 +56,24 @@ export async function executeZalouserTool(
   _signal?: AbortSignal,
   _onUpdate?: unknown,
 ): Promise<AgentToolResult> {
+  const validate = (name: string, value?: string) => {
+    if (value?.startsWith("-")) {
+      throw new Error(`Invalid ${name}: cannot start with a hyphen (potential argument injection)`);
+    }
+  };
+
   try {
+    validate("threadId", params.threadId);
+    validate("query", params.query);
+    validate("profile", params.profile);
+    validate("url", params.url);
+
     switch (params.action) {
       case "send": {
         if (!params.threadId || !params.message) {
           throw new Error("threadId and message required for send action");
         }
-        const args = ["msg", "send", params.threadId, params.message];
+        const args = ["msg", "send", params.threadId, "--", params.message];
         if (params.isGroup) {
           args.push("-g");
         }
@@ -98,7 +109,7 @@ export async function executeZalouserTool(
         if (!params.threadId || !params.url) {
           throw new Error("threadId and url required for link action");
         }
-        const args = ["msg", "link", params.threadId, params.url];
+        const args = ["msg", "link", params.threadId, "--", params.url];
         if (params.isGroup) {
           args.push("-g");
         }
