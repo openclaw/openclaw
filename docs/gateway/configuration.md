@@ -481,7 +481,7 @@ Rules:
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.
-For provider-based secret references (`${env:NAME}`, `${keyring:NAME}`, `op://...`), see [Secrets providers](/gateway/secrets-providers).
+For current secret substitution behavior (`${VAR_NAME}`), see [Secrets in config values](/gateway/secrets-providers).
 
 ## Full reference
 
