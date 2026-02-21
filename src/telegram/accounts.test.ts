@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
-import { resolveTelegramAccount } from "./accounts.js";
+import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+
+const { warnMock } = vi.hoisted(() => ({
+  warnMock: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => {
+    const logger = {
+      warn: warnMock,
+      child: () => logger,
+    };
+    return logger;
+  },
+}));
 
 describe("resolveTelegramAccount", () => {
+  afterEach(() => {
+    warnMock.mockReset();
+  });
+
   it("falls back to the first configured account when accountId is omitted", () => {
     withEnv({ TELEGRAM_BOT_TOKEN: "" }, () => {
       const cfg: OpenClawConfig = {
@@ -62,5 +80,22 @@ describe("resolveTelegramAccount", () => {
       expect(account.tokenSource).toBe("none");
       expect(account.token).toBe("");
     });
+  });
+
+  it("formats debug logs with inspect-style output when debug env is enabled", () => {
+    withEnv({ TELEGRAM_BOT_TOKEN: "", OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS: "1" }, () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: { accounts: { work: { botToken: "tok-work" } } },
+        },
+      };
+
+      expect(listTelegramAccountIds(cfg)).toEqual(["work"]);
+      resolveTelegramAccount({ cfg, accountId: "work" });
+    });
+
+    const lines = warnMock.mock.calls.map(([line]) => String(line));
+    expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
+    expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
   });
 });
