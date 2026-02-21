@@ -23,6 +23,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { selectAdaptiveThinkingLevel } from "../thinking-auto.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -295,6 +296,12 @@ export async function runPreparedReply(
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
+  }
+  if (!resolvedThinkLevel) {
+    resolvedThinkLevel = selectAdaptiveThinkingLevel({
+      text: rawBodyTrimmed || baseBodyTrimmedRaw,
+      supportsXHigh: supportsXHighThinking(provider, model),
+    });
   }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
