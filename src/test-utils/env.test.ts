@@ -40,6 +40,20 @@ describe("env test utils", () => {
     expect(process.env[key]).toBe(prev);
   });
 
+  it("withEnv restores values when callback throws", () => {
+    const key = "OPENCLAW_ENV_TEST_SYNC_THROW";
+    const prev = process.env[key];
+
+    expect(() =>
+      withEnv({ [key]: "inside" }, () => {
+        expect(process.env[key]).toBe("inside");
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(process.env[key]).toBe(prev);
+  });
+
   it("withEnv can delete a key only inside callback", () => {
     const key = "OPENCLAW_ENV_TEST_SYNC_DELETE";
     const prev = process.env[key];
