@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv } from "../test-utils/env.js";
 import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-let originalAgentDir: string | undefined;
-let originalPiAgentDir: string | undefined;
+let envSnapshot: ReturnType<typeof captureEnv>;
 let tempAgentDir: string | undefined;
 
 function makePrompter(confirmValue: boolean): DoctorPrompter {
@@ -23,24 +23,14 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
 }
 
 beforeEach(() => {
-  originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]);
   tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 });
 
 afterEach(() => {
-  if (originalAgentDir === undefined) {
-    delete process.env.OPENCLAW_AGENT_DIR;
-  } else {
-    process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
-  }
-  if (originalPiAgentDir === undefined) {
-    delete process.env.PI_CODING_AGENT_DIR;
-  } else {
-    process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
-  }
+  envSnapshot.restore();
   if (tempAgentDir) {
     fs.rmSync(tempAgentDir, { recursive: true, force: true });
     tempAgentDir = undefined;
