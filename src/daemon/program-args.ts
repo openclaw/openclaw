@@ -1,4 +1,6 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 type GatewayProgramArgs = {
@@ -18,6 +20,50 @@ function isBunRuntime(execPath: string): boolean {
   return base === "bun" || base === "bun.exe";
 }
 
+/**
+ * Detect if a path is inside a pnpm global store (version-specific directory).
+ * These paths break after pnpm updates because the version hash changes.
+ */
+function isPnpmGlobalStorePath(inputPath: string): boolean {
+  const normalized = inputPath.replaceAll("\\", "/");
+  // Match patterns like:
+  // - ~/.local/share/pnpm/5/.pnpm/openclaw@X.Y.Z.../
+  // - /home/user/.local/share/pnpm/.../.pnpm/...
+  return (
+    normalized.includes("/.pnpm/") &&
+    (normalized.includes("/.local/share/pnpm/") || normalized.includes("/pnpm/5/"))
+  );
+}
+
+/**
+ * Try to find the CLI wrapper script that pnpm creates for global installs.
+ * The wrapper is stable across updates (pnpm regenerates it with new paths).
+ */
+async function resolvePnpmGlobalWrapperPath(cliName: string): Promise<string | null> {
+  const home = os.homedir();
+  const candidates =
+    process.platform === "win32"
+      ? [
+          path.join(home, "AppData", "Local", "pnpm", `${cliName}.cmd`),
+          path.join(home, "AppData", "Local", "pnpm", `${cliName}.ps1`),
+        ]
+      : [
+          path.join(home, ".local", "bin", cliName),
+          path.join(home, ".local", "share", "pnpm", cliName),
+          `/usr/local/bin/${cliName}`,
+        ];
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      // Try next candidate
+    }
+  }
+  return null;
+}
+
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -26,6 +72,27 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
 
   const normalized = path.resolve(argv1);
   const resolvedPath = await resolveRealpathSafe(normalized);
+
+  // For pnpm global installs, prefer the wrapper script over the versioned store path.
+  // The wrapper is stable across updates (pnpm regenerates it automatically),
+  // while the store path contains version-specific directories that break after updates.
+  if (isPnpmGlobalStorePath(resolvedPath)) {
+    // Extract CLI name from the path (e.g., "openclaw" from ".../openclaw/openclaw.mjs")
+    // Split on both / and \ to handle mixed separators (common in pnpm paths on Windows)
+    const pathParts = resolvedPath.split(/[/\\]/);
+    const nodeModulesIdx = pathParts.lastIndexOf("node_modules");
+    const cliName =
+      nodeModulesIdx >= 0 && nodeModulesIdx < pathParts.length - 1
+        ? pathParts[nodeModulesIdx + 1]
+        : "openclaw";
+
+    const wrapperPath = await resolvePnpmGlobalWrapperPath(cliName);
+    if (wrapperPath) {
+      return wrapperPath;
+    }
+    // Fall through to existing logic if wrapper not found
+  }
+
   const looksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(resolvedPath);
   if (looksLikeDist) {
     await fs.access(resolvedPath);

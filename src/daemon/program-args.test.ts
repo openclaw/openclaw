@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,10 @@ vi.mock("node:fs/promises", () => ({
   default: { access: fsMocks.access, realpath: fsMocks.realpath },
   access: fsMocks.access,
   realpath: fsMocks.realpath,
+}));
+
+vi.mock("node:fs", () => ({
+  constants: { X_OK: 1 },
 }));
 
 import { resolveGatewayProgramArguments } from "./program-args.js";
@@ -86,5 +91,53 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+
+  it("prefers wrapper script over pnpm global store path for stable service config", async () => {
+    // Simulates pnpm global install where the CLI runs directly from the store path
+    // (not via symlink). The wrapper script at ~/.local/bin/openclaw should be preferred
+    // because pnpm regenerates it automatically during updates.
+    const home = os.homedir();
+    const pnpmStorePath = path.resolve(
+      `${home}/.local/share/pnpm/5/.pnpm/openclaw@2026.2.6-3_abc123/node_modules/openclaw/openclaw.mjs`,
+    );
+    const wrapperPath = path.resolve(`${home}/.local/bin/openclaw`);
+    process.argv = ["node", pnpmStorePath];
+    fsMocks.realpath.mockResolvedValue(pnpmStorePath);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === pnpmStorePath || target === wrapperPath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    // Should use the wrapper script, not the versioned pnpm store path
+    expect(result.programArguments[1]).toBe(wrapperPath);
+    expect(result.programArguments[1]).not.toContain(".pnpm");
+    expect(result.programArguments[1]).not.toContain("@2026.2.6-3");
+  });
+
+  it("falls back to pnpm store dist path when wrapper is not found", async () => {
+    // If the wrapper script doesn't exist, fall back to the store path
+    const home = os.homedir();
+    const pnpmStoreDistPath = path.resolve(
+      `${home}/.local/share/pnpm/5/.pnpm/openclaw@2026.2.6-3_abc123/node_modules/openclaw/dist/entry.mjs`,
+    );
+    process.argv = ["node", pnpmStoreDistPath];
+    fsMocks.realpath.mockResolvedValue(pnpmStoreDistPath);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      // Only the store dist path exists, wrapper is missing
+      if (target === pnpmStoreDistPath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    // Should fall back to the store path since wrapper doesn't exist
+    expect(result.programArguments[1]).toBe(pnpmStoreDistPath);
   });
 });
