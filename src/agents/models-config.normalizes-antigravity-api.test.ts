@@ -93,7 +93,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
@@ -133,7 +133,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
@@ -173,7 +173,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
@@ -213,7 +213,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
@@ -269,7 +269,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
@@ -312,7 +312,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
@@ -352,7 +352,7 @@ describe("models-config normalizes google-antigravity api", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       await ensureOpenClawModelsJson(cfg);
 
