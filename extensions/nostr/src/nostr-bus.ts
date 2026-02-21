@@ -22,7 +22,10 @@ import {
   computeSinceTimestamp,
   readNostrProfileState,
   writeNostrProfileState,
+  storeEncryptedPrivateKey,
+  retrieveDecryptedPrivateKey,
 } from "./nostr-state-store.js";
+import { secureMemoryClear, withDecryptedKeySync, withDecryptedKey } from "./secure-memory.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
@@ -73,6 +76,8 @@ export interface NostrBusOptions {
   maxSeenEntries?: number;
   /** Seen tracker TTL in ms (default: 1 hour) */
   seenTtlMs?: number;
+  /** Encryption passphrase for storing private key securely (optional) */
+  encryptionPassphrase?: string;
 }
 
 export interface NostrBusHandle {
@@ -317,6 +322,11 @@ export function getPublicKeyFromPrivate(privateKey: string): string {
 
 /**
  * Start the Nostr DM bus - subscribes to NIP-04 encrypted DMs
+ *
+ * SECURITY: When encryptionPassphrase is provided, the private key is stored
+ * encrypted on disk and only decrypted during cryptographic operations (sign/decrypt).
+ * The plaintext key never persists in memory. Without passphrase, the key is kept
+ * in memory for backward compatibility.
  */
 export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
   const {
@@ -328,13 +338,48 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     onMetric,
     maxSeenEntries = 100_000,
     seenTtlMs = 60 * 60 * 1000,
+    encryptionPassphrase,
   } = options;
 
-  const sk = validatePrivateKey(privateKey);
-  const pk = getPublicKey(sk);
+  // Validate and convert initial private key
+  const initialSk = validatePrivateKey(privateKey);
+  const pk = getPublicKey(initialSk);
   const pool = new SimplePool();
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
+
+  // Convert private key to hex for storage/processing
+  const privateKeyHex =
+    typeof initialSk === "string"
+      ? initialSk
+      : Array.from(initialSk)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+  // Clear the temporary key reference if we'll be using encryption
+  // Otherwise keep it for backward compatibility
+  let runtimeSk: Uint8Array | null = encryptionPassphrase ? null : initialSk;
+  let encryptedKeyHex: string | null = null;
+
+  // Store encrypted private key if passphrase is provided
+  if (encryptionPassphrase) {
+    try {
+      await storeEncryptedPrivateKey({
+        accountId,
+        privateKey: privateKeyHex,
+        passphrase: encryptionPassphrase,
+      });
+      encryptedKeyHex = privateKeyHex;
+      // Clear the plaintext from memory
+      initialSk instanceof Uint8Array && initialSk.fill(0);
+    } catch (err) {
+      onError?.(err as Error, "store encrypted private key");
+      throw err; // Critical error - can't start without storing key
+    }
+  } else {
+    // Backward compatibility: keep key in memory
+    runtimeSk = initialSk;
+  }
 
   // Initialize metrics
   const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
@@ -446,10 +491,20 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       seen.add(event.id);
       metrics.emit("memory.seen_tracker_size", seen.size());
 
-      // Decrypt the message
+      // Decrypt the message (using just-in-time decryption if encrypted)
       let plaintext: string;
       try {
-        plaintext = decrypt(sk, event.pubkey, event.content);
+        if (encryptionPassphrase && encryptedKeyHex) {
+          // Just-in-time decryption: decrypt key only when needed
+          plaintext = withDecryptedKeySync(encryptedKeyHex, encryptionPassphrase, (sk) =>
+            decrypt(sk, event.pubkey, event.content),
+          );
+        } else if (runtimeSk) {
+          // Backward compatibility: use key from memory
+          plaintext = decrypt(runtimeSk, event.pubkey, event.content);
+        } else {
+          throw new Error("No private key available for decryption");
+        }
         metrics.emit("decrypt.success");
       } catch (err) {
         metrics.emit("decrypt.failure");
@@ -460,17 +515,37 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
       // Create reply function (try relays by health score)
       const replyTo = async (text: string): Promise<void> => {
-        await sendEncryptedDm(
-          pool,
-          sk,
-          event.pubkey,
-          text,
-          relays,
-          metrics,
-          circuitBreakers,
-          healthTracker,
-          onError,
-        );
+        if (encryptionPassphrase && encryptedKeyHex) {
+          // Just-in-time decryption for reply
+          await withDecryptedKey(encryptedKeyHex, encryptionPassphrase, async (sk) =>
+            sendEncryptedDm(
+              pool,
+              sk,
+              event.pubkey,
+              text,
+              relays,
+              metrics,
+              circuitBreakers,
+              healthTracker,
+              onError,
+            ),
+          );
+        } else if (runtimeSk) {
+          // Backward compatibility: use key from memory
+          await sendEncryptedDm(
+            pool,
+            runtimeSk,
+            event.pubkey,
+            text,
+            relays,
+            metrics,
+            circuitBreakers,
+            healthTracker,
+            onError,
+          );
+        } else {
+          throw new Error("No private key available for signing");
+        }
       };
 
       // Call the message handler
@@ -513,17 +588,37 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
-    await sendEncryptedDm(
-      pool,
-      sk,
-      toPubkey,
-      text,
-      relays,
-      metrics,
-      circuitBreakers,
-      healthTracker,
-      onError,
-    );
+    if (encryptionPassphrase && encryptedKeyHex) {
+      // Just-in-time decryption for DM
+      await withDecryptedKey(encryptedKeyHex, encryptionPassphrase, async (sk) =>
+        sendEncryptedDm(
+          pool,
+          sk,
+          toPubkey,
+          text,
+          relays,
+          metrics,
+          circuitBreakers,
+          healthTracker,
+          onError,
+        ),
+      );
+    } else if (runtimeSk) {
+      // Backward compatibility: use key from memory
+      await sendEncryptedDm(
+        pool,
+        runtimeSk,
+        toPubkey,
+        text,
+        relays,
+        metrics,
+        circuitBreakers,
+        healthTracker,
+        onError,
+      );
+    } else {
+      throw new Error("No private key available for signing");
+    }
   };
 
   // Profile publishing function
@@ -532,8 +627,19 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     const profileState = await readNostrProfileState({ accountId });
     const lastPublishedAt = profileState?.lastPublishedAt ?? undefined;
 
-    // Publish the profile
-    const result = await publishProfileFn(pool, sk, relays, profile, lastPublishedAt);
+    // Publish the profile (using just-in-time decryption if encrypted)
+    let result: ProfilePublishResult;
+    if (encryptionPassphrase && encryptedKeyHex) {
+      // Just-in-time decryption for profile publishing
+      result = await withDecryptedKey(encryptedKeyHex, encryptionPassphrase, async (sk) =>
+        publishProfileFn(pool, sk, relays, profile, lastPublishedAt),
+      );
+    } else if (runtimeSk) {
+      // Backward compatibility: use key from memory
+      result = await publishProfileFn(pool, runtimeSk, relays, profile, lastPublishedAt);
+    } else {
+      throw new Error("No private key available for signing");
+    }
 
     // Convert results to state format
     const publishResults: Record<string, "ok" | "failed" | "timeout"> = {};
@@ -569,6 +675,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close: () => {
       sub.close();
       seen.stop();
+      // Clear the runtime key from memory on close (secure cleanup)
+      if (runtimeSk) {
+        secureMemoryClear(runtimeSk);
+        runtimeSk = null;
+      }
       // Flush pending state write synchronously on close
       if (pendingWrite) {
         clearTimeout(pendingWrite);

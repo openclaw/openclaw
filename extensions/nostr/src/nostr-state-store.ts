@@ -1,7 +1,13 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import * as crypto from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  encryptPrivateKey,
+  decryptPrivateKey,
+  isValidEncryptedPrivateKey,
+  type EncryptedPrivateKey,
+} from "./crypto-util.js";
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;
@@ -223,4 +229,74 @@ export async function writeNostrProfileState(params: {
   });
   await fs.chmod(tmp, 0o600);
   await fs.rename(tmp, filePath);
+}
+
+// ============================================================================
+// Encrypted Private Key Storage
+// ============================================================================
+
+/**
+ * Resolve the path for encrypted private key storage
+ */
+function resolveNostrKeyPath(accountId?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
+  const normalized = normalizeAccountId(accountId);
+  return path.join(stateDir, "nostr", `key-${normalized}.json`);
+}
+
+/**
+ * Store an encrypted private key securely on disk
+ * @param params Configuration for key storage
+ */
+export async function storeEncryptedPrivateKey(params: {
+  accountId?: string;
+  privateKey: string;
+  passphrase: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const filePath = resolveNostrKeyPath(params.accountId, params.env);
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+
+  // Encrypt the private key
+  const encrypted = encryptPrivateKey(params.privateKey, params.passphrase);
+
+  // Write to temp file with secure permissions
+  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
+  await fs.writeFile(tmp, `${JSON.stringify(encrypted, null, 2)}\n`, {
+    encoding: "utf-8",
+  });
+  await fs.chmod(tmp, 0o600);
+  await fs.rename(tmp, filePath);
+}
+
+/**
+ * Retrieve and decrypt a stored private key
+ * @param params Configuration for key retrieval
+ * @returns Decrypted private key in hex format, or null if not found
+ */
+export async function retrieveDecryptedPrivateKey(params: {
+  accountId?: string;
+  passphrase: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string | null> {
+  const filePath = resolveNostrKeyPath(params.accountId, params.env);
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const encrypted = JSON.parse(raw) as unknown;
+
+    if (!isValidEncryptedPrivateKey(encrypted)) {
+      throw new Error("Invalid encrypted private key format");
+    }
+
+    // Decrypt and return the private key
+    return decryptPrivateKey(encrypted, params.passphrase);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    // Re-throw decryption errors (wrong passphrase, etc.)
+    throw err;
+  }
 }
