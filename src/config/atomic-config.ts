@@ -180,13 +180,8 @@ export class AtomicConfigManager {
   }
 
   private hasDevelopmentOnlySettings(config: OpenClawConfig): boolean {
-    const debugSettings = [
-      config.logging?.level === "debug",
-      config.gateway?.auth?.disabled === true,
-      config.sandbox?.enabled === false,
-    ];
-
-    return debugSettings.some(Boolean);
+    // Check for settings that indicate a development-only configuration
+    return config.logging?.level === "debug";
   }
 
   private hasImproperLoggingConfig(config: OpenClawConfig): boolean {
