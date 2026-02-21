@@ -152,6 +152,7 @@ export function attachGatewayWsMessageHandler(params: {
   const hostIsTailscaleServe = hostName.endsWith(".ts.net");
   const hostIsLocalish = hostIsLocal || hostIsTailscaleServe;
   const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies);
+  const isLocalLoopbackClient = isLoopbackAddress(remoteAddr);
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -654,6 +655,8 @@ export function attachGatewayWsMessageHandler(params: {
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade",
           ) => {
+            const isSilentPairing =
+              isLocalLoopbackClient || (isLocalClient && reason === "not-paired");
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -664,7 +667,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              silent: isSilentPairing,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {

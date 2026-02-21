@@ -118,6 +118,16 @@ let cachedHasBinaryPath: string | undefined;
 let cachedHasBinaryPathExt: string | undefined;
 const hasBinaryCache = new Map<string, boolean>();
 
+const DEFAULT_BINARY_PATHS = [
+  "/opt/homebrew/bin",
+  "/usr/local/sbin",
+  "/usr/local/bin",
+  "/usr/sbin",
+  "/usr/bin",
+  "/sbin",
+  "/bin",
+];
+
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
@@ -130,7 +140,19 @@ export function hasBinary(bin: string): boolean {
     return hasBinaryCache.get(bin)!;
   }
 
-  const parts = pathEnv.split(path.delimiter).filter(Boolean);
+  const parts = new Set(
+    pathEnv
+      .split(path.delimiter)
+      .map((part) => part.trim())
+      .filter(Boolean),
+  );
+
+  if (process.platform !== "win32") {
+    for (const part of DEFAULT_BINARY_PATHS) {
+      parts.add(part);
+    }
+  }
+
   const extensions = process.platform === "win32" ? windowsPathExtensions() : [""];
   for (const part of parts) {
     for (const ext of extensions) {
