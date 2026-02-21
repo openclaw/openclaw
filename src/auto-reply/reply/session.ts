@@ -29,6 +29,10 @@ import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isContaminatedSessionId,
+  isContaminatedSessionFile,
+} from "../../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -233,7 +237,36 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
-  if (!isNewSession && freshEntry) {
+  // Guard: if the store entry's sessionId looks like a delegate/subagent spawn ID
+  // but the session key is a non-subagent key (e.g. "agent:voice:main"), the entry
+  // is contaminated. Force a new session to break the contamination loop.
+  const contaminatedId = freshEntry && isContaminatedSessionId(sessionKey, entry?.sessionId);
+  if (contaminatedId) {
+    console.warn(
+      `[session-init] contaminated sessionId on ${sessionKey}: "${entry.sessionId}" — forcing new session`,
+    );
+    if (entry.sessionFile) {
+      entry.sessionFile = undefined;
+    }
+  }
+
+  // Guard: if sessionFile exists but doesn't match the sessionId, the file path
+  // is contaminated (e.g. a remediation/cron/boot session file leaked into a
+  // different session key's store entry). Clear it so it gets regenerated.
+  // This catches contamination variants that isContaminatedSessionId misses —
+  // where the sessionId looks normal but sessionFile points to a different session.
+  if (
+    freshEntry &&
+    !contaminatedId &&
+    isContaminatedSessionFile(entry?.sessionId, entry?.sessionFile)
+  ) {
+    console.warn(
+      `[session-init] contaminated sessionFile on ${sessionKey}: sessionId="${entry.sessionId}" but sessionFile="${entry.sessionFile}" — clearing sessionFile`,
+    );
+    entry.sessionFile = undefined;
+  }
+
+  if (!isNewSession && freshEntry && !contaminatedId) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;

@@ -21,6 +21,10 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isContaminatedSessionId,
+  isContaminatedSessionFile,
+} from "../../sessions/session-key-utils.js";
 
 export type SessionResolution = {
   sessionId: string;
@@ -140,9 +144,40 @@ export function resolveSession(opts: {
     ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
         .fresh
     : false;
+
+  // Guard: reject contaminated sessionIds on non-subagent keys.
+  const storeSessionId = fresh ? sessionEntry?.sessionId : undefined;
+  const contaminatedId = isContaminatedSessionId(sessionKey, storeSessionId);
+  if (contaminatedId) {
+    console.warn(
+      `[session-resolve] contaminated sessionId on ${sessionKey}: "${storeSessionId}" — forcing new session`,
+    );
+    if (sessionEntry?.sessionFile) {
+      sessionEntry.sessionFile = undefined;
+    }
+  }
+
+  // Guard: sessionFile must match sessionId. If the sessionFile points to a different
+  // session's .jsonl (e.g. remediation/cron/boot file leaked into the wrong entry),
+  // clear it so resolveSessionFilePath regenerates it from the correct sessionId.
+  if (
+    fresh &&
+    !contaminatedId &&
+    isContaminatedSessionFile(sessionEntry?.sessionId, sessionEntry?.sessionFile)
+  ) {
+    console.warn(
+      `[session-resolve] contaminated sessionFile on ${sessionKey}: sessionId="${sessionEntry?.sessionId}" but sessionFile="${sessionEntry?.sessionFile}" — clearing sessionFile`,
+    );
+    if (sessionEntry) {
+      sessionEntry.sessionFile = undefined;
+    }
+  }
+
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    opts.sessionId?.trim() ||
+    (fresh && !contaminatedId ? storeSessionId : undefined) ||
+    crypto.randomUUID();
+  const isNewSession = (!fresh || contaminatedId) && !opts.sessionId;
 
   const persistedThinking =
     fresh && sessionEntry?.thinkingLevel
