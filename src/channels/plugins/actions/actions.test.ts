@@ -34,6 +34,51 @@ function telegramCfg(): OpenClawConfig {
   return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 }
 
+type TelegramActionInput = Parameters<NonNullable<typeof telegramMessageActions.handleAction>>[0];
+
+async function runTelegramAction(
+  action: TelegramActionInput["action"],
+  params: TelegramActionInput["params"],
+  options?: { cfg?: OpenClawConfig; accountId?: string },
+) {
+  const cfg = options?.cfg ?? telegramCfg();
+  const handleAction = telegramMessageActions.handleAction;
+  if (!handleAction) {
+    throw new Error("telegram handleAction unavailable");
+  }
+  await handleAction({
+    channel: "telegram",
+    action,
+    params,
+    cfg,
+    accountId: options?.accountId,
+  });
+  return { cfg };
+}
+
+type SignalActionInput = Parameters<NonNullable<typeof signalMessageActions.handleAction>>[0];
+
+async function runSignalAction(
+  action: SignalActionInput["action"],
+  params: SignalActionInput["params"],
+  options?: { cfg?: OpenClawConfig; accountId?: string },
+) {
+  const cfg =
+    options?.cfg ?? ({ channels: { signal: { account: "+15550001111" } } } as OpenClawConfig);
+  const handleAction = signalMessageActions.handleAction;
+  if (!handleAction) {
+    throw new Error("signal handleAction unavailable");
+  }
+  await handleAction({
+    channel: "signal",
+    action,
+    params,
+    cfg,
+    accountId: options?.accountId,
+  });
+  return { cfg };
+}
+
 function slackHarness() {
   const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
   const actions = createSlackActions("slack");
@@ -398,86 +443,83 @@ describe("telegramMessageActions", () => {
     }
   });
 
-  it("allows media-only sends and passes asVoice", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "123",
-        media: "https://example.com/voice.ogg",
-        asVoice: true,
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "123",
-        content: "",
-        mediaUrl: "https://example.com/voice.ogg",
-        asVoice: true,
-      }),
-      cfg,
-    );
-  });
-
-  it("passes silent flag for silent sends", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "456",
-        message: "Silent notification test",
-        silent: true,
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "456",
-        content: "Silent notification test",
-        silent: true,
-      }),
-      cfg,
-    );
-  });
-
-  it("maps edit action params into editMessage", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "edit",
-      params: {
-        chatId: "123",
-        messageId: 42,
-        message: "Updated",
-        buttons: [],
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
+  it("maps action params into telegram actions", async () => {
+    const cases = [
       {
-        action: "editMessage",
-        chatId: "123",
-        messageId: 42,
-        content: "Updated",
-        buttons: [],
-        accountId: undefined,
+        name: "media-only send preserves asVoice",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/voice.ogg",
+          asVoice: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          content: "",
+          mediaUrl: "https://example.com/voice.ogg",
+          asVoice: true,
+        }),
       },
-      cfg,
-    );
+      {
+        name: "silent send forwards silent flag",
+        action: "send" as const,
+        params: {
+          to: "456",
+          message: "Silent notification test",
+          silent: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "456",
+          content: "Silent notification test",
+          silent: true,
+        }),
+      },
+      {
+        name: "edit maps to editMessage",
+        action: "edit" as const,
+        params: {
+          chatId: "123",
+          messageId: 42,
+          message: "Updated",
+          buttons: [],
+        },
+        expectedPayload: {
+          action: "editMessage",
+          chatId: "123",
+          messageId: 42,
+          content: "Updated",
+          buttons: [],
+          accountId: undefined,
+        },
+      },
+      {
+        name: "topic-create maps to createForumTopic",
+        action: "topic-create" as const,
+        params: {
+          to: "telegram:group:-1001234567890:topic:271",
+          name: "Build Updates",
+        },
+        expectedPayload: {
+          action: "createForumTopic",
+          chatId: "telegram:group:-1001234567890:topic:271",
+          name: "Build Updates",
+          iconColor: undefined,
+          iconCustomEmojiId: undefined,
+          accountId: undefined,
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      handleTelegramAction.mockClear();
+      const { cfg } = await runTelegramAction(testCase.action, testCase.params);
+      expect(handleTelegramAction, testCase.name).toHaveBeenCalledWith(
+        testCase.expectedPayload,
+        cfg,
+      );
+    }
   });
 
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
@@ -548,33 +590,6 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
-
-  it("maps topic-create params into createForumTopic", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "topic-create",
-      params: {
-        to: "telegram:group:-1001234567890:topic:271",
-        name: "Build Updates",
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      {
-        action: "createForumTopic",
-        chatId: "telegram:group:-1001234567890:topic:271",
-        name: "Build Updates",
-        iconColor: undefined,
-        iconCustomEmojiId: undefined,
-        accountId: undefined,
-      },
-      cfg,
-    );
-  });
 });
 
 describe("signalMessageActions", () => {
@@ -641,54 +656,67 @@ describe("signalMessageActions", () => {
     ).rejects.toThrow(/actions\.reactions/);
   });
 
-  it("uses account-level actions when enabled", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          actions: { reactions: false },
-          accounts: {
-            work: { account: "+15550001111", actions: { reactions: true } },
+  it("maps reaction targets into signal sendReaction calls", async () => {
+    const cases = [
+      {
+        name: "uses account-level actions when enabled",
+        cfg: {
+          channels: {
+            signal: {
+              actions: { reactions: false },
+              accounts: {
+                work: { account: "+15550001111", actions: { reactions: true } },
+              },
+            },
           },
+        } as OpenClawConfig,
+        accountId: "work",
+        params: { to: "+15550001111", messageId: "123", emoji: "👍" },
+        expectedArgs: ["+15550001111", 123, "👍", { accountId: "work" }],
+      },
+      {
+        name: "normalizes uuid recipients",
+        cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
+        accountId: undefined,
+        params: {
+          recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          messageId: "123",
+          emoji: "🔥",
         },
+        expectedArgs: ["123e4567-e89b-12d3-a456-426614174000", 123, "🔥", { accountId: undefined }],
       },
-    } as OpenClawConfig;
-
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "react",
-      params: { to: "+15550001111", messageId: "123", emoji: "👍" },
-      cfg,
-      accountId: "work",
-    });
-
-    expect(sendReactionSignal).toHaveBeenCalledWith("+15550001111", 123, "👍", {
-      accountId: "work",
-    });
-  });
-
-  it("normalizes uuid recipients", async () => {
-    const cfg = {
-      channels: { signal: { account: "+15550001111" } },
-    } as OpenClawConfig;
-
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "react",
-      params: {
-        recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
-        messageId: "123",
-        emoji: "🔥",
+      {
+        name: "passes groupId and targetAuthor for group reactions",
+        cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
+        accountId: undefined,
+        params: {
+          to: "signal:group:group-id",
+          targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          messageId: "123",
+          emoji: "✅",
+        },
+        expectedArgs: [
+          "",
+          123,
+          "✅",
+          {
+            accountId: undefined,
+            groupId: "group-id",
+            targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+            targetAuthorUuid: undefined,
+          },
+        ],
       },
-      cfg,
-      accountId: undefined,
-    });
+    ] as const;
 
-    expect(sendReactionSignal).toHaveBeenCalledWith(
-      "123e4567-e89b-12d3-a456-426614174000",
-      123,
-      "🔥",
-      { accountId: undefined },
-    );
+    for (const testCase of cases) {
+      sendReactionSignal.mockClear();
+      await runSignalAction("react", testCase.params, {
+        cfg: testCase.cfg,
+        accountId: testCase.accountId,
+      });
+      expect(sendReactionSignal, testCase.name).toHaveBeenCalledWith(...testCase.expectedArgs);
+    }
   });
 
   it("requires targetAuthor for group reactions", async () => {
@@ -709,32 +737,6 @@ describe("signalMessageActions", () => {
         accountId: undefined,
       }),
     ).rejects.toThrow(/targetAuthor/);
-  });
-
-  it("passes groupId and targetAuthor for group reactions", async () => {
-    const cfg = {
-      channels: { signal: { account: "+15550001111" } },
-    } as OpenClawConfig;
-
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "react",
-      params: {
-        to: "signal:group:group-id",
-        targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-        messageId: "123",
-        emoji: "✅",
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(sendReactionSignal).toHaveBeenCalledWith("", 123, "✅", {
-      accountId: undefined,
-      groupId: "group-id",
-      targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-      targetAuthorUuid: undefined,
-    });
   });
 });
 
