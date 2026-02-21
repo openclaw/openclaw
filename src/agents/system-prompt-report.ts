@@ -1,8 +1,9 @@
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 
 function extractBetween(
   input: string,
@@ -25,9 +26,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   if (!prompt) {
     return [];
   }
-  const blocks = Array.from(prompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi)).map(
-    (match) => match[0] ?? "",
-  );
+  const blocks = Array.from(prompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi)).map((match) => match[0] ?? "");
   return blocks
     .map((block) => {
       const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
@@ -126,7 +125,7 @@ export function buildSystemPromptReport(params: {
   skillsPrompt: string;
   tools: AgentTool[];
 }): SessionSystemPromptReport {
-  const systemPrompt = params.systemPrompt.trim();
+  const systemPrompt = String(params.systemPrompt ?? "").trim();
   const projectContext = extractBetween(
     systemPrompt,
     "\n# Project Context\n",
