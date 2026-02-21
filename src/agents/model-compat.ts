@@ -4,10 +4,24 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
-export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+function isMoonshotProvider(model: Model<Api>): boolean {
   const baseUrl = model.baseUrl ?? "";
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  return model.provider === "moonshot" || baseUrl.includes("api.moonshot.ai");
+}
+
+function isZaiProvider(model: Model<Api>): boolean {
+  const baseUrl = model.baseUrl ?? "";
+  return model.provider === "zai" || baseUrl.includes("api.z.ai");
+}
+
+export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+  const isZai = isZaiProvider(model);
+  const isMoonshot = isMoonshotProvider(model);
+  if (!isZai && !isMoonshot) {
+    return model;
+  }
+
+  if (!isOpenAiCompletionsModel(model)) {
     return model;
   }
 
