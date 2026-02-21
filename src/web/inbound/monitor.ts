@@ -205,6 +205,7 @@ export async function monitorWebInbox(options: {
         selfE164,
         senderE164,
         group,
+        groupId: group ? remoteJid : undefined,
         pushName: msg.pushName ?? undefined,
         isFromMe: Boolean(msg.key?.fromMe),
         messageTimestampMs,
