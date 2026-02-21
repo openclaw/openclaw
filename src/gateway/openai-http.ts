@@ -37,7 +37,7 @@ type OpenAiChatCompletionRequest = {
 };
 
 function writeSse(res: ServerResponse, data: unknown) {
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`, "utf-8");
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
