@@ -192,6 +192,12 @@ Notes:
 - `channels.matrix.dm.allowFrom` accepts full Matrix user IDs (example: `@user:server`). The wizard resolves display names to user IDs when directory search finds a single exact match.
 - Do not use display names or bare localparts (example: `"Alice"` or `"alice"`). They are ambiguous and are ignored for allowlist matching. Use full `@user:server` IDs.
 
+**Important:** To use gateway commands (`/model`, `/status`, `/reset`) via DM, you must:
+1. Enable DMs by setting `dm.policy` to `"pairing"`, `"allowlist"`, or `"open"` (not `"disabled"`)
+2. Configure `dm.allowFrom` with your Matrix user ID
+
+Without `dm.allowFrom`, commands will be treated as regular messages and sent to the AI model instead of being processed by the gateway. Note: when `dm.policy` is `"disabled"`, all DMs (including commands) are blocked entirely.
+
 ## Rooms (groups)
 
 - Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
