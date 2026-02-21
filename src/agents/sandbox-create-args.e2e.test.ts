@@ -2,6 +2,40 @@ import { describe, expect, it } from "vitest";
 import { buildSandboxCreateArgs, type SandboxDockerConfig } from "./sandbox.js";
 
 describe("buildSandboxCreateArgs", () => {
+  function createSandboxConfig(
+    overrides: Partial<SandboxDockerConfig> = {},
+    binds?: string[],
+  ): SandboxDockerConfig {
+    return {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      ...(binds ? { binds } : {}),
+      ...overrides,
+    };
+  }
+
+  function expectBuildToThrow(
+    name: string,
+    cfg: SandboxDockerConfig,
+    expectedMessage: RegExp,
+  ): void {
+    expect(
+      () =>
+        buildSandboxCreateArgs({
+          name,
+          cfg,
+          scopeKey: "main",
+          createdAtMs: 1700000000000,
+        }),
+      name,
+    ).toThrow(expectedMessage);
+  }
+
   it("includes hardening and resource flags", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",
@@ -127,113 +161,39 @@ describe("buildSandboxCreateArgs", () => {
     expect(vFlags).toContain("/var/data/myapp:/data:ro");
   });
 
-  it("throws on dangerous bind mounts (Docker socket)", () => {
-    const cfg: SandboxDockerConfig = {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      binds: ["/var/run/docker.sock:/var/run/docker.sock"],
-    };
-
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-dangerous",
-        cfg,
-        scopeKey: "main",
-        createdAtMs: 1700000000000,
-      }),
-    ).toThrow(/blocked path/);
-  });
-
-  it("throws on dangerous bind mounts (parent path)", () => {
-    const cfg: SandboxDockerConfig = {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      binds: ["/run:/run"],
-    };
-
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-dangerous-parent",
-        cfg,
-        scopeKey: "main",
-        createdAtMs: 1700000000000,
-      }),
-    ).toThrow(/blocked path/);
-  });
-
-  it("throws on network host mode", () => {
-    const cfg: SandboxDockerConfig = {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "host",
-      capDrop: [],
-    };
-
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-host",
-        cfg,
-        scopeKey: "main",
-        createdAtMs: 1700000000000,
-      }),
-    ).toThrow(/network mode "host" is blocked/);
-  });
-
-  it("throws on seccomp unconfined", () => {
-    const cfg: SandboxDockerConfig = {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      seccompProfile: "unconfined",
-    };
-
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-seccomp",
-        cfg,
-        scopeKey: "main",
-        createdAtMs: 1700000000000,
-      }),
-    ).toThrow(/seccomp profile "unconfined" is blocked/);
-  });
-
-  it("throws on apparmor unconfined", () => {
-    const cfg: SandboxDockerConfig = {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      apparmorProfile: "unconfined",
-    };
-
-    expect(() =>
-      buildSandboxCreateArgs({
-        name: "openclaw-sbx-apparmor",
-        cfg,
-        scopeKey: "main",
-        createdAtMs: 1700000000000,
-      }),
-    ).toThrow(/apparmor profile "unconfined" is blocked/);
+  it.each([
+    {
+      name: "dangerous Docker socket bind mounts",
+      containerName: "openclaw-sbx-dangerous",
+      cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
+      expected: /blocked path/,
+    },
+    {
+      name: "dangerous parent bind mounts",
+      containerName: "openclaw-sbx-dangerous-parent",
+      cfg: createSandboxConfig({}, ["/run:/run"]),
+      expected: /blocked path/,
+    },
+    {
+      name: "network host mode",
+      containerName: "openclaw-sbx-host",
+      cfg: createSandboxConfig({ network: "host" }),
+      expected: /network mode "host" is blocked/,
+    },
+    {
+      name: "seccomp unconfined",
+      containerName: "openclaw-sbx-seccomp",
+      cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
+      expected: /seccomp profile "unconfined" is blocked/,
+    },
+    {
+      name: "apparmor unconfined",
+      containerName: "openclaw-sbx-apparmor",
+      cfg: createSandboxConfig({ apparmorProfile: "unconfined" }),
+      expected: /apparmor profile "unconfined" is blocked/,
+    },
+  ])("throws on $name", ({ containerName, cfg, expected }) => {
+    expectBuildToThrow(containerName, cfg, expected);
   });
 
   it("omits -v flags when binds is empty or undefined", () => {
