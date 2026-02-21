@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
+import { withTempWorkspace, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
 const mocks = {
@@ -52,18 +50,6 @@ function mockTarExtractionFlow(params: {
     }
     return runCommandResult();
   });
-}
-
-async function withTempWorkspace(
-  run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
-) {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-  try {
-    const stateDir = setTempStateDir(workspaceDir);
-    await run({ workspaceDir, stateDir });
-  } finally {
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 async function writeTarBz2Skill(params: {
