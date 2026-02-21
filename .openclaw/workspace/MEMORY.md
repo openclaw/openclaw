@@ -44,6 +44,8 @@ _(none yet)_
   1. **Marketing** — build marketing strategy and materials
   2. **PII detection training** — make entity detection enterprise-ready (accuracy, coverage, edge cases for regulated industries)
 - **Full product flow documented:** `memory/pre-redact-product-flow.md` (from video demos, Feb 2026)
+- **Self-training system designed:** `memory/pre-redact-self-training-loop.md` (Feb 2026)
+- **Dev testing system:** `~/.claude/skills/staged-review/references/pre-redact-rules.md` + `~/.claude/skills/interactive-app-testing/references/pre-redact-playbook.md`
 
 ## Security Knowledge
 
