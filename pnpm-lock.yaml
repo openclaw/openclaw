@@ -341,17 +341,9 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/llm-task:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
+  extensions/llm-task: {}
 
-  extensions/lobster:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
+  extensions/lobster: {}
 
   extensions/matrix:
     dependencies:
@@ -447,11 +439,7 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/open-prose:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
+  extensions/open-prose: {}
 
   extensions/signal:
     devDependencies:
