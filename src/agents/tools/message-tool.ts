@@ -253,6 +253,7 @@ function buildFetchSchema() {
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
     around: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.String()),
     fromMe: Type.Optional(Type.Boolean()),
     includeArchived: Type.Optional(Type.Boolean()),
   };
