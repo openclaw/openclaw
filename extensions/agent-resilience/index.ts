@@ -20,7 +20,13 @@ export {
   RETRYABLE_REASONS,
   computeRetryDelay,
   isRetryableRound,
+  classifyError,
+  extractRetryAfterMs,
+  retryWithBackoff,
+  sleep,
   type RetryConfig,
+  type ClassifiedError,
+  type RetryWithBackoffOptions,
 } from "./src/retry-backoff.js";
 
 export {
