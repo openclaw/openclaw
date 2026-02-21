@@ -148,75 +148,6 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildToolCallFormatSection(params: {
-  isMinimal: boolean;
-  modelProvider?: string;
-  modelId?: string;
-}) {
-  if (params.isMinimal) {
-    return [];
-  }
-
-  // Determine if we should show XML vs JSON vs specific provider formats
-  const isAnthropic = params.modelProvider?.toLowerCase().includes("anthropic");
-  const isGoogle =
-    params.modelProvider?.toLowerCase().includes("google") ||
-    params.modelId?.toLowerCase().includes("gemini");
-
-  const lines = ["## Tool Call Format"];
-
-  if (isAnthropic) {
-    lines.push(
-      "Use Anthropic native tool calling format (structured tool_use blocks).",
-      "Do not wrap tool calls in XML tags like <invoke> unless explicitly instructed by a Skill.",
-    );
-  } else if (isGoogle) {
-    lines.push(
-      "Use Google/Gemini native function calling format.",
-      "If native calling fails, you may fallback to a structured block, but prefer the API's native mechanism.",
-    );
-  } else {
-    lines.push(
-      "Use the model's native tool/function calling mechanism (e.g., OpenAI-compatible tool_calls).",
-      "If you must use text-based calls (e.g. for simple/local models), use this format:",
-      "```json",
-      '{ "tool": "tool_name", "parameters": { "param1": "value1" } }',
-      "```",
-    );
-  }
-
-  lines.push("");
-  return lines;
-}
-
-function buildToolCallExamplesSection(params: { isMinimal: boolean; readToolName: string }) {
-  if (params.isMinimal) {
-    return [];
-  }
-
-  return [
-    "## Tool Call Examples",
-    "### Reading a file",
-    "To read `package.json`:",
-    "```json",
-    `{ "tool": "${params.readToolName}", "parameters": { "path": "package.json" } }`,
-    "```",
-    "",
-    "### Running a command",
-    "To list files in the current directory:",
-    "```json",
-    '{ "tool": "exec", "parameters": { "command": "ls -la" } }',
-    "```",
-    "",
-    "### Sending a message",
-    "To send a message to a specific user on Signal:",
-    "```json",
-    '{ "tool": "message", "parameters": { "action": "send", "channel": "signal", "to": "+123456789", "message": "Hello!" } }',
-    "```",
-    "",
-  ];
-}
-
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -307,7 +238,7 @@ export function buildAgentSystemPrompt(params: {
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs, reminders, and wake events",
+    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: "List agent ids allowed for sessions_spawn",
@@ -316,7 +247,8 @@ export function buildAgentSystemPrompt(params: {
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
-    session_status: "Show usage, time, and session state",
+    session_status:
+      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
   };
 
@@ -459,15 +391,6 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const toolCallFormatSection = buildToolCallFormatSection({
-    isMinimal,
-    modelProvider: params.runtimeInfo?.provider,
-    modelId: params.runtimeInfo?.model,
-  });
-  const toolCallExamplesSection = buildToolCallExamplesSection({
-    isMinimal,
-    readToolName,
-  });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
   // For "none" mode, return just the basic identity line
@@ -506,8 +429,6 @@ export function buildAgentSystemPrompt(params: {
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
-    ...toolCallFormatSection,
-    ...toolCallExamplesSection,
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
