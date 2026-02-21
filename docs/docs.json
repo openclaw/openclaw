@@ -96,6 +96,10 @@
       "destination": "/providers/openrouter"
     },
     {
+      "source": "/poe",
+      "destination": "/providers/poe"
+    },
+    {
       "source": "/opencode",
       "destination": "/providers/opencode"
     },
@@ -1054,6 +1058,7 @@
                   "providers/openai",
                   "providers/openrouter",
                   "providers/litellm",
+                  "providers/poe",
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
