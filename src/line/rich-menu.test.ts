@@ -9,18 +9,19 @@ import {
 } from "./rich-menu.js";
 
 describe("messageAction", () => {
-  it("creates a message action", () => {
-    const action = messageAction("Help", "/help");
-
-    expect(action.type).toBe("message");
-    expect(action.label).toBe("Help");
-    expect((action as { text: string }).text).toBe("/help");
-  });
-
-  it("uses label as text when text not provided", () => {
-    const action = messageAction("Click");
-
-    expect((action as { text: string }).text).toBe("Click");
+  it("creates message actions with explicit or default text", () => {
+    const cases = [
+      { name: "explicit text", label: "Help", text: "/help", expectedText: "/help" },
+      { name: "defaults to label", label: "Click", text: undefined, expectedText: "Click" },
+    ] as const;
+    for (const testCase of cases) {
+      const action = testCase.text
+        ? messageAction(testCase.label, testCase.text)
+        : messageAction(testCase.label);
+      expect(action.type, testCase.name).toBe("message");
+      expect(action.label, testCase.name).toBe(testCase.label);
+      expect((action as { text: string }).text, testCase.name).toBe(testCase.expectedText);
+    }
   });
 });
 
@@ -61,47 +62,32 @@ describe("postbackAction", () => {
     expect((action as { displayText: string }).displayText).toBe("Selected item 1");
   });
 
-  it("truncates data to 300 characters", () => {
-    const longData = "x".repeat(400);
-    const action = postbackAction("Test", longData);
+  it("applies postback payload truncation and displayText behavior", () => {
+    const truncatedData = postbackAction("Test", "x".repeat(400));
+    expect((truncatedData as { data: string }).data.length).toBe(300);
 
-    expect((action as { data: string }).data.length).toBe(300);
-  });
+    const truncatedDisplay = postbackAction("Test", "data", "y".repeat(400));
+    expect((truncatedDisplay as { displayText: string }).displayText?.length).toBe(300);
 
-  it("truncates displayText to 300 characters", () => {
-    const longText = "y".repeat(400);
-    const action = postbackAction("Test", "data", longText);
-
-    expect((action as { displayText: string }).displayText?.length).toBe(300);
-  });
-
-  it("omits displayText when not provided", () => {
-    const action = postbackAction("Test", "data");
-
-    expect((action as { displayText?: string }).displayText).toBeUndefined();
+    const noDisplayText = postbackAction("Test", "data");
+    expect((noDisplayText as { displayText?: string }).displayText).toBeUndefined();
   });
 });
 
 describe("datetimePickerAction", () => {
-  it("creates a date picker action", () => {
-    const action = datetimePickerAction("Pick date", "date_picked", "date");
-
-    expect(action.type).toBe("datetimepicker");
-    expect(action.label).toBe("Pick date");
-    expect((action as { mode: string }).mode).toBe("date");
-    expect((action as { data: string }).data).toBe("date_picked");
-  });
-
-  it("creates a time picker action", () => {
-    const action = datetimePickerAction("Pick time", "time_picked", "time");
-
-    expect((action as { mode: string }).mode).toBe("time");
-  });
-
-  it("creates a datetime picker action", () => {
-    const action = datetimePickerAction("Pick datetime", "datetime_picked", "datetime");
-
-    expect((action as { mode: string }).mode).toBe("datetime");
+  it("creates picker actions for all supported modes", () => {
+    const cases = [
+      { label: "Pick date", data: "date_picked", mode: "date" as const },
+      { label: "Pick time", data: "time_picked", mode: "time" as const },
+      { label: "Pick datetime", data: "datetime_picked", mode: "datetime" as const },
+    ];
+    for (const testCase of cases) {
+      const action = datetimePickerAction(testCase.label, testCase.data, testCase.mode);
+      expect(action.type).toBe("datetimepicker");
+      expect(action.label).toBe(testCase.label);
+      expect((action as { mode: string }).mode).toBe(testCase.mode);
+      expect((action as { data: string }).data).toBe(testCase.data);
+    }
   });
 
   it("includes initial/min/max when provided", () => {
@@ -136,37 +122,22 @@ describe("createGridLayout", () => {
     ];
   }
 
-  it("creates a 2x3 grid layout for tall menu", () => {
+  it("computes expected 2x3 layout for supported menu heights", () => {
     const actions = createSixSimpleActions();
-
-    const areas = createGridLayout(1686, actions);
-
-    expect(areas.length).toBe(6);
-
-    // Check first row positions
-    expect(areas[0].bounds.x).toBe(0);
-    expect(areas[0].bounds.y).toBe(0);
-    expect(areas[1].bounds.x).toBe(833);
-    expect(areas[1].bounds.y).toBe(0);
-    expect(areas[2].bounds.x).toBe(1666);
-    expect(areas[2].bounds.y).toBe(0);
-
-    // Check second row positions
-    expect(areas[3].bounds.y).toBe(843);
-    expect(areas[4].bounds.y).toBe(843);
-    expect(areas[5].bounds.y).toBe(843);
-  });
-
-  it("creates a 2x3 grid layout for short menu", () => {
-    const actions = createSixSimpleActions();
-
-    const areas = createGridLayout(843, actions);
-
-    expect(areas.length).toBe(6);
-
-    // Row height should be half of 843
-    expect(areas[0].bounds.height).toBe(421);
-    expect(areas[3].bounds.y).toBe(421);
+    const cases = [
+      { height: 1686, firstRowY: 0, secondRowY: 843, rowHeight: 843 },
+      { height: 843, firstRowY: 0, secondRowY: 421, rowHeight: 421 },
+    ] as const;
+    for (const testCase of cases) {
+      const areas = createGridLayout(testCase.height, actions);
+      expect(areas.length).toBe(6);
+      expect(areas[0]?.bounds.y).toBe(testCase.firstRowY);
+      expect(areas[0]?.bounds.height).toBe(testCase.rowHeight);
+      expect(areas[3]?.bounds.y).toBe(testCase.secondRowY);
+      expect(areas[0]?.bounds.x).toBe(0);
+      expect(areas[1]?.bounds.x).toBe(833);
+      expect(areas[2]?.bounds.x).toBe(1666);
+    }
   });
 
   it("assigns correct actions to areas", () => {
@@ -222,17 +193,12 @@ describe("createDefaultMenuConfig", () => {
     }
   });
 
-  it("has message actions for all areas", () => {
+  it("uses message actions with expected default commands", () => {
     const config = createDefaultMenuConfig();
 
     for (const area of config.areas) {
       expect(area.action.type).toBe("message");
     }
-  });
-
-  it("has expected default commands", () => {
-    const config = createDefaultMenuConfig();
-
     const commands = config.areas.map((a) => (a.action as { text: string }).text);
     expect(commands).toContain("/help");
     expect(commands).toContain("/status");
