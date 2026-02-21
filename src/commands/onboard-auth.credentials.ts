@@ -3,13 +3,120 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import type { SecretInput, SecretRef } from "../config/types.secrets.js";
 import { resolveStateDir } from "../config/paths.js";
 import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
 export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+
+const ENV_REF_PATTERN = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
+
+const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
+  anthropic: ["ANTHROPIC_API_KEY"],
+  google: ["GEMINI_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
+  "minimax-cn": ["MINIMAX_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+  synthetic: ["SYNTHETIC_API_KEY"],
+  venice: ["VENICE_API_KEY"],
+  zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+  xiaomi: ["XIAOMI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+  litellm: ["LITELLM_API_KEY"],
+  "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+  opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+  together: ["TOGETHER_API_KEY"],
+  huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+  qianfan: ["QIANFAN_API_KEY"],
+  xai: ["XAI_API_KEY"],
+};
+
+function isSecretRef(value: unknown): value is SecretRef {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as SecretRef).source !== undefined &&
+    (value as SecretRef).id !== undefined &&
+    ((value as SecretRef).source === "env" || (value as SecretRef).source === "file") &&
+    typeof (value as SecretRef).id === "string"
+  );
+}
+
+function buildEnvSecretRef(id: string): SecretRef {
+  return { source: "env", id };
+}
+
+function parseEnvSecretRef(value: string): SecretRef | null {
+  const match = ENV_REF_PATTERN.exec(value);
+  if (!match) {
+    return null;
+  }
+  return buildEnvSecretRef(match[1]);
+}
+
+function inferProviderEnvSecretRef(provider: string, value: string): SecretRef | null {
+  const envVars = PROVIDER_ENV_VARS[provider];
+  if (!envVars || value.length === 0) {
+    return null;
+  }
+  for (const envVar of envVars) {
+    const envValue = normalizeSecretInput(process.env[envVar] ?? "");
+    if (envValue && envValue === value) {
+      return buildEnvSecretRef(envVar);
+    }
+  }
+  return null;
+}
+
+function resolveApiKeySecretInput(provider: string, input: SecretInput): SecretInput {
+  if (isSecretRef(input)) {
+    return input;
+  }
+  const normalized = normalizeSecretInput(input);
+  const inlineEnvRef = parseEnvSecretRef(normalized);
+  if (inlineEnvRef) {
+    return inlineEnvRef;
+  }
+  const inferredEnvRef = inferProviderEnvSecretRef(provider, normalized);
+  if (inferredEnvRef) {
+    return inferredEnvRef;
+  }
+  return normalized;
+}
+
+function buildApiKeyCredential(
+  provider: string,
+  input: SecretInput,
+  metadata?: Record<string, string>,
+): {
+  type: "api_key";
+  provider: string;
+  key?: string;
+  keyRef?: SecretRef;
+  metadata?: Record<string, string>;
+} {
+  const secretInput = resolveApiKeySecretInput(provider, input);
+  if (typeof secretInput === "string") {
+    return {
+      type: "api_key",
+      provider,
+      key: secretInput,
+      ...(metadata ? { metadata } : {}),
+    };
+  }
+  return {
+    type: "api_key",
+    provider,
+    keyRef: secretInput,
+    ...(metadata ? { metadata } : {}),
+  };
+}
 
 export type WriteOAuthCredentialsOptions = {
   syncSiblingAgents?: boolean;
@@ -112,34 +219,26 @@ export async function writeOAuthCredentials(
   return profileId;
 }
 
-export async function setAnthropicApiKey(key: string, agentDir?: string) {
+export async function setAnthropicApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "anthropic:default",
-    credential: {
-      type: "api_key",
-      provider: "anthropic",
-      key,
-    },
+    credential: buildApiKeyCredential("anthropic", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setGeminiApiKey(key: string, agentDir?: string) {
+export async function setGeminiApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "google:default",
-    credential: {
-      type: "api_key",
-      provider: "google",
-      key,
-    },
+    credential: buildApiKeyCredential("google", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setMinimaxApiKey(
-  key: string,
+  key: SecretInput,
   agentDir?: string,
   profileId: string = "minimax:default",
 ) {
@@ -147,63 +246,43 @@ export async function setMinimaxApiKey(
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId,
-    credential: {
-      type: "api_key",
-      provider,
-      key,
-    },
+    credential: buildApiKeyCredential(provider, key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setMoonshotApiKey(key: string, agentDir?: string) {
+export async function setMoonshotApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "moonshot:default",
-    credential: {
-      type: "api_key",
-      provider: "moonshot",
-      key,
-    },
+    credential: buildApiKeyCredential("moonshot", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setKimiCodingApiKey(key: string, agentDir?: string) {
+export async function setKimiCodingApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "kimi-coding:default",
-    credential: {
-      type: "api_key",
-      provider: "kimi-coding",
-      key,
-    },
+    credential: buildApiKeyCredential("kimi-coding", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setSyntheticApiKey(key: string, agentDir?: string) {
+export async function setSyntheticApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "synthetic:default",
-    credential: {
-      type: "api_key",
-      provider: "synthetic",
-      key,
-    },
+    credential: buildApiKeyCredential("synthetic", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setVeniceApiKey(key: string, agentDir?: string) {
+export async function setVeniceApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "venice:default",
-    credential: {
-      type: "api_key",
-      provider: "venice",
-      key,
-    },
+    credential: buildApiKeyCredential("venice", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
@@ -216,41 +295,29 @@ export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
-export async function setZaiApiKey(key: string, agentDir?: string) {
+export async function setZaiApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "zai:default",
-    credential: {
-      type: "api_key",
-      provider: "zai",
-      key,
-    },
+    credential: buildApiKeyCredential("zai", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setXiaomiApiKey(key: string, agentDir?: string) {
+export async function setXiaomiApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "xiaomi:default",
-    credential: {
-      type: "api_key",
-      provider: "xiaomi",
-      key,
-    },
+    credential: buildApiKeyCredential("xiaomi", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setOpenrouterApiKey(key: string, agentDir?: string) {
+export async function setOpenrouterApiKey(key: SecretInput, agentDir?: string) {
   // Never persist the literal "undefined" (e.g. when prompt returns undefined and caller used String(key)).
-  const safeKey = key === "undefined" ? "" : key;
+  const safeKey = typeof key === "string" && key === "undefined" ? "" : key;
   upsertAuthProfile({
     profileId: "openrouter:default",
-    credential: {
-      type: "api_key",
-      provider: "openrouter",
-      key: safeKey,
-    },
+    credential: buildApiKeyCredential("openrouter", safeKey),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
@@ -258,107 +325,73 @@ export async function setOpenrouterApiKey(key: string, agentDir?: string) {
 export async function setCloudflareAiGatewayConfig(
   accountId: string,
   gatewayId: string,
-  apiKey: string,
+  apiKey: SecretInput,
   agentDir?: string,
 ) {
   const normalizedAccountId = accountId.trim();
   const normalizedGatewayId = gatewayId.trim();
-  const normalizedKey = apiKey.trim();
   upsertAuthProfile({
     profileId: "cloudflare-ai-gateway:default",
-    credential: {
-      type: "api_key",
-      provider: "cloudflare-ai-gateway",
-      key: normalizedKey,
-      metadata: {
-        accountId: normalizedAccountId,
-        gatewayId: normalizedGatewayId,
-      },
-    },
+    credential: buildApiKeyCredential("cloudflare-ai-gateway", apiKey, {
+      accountId: normalizedAccountId,
+      gatewayId: normalizedGatewayId,
+    }),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setLitellmApiKey(key: string, agentDir?: string) {
+export async function setLitellmApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "litellm:default",
-    credential: {
-      type: "api_key",
-      provider: "litellm",
-      key,
-    },
+    credential: buildApiKeyCredential("litellm", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setVercelAiGatewayApiKey(key: string, agentDir?: string) {
+export async function setVercelAiGatewayApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "vercel-ai-gateway:default",
-    credential: {
-      type: "api_key",
-      provider: "vercel-ai-gateway",
-      key,
-    },
+    credential: buildApiKeyCredential("vercel-ai-gateway", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
+export async function setOpencodeZenApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "opencode:default",
-    credential: {
-      type: "api_key",
-      provider: "opencode",
-      key,
-    },
+    credential: buildApiKeyCredential("opencode", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setTogetherApiKey(key: string, agentDir?: string) {
+export async function setTogetherApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "together:default",
-    credential: {
-      type: "api_key",
-      provider: "together",
-      key,
-    },
+    credential: buildApiKeyCredential("together", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export async function setHuggingfaceApiKey(key: string, agentDir?: string) {
+export async function setHuggingfaceApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "huggingface:default",
-    credential: {
-      type: "api_key",
-      provider: "huggingface",
-      key,
-    },
+    credential: buildApiKeyCredential("huggingface", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export function setQianfanApiKey(key: string, agentDir?: string) {
+export function setQianfanApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "qianfan:default",
-    credential: {
-      type: "api_key",
-      provider: "qianfan",
-      key,
-    },
+    credential: buildApiKeyCredential("qianfan", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
-export function setXaiApiKey(key: string, agentDir?: string) {
+export function setXaiApiKey(key: SecretInput, agentDir?: string) {
   upsertAuthProfile({
     profileId: "xai:default",
-    credential: {
-      type: "api_key",
-      provider: "xai",
-      key,
-    },
+    credential: buildApiKeyCredential("xai", key),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
