@@ -7,8 +7,8 @@ import type {
   Response,
 } from "playwright-core";
 import { chromium } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
