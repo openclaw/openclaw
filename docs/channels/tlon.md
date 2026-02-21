@@ -208,6 +208,58 @@ The Tlon plugin includes a bundled skill (`@tloncorp/tlon-skill`) that provides 
 Tlon operations: managing groups, creating channels, updating profiles, sending DMs, and more.
 The skill is automatically available when the plugin is installed.
 
+## Capabilities
+
+| Feature         | Status                                  |
+| --------------- | --------------------------------------- |
+| Direct messages | ✅ Supported                            |
+| Groups/channels | ✅ Supported (mention-gated by default) |
+| Threads         | ✅ Supported (auto-replies in thread)   |
+| Rich text       | ✅ Markdown converted to Tlon format    |
+| Images          | ✅ Uploaded to Tlon storage             |
+| Reactions       | ❌ Not yet supported                    |
+| Polls           | ❌ Not yet supported                    |
+| Native commands | ✅ Supported (owner-only by default)    |
+
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+```
+
+Common failures:
+
+- **DMs ignored**: sender not in `dmAllowlist` and no `ownerShip` configured for approval flow.
+- **Group messages ignored**: channel not discovered or sender not authorized.
+- **Connection errors**: check ship URL is reachable; enable `allowPrivateNetwork` for local ships.
+- **Auth errors**: verify login code is current (codes rotate).
+
+## Configuration reference
+
+Full configuration: [Configuration](/gateway/configuration)
+
+Provider options:
+
+- `channels.tlon.enabled`: enable/disable channel startup.
+- `channels.tlon.ship`: bot's Urbit ship name (e.g. `~sampel-palnet`).
+- `channels.tlon.url`: ship URL (e.g. `https://sampel-palnet.tlon.network`).
+- `channels.tlon.code`: ship login code.
+- `channels.tlon.allowPrivateNetwork`: allow localhost/LAN URLs (SSRF bypass).
+- `channels.tlon.ownerShip`: owner ship for approval system (always authorized).
+- `channels.tlon.dmAllowlist`: ships allowed to DM (empty = none).
+- `channels.tlon.autoAcceptDmInvites`: auto-accept DMs from allowlisted ships.
+- `channels.tlon.autoAcceptGroupInvites`: auto-accept all group invites.
+- `channels.tlon.autoDiscoverChannels`: auto-discover group channels (default: true).
+- `channels.tlon.groupChannels`: manually pinned channel nests.
+- `channels.tlon.defaultAuthorizedShips`: ships authorized for all channels.
+- `channels.tlon.authorization.channelRules`: per-channel auth rules.
+- `channels.tlon.showModelSignature`: append model name to messages.
+
 ## Notes
 
 - Group replies require a mention (e.g. `~your-bot-ship`) to respond.
