@@ -9,6 +9,7 @@ const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
 };
+const WEB_LOGOUT_TEST_TIMEOUT_MS = 15_000;
 
 describe("web logout", () => {
   let fixtureRoot = "";
@@ -48,12 +49,16 @@ describe("web logout", () => {
     vi.restoreAllMocks();
   });
 
-  it("deletes cached credentials when present", { timeout: 60_000 }, async () => {
-    const authDir = await createAuthCase({ "creds.json": "{}" });
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
-    expect(result).toBe(true);
-    expect(fs.existsSync(authDir)).toBe(false);
-  });
+  it(
+    "deletes cached credentials when present",
+    { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS },
+    async () => {
+      const authDir = await createAuthCase({ "creds.json": "{}" });
+      const result = await logoutWeb({ authDir, runtime: runtime as never });
+      expect(result).toBe(true);
+      expect(fs.existsSync(authDir)).toBe(false);
+    },
+  );
 
   it("removes oauth.json too when not using legacy auth dir", async () => {
     const authDir = await createAuthCase({
@@ -66,7 +71,7 @@ describe("web logout", () => {
     expect(fs.existsSync(authDir)).toBe(false);
   });
 
-  it("no-ops when nothing to delete", { timeout: 60_000 }, async () => {
+  it("no-ops when nothing to delete", { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS }, async () => {
     const authDir = await makeCaseDir();
     const result = await logoutWeb({ authDir, runtime: runtime as never });
     expect(result).toBe(false);
