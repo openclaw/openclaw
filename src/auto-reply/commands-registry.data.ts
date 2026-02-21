@@ -572,31 +572,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
     defineChatCommand({
-      key: "agent",
-      nativeName: "agent",
-      description: "Switch the active agent for this chat.",
-      textAlias: "/agent",
-      category: "session",
-      args: [
-        {
-          name: "agent",
-          description: "Agent id",
-          type: "string",
-          choices: ({ cfg }) => {
-            const agents = cfg?.agents?.list;
-            if (!Array.isArray(agents)) {
-              return ["main"];
-            }
-            const ids = agents
-              .map((a: { id?: string }) => a?.id?.trim())
-              .filter((id): id is string => Boolean(id));
-            return [...ids, { value: "default", label: "↩ Default" }];
-          },
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
       key: "model",
       nativeName: "model",
       description: "Show or set the model.",

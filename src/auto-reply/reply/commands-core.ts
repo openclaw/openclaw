@@ -4,7 +4,6 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { handleAgentCommand } from "./commands-agent.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
@@ -44,7 +43,6 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     HANDLERS = [
       // Plugin commands are processed first, before built-in commands
       handlePluginCommand,
-      handleAgentCommand,
       handleBashCommand,
       handleActivationCommand,
       handleSendPolicyCommand,
