@@ -103,3 +103,6 @@ apps/ios/LocalSigning.xcconfig
 # local builds
 clawos-os/
 
+# ClawOS runtime
+data/
+
