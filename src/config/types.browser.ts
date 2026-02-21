@@ -7,6 +7,13 @@ export type BrowserProfileConfig = {
   driver?: "openclaw" | "extension";
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Browserless-specific settings (session persistence). */
+  browserless?: {
+    /** Keep browser alive after disconnect using Browserless.reconnect. Default: false. */
+    reconnect?: boolean;
+    /** Timeout (ms) for Browserless to keep the browser alive. Default: 60000. */
+    timeout?: number;
+  };
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
@@ -60,4 +67,11 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /** Browserless-specific settings (session persistence). */
+  browserless?: {
+    /** Keep browser alive after disconnect using Browserless.reconnect. Default: false. */
+    reconnect?: boolean;
+    /** Timeout (ms) for Browserless to keep the browser alive. Default: 60000. */
+    timeout?: number;
+  };
 };

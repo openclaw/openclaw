@@ -13,6 +13,12 @@ import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./c
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import {
+  clearReconnectUrl,
+  extractReconnectUrl,
+  getReconnectUrl,
+  storeReconnectUrl,
+} from "./browserless-session.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -104,6 +110,23 @@ const MAX_NETWORK_REQUESTS = 500;
 
 let cached: ConnectedBrowser | null = null;
 let connecting: Promise<ConnectedBrowser> | null = null;
+
+/**
+ * Per-cdpUrl Browserless reconnect configuration.
+ * Set via configureBrowserless() before connecting to a Browserless profile.
+ */
+const browserlessConfigs = new Map<string, { reconnect: boolean; timeoutMs: number }>();
+
+/**
+ * Register Browserless reconnect settings for a CDP URL.
+ * Must be called before connectBrowser() for the URL.
+ */
+export function configureBrowserless(
+  cdpUrl: string,
+  config: { reconnect: boolean; timeoutMs: number },
+): void {
+  browserlessConfigs.set(normalizeCdpUrl(cdpUrl), config);
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -324,13 +347,28 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     return await connecting;
   }
 
+  const blConfig = browserlessConfigs.get(normalized);
+
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
-        const endpoint = wsUrl ?? normalized;
+
+        // On first attempt, try stored Browserless reconnect URL
+        let endpoint: string | null = null;
+        if (attempt === 0 && blConfig?.reconnect) {
+          const reconnectUrl = getReconnectUrl(normalized);
+          if (reconnectUrl) {
+            endpoint = reconnectUrl;
+          }
+        }
+
+        if (!endpoint) {
+          const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
+          endpoint = wsUrl ?? normalized;
+        }
+
         const headers = getHeadersWithAuth(endpoint);
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
         const onDisconnected = () => {
@@ -345,6 +383,10 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         return connected;
       } catch (err) {
         lastErr = err;
+        // If we tried a reconnect URL and it failed, clear it so next attempt uses normal path
+        if (attempt === 0 && blConfig?.reconnect) {
+          clearReconnectUrl(normalized);
+        }
         const delay = 250 + attempt * 250;
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -523,6 +565,35 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
   if (cur.onDisconnected && typeof cur.browser.off === "function") {
     cur.browser.off("disconnected", cur.onDisconnected);
   }
+
+  // Send Browserless.reconnect before closing if configured for this endpoint
+  const blConfig = browserlessConfigs.get(cur.cdpUrl);
+  if (blConfig?.reconnect) {
+    try {
+      const contexts = cur.browser.contexts();
+      const page = contexts[0]?.pages()[0];
+      if (page) {
+        const session = await page.context().newCDPSession(page);
+        try {
+          const result = await session.send(
+            "Browserless.reconnect" as Parameters<typeof session.send>[0],
+            { timeout: blConfig.timeoutMs },
+          );
+          const wsUrl = extractReconnectUrl(result as unknown);
+          if (wsUrl) {
+            storeReconnectUrl(cur.cdpUrl, wsUrl, blConfig.timeoutMs);
+          }
+        } catch {
+          // Not a Browserless instance or reconnect not supported
+        } finally {
+          await session.detach().catch(() => {});
+        }
+      }
+    } catch {
+      // Best effort — browser may already be partially disconnected
+    }
+  }
+
   await cur.browser.close().catch(() => {});
 }
 

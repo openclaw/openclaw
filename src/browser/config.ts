@@ -34,6 +34,8 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  browserlessReconnect: boolean;
+  browserlessReconnectTimeoutMs: number;
 };
 
 export type ResolvedBrowserProfile = {
@@ -44,6 +46,8 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  browserlessReconnect: boolean;
+  browserlessReconnectTimeoutMs: number;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -233,6 +237,8 @@ export function resolveBrowserConfig(
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
+  const browserlessReconnect = cfg?.browserless?.reconnect === true;
+  const browserlessReconnectTimeoutMs = normalizeTimeoutMs(cfg?.browserless?.timeout, 60_000);
 
   return {
     enabled,
@@ -252,6 +258,8 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
+    browserlessReconnect,
+    browserlessReconnectTimeoutMs,
   };
 }
 
@@ -285,14 +293,23 @@ export function resolveProfile(
     throw new Error(`Profile "${profileName}" must define cdpPort or cdpUrl.`);
   }
 
+  const cdpIsLoopback = isLoopbackHost(cdpHost);
+  const browserlessReconnect = cdpIsLoopback
+    ? false
+    : (profile.browserless?.reconnect ?? resolved.browserlessReconnect);
+  const browserlessReconnectTimeoutMs =
+    profile.browserless?.timeout ?? resolved.browserlessReconnectTimeoutMs;
+
   return {
     name: profileName,
     cdpPort,
     cdpUrl,
     cdpHost,
-    cdpIsLoopback: isLoopbackHost(cdpHost),
+    cdpIsLoopback,
     color: profile.color,
     driver,
+    browserlessReconnect,
+    browserlessReconnectTimeoutMs,
   };
 }
 

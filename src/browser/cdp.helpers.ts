@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
+import { extractReconnectUrl, storeReconnectUrl } from "./browserless-session.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -139,7 +140,17 @@ export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit)
 export async function withCdpSocket<T>(
   wsUrl: string,
   fn: (send: CdpSendFn) => Promise<T>,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: {
+    headers?: Record<string, string>;
+    handshakeTimeoutMs?: number;
+    /** Browserless session persistence config. When enabled, sends Browserless.reconnect before closing. */
+    browserless?: {
+      reconnect: boolean;
+      timeoutMs: number;
+      /** The profile's http cdpUrl, used as the store key for reconnect URLs. */
+      cdpUrl: string;
+    };
+  },
 ): Promise<T> {
   const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
   const handshakeTimeoutMs =
@@ -171,6 +182,23 @@ export async function withCdpSocket<T>(
     closeWithError(err instanceof Error ? err : new Error(String(err)));
     throw err;
   } finally {
+    if (opts?.browserless?.reconnect) {
+      try {
+        const result = await send("Browserless.reconnect", {
+          timeout: opts.browserless.timeoutMs,
+        });
+        const reconnectWsUrl = extractReconnectUrl(result);
+        if (reconnectWsUrl) {
+          storeReconnectUrl(
+            opts.browserless.cdpUrl,
+            reconnectWsUrl,
+            opts.browserless.timeoutMs,
+          );
+        }
+      } catch {
+        // Not a Browserless instance or reconnect not supported; ignore silently.
+      }
+    }
     try {
       ws.close();
     } catch {

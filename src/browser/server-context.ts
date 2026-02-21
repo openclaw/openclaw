@@ -76,6 +76,21 @@ function createProfileContext(
   opts: ContextOptions,
   profile: ResolvedBrowserProfile,
 ): ProfileContext {
+  // Configure Browserless reconnect for the Playwright persistent connection
+  if (profile.browserlessReconnect && !profile.cdpIsLoopback) {
+    getPwAiModule({ mode: "strict" })
+      .then((mod) => {
+        const fn = (mod as Record<string, unknown> | null)?.configureBrowserless;
+        if (typeof fn === "function") {
+          fn(profile.cdpUrl, {
+            reconnect: true,
+            timeoutMs: profile.browserlessReconnectTimeoutMs,
+          });
+        }
+      })
+      .catch(() => {});
+  }
+
   const state = () => {
     const current = opts.getState();
     if (!current) {
@@ -164,6 +179,15 @@ function createProfileContext(
       cdpUrl: profile.cdpUrl,
       url,
       ...ssrfPolicyOpts,
+      ...(profile.browserlessReconnect
+        ? {
+            browserless: {
+              reconnect: true,
+              timeoutMs: profile.browserlessReconnectTimeoutMs,
+              cdpUrl: profile.cdpUrl,
+            },
+          }
+        : {}),
     })
       .then((r) => r.targetId)
       .catch(() => null);

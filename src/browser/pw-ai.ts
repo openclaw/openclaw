@@ -6,6 +6,7 @@ export {
   type BrowserConsoleMessage,
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
+  configureBrowserless,
   createPageViaPlaywright,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,

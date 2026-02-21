@@ -88,6 +88,12 @@ export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
   ssrfPolicy?: SsrFPolicy;
+  /** Browserless session persistence config. Passed to withCdpSocket. */
+  browserless?: {
+    reconnect: boolean;
+    timeoutMs: number;
+    cdpUrl: string;
+  };
 }): Promise<{ targetId: string }> {
   await assertBrowserNavigationAllowed({
     url: opts.url,
@@ -104,16 +110,20 @@ export async function createTargetViaCdp(opts: {
     throw new Error("CDP /json/version missing webSocketDebuggerUrl");
   }
 
-  return await withCdpSocket(wsUrl, async (send) => {
-    const created = (await send("Target.createTarget", { url: opts.url })) as {
-      targetId?: string;
-    };
-    const targetId = String(created?.targetId ?? "").trim();
-    if (!targetId) {
-      throw new Error("CDP Target.createTarget returned no targetId");
-    }
-    return { targetId };
-  });
+  return await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      const created = (await send("Target.createTarget", { url: opts.url })) as {
+        targetId?: string;
+      };
+      const targetId = String(created?.targetId ?? "").trim();
+      if (!targetId) {
+        throw new Error("CDP Target.createTarget returned no targetId");
+      }
+      return { targetId };
+    },
+    opts.browserless ? { browserless: opts.browserless } : undefined,
+  );
 }
 
 export type CdpRemoteObject = {
