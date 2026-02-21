@@ -33,7 +33,17 @@ describe("roleScopesAllow", () => {
         requestedScopes: ["operator.write"],
         allowedScopes: ["operator.admin"],
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("treats operator.admin as sufficient for mixed operator scope requests", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.write", "operator.approvals"],
+        allowedScopes: ["operator.admin", "operator.approvals"],
+      }),
+    ).toBe(true);
   });
 
   it("uses strict matching for non-operator roles", () => {
