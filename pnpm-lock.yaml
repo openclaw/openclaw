@@ -485,6 +485,15 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/qqbot:
+    dependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+      ws:
+        specifier: ^8.18.0
+        version: 8.19.0
+
   extensions/signal:
     devDependencies:
       openclaw:
