@@ -412,6 +412,68 @@ describe("QmdMemoryManager", () => {
     expect(addSessions).toBeDefined();
   });
 
+  it("removes legacy unsuffixed collections on upgrade", async () => {
+    // Simulate an index that has legacy "memory-root", "memory-alt", "memory-dir"
+    // collections (created by older OpenClaw versions without agent-scoped naming).
+    // The manager should remove these before creating the new suffixed collections.
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { name: "memory-root", path: workspaceDir, mask: "MEMORY.md" },
+            { name: "memory-alt", path: workspaceDir, mask: "memory.md" },
+            { name: "memory-dir", path: path.join(workspaceDir, "memory"), mask: "**/*.md" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+
+    // Legacy unsuffixed collections should be removed
+    const removeRoot = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "memory-root",
+    );
+    expect(removeRoot).toBeDefined();
+    const removeAlt = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "memory-alt",
+    );
+    expect(removeAlt).toBeDefined();
+    const removeDir = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "memory-dir",
+    );
+    expect(removeDir).toBeDefined();
+
+    // New suffixed collections should be created
+    const addRootMain = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === `memory-root-${agentId}`;
+    });
+    expect(addRootMain).toBeDefined();
+  });
+
   it("times out qmd update during sync when configured", async () => {
     vi.useFakeTimers();
     cfg = {
