@@ -483,8 +483,19 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "append":
                 return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
-              case "create":
-                return json(await createDoc(client, p.title, p.folder_token));
+              case "create": {
+                const created = await createDoc(client, p.title, p.folder_token);
+                if (p.content && created.document_id) {
+                  const writeResult = await writeDoc(
+                    client,
+                    created.document_id,
+                    p.content,
+                    mediaMaxBytes,
+                  );
+                  return json({ ...created, write_result: writeResult });
+                }
+                return json(created);
+              }
               case "list_blocks":
                 return json(await listBlocks(client, p.doc_token));
               case "get_block":

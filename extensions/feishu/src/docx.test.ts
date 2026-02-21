@@ -20,6 +20,7 @@ vi.mock("./runtime.js", () => ({
 import { registerFeishuDocTools } from "./docx.js";
 
 describe("feishu_doc image fetch hardening", () => {
+  const documentCreateMock = vi.hoisted(() => vi.fn());
   const convertMock = vi.hoisted(() => vi.fn());
   const blockListMock = vi.hoisted(() => vi.fn());
   const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
@@ -33,6 +34,7 @@ describe("feishu_doc image fetch hardening", () => {
     createFeishuClientMock.mockReturnValue({
       docx: {
         document: {
+          create: documentCreateMock,
           convert: convertMock,
         },
         documentBlock: {
@@ -60,6 +62,15 @@ describe("feishu_doc image fetch hardening", () => {
       data: {
         blocks: [{ block_type: 27 }],
         first_level_block_ids: [],
+      },
+    });
+    documentCreateMock.mockResolvedValue({
+      code: 0,
+      data: {
+        document: {
+          document_id: "doc_created_1",
+          title: "New Doc",
+        },
       },
     });
 
@@ -119,5 +130,38 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.images_processed).toBe(0);
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("writes initial content when create action includes content", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "New Doc",
+      content: "# Hello",
+    });
+
+    expect(documentCreateMock).toHaveBeenCalledTimes(1);
+    expect(convertMock).toHaveBeenCalledTimes(1);
+    expect(blockChildrenCreateMock).toHaveBeenCalledTimes(1);
+    expect(result.details.document_id).toBe("doc_created_1");
+    expect(result.details.write_result.success).toBe(true);
   });
 });
