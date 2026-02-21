@@ -6,7 +6,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 function buildMediaLocalRoots(stateDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
-  const preferredTmpDir = resolvePreferredOpenClawTmpDir();
+  const preferredTmpDir = path.resolve(resolvePreferredOpenClawTmpDir());
   return [
     preferredTmpDir,
     path.join(resolvedStateDir, "media"),

@@ -78,23 +78,20 @@ export function normalizeToolParameters(
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
-  // - Anthropic (google-antigravity) expects full JSON Schema draft 2020-12 compliance.
+  // - Google endpoints (including google-antigravity) validate Gemini-compatible tool schemas.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
   const isGeminiProvider =
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider =
-    options?.modelProvider?.toLowerCase().includes("anthropic") ||
-    options?.modelProvider?.toLowerCase().includes("google-antigravity");
 
   // If schema already has type + properties (no top-level anyOf to merge),
   // clean it for Gemini compatibility (but only if using Gemini, not Anthropic)
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
     return {
       ...tool,
-      parameters: isGeminiProvider && !isAnthropicProvider ? cleanSchemaForGemini(schema) : schema,
+      parameters: isGeminiProvider ? cleanSchemaForGemini(schema) : schema,
     };
   }
 
@@ -109,10 +106,7 @@ export function normalizeToolParameters(
     const schemaWithType = { ...schema, type: "object" };
     return {
       ...tool,
-      parameters:
-        isGeminiProvider && !isAnthropicProvider
-          ? cleanSchemaForGemini(schemaWithType)
-          : schemaWithType,
+      parameters: isGeminiProvider ? cleanSchemaForGemini(schemaWithType) : schemaWithType,
     };
   }
 
@@ -186,10 +180,7 @@ export function normalizeToolParameters(
     // - OpenAI rejects schemas without top-level `type: "object"`.
     // - Anthropic accepts proper JSON Schema with constraints.
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
-    parameters:
-      isGeminiProvider && !isAnthropicProvider
-        ? cleanSchemaForGemini(flattenedSchema)
-        : flattenedSchema,
+    parameters: isGeminiProvider ? cleanSchemaForGemini(flattenedSchema) : flattenedSchema,
   };
 }
 
