@@ -27,7 +27,7 @@ The Gateway machine must have the `zca` binary available in `PATH`.
 - Verify: `zca --version`
 - If missing, install zca-cli (see `extensions/zalouser/README.md` or the upstream zca-cli docs).
 
-## Quick setup (beginner)
+## Onboarding
 
 1. Install the plugin (see above).
 2. Login (QR, on the Gateway machine):
