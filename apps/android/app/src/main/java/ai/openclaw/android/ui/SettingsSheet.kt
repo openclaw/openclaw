@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -45,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,6 +57,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -411,6 +415,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
     item {
       AnimatedVisibility(visible = advancedExpanded) {
+        val sheetWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        DisposableEffect(Unit) {
+          sheetWindow?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+          onDispose { sheetWindow?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+        }
         Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
           ListItem(
             headlineContent = { Text("Use Manual Gateway") },
