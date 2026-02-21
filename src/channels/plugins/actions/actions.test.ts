@@ -751,6 +751,27 @@ describe("signalMessageActions", () => {
 });
 
 describe("slack actions adapter", () => {
+  it("lists modal actions by default", () => {
+    const { cfg, actions } = slackHarness();
+    const listed = actions.listActions?.({ cfg }) ?? [];
+
+    expect(listed).toContain("modal-open");
+    expect(listed).toContain("modal-push");
+    expect(listed).toContain("modal-update");
+  });
+
+  it("hides modal actions when modals are disabled", () => {
+    const cfg = {
+      channels: { slack: { botToken: "tok", actions: { modals: false } } },
+    } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+    const listed = actions.listActions?.({ cfg }) ?? [];
+
+    expect(listed).not.toContain("modal-open");
+    expect(listed).not.toContain("modal-push");
+    expect(listed).not.toContain("modal-update");
+  });
+
   it("forwards threadId for read", async () => {
     await runSlackAction("read", {
       channelId: "C1",
@@ -888,6 +909,118 @@ describe("slack actions adapter", () => {
         },
       }),
     ).rejects.toThrow(/edit requires message or blocks/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
+
+  it("forwards modal-open params", async () => {
+    await runSlackAction("modal-open", {
+      triggerId: "1337.42",
+      view: JSON.stringify({
+        type: "modal",
+        callback_id: "openclaw:modal:test",
+        title: { type: "plain_text", text: "Open" },
+        blocks: [],
+      }),
+    });
+
+    expectFirstSlackAction({
+      action: "openModal",
+      triggerId: "1337.42",
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:test",
+        title: { type: "plain_text", text: "Open" },
+        blocks: [],
+      },
+    });
+  });
+
+  it("forwards modal-push params", async () => {
+    await runSlackAction("modal-push", {
+      triggerId: "1337.43",
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:push",
+        title: { type: "plain_text", text: "Push" },
+        blocks: [],
+      },
+    });
+
+    expectFirstSlackAction({
+      action: "pushModal",
+      triggerId: "1337.43",
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:push",
+        title: { type: "plain_text", text: "Push" },
+        blocks: [],
+      },
+    });
+  });
+
+  it("rejects modal-open when view.type is not modal", async () => {
+    const { cfg, actions } = slackHarness();
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "modal-open",
+        cfg,
+        params: {
+          triggerId: "1337.42",
+          view: JSON.stringify({
+            type: "home",
+            callback_id: "openclaw:modal:test",
+          }),
+        },
+      }),
+    ).rejects.toThrow(/view\.type must be modal/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
+
+  it("forwards modal-update params", async () => {
+    await runSlackAction("modal-update", {
+      viewId: "V123",
+      hash: "hash-123",
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:update",
+        title: { type: "plain_text", text: "Updated" },
+        blocks: [],
+      },
+    });
+
+    expectFirstSlackAction({
+      action: "updateModal",
+      viewId: "V123",
+      hash: "hash-123",
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:update",
+        title: { type: "plain_text", text: "Updated" },
+        blocks: [],
+      },
+    });
+  });
+
+  it("rejects modal-update without viewId or externalId", async () => {
+    const { cfg, actions } = slackHarness();
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "modal-update",
+        cfg,
+        params: {
+          view: JSON.stringify({
+            type: "modal",
+            callback_id: "openclaw:modal:update",
+            title: { type: "plain_text", text: "Updated" },
+            blocks: [],
+          }),
+        },
+      }),
+    ).rejects.toThrow(/requires viewId or externalId/i);
     expect(handleSlackAction).not.toHaveBeenCalled();
   });
 });

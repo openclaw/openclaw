@@ -38,13 +38,18 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
     actions.add("unpin");
     actions.add("list-pins");
   }
+  if (isActionEnabled("modals")) {
+    actions.add("modal-open");
+    actions.add("modal-push");
+    actions.add("modal-update");
+  }
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");
   }
   if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }
-  return Array.from(actions);
+  return [...actions];
 }
 
 export function extractSlackToolSend(args: Record<string, unknown>): ChannelToolSend | null {

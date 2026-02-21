@@ -9,27 +9,50 @@ const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackPins = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackReactions = vi.fn(async (..._args: unknown[]) => ({}));
 const pinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const pushSlackModal = vi.fn(async (..._args: unknown[]) => ({
+  id: "V_PUSH",
+  externalId: "ext-push",
+  hash: "hash-push",
+}));
 const reactSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const openSlackModal = vi.fn(async (..._args: unknown[]) => ({
+  id: "V_OPEN",
+  externalId: "ext-open",
+  hash: "hash-open",
+}));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const updateSlackModal = vi.fn(async (..._args: unknown[]) => ({
+  id: "V_UPDATE",
+  externalId: "ext-update",
+  hash: "hash-update",
+}));
 
 vi.mock("../../slack/actions.js", () => ({
-  deleteSlackMessage,
-  editSlackMessage,
-  getSlackMemberInfo,
-  listSlackEmojis,
-  listSlackPins,
-  listSlackReactions,
-  pinSlackMessage,
-  reactSlackMessage,
-  readSlackMessages,
-  removeOwnSlackReactions,
-  removeSlackReaction,
-  sendSlackMessage,
-  unpinSlackMessage,
+  deleteSlackMessage: (...args: Parameters<typeof deleteSlackMessage>) =>
+    deleteSlackMessage(...args),
+  editSlackMessage: (...args: Parameters<typeof editSlackMessage>) => editSlackMessage(...args),
+  getSlackMemberInfo: (...args: Parameters<typeof getSlackMemberInfo>) =>
+    getSlackMemberInfo(...args),
+  listSlackEmojis: (...args: Parameters<typeof listSlackEmojis>) => listSlackEmojis(...args),
+  listSlackPins: (...args: Parameters<typeof listSlackPins>) => listSlackPins(...args),
+  listSlackReactions: (...args: Parameters<typeof listSlackReactions>) =>
+    listSlackReactions(...args),
+  openSlackModal: (...args: Parameters<typeof openSlackModal>) => openSlackModal(...args),
+  pinSlackMessage: (...args: Parameters<typeof pinSlackMessage>) => pinSlackMessage(...args),
+  pushSlackModal: (...args: Parameters<typeof pushSlackModal>) => pushSlackModal(...args),
+  reactSlackMessage: (...args: Parameters<typeof reactSlackMessage>) => reactSlackMessage(...args),
+  readSlackMessages: (...args: Parameters<typeof readSlackMessages>) => readSlackMessages(...args),
+  removeOwnSlackReactions: (...args: Parameters<typeof removeOwnSlackReactions>) =>
+    removeOwnSlackReactions(...args),
+  removeSlackReaction: (...args: Parameters<typeof removeSlackReaction>) =>
+    removeSlackReaction(...args),
+  sendSlackMessage: (...args: Parameters<typeof sendSlackMessage>) => sendSlackMessage(...args),
+  unpinSlackMessage: (...args: Parameters<typeof unpinSlackMessage>) => unpinSlackMessage(...args),
+  updateSlackModal: (...args: Parameters<typeof updateSlackModal>) => updateSlackModal(...args),
 }));
 
 describe("handleSlackAction", () => {
@@ -283,6 +306,219 @@ describe("handleSlackAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/requires content or blocks/i);
+  });
+
+  it("opens a modal from JSON view input", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    openSlackModal.mockClear();
+    const result = await handleSlackAction(
+      {
+        action: "openModal",
+        triggerId: "1337.42",
+        view: JSON.stringify({
+          type: "modal",
+          callback_id: "openclaw:modal:test",
+          title: { type: "plain_text", text: "Test modal" },
+          submit: { type: "plain_text", text: "Save" },
+          close: { type: "plain_text", text: "Cancel" },
+          blocks: [],
+        }),
+      },
+      cfg,
+    );
+    expect(openSlackModal).toHaveBeenCalledWith("1337.42", {
+      type: "modal",
+      callback_id: "openclaw:modal:test",
+      title: { type: "plain_text", text: "Test modal" },
+      submit: { type: "plain_text", text: "Save" },
+      close: { type: "plain_text", text: "Cancel" },
+      blocks: [],
+    });
+    const payload = result.details as { ok: boolean; result?: { id?: string } };
+    expect(payload.ok).toBe(true);
+    expect(payload.result?.id).toBe("V_OPEN");
+  });
+
+  it("rejects non-modal views for openModal", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    openSlackModal.mockClear();
+    await expect(
+      handleSlackAction(
+        {
+          action: "openModal",
+          triggerId: "1337.42",
+          view: JSON.stringify({
+            type: "home",
+            callback_id: "openclaw:modal:test",
+          }),
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/view\.type must be modal/i);
+    expect(openSlackModal).not.toHaveBeenCalled();
+  });
+
+  it("surfaces openModal provider errors", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    openSlackModal.mockRejectedValueOnce(new Error("invalid_trigger"));
+    await expect(
+      handleSlackAction(
+        {
+          action: "openModal",
+          triggerId: "expired-trigger",
+          view: {
+            type: "modal",
+            callback_id: "openclaw:modal:test",
+            title: { type: "plain_text", text: "Test modal" },
+            blocks: [],
+          },
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/invalid_trigger/i);
+  });
+
+  it("pushes a modal with object view input", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    pushSlackModal.mockClear();
+    await handleSlackAction(
+      {
+        action: "pushModal",
+        triggerId: "1337.99",
+        view: {
+          type: "modal",
+          callback_id: "openclaw:modal:push",
+          title: { type: "plain_text", text: "Push modal" },
+          blocks: [],
+        },
+      },
+      cfg,
+    );
+    expect(pushSlackModal).toHaveBeenCalledWith("1337.99", {
+      type: "modal",
+      callback_id: "openclaw:modal:push",
+      title: { type: "plain_text", text: "Push modal" },
+      blocks: [],
+    });
+  });
+
+  it("updates a modal by viewId", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    updateSlackModal.mockClear();
+    await handleSlackAction(
+      {
+        action: "updateModal",
+        viewId: "V123",
+        view: {
+          type: "modal",
+          callback_id: "openclaw:modal:update",
+          title: { type: "plain_text", text: "Updated modal" },
+          blocks: [],
+        },
+      },
+      cfg,
+    );
+    expect(updateSlackModal).toHaveBeenCalledWith({
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:update",
+        title: { type: "plain_text", text: "Updated modal" },
+        blocks: [],
+      },
+      viewId: "V123",
+      externalId: undefined,
+      hash: undefined,
+    });
+  });
+
+  it("updates a modal by externalId and hash", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    updateSlackModal.mockClear();
+    await handleSlackAction(
+      {
+        action: "updateModal",
+        externalId: "ext-123",
+        hash: "hash-123",
+        view: {
+          type: "modal",
+          callback_id: "openclaw:modal:update",
+          title: { type: "plain_text", text: "Updated modal ext" },
+          blocks: [],
+        },
+      },
+      cfg,
+    );
+    expect(updateSlackModal).toHaveBeenCalledWith({
+      view: {
+        type: "modal",
+        callback_id: "openclaw:modal:update",
+        title: { type: "plain_text", text: "Updated modal ext" },
+        blocks: [],
+      },
+      viewId: undefined,
+      externalId: "ext-123",
+      hash: "hash-123",
+    });
+  });
+
+  it("surfaces updateModal hash conflicts", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    updateSlackModal.mockRejectedValueOnce(new Error("hash_conflict"));
+    await expect(
+      handleSlackAction(
+        {
+          action: "updateModal",
+          viewId: "V123",
+          hash: "stale-hash",
+          view: {
+            type: "modal",
+            callback_id: "openclaw:modal:update",
+            title: { type: "plain_text", text: "Updated modal ext" },
+            blocks: [],
+          },
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/hash_conflict/i);
+  });
+
+  it("requires viewId or externalId for updateModal", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "updateModal",
+          view: {
+            type: "modal",
+            callback_id: "openclaw:modal:update",
+            title: { type: "plain_text", text: "Updated modal" },
+            blocks: [],
+          },
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/requires viewId or externalId/i);
+  });
+
+  it("respects modal gating", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "tok", actions: { modals: false } } },
+    } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "openModal",
+          triggerId: "1337",
+          view: {
+            type: "modal",
+            callback_id: "openclaw:modal:test",
+            title: { type: "plain_text", text: "Test modal" },
+            blocks: [],
+          },
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Slack modals are disabled/i);
   });
 
   it("auto-injects threadTs from context when replyToMode=all", async () => {
