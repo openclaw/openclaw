@@ -303,7 +303,9 @@ struct GeneralSettings: View {
                 .disabled(self.remoteStatus == .checking || self.state.remoteUrl
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("Direct mode requires a ws:// or wss:// URL (Tailscale Serve uses wss://<magicdns>).")
+            Text(
+                "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1."
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
@@ -546,7 +548,9 @@ extension GeneralSettings {
                 return
             }
             guard Self.isValidWsUrl(trimmedUrl) else {
-                self.remoteStatus = .failed("Gateway URL must start with ws:// or wss://")
+                self.remoteStatus = .failed(
+                    "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)"
+                )
                 return
             }
         } else {
@@ -603,11 +607,7 @@ extension GeneralSettings {
     }
 
     private static func isValidWsUrl(_ raw: String) -> Bool {
-        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
-        let scheme = url.scheme?.lowercased() ?? ""
-        guard scheme == "ws" || scheme == "wss" else { return false }
-        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !host.isEmpty
+        GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
     }
 
     private static func sshCheckCommand(target: String, identity: String) -> [String]? {

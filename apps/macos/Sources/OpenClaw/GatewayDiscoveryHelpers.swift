@@ -42,12 +42,25 @@ enum GatewayDiscoveryHelpers {
         guard let endpoint = self.serviceEndpoint(serviceHost: serviceHost, servicePort: servicePort) else {
             return nil
         }
-        let scheme = endpoint.port == 443 ? "wss" : "ws"
+        // Security: for non-loopback hosts, force TLS to avoid plaintext credential/session leakage.
+        let scheme = self.isLoopbackHost(endpoint.host) ? "ws" : "wss"
         let portSuffix = endpoint.port == 443 ? "" : ":\(endpoint.port)"
         return "\(scheme)://\(endpoint.host)\(portSuffix)"
     }
 
     private static func trimmed(_ value: String?) -> String? {
         value?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isLoopbackHost(_ rawHost: String) -> Bool {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return false }
+        if host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1" {
+            return true
+        }
+        if host.hasPrefix("::ffff:127.") {
+            return true
+        }
+        return host.hasPrefix("127.")
     }
 }
