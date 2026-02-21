@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGateway = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
@@ -92,14 +93,15 @@ function parseFirstJsonRuntimeLine<T>() {
 }
 
 describe("daemon-cli coverage", () => {
-  const originalEnv = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-    OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-    OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE,
-  };
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    envSnapshot = captureEnv([
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_PROFILE",
+    ]);
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli-state";
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
     delete process.env.OPENCLAW_GATEWAY_PORT;
@@ -108,29 +110,7 @@ describe("daemon-cli coverage", () => {
   });
 
   afterEach(() => {
-    if (originalEnv.OPENCLAW_STATE_DIR !== undefined) {
-      process.env.OPENCLAW_STATE_DIR = originalEnv.OPENCLAW_STATE_DIR;
-    } else {
-      delete process.env.OPENCLAW_STATE_DIR;
-    }
-
-    if (originalEnv.OPENCLAW_CONFIG_PATH !== undefined) {
-      process.env.OPENCLAW_CONFIG_PATH = originalEnv.OPENCLAW_CONFIG_PATH;
-    } else {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    }
-
-    if (originalEnv.OPENCLAW_GATEWAY_PORT !== undefined) {
-      process.env.OPENCLAW_GATEWAY_PORT = originalEnv.OPENCLAW_GATEWAY_PORT;
-    } else {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
-    }
-
-    if (originalEnv.OPENCLAW_PROFILE !== undefined) {
-      process.env.OPENCLAW_PROFILE = originalEnv.OPENCLAW_PROFILE;
-    } else {
-      delete process.env.OPENCLAW_PROFILE;
-    }
+    envSnapshot.restore();
   });
 
   it("probes gateway status by default", async () => {
