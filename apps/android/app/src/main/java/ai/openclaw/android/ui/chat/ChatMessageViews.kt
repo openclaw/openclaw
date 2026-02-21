@@ -72,14 +72,34 @@ fun ChatMessageBubble(message: ChatMessage) {
             .padding(horizontal = 12.dp, vertical = 10.dp),
       ) {
         val textColor = textColorOverBubble(isUser)
-        ChatMessageBody(content = displayableContent, textColor = textColor)
+        ChatMessageBody(
+          content = displayableContent,
+          textColor = textColor,
+          stopReason = message.stopReason,
+          errorMessage = message.errorMessage,
+        )
       }
     }
   }
 }
 
 @Composable
-private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color) {
+private fun ChatMessageBody(
+  content: List<ChatMessageContent>,
+  textColor: Color,
+  stopReason: String? = null,
+  errorMessage: String? = null,
+) {
+  // Check if content is effectively empty (no text blocks)
+  val hasTextContent = content.any { it.type == "text" && !it.text.isNullOrBlank() }
+
+  // If content is empty and this is an error, show formatted error message
+  if (!hasTextContent && stopReason == "error" && !errorMessage.isNullOrBlank()) {
+    val formattedError = formatErrorMessage(errorMessage)
+    ChatMarkdown(text = formattedError, textColor = textColor)
+    return
+  }
+
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     for (part in content) {
       when (part.type) {
@@ -93,6 +113,53 @@ private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color)
         }
       }
     }
+  }
+}
+
+/** Format raw API error messages for user-friendly display */
+private fun formatErrorMessage(raw: String): String {
+  val trimmed = raw.trim()
+  if (trimmed.isEmpty()) {
+    return "LLM request failed with an unknown error."
+  }
+
+  // Try to extract message from JSON error payload
+  val jsonStart = trimmed.indexOf('{')
+  if (jsonStart >= 0) {
+    try {
+      val jsonStr = trimmed.substring(jsonStart)
+      val json = org.json.JSONObject(jsonStr)
+
+      // Extract nested error.message or top-level message
+      var message: String? = null
+      if (json.has("error")) {
+        val error = json.optJSONObject("error")
+        message = error?.optString("message")?.takeIf { it.isNotBlank() }
+      }
+      if (message == null) {
+        message = json.optString("message")?.takeIf { it.isNotBlank() }
+      }
+
+      if (message != null) {
+        // Extract HTTP status code if present
+        val httpPrefix = trimmed.substring(0, jsonStart).trim()
+        val httpCode = httpPrefix.toIntOrNull()
+        return if (httpCode != null) {
+          "HTTP $httpCode: $message"
+        } else {
+          "LLM error: $message"
+        }
+      }
+    } catch (_: Exception) {
+      // Fall through to default handling
+    }
+  }
+
+  // Fallback: truncate long messages
+  return if (trimmed.length > 600) {
+    trimmed.take(600) + "…"
+  } else {
+    trimmed
   }
 }
 

@@ -49,7 +49,52 @@ export function extractText(message: unknown): string | null {
           : stripEnvelope(m.text);
     return processed;
   }
+
+  // If content is empty and this is an error response, show the formatted error
+  if (m.stopReason === "error" && typeof m.errorMessage === "string") {
+    return formatErrorMessage(m.errorMessage);
+  }
+
   return null;
+}
+
+/**
+ * Format raw API error messages for user-friendly display.
+ */
+function formatErrorMessage(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "LLM request failed with an unknown error.";
+  }
+
+  // Try to extract message from JSON error payload
+  const jsonStart = trimmed.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const jsonStr = trimmed.slice(jsonStart);
+      const json = JSON.parse(jsonStr);
+
+      // Extract nested error.message or top-level message
+      let message: string | null = null;
+      if (json.error && typeof json.error.message === "string") {
+        message = json.error.message;
+      } else if (typeof json.message === "string") {
+        message = json.message;
+      }
+
+      if (message) {
+        // Extract HTTP status code if present
+        const httpPrefix = trimmed.slice(0, jsonStart).trim();
+        const httpCode = /^\d+$/.test(httpPrefix) ? parseInt(httpPrefix, 10) : null;
+        return httpCode ? `HTTP ${httpCode}: ${message}` : `LLM error: ${message}`;
+      }
+    } catch {
+      // Fall through to default handling
+    }
+  }
+
+  // Fallback: truncate long messages
+  return trimmed.length > 600 ? trimmed.slice(0, 600) + "…" : trimmed;
 }
 
 export function extractTextCached(message: unknown): string | null {

@@ -5,6 +5,8 @@ data class ChatMessage(
   val role: String,
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
+  val stopReason: String? = null,
+  val errorMessage: String? = null,
 )
 
 data class ChatMessageContent(

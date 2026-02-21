@@ -144,6 +144,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
     public let toolName: String?
     public let usage: OpenClawChatUsage?
     public let stopReason: String?
+    public let errorMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case role
@@ -155,6 +156,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         case tool_name
         case usage
         case stopReason
+        case errorMessage
     }
 
     public init(
@@ -165,7 +167,8 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         toolCallId: String? = nil,
         toolName: String? = nil,
         usage: OpenClawChatUsage? = nil,
-        stopReason: String? = nil)
+        stopReason: String? = nil,
+        errorMessage: String? = nil)
     {
         self.id = id
         self.role = role
@@ -175,6 +178,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         self.toolName = toolName
         self.usage = usage
         self.stopReason = stopReason
+        self.errorMessage = errorMessage
     }
 
     public init(from decoder: Decoder) throws {
@@ -189,6 +193,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
             container.decodeIfPresent(String.self, forKey: .tool_name)
         self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
 
         if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
             self.content = decoded
@@ -220,10 +225,11 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
-        try container.encodeIfPresent(self.toolCallId, forKey: .toolCallId)
-        try container.encodeIfPresent(self.toolName, forKey: .toolName)
+        try container.encodeIfPresent(self.toolCallId, forKey: .tool_call_id)
+        try container.encodeIfPresent(self.toolName, forKey: .tool_name)
         try container.encodeIfPresent(self.usage, forKey: .usage)
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
+        try container.encodeIfPresent(self.errorMessage, forKey: .errorMessage)
         try container.encode(self.content, forKey: .content)
     }
 }

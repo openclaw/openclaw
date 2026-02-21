@@ -1145,6 +1145,7 @@ Docs: https://docs.openclaw.ai
 - Agents: fix Pi prompt template argument syntax. (#6543)
 - Subagents: fix announce failover race (always emit lifecycle end; timeout=0 means no-timeout). (#6621)
 - Teams: gate media auth retries.
+- Chat: display error messages in webchat/native apps instead of blank bubbles when LLM requests fail. (#4418) Thanks @niemesrw.
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
 - Onboarding: friendlier Windows onboarding message. (#6242) Thanks @shanselman.
 - TUI: prevent crash when searching with digits in the model selector.

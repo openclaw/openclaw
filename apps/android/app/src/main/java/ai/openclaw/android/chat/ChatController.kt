@@ -449,11 +449,15 @@ class ChatController(
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
         val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
         val ts = obj["timestamp"].asLongOrNull()
+        val stopReason = obj["stopReason"].asStringOrNull()
+        val errorMessage = obj["errorMessage"].asStringOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
           role = role,
           content = content,
           timestampMs = ts,
+          stopReason = stopReason,
+          errorMessage = errorMessage,
         )
       }
 

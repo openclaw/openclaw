@@ -231,7 +231,59 @@ private struct ChatMessageBody: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // If there is truly no renderable content (no text, no attachments, no tool content)
+        // and this is an error, show formatted error message
+        let hasNonTextContent = self.message.content.contains { content in
+            let kind = (content.type ?? "text").lowercased()
+            return kind != "text" && !kind.isEmpty
+        }
+        if text.isEmpty, !hasNonTextContent, self.message.stopReason == "error", let errorMessage = self.message.errorMessage {
+            return Self.formatErrorMessage(errorMessage)
+        }
+
+        return text
+    }
+
+    /// Format raw API error messages for user-friendly display
+    private static func formatErrorMessage(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "LLM request failed with an unknown error."
+        }
+
+        // Try to extract message from JSON error payload like:
+        // 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance..."}}
+        if let jsonStart = trimmed.firstIndex(of: "{"),
+           let data = String(trimmed[jsonStart...]).data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            // Extract nested error.message or top-level message
+            var message: String?
+            if let error = json["error"] as? [String: Any] {
+                message = error["message"] as? String
+            }
+            if message == nil {
+                message = json["message"] as? String
+            }
+
+            if let msg = message {
+                // Extract HTTP status code if present
+                let httpPrefix = trimmed.prefix(while: { $0.isNumber || $0.isWhitespace })
+                let httpCode = httpPrefix.trimmingCharacters(in: .whitespaces)
+                if !httpCode.isEmpty, let _ = Int(httpCode) {
+                    return "HTTP \(httpCode): \(msg)"
+                }
+                return "LLM error: \(msg)"
+            }
+        }
+
+        // Fallback: truncate long messages
+        if trimmed.count > 600 {
+            return String(trimmed.prefix(600)) + "…"
+        }
+        return trimmed
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
