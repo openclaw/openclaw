@@ -60,6 +60,17 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
   };
 }
 
+async function expectUnsupportedNpmSpec(
+  install: (spec: string) => Promise<{ ok: boolean; error?: string }>,
+) {
+  const result = await install("github:evil/evil");
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    return;
+  }
+  expect(result.error).toContain("unsupported npm spec");
+}
+
 describe("installHooksFromArchive", () => {
   it.each([
     {
@@ -365,12 +376,7 @@ describe("installHooksFromNpmSpec", () => {
   });
 
   it("rejects non-registry npm specs", async () => {
-    const result = await installHooksFromNpmSpec({ spec: "github:evil/evil" });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("unsupported npm spec");
+    await expectUnsupportedNpmSpec((spec) => installHooksFromNpmSpec({ spec }));
   });
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
