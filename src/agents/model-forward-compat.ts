@@ -278,6 +278,38 @@ function resolveAntigravityOpus46ForwardCompatModel(
   });
 }
 
+// Google Vertex gemini-3.1-* models may not be in pi-ai's built-in catalog yet.
+// Clone the corresponding gemini-3-* template as a forward-compat fallback.
+const GOOGLE_VERTEX_PROVIDERS = ["google-vertex", "google", "google-gemini-cli"] as const;
+const GEMINI_31_TEMPLATE_MAP: Record<string, string[]> = {
+  "gemini-3.1-pro-preview": ["gemini-3-pro-preview"],
+  "gemini-3.1-pro-preview-customtools": ["gemini-3-pro-preview"],
+  "gemini-3.1-flash-preview": ["gemini-3-flash-preview"],
+};
+
+function resolveGoogleGemini31ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!(GOOGLE_VERTEX_PROVIDERS as readonly string[]).includes(normalizedProvider)) {
+    return undefined;
+  }
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  const templateIds = GEMINI_31_TEMPLATE_MAP[lower];
+  if (!templateIds) {
+    return undefined;
+  }
+  return cloneFirstTemplateModel({
+    normalizedProvider,
+    trimmedModelId,
+    templateIds,
+    modelRegistry,
+  });
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -288,6 +320,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGoogleGemini31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
