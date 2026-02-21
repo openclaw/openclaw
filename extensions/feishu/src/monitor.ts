@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
+import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -94,6 +95,27 @@ function registerEventHandlers(
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+      }
+    },
+    "card.action.trigger": async (data) => {
+      try {
+        const event = data as unknown as FeishuCardActionEvent;
+        const promise = handleFeishuCardAction({
+          cfg,
+          event,
+          runtime,
+          accountId,
+        });
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+          });
+          return undefined;
+        }
+        return await promise;
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+        return undefined;
       }
     },
   });
