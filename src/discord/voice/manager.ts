@@ -37,7 +37,6 @@ import { parseTtsDirectives } from "../../tts/tts-core.js";
 import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tts/tts.js";
 
 const require = createRequire(import.meta.url);
-const OpusScript = require("opusscript") as typeof import("opusscript");
 
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
@@ -149,6 +148,7 @@ type OpusDecoder = {
 
 function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
   try {
+    const OpusScript = require("opusscript") as typeof import("opusscript");
     const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
     return { decoder, name: "opusscript" };
   } catch (err) {

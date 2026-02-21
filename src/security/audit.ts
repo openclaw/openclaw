@@ -114,6 +114,30 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   return list.map((v) => String(v).trim()).filter(Boolean);
 }
 
+function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
+  const enabledFlags: string[] = [];
+  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
+    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
+  }
+  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
+    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
+  }
+  if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
+    enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
+  }
+  if (Array.isArray(cfg.hooks?.mappings)) {
+    for (const [index, mapping] of cfg.hooks.mappings.entries()) {
+      if (mapping?.allowUnsafeExternalContent === true) {
+        enabledFlags.push(`hooks.mappings[${index}].allowUnsafeExternalContent=true`);
+      }
+    }
+  }
+  if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
+    enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
+  }
+  return enabledFlags;
+}
+
 async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
@@ -348,10 +372,10 @@ function collectGatewayConfigFindings(
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "critical",
-      title: "Control UI allows insecure HTTP auth",
+      severity: "warn",
+      title: "Control UI insecure auth toggle enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true is a legacy insecure-auth toggle; Control UI still enforces secure context and device identity unless dangerouslyDisableDeviceAuth is enabled.",
+        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }
@@ -364,6 +388,18 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+    });
+  }
+
+  const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
+  if (enabledDangerousFlags.length > 0) {
+    findings.push({
+      checkId: "config.insecure_or_dangerous_flags",
+      severity: "warn",
+      title: "Insecure or dangerous config flags enabled",
+      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      remediation:
+        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
