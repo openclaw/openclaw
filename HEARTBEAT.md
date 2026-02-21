@@ -16,6 +16,17 @@
 
 ### Active Tracking
 
+#### Obsidian 커뮤니티 플러그인 PR #10404
+
+- **URL:** https://github.com/obsidianmd/obsidian-releases/pull/10404
+- **상태:** Open, 리뷰 대기
+- **체크:** `gh pr view 10404 -R obsidianmd/obsidian-releases --json state,reviews,comments`
+- **할 일:**
+  1. 리뷰 코멘트 달리면 → 내용 분석 → 코드 수정 → push → 답변
+  2. 변경 요청 시 → 수정 후 re-request review
+  3. 진행 상황 Discord DM 보고
+- **완료 조건:** PR 머지됨
+
 #### MAISECONDBRAIN (Mnemo) — 이슈 자동 대응
 
 - **Repo:** https://github.com/jini92/MAISECONDBRAIN
