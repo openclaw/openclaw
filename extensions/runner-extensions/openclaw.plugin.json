@@ -1,0 +1,32 @@
+{
+  "id": "runner-extensions",
+  "kind": "agent",
+  "name": "Runner Extensions",
+  "description": "Dynamic pi-extension loader with memory-context wiring, embedding upgrade probes, and compaction safeguard integration",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "memoryContext": {
+        "type": "object",
+        "description": "Memory-context configuration for agent defaults",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "hardCapTokens": { "type": "number", "default": 4000 },
+          "embeddingModel": {
+            "type": "string",
+            "enum": ["auto", "gemini", "hash", "transformer"],
+            "default": "auto"
+          },
+          "storagePath": { "type": "string", "default": "~/.openclaw/memory/context" },
+          "redaction": { "type": "boolean", "default": true },
+          "knowledgeExtraction": { "type": "boolean", "default": true },
+          "autoRecallMinScore": { "type": "number", "default": 0.7 },
+          "maxSegments": { "type": "number", "default": 20000 },
+          "crossSession": { "type": "boolean", "default": false },
+          "evictionDays": { "type": "number", "default": 90 }
+        }
+      }
+    }
+  }
+}
