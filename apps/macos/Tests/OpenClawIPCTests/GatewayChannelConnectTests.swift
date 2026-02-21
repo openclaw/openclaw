@@ -53,6 +53,10 @@ import Testing
             }
         }
 
+        func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+            pongReceiveHandler(nil)
+        }
+
         func receive() async throws -> URLSessionWebSocketTask.Message {
             let delayMs: Int
             let msg: URLSessionWebSocketTask.Message
