@@ -17,7 +17,10 @@ export {
   suggestOAuthProfileIdForLegacyDefault,
 } from "./auth-profiles/repair.js";
 export {
+  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
+  replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles/store.js";
