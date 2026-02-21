@@ -51,7 +51,7 @@ async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[
   do {
     const res = (await client.conversations.list({
       types: "public_channel,private_channel",
-      exclude_archived: false,
+      exclude_archived: true,
       limit: 1000,
       cursor,
     })) as SlackListResponse;
