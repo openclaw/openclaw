@@ -260,6 +260,12 @@ export type DiscordAccountConfig = {
   slashCommand?: DiscordSlashCommandConfig;
   /** Thread binding lifecycle settings (focus/subagent thread sessions). */
   threadBindings?: DiscordThreadBindingsConfig;
+  /**
+   * Append `:thread:<threadId>` suffix to session keys for thread messages,
+   * giving each thread its own isolated session. Default: false (threads
+   * share the parent channel's session).
+   */
+  threadSessionSuffix?: boolean;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */

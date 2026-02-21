@@ -278,7 +278,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     baseSessionKey,
     threadId: threadChannel ? messageChannelId : undefined,
     parentSessionKey,
-    useSuffix: false,
+    useSuffix: discordConfig?.threadSessionSuffix ?? false,
   });
   const replyPlan = await resolveDiscordAutoThreadReplyPlan({
     client,
