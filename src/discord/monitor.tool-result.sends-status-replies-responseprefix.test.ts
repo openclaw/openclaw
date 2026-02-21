@@ -12,6 +12,16 @@ import { createDiscordMessageHandler } from "./monitor/message-handler.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 
+const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./pluralkit.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pluralkit.js")>();
+  return {
+    ...actual,
+    fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
+  };
+});
+
 type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
 
 beforeEach(() => {
@@ -24,6 +34,7 @@ beforeEach(() => {
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  fetchPluralKitMessageInfoMock.mockReset().mockResolvedValue(null);
 });
 
 const BASE_CFG: Config = {
@@ -237,4 +248,97 @@ describe("discord tool result dispatch", () => {
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   }, 10000);
+
+  it("drops non-guild messages when DM channel lookup is unavailable", async () => {
+    const cfg = {
+      ...BASE_CFG,
+      channels: {
+        discord: { dm: { enabled: true, policy: "open" } },
+      },
+    } as Config;
+
+    const handler = await createDmHandler({ cfg });
+    const client = {
+      fetchChannel: vi.fn().mockRejectedValue(new Error("discord lookup timed out")),
+    } as unknown as Client;
+
+    await handler(
+      {
+        message: {
+          id: "m-timeout",
+          content: "hello",
+          channelId: "c1",
+          timestamp: new Date().toISOString(),
+          type: MessageType.Default,
+          attachments: [],
+          embeds: [],
+          mentionedEveryone: false,
+          mentionedUsers: [],
+          mentionedRoles: [],
+          author: { id: "u-timeout", bot: false, username: "Ada" },
+        },
+        author: { id: "u-timeout", bot: false, username: "Ada" },
+        guild_id: null,
+      },
+      client,
+    );
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("retries PluralKit lookup with a longer timeout before dropping bot messages", async () => {
+    const cfg = {
+      ...BASE_CFG,
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          pluralkit: { enabled: true },
+        },
+      },
+    } as Config;
+
+    fetchPluralKitMessageInfoMock
+      .mockRejectedValueOnce(new Error("aborted"))
+      .mockResolvedValueOnce({
+        id: "m-pk",
+        member: { id: "pk_member_1", name: "Proxy User" },
+        system: { id: "pk_system_1", name: "Collective" },
+      });
+
+    const handler = await createDmHandler({ cfg });
+    const client = createDmClient();
+
+    await handler(
+      {
+        message: {
+          id: "m-pk",
+          content: "hello from proxy",
+          channelId: "c1",
+          timestamp: new Date().toISOString(),
+          type: MessageType.Default,
+          attachments: [],
+          embeds: [],
+          mentionedEveryone: false,
+          mentionedUsers: [],
+          mentionedRoles: [],
+          author: { id: "proxy-bot", bot: true, username: "Proxy", discriminator: "0" },
+        },
+        author: { id: "proxy-bot", bot: true, username: "Proxy", discriminator: "0" },
+        guild_id: null,
+      },
+      client,
+    );
+
+    expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledTimes(2);
+    expect(fetchPluralKitMessageInfoMock.mock.calls[0]?.[0]).toMatchObject({
+      messageId: "m-pk",
+      timeoutMs: 1_500,
+    });
+    expect(fetchPluralKitMessageInfoMock.mock.calls[1]?.[0]).toMatchObject({
+      messageId: "m-pk",
+      timeoutMs: 5_000,
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -102,6 +102,24 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   return webhookId === boundWebhookId;
 }
 
+const DISCORD_PREFLIGHT_CHANNEL_LOOKUP_TIMEOUT_MS = 2_500;
+const DISCORD_PREFLIGHT_PLURALKIT_TIMEOUT_MS = 1_500;
+const DISCORD_PREFLIGHT_PLURALKIT_BOT_LOOKUP_RETRY_TIMEOUT_MS = 5_000;
+
+function isAbortLikeError(err: unknown): boolean {
+  const name =
+    err instanceof Error
+      ? err.name
+      : err && typeof err === "object" && "name" in err && typeof err.name === "string"
+        ? err.name
+        : "";
+  if (name === "AbortError" || name === "TimeoutError") {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /aborted?|timed?\s*out|timeout/i.test(message);
+}
+
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
@@ -130,14 +148,36 @@ export async function preflightDiscordMessage(
   const webhookId = resolveDiscordWebhookId(message);
   const shouldCheckPluralKit = Boolean(pluralkitConfig?.enabled) && !webhookId;
   let pluralkitInfo: Awaited<ReturnType<typeof fetchPluralKitMessageInfo>> = null;
+  let pluralkitLookupError: unknown;
+  const lookupPluralKit = (timeoutMs: number) =>
+    fetchPluralKitMessageInfo({
+      messageId: message.id,
+      config: pluralkitConfig,
+      timeoutMs,
+    });
+
   if (shouldCheckPluralKit) {
     try {
-      pluralkitInfo = await fetchPluralKitMessageInfo({
-        messageId: message.id,
-        config: pluralkitConfig,
-      });
+      pluralkitInfo = await lookupPluralKit(DISCORD_PREFLIGHT_PLURALKIT_TIMEOUT_MS);
     } catch (err) {
+      pluralkitLookupError = err;
       logVerbose(`discord: pluralkit lookup failed for ${message.id}: ${String(err)}`);
+    }
+  }
+  const shouldRetryPluralKitLookup =
+    shouldCheckPluralKit &&
+    !pluralkitInfo &&
+    author.bot &&
+    !allowBots &&
+    pluralkitLookupError &&
+    isAbortLikeError(pluralkitLookupError);
+  if (shouldRetryPluralKitLookup) {
+    try {
+      pluralkitInfo = await lookupPluralKit(
+        DISCORD_PREFLIGHT_PLURALKIT_BOT_LOOKUP_RETRY_TIMEOUT_MS,
+      );
+    } catch (retryErr) {
+      logVerbose(`discord: pluralkit lookup retry failed for ${message.id}: ${String(retryErr)}`);
     }
   }
   const sender = resolveDiscordSenderIdentity({
@@ -154,9 +194,18 @@ export async function preflightDiscordMessage(
   }
 
   const isGuildMessage = Boolean(params.data.guild_id);
-  const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
-  const isDirectMessage = channelInfo?.type === ChannelType.DM;
-  const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
+  // Payload-first fast path: guild messages don't need an early REST channel lookup to route.
+  const channelInfo = isGuildMessage
+    ? null
+    : await resolveDiscordChannelInfo(params.client, messageChannelId, {
+        timeoutMs: DISCORD_PREFLIGHT_CHANNEL_LOOKUP_TIMEOUT_MS,
+      });
+  if (!isGuildMessage && !channelInfo) {
+    logVerbose(`discord: drop non-guild message ${message.id} (channel lookup unavailable)`);
+    return null;
+  }
+  const isDirectMessage = !isGuildMessage && channelInfo?.type === ChannelType.DM;
+  const isGroupDm = !isGuildMessage && channelInfo?.type === ChannelType.GroupDM;
   logDebug(
     `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
   );
@@ -270,6 +319,7 @@ export async function preflightDiscordMessage(
       client: params.client,
       threadChannel: earlyThreadChannel,
       channelInfo,
+      channelLookupTimeoutMs: DISCORD_PREFLIGHT_CHANNEL_LOOKUP_TIMEOUT_MS,
     });
     earlyThreadParentId = parentInfo.id;
     earlyThreadParentName = parentInfo.name;
@@ -293,9 +343,8 @@ export async function preflightDiscordMessage(
     // Pass parent peer for thread binding inheritance
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
-  const threadBinding = earlyThreadChannel
-    ? params.threadBindings.getByThreadId(messageChannelId)
-    : undefined;
+  // Always consult bindings by channel id; event payloads may omit thread metadata.
+  const threadBinding = params.threadBindings.getByThreadId(messageChannelId);
   if (
     shouldIgnoreBoundThreadWebhookMessage({
       accountId: params.accountId,
@@ -479,7 +528,7 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const isBoundThreadSession = Boolean(boundSessionKey && threadChannel);
+  const isBoundThreadSession = Boolean(boundSessionKey);
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
     isBoundThreadSession,

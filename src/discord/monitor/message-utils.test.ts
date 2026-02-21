@@ -295,4 +295,49 @@ describe("resolveDiscordChannelInfo", () => {
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
+
+  it("fails fast when channel lookup exceeds timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchChannel = vi.fn(
+        () =>
+          new Promise<null>(() => {
+            // Intentionally never resolves.
+          }),
+      );
+      const client = { fetchChannel } as unknown as Client;
+
+      const pending = resolveDiscordChannelInfo(client, "slow-channel", { timeoutMs: 20 });
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(pending).resolves.toBeNull();
+      expect(fetchChannel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not enforce a timeout when timeoutMs is not provided", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchChannel = vi.fn(
+        () =>
+          new Promise<null>(() => {
+            // Intentionally never resolves.
+          }),
+      );
+      const client = { fetchChannel } as unknown as Client;
+
+      const pending = resolveDiscordChannelInfo(client, "slow-default-channel");
+      const race = await Promise.race([
+        pending.then(() => "resolved"),
+        vi.advanceTimersByTimeAsync(2_000).then(() => "timer"),
+      ]);
+
+      expect(race).toBe("timer");
+      expect(fetchChannel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

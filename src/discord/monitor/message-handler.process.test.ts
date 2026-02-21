@@ -22,14 +22,19 @@ const deliveryMocks = vi.hoisted(() => ({
     forceNewMessage: vi.fn(() => {}),
   })),
 }));
+const typingMocks = vi.hoisted(() => ({
+  sendTyping: vi.fn(async () => {}),
+}));
 const editMessageDiscord = deliveryMocks.editMessageDiscord;
 const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
+const sendTyping = typingMocks.sendTyping;
 type DispatchInboundParams = {
   dispatcher: {
     sendFinalReply: (payload: { text?: string }) => boolean | Promise<boolean>;
   };
   replyOptions?: {
+    onReplyStart?: () => Promise<void> | void;
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: { name?: string }) => Promise<void> | void;
@@ -62,13 +67,20 @@ vi.mock("./reply-delivery.js", () => ({
   deliverDiscordReply: deliveryMocks.deliverDiscordReply,
 }));
 
+vi.mock("./typing.js", () => ({
+  sendTyping,
+}));
+
 vi.mock("../../auto-reply/dispatch.js", () => ({
   dispatchInboundMessage,
 }));
 
 vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
   createReplyDispatcherWithTyping: vi.fn(
-    (opts: { deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void }) => ({
+    (opts: {
+      deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
+      onReplyStart?: () => Promise<void> | void;
+    }) => ({
       dispatcher: {
         sendToolResult: vi.fn(() => true),
         sendBlockReply: vi.fn(() => true),
@@ -80,7 +92,9 @@ vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
         getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
         markComplete: vi.fn(),
       },
-      replyOptions: {},
+      replyOptions: {
+        onReplyStart: opts.onReplyStart,
+      },
       markDispatchIdle: vi.fn(),
     }),
   ),
@@ -104,6 +118,8 @@ beforeEach(() => {
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
   editMessageDiscord.mockClear();
+  sendTyping.mockReset();
+  sendTyping.mockResolvedValue(undefined);
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockReset();
@@ -148,6 +164,29 @@ function getLastDispatchCtx():
 }
 
 describe("processDiscordMessage ack reactions", () => {
+  it("does not block dispatch when typing start is slow", async () => {
+    let releaseTyping: (() => void) | undefined;
+    sendTyping.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseTyping = resolve;
+        }),
+    );
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReplyStart?.();
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    expect(sendTyping).toHaveBeenCalledTimes(1);
+    releaseTyping?.();
+  });
+
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,

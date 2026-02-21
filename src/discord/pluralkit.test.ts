@@ -64,4 +64,34 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
   });
+
+  it("aborts slow lookups when timeout elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
+        return await new Promise<MockResponse>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal && typeof signal.addEventListener === "function") {
+            signal.addEventListener("abort", () => {
+              reject(new Error("aborted"));
+            });
+          }
+        });
+      });
+
+      const pending = fetchPluralKitMessageInfo({
+        messageId: "slow",
+        config: { enabled: true },
+        fetcher: fetcher as unknown as typeof fetch,
+        timeoutMs: 20,
+      });
+      // Attach a rejection handler before advancing timers to avoid
+      // transient unhandled-rejection warnings under fake timers.
+      const rejected = expect(pending).rejects.toThrow("aborted");
+      await vi.advanceTimersByTimeAsync(25);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
