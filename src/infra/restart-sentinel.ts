@@ -41,6 +41,10 @@ export type RestartSentinelPayload = {
   /** Thread ID for reply threading (e.g., Slack thread_ts). */
   threadId?: string;
   message?: string | null;
+  /** When true, start a fresh agent turn after restart in the same session. */
+  autoContinue?: boolean;
+  /** Optional prompt for the post-restart continuation turn. */
+  autoContinuePrompt?: string | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };

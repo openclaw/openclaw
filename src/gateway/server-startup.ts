@@ -164,9 +164,14 @@ export async function startGatewaySidecars(params: {
   });
 
   if (shouldWakeFromRestartSentinel()) {
+    console.info("[restart-sentinel] shouldWake=true — scheduling sentinel wake in 750ms");
     setTimeout(() => {
-      void scheduleRestartSentinelWake({ deps: params.deps });
+      scheduleRestartSentinelWake({ deps: params.deps }).catch((err) => {
+        console.error("[restart-sentinel] scheduleRestartSentinelWake threw:", err);
+      });
     }, 750);
+  } else {
+    console.info("[restart-sentinel] shouldWake=false — skipping sentinel wake");
   }
 
   return { browserControl, pluginServices };

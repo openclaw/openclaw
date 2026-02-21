@@ -14,6 +14,8 @@ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_AUTO_CONTINUE_PROMPT =
+  "Gateway restarted. Continue the interrupted task in this session from existing context and send the next useful update.";
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -45,6 +47,8 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  autoContinue: Type.Optional(Type.Boolean()),
+  autoContinuePrompt: Type.Optional(Type.String()),
   // config.get, config.schema, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -71,7 +75,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. For restart, you can set `autoContinue=true` (optional `autoContinuePrompt`) to start a fresh post-restart turn automatically.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -94,6 +98,17 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const autoContinue =
+          typeof params.autoContinue === "boolean" ? params.autoContinue : Boolean(sessionKey);
+        const autoContinuePromptRaw =
+          typeof params.autoContinuePrompt === "string" && params.autoContinuePrompt.trim()
+            ? params.autoContinuePrompt.trim()
+            : undefined;
+        const autoContinuePrompt =
+          autoContinue && sessionKey
+            ? (autoContinuePromptRaw ?? note ?? reason ?? DEFAULT_AUTO_CONTINUE_PROMPT)
+            : undefined;
+
         // Extract channel + threadId for routing after restart
         // Supports both :thread: (most channels) and :topic: (Telegram)
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -105,6 +120,8 @@ export function createGatewayTool(opts?: {
           deliveryContext,
           threadId,
           message: note ?? reason ?? null,
+          autoContinue: autoContinue && Boolean(sessionKey),
+          autoContinuePrompt: autoContinuePrompt ?? null,
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
@@ -117,7 +134,7 @@ export function createGatewayTool(opts?: {
           // ignore: sentinel is best-effort
         }
         console.info(
-          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
+          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"}, autoContinue=${payload.autoContinue ? "on" : "off"})`,
         );
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
