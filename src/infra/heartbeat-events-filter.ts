@@ -1,8 +1,8 @@
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 
-// Build a dynamic prompt for cron events by embedding the actual event content.
-// This ensures the model sees the reminder text directly instead of relying on
-// "shown in the system messages above" which may not be visible in context.
+// Prompt used when a scheduled cron job fires during a heartbeat turn.
+// Replaces the default heartbeat prompt to prevent HEARTBEAT_OK responses.
+// The actual task content is delivered via prependSystemEvents (System: [...] lines).
 export function buildCronEventPrompt(pendingEvents: string[]): string {
   const eventText = pendingEvents.join("\n").trim();
   if (!eventText) {
@@ -11,11 +11,7 @@ export function buildCronEventPrompt(pendingEvents: string[]): string {
       "Reply HEARTBEAT_OK."
     );
   }
-  return (
-    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
-    eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
-  );
+  return "---\nThis system message is triggered by a scheduled cron job.";
 }
 
 const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();
