@@ -1166,6 +1166,99 @@ describe("security audit", () => {
     });
   });
 
+  it("warns when Discord allowlists contain name-based entries", async () => {
+    await withStateDir("discord-name-based-allowlist", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "credentials", "discord-allowFrom.json"),
+        JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
+      );
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: ["Alice#1234", "<@123456789012345678>"],
+            guilds: {
+              "123": {
+                users: ["trusted.operator"],
+                channels: {
+                  general: {
+                    users: ["987654321098765432", "security-team"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
+      expect(finding?.detail).toContain("channels.discord.guilds.123.users:trusted.operator");
+      expect(finding?.detail).toContain(
+        "channels.discord.guilds.123.channels.general.users:security-team",
+      );
+      expect(finding?.detail).toContain(
+        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+      );
+      expect(finding?.detail).not.toContain("<@123456789012345678>");
+    });
+  });
+
+  it("does not warn when Discord allowlists use ID-style entries only", async () => {
+    await withStateDir("discord-id-only-allowlist", async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: [
+              "123456789012345678",
+              "<@223456789012345678>",
+              "user:323456789012345678",
+              "discord:423456789012345678",
+              "pk:member-123",
+            ],
+            guilds: {
+              "123": {
+                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+                channels: {
+                  general: {
+                    users: ["723456789012345678", "user:823456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "channels.discord.allowFrom.name_based_entries" }),
+        ]),
+      );
+    });
+  });
+
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
     await withStateDir("discord-open", async () => {
       const cfg: OpenClawConfig = {
