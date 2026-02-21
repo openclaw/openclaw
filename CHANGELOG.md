@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Auth: add `operator.write` to operator scope hierarchy so `operator.admin` satisfies `operator.write` requests, preventing gateway-client pairing loop on scope upgrade. (#22574)
 - Docker/Build: include `ownerDisplay` in `CommandsSchema` object-level defaults so Docker `pnpm build` no longer fails with `TS2769` during plugin SDK d.ts generation. (#22558) Thanks @obviyus.
 - Security/Gateway/Hooks: block `__proto__`, `constructor`, and `prototype` traversal in webhook template path resolution to prevent prototype-chain payload data leakage in `messageTemplate` rendering. (#22213) Thanks @SleuthCo.
 - Cron: honor `cron.maxConcurrentRuns` in the timer loop so due jobs can execute up to the configured parallelism instead of always running serially. (#11595) Thanks @Takhoffman.
