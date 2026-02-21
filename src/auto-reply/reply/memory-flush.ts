@@ -2,11 +2,14 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
+import type { AgentPeriodicFactExtractionConfig } from "../../config/types.agent-defaults.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+export const DEFAULT_PERIODIC_EXTRACTION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
@@ -141,4 +144,77 @@ export function shouldRunMemoryFlush(params: {
   }
 
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Periodic fact extraction
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_PERIODIC_EXTRACTION_PROMPT = [
+  "Periodic fact extraction.",
+  "Review the recent conversation and extract key facts worth remembering long-term.",
+  "Focus on: user preferences, decisions made, project names, people mentioned, technical choices, action items, and important context.",
+  "Save extracted facts to memory/YYYY-MM-DD.md under a '## Extracted Facts' section.",
+  "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
+  "Skip facts that are already recorded in the file.",
+  `If no new facts to extract, reply with ${SILENT_REPLY_TOKEN}.`,
+].join(" ");
+
+export const DEFAULT_PERIODIC_EXTRACTION_SYSTEM_PROMPT = [
+  "Periodic fact extraction turn.",
+  "Analyze the conversation for durable facts, preferences, and decisions.",
+  "Write structured facts to the workspace memory files.",
+  `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
+].join(" ");
+
+export type PeriodicExtractionSettings = {
+  enabled: boolean;
+  intervalMs: number;
+  prompt: string;
+  systemPrompt: string;
+};
+
+export function resolvePeriodicExtractionSettings(
+  cfg?: OpenClawConfig,
+): PeriodicExtractionSettings | null {
+  const extractionCfg: AgentPeriodicFactExtractionConfig | undefined =
+    cfg?.agents?.defaults?.compaction?.memoryFlush?.periodicExtraction;
+  if (!extractionCfg?.enabled) {
+    return null;
+  }
+  let intervalMs = DEFAULT_PERIODIC_EXTRACTION_INTERVAL_MS;
+  if (extractionCfg.every) {
+    try {
+      const parsed = parseDurationMs(extractionCfg.every, { defaultUnit: "m" });
+      if (parsed > 0) {
+        intervalMs = parsed;
+      }
+    } catch {
+      // Use default on parse failure
+    }
+  }
+  return {
+    enabled: true,
+    intervalMs,
+    prompt: ensureNoReplyHint(extractionCfg.prompt?.trim() || DEFAULT_PERIODIC_EXTRACTION_PROMPT),
+    systemPrompt: ensureNoReplyHint(
+      extractionCfg.systemPrompt?.trim() || DEFAULT_PERIODIC_EXTRACTION_SYSTEM_PROMPT,
+    ),
+  };
+}
+
+export function shouldRunPeriodicExtraction(params: {
+  entry?: Pick<SessionEntry, "lastPeriodicExtractionAt"> & { totalTokens?: number };
+  settings: PeriodicExtractionSettings;
+  nowMs?: number;
+}): boolean {
+  const now = params.nowMs ?? Date.now();
+  const lastRun = params.entry?.lastPeriodicExtractionAt;
+  if (typeof lastRun !== "number") {
+    // Never run before — only run if the session has accumulated enough context
+    // to make extraction worthwhile (at least 1000 tokens of conversation).
+    const tokens = params.entry?.totalTokens;
+    return typeof tokens === "number" && tokens >= 1000;
+  }
+  return now - lastRun >= params.settings.intervalMs;
 }

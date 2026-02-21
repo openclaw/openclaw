@@ -1,9 +1,34 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+export type ImportanceBoostPatterns = {
+  /** Content markers that indicate importance (matched case-insensitively) */
+  contentMarkers?: string[];
+  /** File path patterns (matched case-insensitively against the normalized path) */
+  filePatterns?: string[];
+};
+
+export type ImportanceBoostConfig = {
+  enabled: boolean;
+  /** Multiplier for important memories (e.g., 3.0 = effective age is divided by 3) */
+  boostFactor: number;
+  /** Patterns that indicate importance */
+  patterns?: ImportanceBoostPatterns;
+};
+
+export const DEFAULT_IMPORTANCE_BOOST_CONFIG: ImportanceBoostConfig = {
+  enabled: false,
+  boostFactor: 3,
+  patterns: {
+    contentMarkers: ["<!-- important -->", "**IMPORTANT**", "[!important]"],
+    filePatterns: ["MEMORY.md"],
+  },
+};
+
 export type TemporalDecayConfig = {
   enabled: boolean;
   halfLifeDays: number;
+  importanceBoost?: Partial<ImportanceBoostConfig>;
 };
 
 export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
@@ -113,13 +138,45 @@ async function extractTimestamp(params: {
   }
 }
 
+export function isImportantChunk(params: {
+  filePath: string;
+  snippet?: string;
+  config: ImportanceBoostConfig;
+}): boolean {
+  const { filePath, snippet, config } = params;
+  if (!config.enabled) {
+    return false;
+  }
+  const patterns = { ...DEFAULT_IMPORTANCE_BOOST_CONFIG.patterns, ...config.patterns };
+  const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "").toLowerCase();
+
+  if (patterns.filePatterns) {
+    for (const fp of patterns.filePatterns) {
+      if (normalized.includes(fp.toLowerCase())) {
+        return true;
+      }
+    }
+  }
+
+  if (snippet && patterns.contentMarkers) {
+    const lower = snippet.toLowerCase();
+    for (const marker of patterns.contentMarkers) {
+      if (lower.includes(marker.toLowerCase())) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function ageInDaysFromTimestamp(timestamp: Date, nowMs: number): number {
   const ageMs = Math.max(0, nowMs - timestamp.getTime());
   return ageMs / DAY_MS;
 }
 
 export async function applyTemporalDecayToHybridResults<
-  T extends { path: string; score: number; source: string },
+  T extends { path: string; score: number; source: string; snippet?: string },
 >(params: {
   results: T[];
   temporalDecay?: Partial<TemporalDecayConfig>;
@@ -130,6 +187,11 @@ export async function applyTemporalDecayToHybridResults<
   if (!config.enabled) {
     return [...params.results];
   }
+
+  const importanceConfig: ImportanceBoostConfig = {
+    ...DEFAULT_IMPORTANCE_BOOST_CONFIG,
+    ...config.importanceBoost,
+  };
 
   const nowMs = params.nowMs ?? Date.now();
   const timestampPromiseCache = new Map<string, Promise<Date | null>>();
@@ -152,9 +214,24 @@ export async function applyTemporalDecayToHybridResults<
         return entry;
       }
 
+      let ageInDays = ageInDaysFromTimestamp(timestamp, nowMs);
+
+      // Important memories decay slower by dividing their effective age
+      if (
+        importanceConfig.enabled &&
+        importanceConfig.boostFactor > 1 &&
+        isImportantChunk({
+          filePath: entry.path,
+          snippet: (entry as { snippet?: string }).snippet,
+          config: importanceConfig,
+        })
+      ) {
+        ageInDays = ageInDays / importanceConfig.boostFactor;
+      }
+
       const decayedScore = applyTemporalDecayToScore({
         score: entry.score,
-        ageInDays: ageInDaysFromTimestamp(timestamp, nowMs),
+        ageInDays,
         halfLifeDays: config.halfLifeDays,
       });
 
