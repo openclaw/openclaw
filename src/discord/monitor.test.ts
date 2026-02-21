@@ -67,38 +67,51 @@ describe("registerDiscordListener", () => {
 });
 
 describe("DiscordMessageListener", () => {
+  function createDeferred() {
+    let resolve: (() => void) | null = null;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    return {
+      promise,
+      resolve: () => {
+        if (typeof resolve === "function") {
+          (resolve as () => void)();
+        }
+      },
+    };
+  }
+
+  async function expectPending(promise: Promise<unknown>) {
+    let resolved = false;
+    void promise.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+  }
+
   it("awaits the handler before returning", async () => {
     let handlerResolved = false;
-    let resolveHandler: (() => void) | null = null;
-    const handlerPromise = new Promise<void>((resolve) => {
-      resolveHandler = () => {
-        handlerResolved = true;
-        resolve();
-      };
+    const deferred = createDeferred();
+    const handler = vi.fn(async () => {
+      await deferred.promise;
+      handlerResolved = true;
     });
-    const handler = vi.fn(() => handlerPromise);
     const listener = new DiscordMessageListener(handler);
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    let handleResolved = false;
-    void handlePromise.then(() => {
-      handleResolved = true;
-    });
 
     // Handler should be called but not yet resolved
     expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
-    await Promise.resolve();
-    expect(handleResolved).toBe(false);
+    await expectPending(handlePromise);
 
     // Release the handler
-    const release = resolveHandler;
-    if (typeof release === "function") {
-      (release as () => void)();
-    }
+    deferred.resolve();
 
     // Now await handle() - it should complete only after handler resolves
     await handlePromise;
@@ -129,11 +142,8 @@ describe("DiscordMessageListener", () => {
     vi.setSystemTime(0);
 
     try {
-      let resolveHandler: (() => void) | null = null;
-      const handlerPromise = new Promise<void>((resolve) => {
-        resolveHandler = resolve;
-      });
-      const handler = vi.fn(() => handlerPromise);
+      const deferred = createDeferred();
+      const handler = vi.fn(() => deferred.promise);
       const logger = {
         warn: vi.fn(),
         error: vi.fn(),
@@ -145,21 +155,13 @@ describe("DiscordMessageListener", () => {
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
         {} as unknown as import("@buape/carbon").Client,
       );
-      let handleResolved = false;
-      void handlePromise.then(() => {
-        handleResolved = true;
-      });
-      await Promise.resolve();
-      expect(handleResolved).toBe(false);
+      await expectPending(handlePromise);
 
       // Advance time past the slow listener threshold
       vi.setSystemTime(31_000);
 
       // Release the handler
-      const release = resolveHandler;
-      if (typeof release === "function") {
-        (release as () => void)();
-      }
+      deferred.resolve();
 
       // Now await handle() - it should complete and log the slow listener
       await handlePromise;
