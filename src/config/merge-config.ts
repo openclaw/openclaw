@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "./config.js";
 import type { WhatsAppConfig } from "./types.js";
 
+/** Keys that must never be merged to prevent prototype-pollution attacks. */
+const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 export type MergeSectionOptions<T> = {
   unsetOnUndefined?: Array<keyof T>;
 };
@@ -12,6 +15,9 @@ export function mergeConfigSection<T extends Record<string, unknown>>(
 ): T {
   const next: Record<string, unknown> = { ...(base ?? undefined) };
   for (const [key, value] of Object.entries(patch) as [keyof T, T[keyof T]][]) {
+    if (BLOCKED_KEYS.has(key as string)) {
+      continue;
+    }
     if (value === undefined) {
       if (options.unsetOnUndefined?.includes(key)) {
         delete next[key as string];
