@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -108,8 +107,7 @@ export async function spawnSubagentDirect(
   });
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
-  const maxSpawnDepth =
-    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const maxSpawnDepth = cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
   if (callerDepth >= maxSpawnDepth) {
     return {
       status: "forbidden",

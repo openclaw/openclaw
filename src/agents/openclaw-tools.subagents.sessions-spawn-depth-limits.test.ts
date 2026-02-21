@@ -94,14 +94,13 @@ describe("sessions_spawn depth + child limits", () => {
     });
   });
 
-  it("allows depth-1 callers by default (maxSpawnDepth defaults to 2)", async () => {
+  it("rejects spawning when caller depth reaches maxSpawnDepth", async () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
     const result = await tool.execute("call-depth-reject", { task: "hello" });
 
     expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
-      runId: "run-depth",
+      status: "forbidden",
+      error: "sessions_spawn is not allowed at this depth (current depth: 1, max: 1)",
     });
   });
 

@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Discord/Streaming: add stream preview mode for live draft replies with partial/block options and configurable chunking. Thanks @thewilloftheshadow. Inspiration @neoagentic-ship-it.
 - Discord/Telegram: add configurable lifecycle status reactions for queued/thinking/tool/done/error phases with a shared controller and emoji/timing overrides. Thanks @wolly-tundracube and @thewilloftheshadow.
 - Discord/Voice: add voice channel join/leave/status via `/vc`, plus auto-join configuration for realtime voice conversations. Thanks @thewilloftheshadow.
+- Channels: allow per-channel model overrides via `channels.modelByChannel` and note them in /status. Thanks @thewilloftheshadow.
 - Discord: include channel topics in trusted inbound metadata on new sessions. Thanks @thewilloftheshadow.
 - Docs/Discord: document forum channel thread creation flows and component limits. Thanks @thewilloftheshadow.
 

@@ -575,15 +575,14 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("instead of full-file `cat`");
   });
 
-  it("defaults to depth 1 and maxSpawnDepth 2 when not provided", () => {
+  it("defaults to depth 1 and maxSpawnDepth 1 when not provided", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
       task: "basic task",
     });
 
-    // Default maxSpawnDepth is 2, so depth-1 subagents are orchestrators.
-    expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("You CAN spawn your own sub-agents");
+    // Should not include spawning guidance (default maxSpawnDepth is 1, depth 1 is leaf)
+    expect(prompt).not.toContain("## Sub-Agent Spawning");
     expect(prompt).toContain("spawned by the main agent");
   });
 });
