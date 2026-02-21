@@ -724,9 +724,13 @@ describe("discord reaction notification gating", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(shouldEmitDiscordReactionNotification(testCase.input), testCase.name).toBe(
-        testCase.expected,
-      );
+      expect(
+        shouldEmitDiscordReactionNotification({
+          ...testCase.input,
+          allowlist: testCase.input.allowlist ? [...testCase.input.allowlist] : undefined,
+        }),
+        testCase.name,
+      ).toBe(testCase.expected);
     }
   });
 });
@@ -1040,7 +1044,7 @@ describe("discord reaction notification modes", () => {
       const guildEntries = makeEntries({
         [guildId]: {
           reactionNotifications: testCase.reactionNotifications,
-          users: testCase.users,
+          users: testCase.users ? [...testCase.users] : undefined,
         },
       });
       const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
