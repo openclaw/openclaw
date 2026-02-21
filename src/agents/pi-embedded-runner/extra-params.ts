@@ -265,6 +265,46 @@ function createAnthropicBetaHeadersWrapper(
 }
 
 /**
+ * Create a streamFn wrapper that injects Claude's native structured outputs.
+ * Uses output_config.format to guarantee schema-compliant JSON responses.
+ * Only applies to Anthropic provider.
+ */
+function createStructuredOutputWrapper(
+  baseStreamFn: StreamFn | undefined,
+  responseSchema: Record<string, unknown>,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Only apply to Anthropic provider
+    if (model.provider !== "anthropic") {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as {
+            output_config?: { effort?: string; format?: unknown };
+          };
+          // Merge with existing output_config (may have effort set)
+          p.output_config = {
+            ...p.output_config,
+            format: {
+              type: "json_schema",
+              schema: responseSchema,
+            },
+          };
+          log.debug(`injecting structured output schema into Anthropic request`);
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers.
  * These headers allow OpenClaw to appear on OpenRouter's leaderboard.
  */
@@ -316,6 +356,7 @@ function createZaiToolStreamWrapper(
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
+ * When responseSchema is provided for Anthropic, uses native structured outputs.
  *
  * @internal Exported for testing
  */
@@ -325,6 +366,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
+  responseSchema?: Record<string, unknown>,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -372,4 +414,11 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+
+  // Apply structured output wrapper for Anthropic when responseSchema is provided.
+  // This uses Claude's native output_config.format for guaranteed schema compliance.
+  if (responseSchema && Object.keys(responseSchema).length > 0 && provider === "anthropic") {
+    log.debug(`applying structured output wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createStructuredOutputWrapper(agent.streamFn, responseSchema);
+  }
 }

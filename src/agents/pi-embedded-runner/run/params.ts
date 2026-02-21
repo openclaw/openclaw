@@ -101,4 +101,6 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /** JSON Schema for structured output (uses Claude's native output_config.format) */
+  responseSchema?: Record<string, unknown>;
 };
