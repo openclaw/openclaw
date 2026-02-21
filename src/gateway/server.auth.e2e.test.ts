@@ -759,7 +759,7 @@ describe("gateway server auth/connect", () => {
     });
   });
 
-  test("rejects control ui without device identity even when insecure auth is enabled", async () => {
+  test("allows localhost control ui without device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     const { server, ws, prevToken } = await startServerWithClient("secret", {
       wsHeaders: { origin: "http://127.0.0.1" },
@@ -774,14 +774,18 @@ describe("gateway server auth/connect", () => {
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       },
     });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("secure context");
+    expect(res.ok).toBe(true);
+    const status = await rpcReq(ws, "status");
+    expect(status.ok).toBe(false);
+    expect(status.error?.message ?? "").toContain("missing scope");
+    const health = await rpcReq(ws, "health");
+    expect(health.ok).toBe(true);
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });
 
-  test("rejects control ui password-only auth when insecure auth is enabled", async () => {
+  test("allows control ui password-only auth on localhost when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     testState.gatewayAuth = { mode: "password", password: "secret" };
     await withGatewayServer(async ({ port }) => {
@@ -793,8 +797,12 @@ describe("gateway server auth/connect", () => {
           ...CONTROL_UI_CLIENT,
         },
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("secure context");
+      expect(res.ok).toBe(true);
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(true);
       ws.close();
     });
   });
@@ -1267,6 +1275,108 @@ describe("gateway server auth/connect", () => {
       restoreGatewayToken(prevToken);
       ws.close();
       ws2?.close();
+    }
+  });
+
+  test("rejects scope escalation from legacy paired metadata", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { readJsonFile, resolvePairingPaths } = await import("../infra/pairing-files.js");
+    const { writeJsonAtomic } = await import("../infra/json-files.js");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
+      await import("../utils/message-channel.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    let ws2: WebSocket | undefined;
+    try {
+      const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-legacy-"));
+      const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+      const client = {
+        id: GATEWAY_CLIENT_NAMES.TEST,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+      };
+      const buildDevice = (scopes: string[]) => {
+        const signedAtMs = Date.now();
+        const payload = buildDeviceAuthPayload({
+          deviceId: identity.deviceId,
+          clientId: client.id,
+          clientMode: client.mode,
+          role: "operator",
+          scopes,
+          signedAtMs,
+          token: "secret",
+        });
+        return {
+          id: identity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          signature: signDevicePayload(identity.privateKeyPem, payload),
+          signedAt: signedAtMs,
+        };
+      };
+
+      const initial = await connectReq(ws, {
+        token: "secret",
+        scopes: ["operator.read"],
+        client,
+        device: buildDevice(["operator.read"]),
+      });
+      if (!initial.ok) {
+        const list = await listDevicePairing();
+        const pending = list.pending.at(0);
+        expect(pending?.requestId).toBeDefined();
+        if (pending?.requestId) {
+          await approveDevicePairing(pending.requestId);
+        }
+      }
+      ws.close();
+
+      const { pairedPath } = resolvePairingPaths(undefined, "devices");
+      const paired =
+        (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+      const legacy = paired[identity.deviceId];
+      expect(legacy).toBeTruthy();
+      if (!legacy) {
+        throw new Error(`Expected paired metadata for deviceId=${identity.deviceId}`);
+      }
+      delete legacy.roles;
+      delete legacy.scopes;
+      await writeJsonAtomic(pairedPath, paired);
+
+      const wsUpgrade = new WebSocket(`ws://127.0.0.1:${port}`);
+      ws2 = wsUpgrade;
+      await new Promise<void>((resolve) => wsUpgrade.once("open", resolve));
+      const upgraded = await connectReq(wsUpgrade, {
+        token: "secret",
+        scopes: ["operator.admin"],
+        client,
+        device: buildDevice(["operator.admin"]),
+      });
+      expect(upgraded.ok).toBe(false);
+      expect(upgraded.error?.message ?? "").toContain("pairing required");
+      wsUpgrade.close();
+
+      const pendingUpgrade = (await listDevicePairing()).pending.find(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      expect(pendingUpgrade?.requestId).toBeDefined();
+      expect(pendingUpgrade?.scopes).toContain("operator.admin");
+      const repaired = await getPairedDevice(identity.deviceId);
+      expect(repaired?.role).toBe("operator");
+      expect(repaired?.roles).toBeUndefined();
+      expect(repaired?.scopes).toBeUndefined();
+      expect(repaired?.approvedScopes).not.toContain("operator.admin");
+    } finally {
+      ws.close();
+      ws2?.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
     }
   });
 

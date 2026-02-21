@@ -40,6 +40,7 @@ describe("ws connect policy", () => {
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
+        isLocalClient: false,
       }).kind,
     ).toBe("allow");
 
@@ -48,6 +49,7 @@ describe("ws connect policy", () => {
       controlUiConfig: { allowInsecureAuth: true, dangerouslyDisableDeviceAuth: false },
       deviceRaw: null,
     });
+    // Remote Control UI with allowInsecureAuth -> still rejected.
     expect(
       evaluateMissingDeviceIdentity({
         hasDeviceIdentity: false,
@@ -57,6 +59,40 @@ describe("ws connect policy", () => {
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-control-ui-insecure-auth");
+
+    // Local Control UI with allowInsecureAuth -> allowed.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiStrict,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: true,
+      }).kind,
+    ).toBe("allow");
+
+    // Control UI without allowInsecureAuth, even on localhost -> rejected.
+    const controlUiNoInsecure = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: false },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiNoInsecure,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: true,
       }).kind,
     ).toBe("reject-control-ui-insecure-auth");
 
@@ -69,6 +105,7 @@ describe("ws connect policy", () => {
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
+        isLocalClient: false,
       }).kind,
     ).toBe("allow");
 
@@ -81,6 +118,7 @@ describe("ws connect policy", () => {
         sharedAuthOk: false,
         authOk: false,
         hasSharedAuth: true,
+        isLocalClient: false,
       }).kind,
     ).toBe("reject-unauthorized");
 
@@ -93,6 +131,7 @@ describe("ws connect policy", () => {
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
+        isLocalClient: false,
       }).kind,
     ).toBe("reject-device-required");
   });

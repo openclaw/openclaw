@@ -53,12 +53,20 @@ export function evaluateMissingDeviceIdentity(params: {
   sharedAuthOk: boolean;
   authOk: boolean;
   hasSharedAuth: boolean;
+  isLocalClient: boolean;
 }): MissingDeviceIdentityDecision {
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };
   }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {
-    return { kind: "reject-control-ui-insecure-auth" };
+    // Allow localhost Control UI connections when allowInsecureAuth is configured.
+    // Localhost has no network interception risk, and browser SubtleCrypto
+    // (needed for device identity) is unavailable in insecure HTTP contexts.
+    // Remote connections are still rejected to preserve the MitM protection
+    // that the security fix (#20684) intended.
+    if (!params.controlUiAuthPolicy.allowInsecureAuthConfigured || !params.isLocalClient) {
+      return { kind: "reject-control-ui-insecure-auth" };
+    }
   }
   if (roleCanSkipDeviceIdentity(params.role, params.sharedAuthOk)) {
     return { kind: "allow" };
