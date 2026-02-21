@@ -315,9 +315,24 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
 
   const hasFallbackCandidates = candidates.length > 1;
+  // Track providers that timed out so we can skip remaining candidates on the same provider.
+  // When a provider is unresponsive, all models on that provider will also be unresponsive.
+  const timedOutProviders = new Set<string>();
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+
+    // Skip candidates whose provider already timed out in a previous attempt.
+    if (timedOutProviders.has(candidate.provider)) {
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: `Provider ${candidate.provider} skipped (timed out on earlier candidate)`,
+        reason: "timeout",
+      });
+      continue;
+    }
+
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -388,6 +403,9 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = normalized;
       const described = describeFailoverError(normalized);
+      if (described.reason === "timeout") {
+        timedOutProviders.add(candidate.provider);
+      }
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,

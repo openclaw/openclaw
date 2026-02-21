@@ -776,6 +776,20 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      // First-token timeout: detect unresponsive providers quickly.
+      // The timer is started just before prompt() and cleared when the model begins responding.
+      let firstTokenTimer: NodeJS.Timeout | undefined;
+      const clearFirstTokenTimer = () => {
+        if (firstTokenTimer) {
+          clearTimeout(firstTokenTimer);
+          firstTokenTimer = undefined;
+        }
+      };
+      const wrappedOnAssistantMessageStart = () => {
+        clearFirstTokenTimer();
+        void params.onAssistantMessageStart?.();
+      };
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -793,7 +807,7 @@ export async function runEmbeddedAttempt(
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply,
-        onAssistantMessageStart: params.onAssistantMessageStart,
+        onAssistantMessageStart: wrappedOnAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
@@ -1064,6 +1078,22 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+
+          // Start first-token timeout just before dispatching the prompt.
+          // If the provider is unresponsive (TCP connects but no SSE data), this fires
+          // much sooner than the full timeoutMs, allowing faster fallback to other models.
+          const firstTokenTimeoutMs = params.firstTokenTimeoutMs ?? 30_000;
+          if (firstTokenTimeoutMs > 0) {
+            firstTokenTimer = setTimeout(() => {
+              if (!isProbeSession) {
+                log.warn(
+                  `first-token timeout: no response from ${params.provider}/${params.modelId} after ${firstTokenTimeoutMs}ms`,
+                );
+              }
+              abortRun(true);
+            }, firstTokenTimeoutMs);
+          }
+
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
@@ -1073,6 +1103,7 @@ export async function runEmbeddedAttempt(
           promptError = err;
           promptErrorSource = "prompt";
         } finally {
+          clearFirstTokenTimer();
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
