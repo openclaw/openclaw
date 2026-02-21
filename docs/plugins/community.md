@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Community plugins
+
+- **SMS Gateway** — Enable OpenClaw to send and receive SMS via an Android phone
+  npm: `openclaw-sms-gateway`
+  repo: `https://github.com/zacharypodbela/openclaw-sms-gateway`
+  install: `openclaw plugins install openclaw-sms-gateway`
