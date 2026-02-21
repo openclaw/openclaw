@@ -4,6 +4,7 @@ const loadConfig = vi.fn();
 const resolveGatewayPort = vi.fn();
 const pickPrimaryTailnetIPv4 = vi.fn();
 const pickPrimaryLanIPv4 = vi.fn();
+const loadGatewayTlsRuntime = vi.fn();
 
 const originalEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
 const originalEnvPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -31,7 +32,26 @@ vi.mock("../gateway/net.js", async (importOriginal) => {
   };
 });
 
-const { resolveGatewayConnection } = await import("./gateway-chat.js");
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime,
+}));
+
+// Mock GatewayClient to avoid real WebSocket connections
+const GatewayClientSpy = vi.fn();
+vi.mock("../gateway/client.js", () => ({
+  GatewayClient: class MockGatewayClient {
+    opts: unknown;
+    constructor(opts: unknown) {
+      GatewayClientSpy(opts);
+      this.opts = opts;
+    }
+    start() {}
+    stop() {}
+    request() {}
+  },
+}));
+
+const { resolveGatewayConnection, GatewayChatClient } = await import("./gateway-chat.js");
 
 describe("resolveGatewayConnection", () => {
   beforeEach(() => {
@@ -111,5 +131,184 @@ describe("resolveGatewayConnection", () => {
     const result = resolveGatewayConnection({});
 
     expect(result.url).toBe("ws://127.0.0.1:18800");
+  });
+});
+
+describe("GatewayChatClient TLS fingerprint", () => {
+  beforeEach(() => {
+    loadConfig.mockReset();
+    resolveGatewayPort.mockReset();
+    pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
+    loadGatewayTlsRuntime.mockReset();
+    GatewayClientSpy.mockClear();
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  });
+
+  afterEach(() => {
+    if (originalEnvToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = originalEnvToken;
+    }
+    if (originalEnvPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = originalEnvPassword;
+    }
+  });
+
+  it("passes tlsFingerprint to GatewayClient when local TLS is enabled with wss://", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "test-token" },
+        tls: { enabled: true, autoGenerate: true },
+      },
+    });
+    pickPrimaryLanIPv4.mockReturnValue("10.10.80.28");
+    loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "abc123def456",
+    });
+
+    const client = new GatewayChatClient({});
+    await client.start();
+
+    expect(loadGatewayTlsRuntime).toHaveBeenCalledWith({ enabled: true, autoGenerate: true });
+    expect(GatewayClientSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ tlsFingerprint: "abc123def456" }),
+    );
+  });
+
+  it("does not call loadGatewayTlsRuntime when TLS is not enabled", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", auth: { token: "test-token" } },
+    });
+    loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
+
+    const client = new GatewayChatClient({});
+    await client.start();
+
+    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(GatewayClientSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ tlsFingerprint: undefined }),
+    );
+  });
+
+  it("does not call loadGatewayTlsRuntime when url is ws:// (TLS not enabled)", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "test-token" },
+        // tls not enabled → scheme is ws://
+      },
+    });
+
+    const client = new GatewayChatClient({});
+    await client.start();
+
+    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+  });
+
+  it("skips TLS resolution when url override is provided", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "test-token" },
+        tls: { enabled: true, autoGenerate: true },
+      },
+    });
+    loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "should-not-appear",
+    });
+
+    const client = new GatewayChatClient({ url: "wss://custom.example/ws", token: "t" });
+    await client.start();
+
+    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(GatewayClientSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ tlsFingerprint: undefined }),
+    );
+  });
+
+  it("uses remote tlsFingerprint in remote mode", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote-gw.example:18789",
+          token: "remote-token",
+          tlsFingerprint: "remote-fp-sha256",
+        },
+      },
+    });
+
+    const client = new GatewayChatClient({});
+    await client.start();
+
+    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(GatewayClientSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ tlsFingerprint: "remote-fp-sha256" }),
+    );
+  });
+
+  it("returns undefined fingerprint in remote mode when no tlsFingerprint configured", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote-gw.example:18789",
+          token: "remote-token",
+        },
+      },
+    });
+
+    const client = new GatewayChatClient({});
+    await client.start();
+
+    expect(GatewayClientSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ tlsFingerprint: undefined }),
+    );
+  });
+
+  it("stop() is safe to call before start() completes", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", auth: { token: "test-token" } },
+    });
+    loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
+
+    const client = new GatewayChatClient({});
+    // stop() before start() — client is not yet initialized
+    expect(() => client.stop()).not.toThrow();
+  });
+
+  it("connection.url is available synchronously after construction", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "test-token" },
+        tls: { enabled: true, autoGenerate: true },
+      },
+    });
+    pickPrimaryLanIPv4.mockReturnValue("10.10.80.28");
+    loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "abc123",
+    });
+
+    const client = new GatewayChatClient({});
+    // connection.url must be available immediately (for TUI header rendering)
+    expect(client.connection.url).toBe("wss://127.0.0.1:18789");
   });
 });
