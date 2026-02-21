@@ -44,6 +44,7 @@ import {
   resolveDiscordSystemLocation,
   resolveTimestampMs,
 } from "./format.js";
+import { isInstanceBotUserId } from "./instance-bot-registry.js";
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
@@ -107,7 +108,11 @@ export async function preflightDiscordMessage(
   });
 
   if (author.bot) {
-    if (!allowBots && !sender.isPluralKit) {
+    // Allow messages from other bots in this OpenClaw instance (agent-to-agent
+    // communication) even when allowBots is false. Each account's own bot is
+    // already filtered by the self-message check above.
+    const fromInstanceBot = isInstanceBotUserId(author.id, params.botUserId);
+    if (!allowBots && !sender.isPluralKit && !fromInstanceBot) {
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
