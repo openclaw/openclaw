@@ -356,7 +356,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       (acc, next) => ({
         content: next.content ?? acc?.content,
-        cancel: next.cancel ?? acc?.cancel,
+        cancel: acc?.cancel === true || next.cancel === true ? true : undefined,
       }),
     );
   }
@@ -391,8 +391,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       (acc, next) => ({
         params: next.params ?? acc?.params,
-        block: next.block ?? acc?.block,
-        blockReason: next.blockReason ?? acc?.blockReason,
+        block: acc?.block === true || next.block === true ? true : undefined,
+        blockReason: acc?.blockReason ?? next.blockReason,
       }),
     );
   }
