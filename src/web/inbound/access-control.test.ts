@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  readAllowFromStoreMock,
   sendMessageMock,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
@@ -107,5 +108,109 @@ describe("WhatsApp dmPolicy precedence", () => {
 
     const result = await checkUnauthorizedWorkDmSender();
     expectSilentlyBlocked(result);
+  });
+});
+
+describe("dmPolicy: allowlist — pairing store isolation (#22599)", () => {
+  it("blocks a number in the pairing store but not in allowFrom", async () => {
+    // The core bug: a previously paired number should NOT bypass the allowlist.
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15559999999"],
+        },
+      },
+    });
+    readAllowFromStoreMock.mockResolvedValue(["+15550001111"]);
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call readChannelAllowFromStore when dmPolicy is allowlist", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15559999999"],
+        },
+      },
+    });
+
+    await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a number explicitly listed in allowFrom", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("still reads store and allows approved numbers when dmPolicy is pairing (regression check)", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    });
+    readAllowFromStoreMock.mockResolvedValue(["+15550001111"]);
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(readAllowFromStoreMock).toHaveBeenCalled();
   });
 });
