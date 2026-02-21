@@ -9,8 +9,8 @@ export type BackoffPolicy = {
 
 export function computeBackoff(policy: BackoffPolicy, attempt: number) {
   const base = policy.initialMs * policy.factor ** Math.max(attempt - 1, 0);
-  const jitter = base * policy.jitter * Math.random();
-  return Math.min(policy.maxMs, Math.round(base + jitter));
+  const jitter = base * policy.jitter * (Math.random() * 2 - 1);
+  return Math.min(policy.maxMs, Math.max(0, Math.round(base + jitter)));
 }
 
 export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
