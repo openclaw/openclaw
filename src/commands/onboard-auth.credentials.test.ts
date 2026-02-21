@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { setCloudflareAiGatewayConfig, setMoonshotApiKey } from "./onboard-auth.js";
+import {
+  setCloudflareAiGatewayConfig,
+  setMoonshotApiKey,
+  setOpenaiApiKey,
+} from "./onboard-auth.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -12,6 +16,7 @@ describe("onboard auth credentials secret refs", () => {
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "MOONSHOT_API_KEY",
+    "OPENAI_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
   ]);
 
@@ -99,5 +104,21 @@ describe("onboard auth credentials secret refs", () => {
       metadata: { accountId: "account-1", gatewayId: "gateway-1" },
     });
     expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBeUndefined();
+  });
+
+  it("stores env-backed openai key as keyRef", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-openai-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.OPENAI_API_KEY = "sk-openai-env";
+
+    await setOpenaiApiKey("sk-openai-env");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai:default"]).toMatchObject({
+      keyRef: { source: "env", id: "OPENAI_API_KEY" },
+    });
+    expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
   });
 });

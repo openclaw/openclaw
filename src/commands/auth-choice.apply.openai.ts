@@ -1,5 +1,4 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
-import { upsertSharedEnvVar } from "../infra/env-file.js";
 import {
   formatApiKeyPreview,
   normalizeApiKeyInput,
@@ -9,7 +8,7 @@ import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js"
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
-import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
+import { applyAuthProfileConfig, setOpenaiApiKey, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import {
   applyOpenAICodexModelDefault,
@@ -58,17 +57,12 @@ export async function applyAuthChoiceOpenAI(
         initialValue: true,
       });
       if (useExisting) {
-        const result = upsertSharedEnvVar({
-          key: "OPENAI_API_KEY",
-          value: envKey.apiKey,
+        await setOpenaiApiKey(envKey.apiKey, params.agentDir);
+        nextConfig = applyAuthProfileConfig(nextConfig, {
+          profileId: "openai:default",
+          provider: "openai",
+          mode: "api_key",
         });
-        if (!process.env.OPENAI_API_KEY) {
-          process.env.OPENAI_API_KEY = envKey.apiKey;
-        }
-        await params.prompter.note(
-          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
-          "OpenAI API key",
-        );
         return await applyOpenAiDefaultModelChoice();
       }
     }
@@ -84,15 +78,12 @@ export async function applyAuthChoiceOpenAI(
     }
 
     const trimmed = normalizeApiKeyInput(String(key));
-    const result = upsertSharedEnvVar({
-      key: "OPENAI_API_KEY",
-      value: trimmed,
+    await setOpenaiApiKey(trimmed, params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openai:default",
+      provider: "openai",
+      mode: "api_key",
     });
-    process.env.OPENAI_API_KEY = trimmed;
-    await params.prompter.note(
-      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
-      "OpenAI API key",
-    );
     return await applyOpenAiDefaultModelChoice();
   }
 
