@@ -6,7 +6,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath } from "../utils.js";
+import { isPlainObject, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
@@ -42,6 +42,46 @@ import {
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
+
+/**
+ * Merge wizard changes into the raw parsed config, preserving keys
+ * the wizard didn't modify (#9632).
+ *
+ * Uses reference equality between baseConfig and nextConfig to detect
+ * which top-level sections the wizard touched:
+ * - Modified sections (different reference) → use wizard's value
+ * - Unmodified sections present in rawParsed → keep raw file value
+ *   (preserving ${VAR} references, unknown sub-keys, original values)
+ * - Unmodified sections only in baseConfig (Zod defaults) → keep
+ *   baseConfig value to avoid dropping config sections
+ */
+export function mergeWizardOutput(
+  rawParsed: Record<string, unknown>,
+  baseConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): Record<string, unknown> {
+  if (Object.hasOwn(rawParsed, "$include")) {
+    return nextConfig as unknown as Record<string, unknown>;
+  }
+
+  const result: Record<string, unknown> = { ...rawParsed };
+  const baseRec = baseConfig as unknown as Record<string, unknown>;
+  const nextRec = nextConfig as unknown as Record<string, unknown>;
+
+  for (const key of Object.keys(nextRec)) {
+    if (nextRec[key] !== baseRec[key]) {
+      // Wizard modified this section — use wizard's value.
+      result[key] = nextRec[key];
+    } else if (!(key in rawParsed)) {
+      // Section exists only in baseConfig (e.g., Zod defaults) and the
+      // wizard didn't touch it — carry forward to avoid dropping it.
+      result[key] = baseRec[key];
+    }
+    // else: section is in rawParsed and unmodified → already in result
+  }
+
+  return result;
+}
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 
@@ -218,6 +258,8 @@ export async function runConfigureWizard(
 
     const snapshot = await readConfigFileSnapshot();
     const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    const rawParsed: Record<string, unknown> =
+      snapshot.exists && snapshot.valid && isPlainObject(snapshot.parsed) ? snapshot.parsed : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -286,7 +328,8 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(remoteConfig);
+      const merged = mergeWizardOutput(rawParsed, baseConfig, remoteConfig);
+      await writeConfigFile(merged as OpenClawConfig);
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -319,7 +362,8 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(nextConfig);
+      const merged = mergeWizardOutput(rawParsed, baseConfig, nextConfig);
+      await writeConfigFile(merged as OpenClawConfig);
       logConfigUpdated(runtime);
     };
 
