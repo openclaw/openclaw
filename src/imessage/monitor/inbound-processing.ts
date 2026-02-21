@@ -21,11 +21,7 @@ import {
 } from "../../config/group-policy.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import {
-  formatIMessageChatTarget,
-  isAllowedIMessageSender,
-  normalizeIMessageHandle,
-} from "../targets.js";
+import { isAllowedIMessageSender, normalizeIMessageHandle } from "../targets.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
@@ -55,13 +51,72 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   return { body, id, sender };
 }
 
+function normalizeIMessageNumericId(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    return String(Math.trunc(value));
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return /^\d+$/.test(trimmed) ? trimmed : undefined;
+}
+
+function resolveIMessageGroupId(params: {
+  chatId?: number | string | null;
+  chatGuid?: string | null;
+  chatIdentifier?: string | null;
+}): string | undefined {
+  const numericChatId = normalizeIMessageNumericId(params.chatId);
+  if (numericChatId) {
+    return numericChatId;
+  }
+  if (typeof params.chatGuid === "string") {
+    const trimmed = params.chatGuid.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof params.chatIdentifier === "string") {
+    const trimmed = params.chatIdentifier.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function resolveIMessageGroupTarget(params: {
+  chatId?: string | null;
+  chatGuid?: string | null;
+  chatIdentifier?: string | null;
+}): string | undefined {
+  if (params.chatId) {
+    return `chat_id:${params.chatId}`;
+  }
+  if (params.chatGuid) {
+    return `chat_guid:${params.chatGuid}`;
+  }
+  if (params.chatIdentifier) {
+    return `chat_identifier:${params.chatIdentifier}`;
+  }
+  return undefined;
+}
+
 export type IMessageInboundDispatchDecision = {
   kind: "dispatch";
   isGroup: boolean;
-  chatId?: number;
+  chatId?: string;
   chatGuid?: string;
   chatIdentifier?: string;
   groupId?: string;
+  groupTarget?: string;
   historyKey?: string;
   sender: string;
   senderNormalized: string;
@@ -112,7 +167,11 @@ export function resolveIMessageInboundDecision(params: {
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
 
-  const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
+  const groupIdCandidate = resolveIMessageGroupId({
+    chatId,
+    chatGuid,
+    chatIdentifier,
+  });
   const groupListPolicy = groupIdCandidate
     ? resolveChannelGroupPolicy({
         cfg: params.cfg,
@@ -127,14 +186,12 @@ export function resolveIMessageInboundDecision(params: {
         defaultConfig: undefined,
       };
 
-  // If the owner explicitly configures a chat_id under imessage.groups, treat that thread as a
+  // If the owner explicitly configures a thread under imessage.groups, treat that thread as a
   // "group" for permission gating + session isolation, even when is_group=false.
-  const treatAsGroupByConfig = Boolean(
-    groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
-  );
+  const treatAsGroupByConfig = Boolean(groupIdCandidate && groupListPolicy.groupConfig);
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
-  if (isGroup && !chatId) {
-    return { kind: "drop", reason: "group without chat_id" };
+  if (isGroup && !groupIdCandidate) {
+    return { kind: "drop", reason: "group without peer identifier" };
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
@@ -211,7 +268,7 @@ export function resolveIMessageInboundDecision(params: {
     accountId: params.accountId,
     peer: {
       kind: isGroup ? "group" : "direct",
-      id: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+      id: isGroup ? String(groupIdCandidate ?? "unknown") : senderNormalized,
     },
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
@@ -227,7 +284,7 @@ export function resolveIMessageInboundDecision(params: {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
       isGroup,
-      chatId,
+      chatId: isGroup ? groupIdCandidate : undefined,
       sender,
     });
     if (params.echoCache.has(echoScope, messageText)) {
@@ -238,9 +295,7 @@ export function resolveIMessageInboundDecision(params: {
 
   const replyContext = describeReplyContext(params.message);
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
-  const historyKey = isGroup
-    ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
-    : undefined;
+  const historyKey = isGroup ? String(groupIdCandidate ?? "unknown") : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
   const requireMention = resolveChannelGroupRequireMention({
@@ -318,13 +373,22 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "no mention" };
   }
 
+  const groupTarget = isGroup
+    ? resolveIMessageGroupTarget({
+        chatId: normalizeIMessageNumericId(chatId),
+        chatGuid,
+        chatIdentifier,
+      })
+    : undefined;
+
   return {
     kind: "dispatch",
     isGroup,
-    chatId,
+    chatId: isGroup ? groupIdCandidate : undefined,
     chatGuid,
     chatIdentifier,
     groupId,
+    groupTarget,
     historyKey,
     sender,
     senderNormalized,
@@ -364,8 +428,7 @@ export function buildIMessageInboundContext(params: {
   const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
-  const chatTarget =
-    decision.isGroup && chatId != null ? formatIMessageChatTarget(chatId) : undefined;
+  const chatTarget = decision.isGroup ? decision.groupTarget : undefined;
 
   const replySuffix = decision.replyContext
     ? `\n\n[Replying to ${decision.replyContext.sender ?? "unknown sender"}${
@@ -472,10 +535,17 @@ export function buildIMessageInboundContext(params: {
 export function buildIMessageEchoScope(params: {
   accountId: string;
   isGroup: boolean;
-  chatId?: number;
+  chatId?: string;
   sender: string;
 }): string {
-  return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
+  if (!params.isGroup) {
+    return `${params.accountId}:imessage:${params.sender}`;
+  }
+  const target = params.chatId ? resolveIMessageGroupTarget({ chatId: params.chatId }) : undefined;
+  if (!target) {
+    return `${params.accountId}:group:unknown`;
+  }
+  return `${params.accountId}:${target}`;
 }
 
 export function describeIMessageEchoDropLog(params: { messageText: string }): string {
