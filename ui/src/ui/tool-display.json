@@ -113,6 +113,12 @@
         "a2ui_reset": { "label": "A2UI reset", "detailKeys": ["node", "nodeId"] }
       }
     },
+    "ikentic_locus_check_task": {
+      "icon": "check",
+      "title": "Ike Locus Check Task",
+      "detailKeys": ["taskId"],
+      "suppressWhenNoOutput": true
+    },
     "nodes": {
       "icon": "smartphone",
       "title": "Nodes",
