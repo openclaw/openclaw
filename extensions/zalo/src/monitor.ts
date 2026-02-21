@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
 import {
@@ -50,8 +51,13 @@ export type ZaloMonitorResult = {
 
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
+const ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
+const ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
+const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
+const ZALO_WEBHOOK_COUNTER_LOG_EVERY = 25;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
+type WebhookRateLimitState = { count: number; windowStartMs: number };
 
 function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: string): void {
   if (core.logging.shouldLogVerbose()) {
@@ -84,6 +90,91 @@ type WebhookTarget = {
 };
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
+const webhookRateLimits = new Map<string, WebhookRateLimitState>();
+const recentWebhookEvents = new Map<string, number>();
+const webhookStatusCounters = new Map<string, number>();
+
+function isJsonContentType(value: string | string[] | undefined): boolean {
+  const first = Array.isArray(value) ? value[0] : value;
+  if (!first) {
+    return false;
+  }
+  const mediaType = first.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
+}
+
+function timingSafeEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    const length = Math.max(1, leftBuffer.length, rightBuffer.length);
+    const paddedLeft = Buffer.alloc(length);
+    const paddedRight = Buffer.alloc(length);
+    leftBuffer.copy(paddedLeft);
+    rightBuffer.copy(paddedRight);
+    timingSafeEqual(paddedLeft, paddedRight);
+    return false;
+  }
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isWebhookRateLimited(key: string, nowMs: number): boolean {
+  const state = webhookRateLimits.get(key);
+  if (!state || nowMs - state.windowStartMs >= ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
+    webhookRateLimits.set(key, { count: 1, windowStartMs: nowMs });
+    return false;
+  }
+
+  state.count += 1;
+  if (state.count > ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS) {
+    return true;
+  }
+  return false;
+}
+
+function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
+  const messageId = update.message?.message_id;
+  if (!messageId) {
+    return false;
+  }
+  const key = `${update.event_name}:${messageId}`;
+  const seenAt = recentWebhookEvents.get(key);
+  recentWebhookEvents.set(key, nowMs);
+
+  if (seenAt && nowMs - seenAt < ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
+    return true;
+  }
+
+  if (recentWebhookEvents.size > 5000) {
+    for (const [eventKey, timestamp] of recentWebhookEvents) {
+      if (nowMs - timestamp >= ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
+        recentWebhookEvents.delete(eventKey);
+      }
+    }
+  }
+
+  return false;
+}
+
+function recordWebhookStatus(
+  runtime: ZaloRuntimeEnv | undefined,
+  path: string,
+  statusCode: number,
+): void {
+  if (![400, 401, 408, 413, 415, 429].includes(statusCode)) {
+    return;
+  }
+  const key = `${path}:${statusCode}`;
+  const next = (webhookStatusCounters.get(key) ?? 0) + 1;
+  webhookStatusCounters.set(key, next);
+  if (next === 1 || next % ZALO_WEBHOOK_COUNTER_LOG_EVERY === 0) {
+    runtime?.log?.(
+      `[zalo] webhook anomaly path=${path} status=${statusCode} count=${String(next)}`,
+    );
+  }
+}
 
 export function registerZaloWebhookTarget(target: WebhookTarget): () => void {
   return registerWebhookTarget(webhookTargets, target).unregister;
@@ -104,18 +195,37 @@ export async function handleZaloWebhookRequest(
   }
 
   const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matching = targets.filter((entry) => entry.secret === headerToken);
+  const matching = targets.filter((entry) => timingSafeEquals(entry.secret, headerToken));
   if (matching.length === 0) {
     res.statusCode = 401;
     res.end("unauthorized");
+    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
     return true;
   }
   if (matching.length > 1) {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
+    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
     return true;
   }
   const target = matching[0];
+  const path = req.url ?? "<unknown>";
+  const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
+  const nowMs = Date.now();
+
+  if (isWebhookRateLimited(rateLimitKey, nowMs)) {
+    res.statusCode = 429;
+    res.end("Too Many Requests");
+    recordWebhookStatus(target.runtime, path, res.statusCode);
+    return true;
+  }
+
+  if (!isJsonContentType(req.headers["content-type"])) {
+    res.statusCode = 415;
+    res.end("Unsupported Media Type");
+    recordWebhookStatus(target.runtime, path, res.statusCode);
+    return true;
+  }
 
   const body = await readJsonBodyWithLimit(req, {
     maxBytes: 1024 * 1024,
@@ -125,11 +235,14 @@ export async function handleZaloWebhookRequest(
   if (!body.ok) {
     res.statusCode =
       body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
-    res.end(
-      body.code === "REQUEST_BODY_TIMEOUT"
-        ? requestBodyErrorToText("REQUEST_BODY_TIMEOUT")
-        : body.error,
-    );
+    const message =
+      body.code === "PAYLOAD_TOO_LARGE"
+        ? requestBodyErrorToText("PAYLOAD_TOO_LARGE")
+        : body.code === "REQUEST_BODY_TIMEOUT"
+          ? requestBodyErrorToText("REQUEST_BODY_TIMEOUT")
+          : "Bad Request";
+    res.end(message);
+    recordWebhookStatus(target.runtime, path, res.statusCode);
     return true;
   }
 
@@ -143,7 +256,14 @@ export async function handleZaloWebhookRequest(
 
   if (!update?.event_name) {
     res.statusCode = 400;
-    res.end("invalid payload");
+    res.end("Bad Request");
+    recordWebhookStatus(target.runtime, path, res.statusCode);
+    return true;
+  }
+
+  if (isReplayEvent(update, nowMs)) {
+    res.statusCode = 200;
+    res.end("ok");
     return true;
   }
 

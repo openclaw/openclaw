@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { resolveFetch, wrapFetchWithAbortSignal } from "./fetch.js";
 
+async function waitForMicrotaskTurn(): Promise<void> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
 function createForeignSignalHarness() {
   let abortHandler: (() => void) | null = null;
   const removeEventListener = vi.fn((event: string, handler: () => void) => {
@@ -25,6 +29,18 @@ function createForeignSignalHarness() {
     removeEventListener,
     triggerAbort: () => abortHandler?.(),
   };
+}
+
+function createThrowingCleanupSignalHarness(cleanupError: Error) {
+  const removeEventListener = vi.fn(() => {
+    throw cleanupError;
+  });
+  const fakeSignal = {
+    aborted: false,
+    addEventListener: (_event: string, _handler: () => void) => {},
+    removeEventListener,
+  } as unknown as AbortSignal;
+  return { fakeSignal, removeEventListener };
 }
 
 describe("wrapFetchWithAbortSignal", () => {
@@ -86,7 +102,7 @@ describe("wrapFetchWithAbortSignal", () => {
     try {
       await expect(wrapped("https://example.com", { signal: fakeSignal })).rejects.toBe(fetchError);
       await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitForMicrotaskTurn();
 
       expect(unhandled).toEqual([]);
       expect(removeEventListener).toHaveBeenCalledOnce();
@@ -118,15 +134,7 @@ describe("wrapFetchWithAbortSignal", () => {
     );
     const wrapped = wrapFetchWithAbortSignal(fetchImpl);
 
-    const removeEventListener = vi.fn(() => {
-      throw cleanupError;
-    });
-
-    const fakeSignal = {
-      aborted: false,
-      addEventListener: (_event: string, _handler: () => void) => {},
-      removeEventListener,
-    } as unknown as AbortSignal;
+    const { fakeSignal, removeEventListener } = createThrowingCleanupSignalHarness(cleanupError);
 
     await expect(wrapped("https://example.com", { signal: fakeSignal })).rejects.toBe(fetchError);
     expect(removeEventListener).toHaveBeenCalledOnce();
@@ -142,15 +150,7 @@ describe("wrapFetchWithAbortSignal", () => {
     );
     const wrapped = wrapFetchWithAbortSignal(fetchImpl);
 
-    const removeEventListener = vi.fn(() => {
-      throw cleanupError;
-    });
-
-    const fakeSignal = {
-      aborted: false,
-      addEventListener: (_event: string, _handler: () => void) => {},
-      removeEventListener,
-    } as unknown as AbortSignal;
+    const { fakeSignal, removeEventListener } = createThrowingCleanupSignalHarness(cleanupError);
 
     expect(() => wrapped("https://example.com", { signal: fakeSignal })).toThrow(syncError);
     expect(removeEventListener).toHaveBeenCalledOnce();

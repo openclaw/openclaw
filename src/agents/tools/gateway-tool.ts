@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
@@ -10,7 +11,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
 
@@ -68,6 +69,7 @@ export function createGatewayTool(opts?: {
   return {
     label: "Gateway",
     name: "gateway",
+    ownerOnly: true,
     description:
       "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
@@ -75,8 +77,8 @@ export function createGatewayTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
-        if (opts?.config?.commands?.restart !== true) {
-          throw new Error("Gateway restart is disabled. Set commands.restart=true to enable.");
+        if (!isRestartEnabled(opts?.config)) {
+          throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -124,19 +126,7 @@ export function createGatewayTool(opts?: {
         return jsonResult(scheduled);
       }
 
-      const gatewayUrl =
-        typeof params.gatewayUrl === "string" && params.gatewayUrl.trim()
-          ? params.gatewayUrl.trim()
-          : undefined;
-      const gatewayToken =
-        typeof params.gatewayToken === "string" && params.gatewayToken.trim()
-          ? params.gatewayToken.trim()
-          : undefined;
-      const timeoutMs =
-        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-          ? Math.max(1, Math.floor(params.timeoutMs))
-          : undefined;
-      const gatewayOpts = { gatewayUrl, gatewayToken, timeoutMs };
+      const gatewayOpts = readGatewayCallOptions(params);
 
       const resolveGatewayWriteMeta = (): {
         sessionKey: string | undefined;
@@ -209,15 +199,16 @@ export function createGatewayTool(opts?: {
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
-          timeoutMs: timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS,
+          timeoutMs: updateTimeoutMs,
         };
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
           restartDelayMs,
-          timeoutMs: timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS,
+          timeoutMs: updateTimeoutMs,
         });
         return jsonResult({ ok: true, result });
       }

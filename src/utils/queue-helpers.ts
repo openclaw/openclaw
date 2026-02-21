@@ -11,6 +11,53 @@ export type QueueState<T> = QueueSummaryState & {
   cap: number;
 };
 
+export function clearQueueSummaryState(state: QueueSummaryState): void {
+  state.droppedCount = 0;
+  state.summaryLines = [];
+}
+
+export function previewQueueSummaryPrompt(params: {
+  state: QueueSummaryState;
+  noun: string;
+  title?: string;
+}): string | undefined {
+  return buildQueueSummaryPrompt({
+    state: {
+      dropPolicy: params.state.dropPolicy,
+      droppedCount: params.state.droppedCount,
+      summaryLines: [...params.state.summaryLines],
+    },
+    noun: params.noun,
+    title: params.title,
+  });
+}
+
+export function applyQueueRuntimeSettings<TMode extends string>(params: {
+  target: {
+    mode: TMode;
+    debounceMs: number;
+    cap: number;
+    dropPolicy: QueueDropPolicy;
+  };
+  settings: {
+    mode: TMode;
+    debounceMs?: number;
+    cap?: number;
+    dropPolicy?: QueueDropPolicy;
+  };
+}): void {
+  params.target.mode = params.settings.mode;
+  params.target.debounceMs =
+    typeof params.settings.debounceMs === "number"
+      ? Math.max(0, params.settings.debounceMs)
+      : params.target.debounceMs;
+  params.target.cap =
+    typeof params.settings.cap === "number" && params.settings.cap > 0
+      ? Math.floor(params.settings.cap)
+      : params.target.cap;
+  params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
+}
+
 export function elideQueueText(text: string, limit = 140): string {
   if (text.length <= limit) {
     return text;
@@ -82,6 +129,36 @@ export function waitForQueueDebounce(queue: {
   });
 }
 
+export async function drainNextQueueItem<T>(
+  items: T[],
+  run: (item: T) => Promise<void>,
+): Promise<boolean> {
+  const next = items[0];
+  if (!next) {
+    return false;
+  }
+  await run(next);
+  items.shift();
+  return true;
+}
+
+export async function drainCollectItemIfNeeded<T>(params: {
+  forceIndividualCollect: boolean;
+  isCrossChannel: boolean;
+  setForceIndividualCollect?: (next: boolean) => void;
+  items: T[];
+  run: (item: T) => Promise<void>;
+}): Promise<"skipped" | "drained" | "empty"> {
+  if (!params.forceIndividualCollect && !params.isCrossChannel) {
+    return "skipped";
+  }
+  if (params.isCrossChannel) {
+    params.setForceIndividualCollect?.(true);
+  }
+  const drained = await drainNextQueueItem(params.items, params.run);
+  return drained ? "drained" : "empty";
+}
+
 export function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -101,8 +178,7 @@ export function buildQueueSummaryPrompt(params: {
       lines.push(`- ${line}`);
     }
   }
-  params.state.droppedCount = 0;
-  params.state.summaryLines = [];
+  clearQueueSummaryState(params.state);
   return lines.join("\n");
 }
 

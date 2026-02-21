@@ -1,7 +1,12 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
+import {
+  buildImageResizeSideGrid,
+  getImageMetadata,
+  IMAGE_REDUCE_QUALITY_STEPS,
+  resizeToJpeg,
+} from "../media/image-ops.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
@@ -101,17 +106,13 @@ async function resizeImageBase64IfNeeded(params: {
     };
   }
 
-  const qualities = [85, 75, 65, 55, 45, 35];
   const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
-  const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
-    .filter((v) => v > 0 && v <= params.maxDimensionPx)
-    .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
-    .toSorted((a, b) => b - a);
+  const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
   for (const side of sideGrid) {
-    for (const quality of qualities) {
+    for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
       const out = await resizeToJpeg({
         buffer: buf,
         maxSide: side,
