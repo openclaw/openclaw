@@ -288,16 +288,35 @@ async function resolveGatewayTlsFingerprint(params: {
   );
 }
 
+export function resolveCloseReasonHint(reason: string): string | undefined {
+  const lower = reason.toLowerCase();
+  if (lower.includes("pairing required")) {
+    return "Device is not paired with the gateway. Run: openclaw devices approve --latest";
+  }
+  if (lower.includes("device token mismatch")) {
+    return "Device token is out of sync. Run: openclaw doctor --repair";
+  }
+  if (lower.includes("unauthorized")) {
+    return "Authentication failed. Check gateway.auth.token in your config, or run: openclaw doctor";
+  }
+  return undefined;
+}
+
 function formatGatewayCloseError(
   code: number,
   reason: string,
   connectionDetails: GatewayConnectionDetails,
 ): string {
   const reasonText = reason?.trim() || "no close reason";
-  const hint =
+  const codeHint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
-  const suffix = hint ? ` ${hint}` : "";
-  return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  const suffix = codeHint ? ` ${codeHint}` : "";
+  const actionHint = reasonText ? resolveCloseReasonHint(reasonText) : undefined;
+  const parts = [`gateway closed (${code}${suffix}): ${reasonText}`, connectionDetails.message];
+  if (actionHint) {
+    parts.push(`Hint: ${actionHint}`);
+  }
+  return parts.join("\n");
 }
 
 function formatGatewayTimeoutError(

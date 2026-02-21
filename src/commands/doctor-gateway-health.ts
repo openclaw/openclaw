@@ -20,7 +20,25 @@ export async function checkGatewayHealth(params: {
     healthOk = true;
   } catch (err) {
     const message = String(err);
-    if (message.includes("gateway closed")) {
+    if (message.includes("pairing required")) {
+      note(
+        "Gateway is running but this device is not paired.\nRun: openclaw devices approve --latest",
+        "Gateway pairing",
+      );
+      note(gatewayDetails.message, "Gateway connection");
+    } else if (message.includes("device token mismatch")) {
+      note(
+        "Gateway is running but the device token is out of sync.\nRun: openclaw doctor --repair",
+        "Gateway auth",
+      );
+      note(gatewayDetails.message, "Gateway connection");
+    } else if (message.includes("unauthorized")) {
+      note(
+        "Gateway is running but authentication failed.\nCheck gateway.auth.token in your config.",
+        "Gateway auth",
+      );
+      note(gatewayDetails.message, "Gateway connection");
+    } else if (message.includes("gateway closed")) {
       note("Gateway not running.", "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
