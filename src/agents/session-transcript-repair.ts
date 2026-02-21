@@ -205,14 +205,25 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
 
-    // Skip tool call extraction for aborted or errored assistant messages.
     // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
     // (e.g., partialJson: true) and should not have synthetic tool_results created.
-    // Creating synthetic results for incomplete tool calls causes API 400 errors:
-    // "unexpected tool_use_id found in tool_result blocks"
-    // See: https://github.com/openclaw/openclaw/issues/4597
+    // Strip tool_use blocks from these messages to prevent API 400 errors like
+    // "unexpected tool_use_id found in tool_result blocks" (#4597, #16823).
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
+      if (Array.isArray(assistant.content)) {
+        const filtered = assistant.content.filter(
+          (block) => !block || typeof block !== "object" || !isToolCallBlock(block),
+        );
+        if (filtered.length !== assistant.content.length) {
+          changed = true;
+          if (filtered.length > 0) {
+            out.push({ ...msg, content: filtered } as AgentMessage);
+          }
+          // If no content remains after stripping, drop the entire message
+          continue;
+        }
+      }
       out.push(msg);
       continue;
     }

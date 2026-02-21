@@ -106,10 +106,11 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
+  it("strips tool_use blocks from assistant messages with stopReason 'error'", () => {
     // When an assistant message has stopReason: "error", its tool_use blocks may be
-    // incomplete/malformed. We should NOT create synthetic tool_results for them,
-    // as this causes API 400 errors: "unexpected tool_use_id found in tool_result blocks"
+    // incomplete/malformed. They are stripped to prevent API 400 errors like
+    // "unexpected tool_use_id found in tool_result blocks" (#4597, #16823).
+    // If no content remains after stripping, the message is dropped entirely.
     const input = [
       {
         role: "assistant",
@@ -123,15 +124,15 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for errored messages
     expect(result.added).toHaveLength(0);
-    // The assistant message should be passed through unchanged
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
-    expect(result.messages).toHaveLength(2);
+    // The assistant message had only tool_use content, so it's dropped
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'aborted'", () => {
+  it("strips tool_use blocks from assistant messages with stopReason 'aborted'", () => {
     // When a request is aborted mid-stream, the assistant message may have incomplete
-    // tool_use blocks (with partialJson). We should NOT create synthetic tool_results.
+    // tool_use blocks (with partialJson). These are stripped, and if no content remains,
+    // the entire message is dropped.
     const input = [
       {
         role: "assistant",
@@ -145,10 +146,9 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for aborted messages
     expect(result.added).toHaveLength(0);
-    // Messages should be passed through without synthetic insertions
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
+    // The assistant message had only tool_use content, so it's dropped
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
   });
 
   it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
@@ -191,11 +191,11 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    // The orphan tool result should be dropped
+    // The orphan tool result should be dropped, and the aborted assistant message
+    // (which only contained tool_use blocks) is also dropped
     expect(result.droppedOrphanCount).toBe(1);
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
     // No synthetic results should be added
     expect(result.added).toHaveLength(0);
   });
