@@ -6,6 +6,7 @@ import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
+import { buildDeliveryEchoScope } from "./echo-scope.js";
 
 type SentMessageCache = {
   remember: (scope: string, text: string) => void;
@@ -23,7 +24,7 @@ export async function deliverReplies(params: {
 }) {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
-  const scope = `${accountId ?? ""}:${target}`;
+  const scope = buildDeliveryEchoScope(accountId ?? "", target);
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -39,7 +40,6 @@ export async function deliverReplies(params: {
       continue;
     }
     if (mediaList.length === 0) {
-      sentMessageCache?.remember(scope, text);
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         await sendMessageIMessage(target, chunk, {
           maxBytes,

@@ -45,6 +45,7 @@ import {
 } from "./inbound-processing.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+import { SentMessageCache } from "./sent-message-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
 /**
@@ -72,51 +73,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
     return hostOnlyMatch?.[1];
   } catch {
     return undefined;
-  }
-}
-
-/**
- * Cache for recently sent messages, used for echo detection.
- * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
- * Entries expire after 5 seconds; we do not forget on match so multiple echo deliveries are all filtered.
- */
-class SentMessageCache {
-  private cache = new Map<string, number>();
-  private readonly ttlMs = 5000; // 5 seconds
-
-  remember(scope: string, text: string): void {
-    if (!text?.trim()) {
-      return;
-    }
-    const key = `${scope}:${text.trim()}`;
-    this.cache.set(key, Date.now());
-    this.cleanup();
-  }
-
-  has(scope: string, text: string): boolean {
-    if (!text?.trim()) {
-      return false;
-    }
-    const key = `${scope}:${text.trim()}`;
-    const timestamp = this.cache.get(key);
-    if (!timestamp) {
-      return false;
-    }
-    const age = Date.now() - timestamp;
-    if (age > this.ttlMs) {
-      this.cache.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [text, timestamp] of this.cache.entries()) {
-      if (now - timestamp > this.ttlMs) {
-        this.cache.delete(text);
-      }
-    }
   }
 }
 
