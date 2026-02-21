@@ -214,6 +214,7 @@ export function createFollowupRunner(params: {
           providerUsed: fallbackProvider,
           contextTokensUsed,
           logLabel: "followup",
+          isHeartbeat: opts?.isHeartbeat === true,
         });
       }
 
