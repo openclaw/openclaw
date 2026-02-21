@@ -264,7 +264,6 @@ export async function doctorCommand(
   }
 
   noteWorkspaceStatus(cfg);
-  await noteMemorySearchHealth(cfg);
 
   // Check and fix shell completion
   await doctorShellCompletion(runtime, prompter, {
@@ -276,6 +275,7 @@ export async function doctorCommand(
     cfg,
     timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
   });
+  await noteMemorySearchHealth(cfg, { gatewayHealthOk: healthOk });
   await maybeRepairGatewayDaemon({
     cfg,
     runtime,

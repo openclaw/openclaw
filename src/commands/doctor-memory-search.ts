@@ -12,7 +12,10 @@ import { resolveUserPath } from "../utils.js";
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only, no network calls.
  */
-export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void> {
+export async function noteMemorySearchHealth(
+  cfg: OpenClawConfig,
+  opts?: { gatewayHealthOk?: boolean },
+): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
@@ -54,6 +57,17 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
     }
+    if (opts?.gatewayHealthOk) {
+      note(
+        [
+          `Memory search provider is set to "${resolved.provider}" but the API key was not found in the CLI environment.`,
+          "The key may be loaded by the running gateway (e.g. via secrets.env).",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+      return;
+    }
     const envVar = providerEnvVar(resolved.provider);
     note(
       [
@@ -62,7 +76,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
         "",
         "Fix (pick one):",
         `- Set ${envVar} in your environment`,
-        `- Add credentials: ${formatCliCommand(`openclaw auth add --provider ${resolved.provider}`)}`,
+        `- Configure credentials: ${formatCliCommand("openclaw configure")}`,
         `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
@@ -82,6 +96,18 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
     }
   }
 
+  if (opts?.gatewayHealthOk) {
+    note(
+      [
+        'Memory search provider is set to "auto" but the API key was not found in the CLI environment.',
+        "The key may be loaded by the running gateway (e.g. via secrets.env).",
+        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+      ].join("\n"),
+      "Memory search",
+    );
+    return;
+  }
+
   note(
     [
       "Memory search is enabled but no embedding provider is configured.",
@@ -89,7 +115,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
       "",
       "Fix (pick one):",
       "- Set OPENAI_API_KEY or GEMINI_API_KEY in your environment",
-      `- Add credentials: ${formatCliCommand("openclaw auth add --provider openai")}`,
+      `- Configure credentials: ${formatCliCommand("openclaw configure")}`,
       `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
       "",
