@@ -10,7 +10,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { GatewayAgentRow, SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -88,6 +88,7 @@ export function renderChatControls(state: AppViewState) {
     state.sessionKey,
     state.sessionsResult,
     mainSessionKey,
+    state.agentsList?.agents,
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -270,6 +271,8 @@ export type SessionKeyInfo = {
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
   fallbackName: string;
+  /** Agent ID extracted from the key (second segment of agent:X:...). */
+  agentId?: string;
 };
 
 function capitalize(s: string): string {
@@ -281,19 +284,23 @@ function capitalize(s: string): string {
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
+  // ── Extract agentId from agent:X:… keys ─────────
+  const agentIdMatch = key.match(/^agent:([^:]+):/);
+  const agentId = agentIdMatch?.[1];
+
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: "Main Session", agentId: agentId ?? "main" };
   }
 
   // ── Subagent ─────────────────────────────────────
   if (key.includes(":subagent:")) {
-    return { prefix: "Subagent:", fallbackName: "Subagent:" };
+    return { prefix: "Subagent:", fallbackName: "Subagent:", agentId };
   }
 
   // ── Cron job ─────────────────────────────────────
   if (key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
+    return { prefix: "Cron:", fallbackName: "Cron Job:", agentId };
   }
 
   // ── Direct chat  (agent:<x>:<channel>:direct:<id>) ──
@@ -302,7 +309,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     const channel = directMatch[1];
     const identifier = directMatch[2];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
+    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}`, agentId };
   }
 
   // ── Group chat  (agent:<x>:<channel>:group:<id>) ────
@@ -310,7 +317,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   if (groupMatch) {
     const channel = groupMatch[1];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} Group` };
+    return { prefix: "", fallbackName: `${channelLabel} Group`, agentId };
   }
 
   // ── Channel-prefixed legacy keys (e.g. "bluebubbles:g-…") ──
@@ -320,17 +327,27 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     }
   }
 
+  // ── Agent main session (agent:<x>:main where x ≠ "main") ──
+  if (agentId && key === `agent:${agentId}:main`) {
+    return { prefix: "", fallbackName: key, agentId };
+  }
+
   // ── Unknown — return key as-is ───────────────────
-  return { prefix: "", fallbackName: key };
+  return { prefix: "", fallbackName: key, agentId };
 }
 
 export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
+  agents?: GatewayAgentRow[],
 ): string {
   const label = row?.label?.trim() || "";
   const displayName = row?.displayName?.trim() || "";
-  const { prefix, fallbackName } = parseSessionKey(key);
+  const { prefix, fallbackName, agentId } = parseSessionKey(key);
+
+  // Look up agent name from the config
+  const agentEntry = agentId && agents ? agents.find((a) => a.id === agentId) : undefined;
+  const agentName = agentEntry?.name?.trim() || "";
 
   const applyTypedPrefix = (name: string): string => {
     if (!prefix) {
@@ -340,9 +357,17 @@ export function resolveSessionDisplayName(
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
+  // User-editable label always wins
   if (label && label !== key) {
     return applyTypedPrefix(label);
   }
+
+  // Agent name from config is preferred over row displayName (which may be
+  // a delivery-context value like a phone number)
+  if (agentName) {
+    return applyTypedPrefix(agentName);
+  }
+
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
   }
@@ -353,6 +378,7 @@ function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
+  agents?: GatewayAgentRow[],
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
@@ -365,7 +391,7 @@ function resolveSessionOptions(
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
+      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined, agents),
     });
   }
 
@@ -374,7 +400,7 @@ function resolveSessionOptions(
     seen.add(sessionKey);
     options.push({
       key: sessionKey,
-      displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
+      displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent, agents),
     });
   }
 
@@ -385,7 +411,7 @@ function resolveSessionOptions(
         seen.add(s.key);
         options.push({
           key: s.key,
-          displayName: resolveSessionDisplayName(s.key, s),
+          displayName: resolveSessionDisplayName(s.key, s, agents),
         });
       }
     }
