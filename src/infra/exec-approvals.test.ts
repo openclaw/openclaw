@@ -39,6 +39,28 @@ function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
 }
 
+type ShellParserParityFixtureCase = {
+  id: string;
+  command: string;
+  ok: boolean;
+  executables: string[];
+};
+
+type ShellParserParityFixture = {
+  cases: ShellParserParityFixtureCase[];
+};
+
+function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
+  const fixturePath = path.join(
+    process.cwd(),
+    "test",
+    "fixtures",
+    "exec-allowlist-shell-parser-parity.json",
+  );
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ShellParserParityFixture;
+  return fixture.cases;
+}
+
 describe("exec approvals allowlist matching", () => {
   it("ignores basename-only patterns", () => {
     const resolution = {
@@ -425,6 +447,25 @@ describe("exec approvals shell parsing", () => {
     expect(parsed.flag).toBe("--output");
     expect(parsed.inlineValue).toBe("blocked.txt");
   });
+});
+
+describe("exec approvals shell parser parity fixture", () => {
+  const fixtures = loadShellParserParityFixtureCases();
+
+  for (const fixture of fixtures) {
+    it(`matches fixture: ${fixture.id}`, () => {
+      const res = analyzeShellCommand({ command: fixture.command });
+      expect(res.ok).toBe(fixture.ok);
+      if (fixture.ok) {
+        const executables = res.segments.map((segment) =>
+          path.basename(segment.argv[0] ?? "").toLowerCase(),
+        );
+        expect(executables).toEqual(fixture.executables.map((entry) => entry.toLowerCase()));
+      } else {
+        expect(res.segments).toHaveLength(0);
+      }
+    });
+  }
 });
 
 describe("exec approvals shell allowlist (chained commands)", () => {
