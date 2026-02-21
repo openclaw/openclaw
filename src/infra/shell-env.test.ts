@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   getShellPathFromLoginShell,
@@ -23,6 +24,18 @@ describe("shell env fallback", () => {
       platform: params.platform,
     });
     return { first, second };
+  }
+
+  function runShellEnvFallbackForShell(shell: string) {
+    const env: NodeJS.ProcessEnv = { SHELL: shell };
+    const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
+    const res = loadShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+    });
+    return { res, exec };
   }
 
   it("is disabled by default", () => {
@@ -122,15 +135,7 @@ describe("shell env fallback", () => {
   });
 
   it("falls back to /bin/sh when SHELL is non-absolute", () => {
-    const env: NodeJS.ProcessEnv = { SHELL: "zsh" };
-    const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
-
-    const res = loadShellEnvFallback({
-      enabled: true,
-      env,
-      expectedKeys: ["OPENAI_API_KEY"],
-      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
-    });
+    const { res, exec } = runShellEnvFallbackForShell("zsh");
 
     expect(res.ok).toBe(true);
     expect(exec).toHaveBeenCalledTimes(1);
@@ -138,19 +143,25 @@ describe("shell env fallback", () => {
   });
 
   it("falls back to /bin/sh when SHELL points to an untrusted path", () => {
-    const env: NodeJS.ProcessEnv = { SHELL: "/tmp/evil-shell" };
-    const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
-
-    const res = loadShellEnvFallback({
-      enabled: true,
-      env,
-      expectedKeys: ["OPENAI_API_KEY"],
-      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
-    });
+    const { res, exec } = runShellEnvFallbackForShell("/tmp/evil-shell");
 
     expect(res.ok).toBe(true);
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
+  });
+
+  it("uses trusted absolute SHELL path when executable", () => {
+    const accessSyncSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    try {
+      const trustedShell = "/usr/bin/zsh-trusted";
+      const { res, exec } = runShellEnvFallbackForShell(trustedShell);
+
+      expect(res.ok).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+    } finally {
+      accessSyncSpy.mockRestore();
+    }
   });
 
   it("returns null without invoking shell on win32", () => {
