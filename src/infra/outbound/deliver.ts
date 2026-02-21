@@ -114,6 +114,7 @@ type ChannelHandlerParams = {
   gifPlayback?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
+  fileName?: string;
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -187,6 +188,7 @@ function createChannelOutboundContextBase(
     deps: params.deps,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
+    fileName: params.fileName,
   };
 }
 
@@ -209,6 +211,7 @@ type DeliverOutboundPayloadsCoreParams = {
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Active agent id for media local-root scoping. */
   agentId?: string;
+  fileName?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -309,6 +312,7 @@ async function deliverOutboundPayloadsCore(
     gifPlayback: params.gifPlayback,
     silent: params.silent,
     mediaLocalRoots,
+    fileName: params.fileName,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {

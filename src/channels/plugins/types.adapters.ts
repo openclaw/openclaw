@@ -88,6 +88,7 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  fileName?: string;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

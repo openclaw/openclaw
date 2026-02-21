@@ -26,6 +26,8 @@ export const SendParamsSchema = Type.Object(
     threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
+    /** Optional file name override for document attachments. */
+    fileName: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

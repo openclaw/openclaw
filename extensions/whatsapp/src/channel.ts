@@ -305,13 +305,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       });
       return { channel: "whatsapp", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback, fileName }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
         accountId: accountId ?? undefined,
         gifPlayback,
+        fileName: fileName ?? undefined,
       });
       return { channel: "whatsapp", ...result };
     },
