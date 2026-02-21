@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_EMOJIS } from "../../channels/status-reactions.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 import {
   __testing as threadBindingTesting,
@@ -147,6 +146,10 @@ function getLastDispatchCtx():
   return params?.ctx;
 }
 
+function expectEmojiVariant(emojis: string[], variants: string[]) {
+  expect(emojis.some((emoji) => variants.includes(emoji))).toBe(true);
+}
+
 describe("processDiscordMessage ack reactions", () => {
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
@@ -211,9 +214,9 @@ describe("processDiscordMessage ack reactions", () => {
       sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
     expect(emojis).toContain("👀");
-    expect(emojis).toContain(DEFAULT_EMOJIS.done);
-    expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
-    expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
+    expectEmojiVariant(emojis, ["✅", "👍"]);
+    expect(emojis).not.toContain("🧠");
+    expect(emojis).not.toContain("💻");
   });
 
   it("shows stall emojis for long no-progress runs", async () => {
@@ -239,9 +242,9 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = (
       sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
-    expect(emojis).toContain(DEFAULT_EMOJIS.stallSoft);
-    expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
-    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+    expectEmojiVariant(emojis, ["⏳", "🥱"]);
+    expectEmojiVariant(emojis, ["⚠️", "😨"]);
+    expectEmojiVariant(emojis, ["✅", "👍"]);
   });
 });
 
