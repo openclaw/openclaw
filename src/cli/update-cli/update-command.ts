@@ -5,8 +5,19 @@ import {
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
+import {
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+  writeConfigFile,
+} from "../../config/config.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  classifyPortListener,
+  formatPortDiagnostics,
+  inspectPortUsage,
+  type PortUsage,
+} from "../../infra/ports.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -29,7 +40,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
-import { pathExists } from "../../utils.js";
+import { pathExists, sleep } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
@@ -55,6 +66,9 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
+const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const POST_RESTART_HEALTH_ATTEMPTS = 8;
+const POST_RESTART_HEALTH_DELAY_MS = 450;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -81,6 +95,180 @@ const UPDATE_QUIPS = [
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
+}
+
+type GatewayRestartSnapshot = {
+  runtime: GatewayServiceRuntime;
+  portUsage: PortUsage;
+  healthy: boolean;
+  staleGatewayPids: number[];
+};
+
+function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
+  if (!root) {
+    return [];
+  }
+  return [
+    path.join(root, "dist", "entry.js"),
+    path.join(root, "dist", "entry.mjs"),
+    path.join(root, "dist", "index.js"),
+    path.join(root, "dist", "index.mjs"),
+  ];
+}
+
+function formatCommandFailure(stdout: string, stderr: string): string {
+  const detail = (stderr || stdout).trim();
+  if (!detail) {
+    return "command returned a non-zero exit code";
+  }
+  return detail.split("\n").slice(-3).join("\n");
+}
+
+async function refreshGatewayServiceEnv(params: {
+  result: UpdateRunResult;
+  jsonMode: boolean;
+}): Promise<void> {
+  const args = ["gateway", "install", "--force"];
+  if (params.jsonMode) {
+    args.push("--json");
+  }
+
+  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
+    if (!(await pathExists(candidate))) {
+      continue;
+    }
+    const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
+      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+    });
+    if (res.code === 0) {
+      return;
+    }
+    throw new Error(
+      `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
+    );
+  }
+
+  await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
+}
+
+async function inspectGatewayRestart(port: number): Promise<GatewayRestartSnapshot> {
+  const service = resolveGatewayService();
+  let runtime: GatewayServiceRuntime = { status: "unknown" };
+  try {
+    runtime = await service.readRuntime(process.env);
+  } catch (err) {
+    runtime = { status: "unknown", detail: String(err) };
+  }
+
+  let portUsage: PortUsage;
+  try {
+    portUsage = await inspectPortUsage(port);
+  } catch (err) {
+    portUsage = {
+      port,
+      status: "unknown",
+      listeners: [],
+      hints: [],
+      errors: [String(err)],
+    };
+  }
+
+  const gatewayListeners =
+    portUsage.status === "busy"
+      ? portUsage.listeners.filter((listener) => classifyPortListener(listener, port) === "gateway")
+      : [];
+  const running = runtime.status === "running";
+  const ownsPort =
+    runtime.pid != null
+      ? portUsage.listeners.some((listener) => listener.pid === runtime.pid)
+      : gatewayListeners.length > 0 ||
+        (portUsage.status === "busy" && portUsage.listeners.length === 0);
+  const healthy = running && ownsPort;
+  const staleGatewayPids = Array.from(
+    new Set(
+      gatewayListeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => Number.isFinite(pid))
+        .filter((pid) => runtime.pid == null || pid !== runtime.pid || !running),
+    ),
+  );
+
+  return {
+    runtime,
+    portUsage,
+    healthy,
+    staleGatewayPids,
+  };
+}
+
+async function waitForGatewayHealthyRestart(port: number): Promise<GatewayRestartSnapshot> {
+  let snapshot = await inspectGatewayRestart(port);
+  for (let attempt = 0; attempt < POST_RESTART_HEALTH_ATTEMPTS; attempt += 1) {
+    if (snapshot.healthy) {
+      return snapshot;
+    }
+    if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
+      return snapshot;
+    }
+    await sleep(POST_RESTART_HEALTH_DELAY_MS);
+    snapshot = await inspectGatewayRestart(port);
+  }
+  return snapshot;
+}
+
+function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
+  const lines: string[] = [];
+  const runtimeSummary = [
+    snapshot.runtime.status ? `status=${snapshot.runtime.status}` : null,
+    snapshot.runtime.state ? `state=${snapshot.runtime.state}` : null,
+    snapshot.runtime.pid != null ? `pid=${snapshot.runtime.pid}` : null,
+    snapshot.runtime.lastExitStatus != null ? `lastExit=${snapshot.runtime.lastExitStatus}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  if (runtimeSummary) {
+    lines.push(`Service runtime: ${runtimeSummary}`);
+  }
+  if (snapshot.portUsage.status === "busy") {
+    lines.push(...formatPortDiagnostics(snapshot.portUsage));
+  } else {
+    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
+  }
+  if (snapshot.portUsage.errors?.length) {
+    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
+  }
+  return lines;
+}
+
+async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
+  const killed: number[] = [];
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+      killed.push(pid);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "ESRCH") {
+        throw err;
+      }
+    }
+  }
+  if (killed.length === 0) {
+    return killed;
+  }
+  await sleep(400);
+  for (const pid of killed) {
+    try {
+      process.kill(pid, 0);
+      process.kill(pid, "SIGKILL");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "ESRCH") {
+        throw err;
+      }
+    }
+  }
+  return killed;
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -392,6 +580,7 @@ async function maybeRestartService(params: {
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
+  gatewayPort: number;
   restartScriptPath?: string | null;
 }): Promise<void> {
   if (params.shouldRestart) {
@@ -405,7 +594,10 @@ async function maybeRestartService(params: {
       let restartInitiated = false;
       if (params.refreshServiceEnv) {
         try {
-          await runDaemonInstall({ force: true, json: params.opts.json });
+          await refreshGatewayServiceEnv({
+            result: params.result,
+            jsonMode: Boolean(params.opts.json),
+          });
         } catch (err) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -441,12 +633,33 @@ async function maybeRestartService(params: {
       }
 
       if (!params.opts.json && restartInitiated) {
-        defaultRuntime.log(theme.success("Daemon restart initiated."));
-        defaultRuntime.log(
-          theme.muted(
-            `Verify with \`${replaceCliName(formatCliCommand("openclaw gateway status"), CLI_NAME)}\` once the gateway is back.`,
-          ),
-        );
+        let health = await waitForGatewayHealthyRestart(params.gatewayPort);
+        if (!health.healthy && health.staleGatewayPids.length > 0) {
+          if (!params.opts.json) {
+            defaultRuntime.log(
+              theme.warn(
+                `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+              ),
+            );
+          }
+          await terminateStaleGatewayPids(health.staleGatewayPids);
+          await runDaemonRestart();
+          health = await waitForGatewayHealthyRestart(params.gatewayPort);
+        }
+
+        if (health.healthy) {
+          defaultRuntime.log(theme.success("Daemon restart completed."));
+        } else {
+          defaultRuntime.log(theme.warn("Gateway did not become healthy after restart."));
+          for (const line of renderRestartDiagnostics(health)) {
+            defaultRuntime.log(theme.muted(line));
+          }
+          defaultRuntime.log(
+            theme.muted(
+              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --probe --deep"), CLI_NAME)}\` for details.`,
+            ),
+          );
+        }
         defaultRuntime.log("");
       }
     } catch (err) {
@@ -686,6 +899,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     result,
     opts,
     refreshServiceEnv: refreshGatewayServiceEnv,
+    gatewayPort: resolveGatewayPort(configSnapshot.valid ? configSnapshot.config : undefined),
     restartScriptPath,
   });
 
