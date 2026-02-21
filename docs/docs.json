@@ -1852,6 +1852,24 @@
             ]
           }
         ]
+      },
+      {
+        "language": "zh-Hant",
+        "tabs": [
+          {
+            "tab": "快速上手",
+            "groups": [
+              {
+                "group": "首頁",
+                "pages": ["zh-TW/index"]
+              },
+              {
+                "group": "第一步",
+                "pages": ["zh-TW/start/getting-started"]
+              }
+            ]
+          }
+        ]
       }
     ]
   }

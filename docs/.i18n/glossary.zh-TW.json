@@ -1,0 +1,210 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway 閘道器"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills 設定"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills 設定"
+  },
+  {
+    "source": "local loopback",
+    "target": "本地迴路 (local loopback)"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入門指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入門指南"
+  },
+  {
+    "source": "Quick start",
+    "target": "快速上手"
+  },
+  {
+    "source": "Quick Start",
+    "target": "快速上手"
+  },
+  {
+    "source": "Docs directory",
+    "target": "文件目錄"
+  },
+  {
+    "source": "Credits",
+    "target": "致謝"
+  },
+  {
+    "source": "Features",
+    "target": "功能特色"
+  },
+  {
+    "source": "DMs",
+    "target": "私訊"
+  },
+  {
+    "source": "DM",
+    "target": "私訊"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙盒"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙盒"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙盒隔離"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "沙盒隔離"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙盒隔離"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙盒隔離"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "沙盒注意事項"
+  },
+  {
+    "source": "Companion apps",
+    "target": "隨身應用程式"
+  },
+  {
+    "source": "expected keys",
+    "target": "預期鍵名"
+  },
+  {
+    "source": "block streaming",
+    "target": "分塊流式傳輸"
+  },
+  {
+    "source": "Block streaming",
+    "target": "分塊流式傳輸"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "設備發現 + 傳輸協議"
+  },
+  {
+    "source": "Discovery",
+    "target": "設備發現"
+  },
+  {
+    "source": "Network model",
+    "target": "網路模型"
+  },
+  {
+    "source": "for full details",
+    "target": "了解詳情"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初的 60 秒"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "身分驗證：存儲位置 (重要)"
+  },
+  {
+    "source": "agent",
+    "target": "Agent"
+  },
+  {
+    "source": "channel",
+    "target": "頻道"
+  },
+  {
+    "source": "session",
+    "target": "會話 (Session)"
+  },
+  {
+    "source": "provider",
+    "target": "供應商"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "tool",
+    "target": "工具"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "安裝完整性檢查"
+  },
+  {
+    "source": "get unstuck",
+    "target": "解決問題"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "故障排除"
+  },
+  {
+    "source": "FAQ",
+    "target": "常見問題"
+  },
+  {
+    "source": "onboarding",
+    "target": "上線引導"
+  },
+  {
+    "source": "Onboarding",
+    "target": "上線引導"
+  },
+  {
+    "source": "wizard",
+    "target": "精靈"
+  },
+  {
+    "source": "environment variables",
+    "target": "環境變數"
+  },
+  {
+    "source": "environment variable",
+    "target": "環境變數"
+  },
+  {
+    "source": "env vars",
+    "target": "環境變數"
+  },
+  {
+    "source": "env var",
+    "target": "環境變數"
+  }
+]
