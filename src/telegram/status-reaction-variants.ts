@@ -200,10 +200,14 @@ export async function resolveTelegramAllowedEmojiReactions(params: {
   }
 
   if (params.getChat) {
-    const chatInfo = await params.getChat(params.chatId);
-    const fromLookup = extractTelegramAllowedEmojiReactions(chatInfo);
-    if (fromLookup !== undefined) {
-      return fromLookup;
+    try {
+      const chatInfo = await params.getChat(params.chatId);
+      const fromLookup = extractTelegramAllowedEmojiReactions(chatInfo);
+      if (fromLookup !== undefined) {
+        return fromLookup;
+      }
+    } catch {
+      return null;
     }
   }
 

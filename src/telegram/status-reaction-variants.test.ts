@@ -97,6 +97,20 @@ describe("resolveTelegramAllowedEmojiReactions", () => {
 
     expect(result ? Array.from(result) : null).toEqual(["👍"]);
   });
+
+  it("falls back to unrestricted reactions when getChat lookup fails", async () => {
+    const getChat = async () => {
+      throw new Error("lookup failed");
+    };
+
+    const result = await resolveTelegramAllowedEmojiReactions({
+      chat: { id: 1 },
+      chatId: 1,
+      getChat,
+    });
+
+    expect(result).toBeNull();
+  });
 });
 
 describe("resolveTelegramReactionVariant", () => {

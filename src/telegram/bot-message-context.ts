@@ -562,7 +562,7 @@ export const buildTelegramMessageContext = async ({
                     logVerbose(
                       `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
                     );
-                    return new Set<string>();
+                    return null;
                   });
                 }
                 const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
