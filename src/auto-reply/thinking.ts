@@ -80,9 +80,11 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
     return false;
   }
   const providerKey = provider?.trim().toLowerCase();
-  if (providerKey) {
-    return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
+  if (providerKey && XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`)) {
+    return true;
   }
+  // Fallback to model-id allowlist so OpenAI-compatible provider aliases/proxies
+  // for codex-backed models retain xhigh support.
   return XHIGH_MODEL_IDS.has(modelKey);
 }
 

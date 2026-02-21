@@ -53,6 +53,12 @@ describe("directive behavior", () => {
       expect(texts).toContain("Thinking level set to xhigh.");
     });
   });
+  it("accepts /thinking xhigh for openai-compatible providers on gpt-5.3-codex-spark", async () => {
+    await withTempHome(async (home) => {
+      const texts = await runThinkingDirective(home, "openai-compatible/gpt-5.3-codex-spark");
+      expect(texts).toContain("Thinking level set to xhigh.");
+    });
+  });
   it("rejects /thinking xhigh for non-codex models", async () => {
     await withTempHome(async (home) => {
       const texts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
