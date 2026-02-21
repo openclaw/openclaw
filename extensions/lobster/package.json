@@ -3,9 +3,6 @@
   "version": "2026.2.20",
   "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
