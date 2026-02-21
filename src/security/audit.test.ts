@@ -707,7 +707,12 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "gateway.control_ui.insecure_auth",
-          severity: "critical",
+          severity: "warn",
+        }),
+        expect.objectContaining({
+          checkId: "config.insecure_or_dangerous_flags",
+          severity: "warn",
+          detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
         }),
       ]),
     );
@@ -728,8 +733,38 @@ describe("security audit", () => {
           checkId: "gateway.control_ui.device_auth_disabled",
           severity: "critical",
         }),
+        expect.objectContaining({
+          checkId: "config.insecure_or_dangerous_flags",
+          severity: "warn",
+          detail: expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
+        }),
       ]),
     );
+  });
+
+  it("warns when insecure/dangerous debug flags are enabled", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: { allowUnsafeExternalContent: true },
+        mappings: [{ allowUnsafeExternalContent: true }],
+      },
+      tools: {
+        exec: {
+          applyPatch: {
+            workspaceOnly: false,
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+
+    expect(finding).toBeTruthy();
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
+    expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
+    expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
   it("flags trusted-proxy auth mode without generic shared-secret findings", async () => {

@@ -127,8 +127,9 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `gateway.http.no_auth`                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                     | `gateway.auth.mode`, `gateway.http.endpoints.*`               | no       |
 | `gateway.tools_invoke_http.dangerous_allow`   | warn/critical | Re-enables dangerous tools over HTTP API                                | `gateway.tools.allow`                                         | no       |
 | `gateway.tailscale_funnel`                    | critical      | Public internet exposure                                                | `gateway.tailscale.mode`                                      | no       |
-| `gateway.control_ui.insecure_auth`            | critical      | Insecure-auth toggle enabled                                            | `gateway.controlUi.allowInsecureAuth`                         | no       |
+| `gateway.control_ui.insecure_auth`            | warn          | Insecure-auth compatibility toggle enabled                              | `gateway.controlUi.allowInsecureAuth`                         | no       |
 | `gateway.control_ui.device_auth_disabled`     | critical      | Disables device identity check                                          | `gateway.controlUi.dangerouslyDisableDeviceAuth`              | no       |
+| `config.insecure_or_dangerous_flags`          | warn          | Any insecure/dangerous debug flags enabled                              | multiple keys (see finding detail)                            | no       |
 | `hooks.token_too_short`                       | warn          | Easier brute force on hook ingress                                      | `hooks.token`                                                 | no       |
 | `hooks.request_session_key_enabled`           | warn/critical | External caller can choose sessionKey                                   | `hooks.allowRequestSessionKey`                                | no       |
 | `hooks.request_session_key_prefixes_missing`  | warn/critical | No bound on external session key shapes                                 | `hooks.allowedSessionKeyPrefixes`                             | no       |
@@ -152,6 +153,16 @@ disables device identity checks entirely. This is a severe security downgrade;
 keep it off unless you are actively debugging and can revert quickly.
 
 `openclaw security audit` warns when this setting is enabled.
+
+## Insecure or dangerous flags summary
+
+`openclaw security audit` includes `config.insecure_or_dangerous_flags` when any
+insecure/dangerous debug switches are enabled. This warning aggregates the exact
+keys so you can review them in one place (for example
+`gateway.controlUi.allowInsecureAuth=true`,
+`gateway.controlUi.dangerouslyDisableDeviceAuth=true`,
+`hooks.gmail.allowUnsafeExternalContent=true`, or
+`tools.exec.applyPatch.workspaceOnly=false`).
 
 ## Reverse Proxy Configuration
 

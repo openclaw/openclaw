@@ -29,6 +29,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/Security: escape control and delimiter characters in ACP `resource_link` title/URI metadata before prompt interpolation to prevent metadata-driven prompt injection through resource links. This ships in the next npm release. Thanks @aether-ai-agent for reporting.
+- TTS/Security: make model-driven provider switching opt-in by default (`messages.tts.modelOverrides.allowProvider=false` unless explicitly enabled), while keeping voice/style overrides available, to reduce prompt-injection-driven provider hops and unexpected TTS cost escalation. This ships in the next npm release. Thanks @aether-ai-agent for reporting.
 - Security/Agents: keep overflow compaction retry budgeting global across tool-result truncation recovery so successful truncation cannot reset the overflow retry counter and amplify retry/cost cycles. This ships in the next npm release. Thanks @aether-ai-agent for reporting.
 - BlueBubbles/Security (optional beta iMessage plugin): require webhook token authentication for all BlueBubbles webhook requests (including loopback/proxied setups), removing passwordless webhook fallback behavior. Thanks @zpbrent.
 - iOS/Security: force `https://` for non-loopback manual gateway hosts during iOS onboarding to block insecure remote transport URLs. (#21969) Thanks @mbelinky.
