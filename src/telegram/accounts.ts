@@ -54,6 +54,16 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   }
   const ids = listTelegramAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    // When "default" coexists with explicitly named accounts, prefer the named
+    // account.  The "default" entry is often an implicit artifact of the
+    // top-level `telegram.botToken` config created during initial setup.  If a
+    // user later adds a named account (e.g. via `openclaw channels add`), the
+    // named account is almost certainly the intended primary.  Without this
+    // check, bindings silently target the orphan "default" account instead.
+    const namedIds = ids.filter((id) => id !== DEFAULT_ACCOUNT_ID);
+    if (namedIds.length > 0) {
+      return namedIds[0];
+    }
     return DEFAULT_ACCOUNT_ID;
   }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
