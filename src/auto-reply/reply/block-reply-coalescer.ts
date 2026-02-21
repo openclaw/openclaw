@@ -76,7 +76,7 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const text = payload.text ?? "";
+    const text = (payload.text ?? "").replace(/^\n+/, "");
     const hasText = text.trim().length > 0;
     if (hasMedia) {
       void flush({ force: true });

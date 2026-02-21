@@ -314,7 +314,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       const replyToMessageGuid = rawReplyToId
         ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
         : "";
-      const result = await sendMessageBlueBubbles(to, text, {
+      const result = await sendMessageBlueBubbles(to, text.replace(/^\n+/, ""), {
         cfg: cfg,
         accountId: accountId ?? undefined,
         replyToMessageGuid: replyToMessageGuid || undefined,
