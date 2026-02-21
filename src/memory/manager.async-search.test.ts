@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
-//
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 
@@ -12,10 +11,10 @@ const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
 const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
 
 vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () =>
+  createEmbeddingProvider: async (_options: unknown) =>
     createOpenAIEmbeddingProviderMock({
-      embedQuery,
-      embedBatch,
+      embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
+      embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
     }),
 }));
 
