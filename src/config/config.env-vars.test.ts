@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { applyConfigEnvVars, collectConfigEnvVars } from "./env-vars.js";
+import { applyConfigEnvVars, collectConfigRuntimeEnvVars } from "./env-vars.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -34,13 +34,31 @@ describe("config env vars", () => {
       const config = {
         env: { vars: { BASH_ENV: "/tmp/pwn.sh", OPENROUTER_API_KEY: "config-key" } },
       };
-      const entries = collectConfigEnvVars(config as OpenClawConfig);
+      const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
       expect(entries.BASH_ENV).toBeUndefined();
       expect(entries.OPENROUTER_API_KEY).toBe("config-key");
 
       applyConfigEnvVars(config as OpenClawConfig);
       expect(process.env.BASH_ENV).toBeUndefined();
       expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
+    });
+  });
+
+  it("drops non-portable env keys from config env", async () => {
+    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+      const config = {
+        env: {
+          vars: {
+            " BAD KEY": "oops",
+            OPENROUTER_API_KEY: "config-key",
+          },
+          "NOT-PORTABLE": "bad",
+        },
+      };
+      const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
+      expect(entries.OPENROUTER_API_KEY).toBe("config-key");
+      expect(entries[" BAD KEY"]).toBeUndefined();
+      expect(entries["NOT-PORTABLE"]).toBeUndefined();
     });
   });
 
