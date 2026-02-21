@@ -230,8 +230,11 @@ export async function resolveDiscordChannelAllowlist(params: {
         continue;
       }
       const channels = await getChannels(guild.id);
-      const matches = channels.filter(
-        (channel) => normalizeDiscordSlug(channel.name) === normalizeDiscordSlug(channelQuery),
+      const isNumericId = /^\d+$/.test(channelQuery);
+      const matches = channels.filter((channel) =>
+        isNumericId
+          ? channel.id === channelQuery
+          : normalizeDiscordSlug(channel.name) === normalizeDiscordSlug(channelQuery),
       );
       const match = preferActiveMatch(matches);
       if (match) {
