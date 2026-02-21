@@ -41,7 +41,7 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
-import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
+import { isLoopbackAddress, isTrustedProxyAddress, resolveClientIp } from "../../net.js";
 import { resolveHostName } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
@@ -176,7 +176,14 @@ export function attachGatewayWsMessageHandler(params: {
 
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-  const clientIp = resolveGatewayClientIp({ remoteAddr, forwardedFor, realIp, trustedProxies });
+  const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const clientIp = resolveClientIp({
+    remoteAddr,
+    forwardedFor,
+    realIp,
+    trustedProxies,
+    allowRealIpFallback,
+  });
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
@@ -189,7 +196,7 @@ export function attachGatewayWsMessageHandler(params: {
   const hostIsLocal = hostName === "localhost" || hostName === "127.0.0.1" || hostName === "::1";
   const hostIsTailscaleServe = hostName.endsWith(".ts.net");
   const hostIsLocalish = hostIsLocal || hostIsTailscaleServe;
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies);
+  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -389,6 +396,7 @@ export function attachGatewayWsMessageHandler(params: {
             connectAuth: connectParams.auth,
             req: upgradeReq,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
             clientIp,
             rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -424,6 +432,7 @@ export function attachGatewayWsMessageHandler(params: {
                 connectAuth: connectParams.auth,
                 req: upgradeReq,
                 trustedProxies,
+                allowRealIpFallback,
                 // Shared-auth probe only; rate-limit side effects are handled in
                 // the primary auth flow (or deferred for device-token candidates).
                 rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,

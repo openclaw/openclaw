@@ -9,6 +9,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   res: ServerResponse;
   auth: ResolvedGatewayAuth;
   trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
   const token = getBearerToken(params.req);
@@ -17,6 +18,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
     connectAuth: token ? { token, password: token } : null,
     req: params.req,
     trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
     rateLimiter: params.rateLimiter,
   });
   if (!authResult.ok) {

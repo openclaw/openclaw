@@ -168,18 +168,34 @@ keys so you can review them in one place (for example
 
 If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
 
-When the Gateway detects proxy headers (`X-Forwarded-For` or `X-Real-IP`) from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
+When the Gateway detects proxy headers from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
 
 ```yaml
 gateway:
   trustedProxies:
     - "127.0.0.1" # if your proxy runs on localhost
+  # Optional. Default false.
+  # Only enable if your proxy cannot provide X-Forwarded-For.
+  allowRealIpFallback: false
   auth:
     mode: password
     password: ${OPENCLAW_GATEWAY_PASSWORD}
 ```
 
-When `trustedProxies` is configured, the Gateway will use `X-Forwarded-For` headers to determine the real client IP for local client detection. Make sure your proxy overwrites (not appends to) incoming `X-Forwarded-For` headers to prevent spoofing.
+When `trustedProxies` is configured, the Gateway uses `X-Forwarded-For` to determine the client IP. `X-Real-IP` is ignored by default unless `gateway.allowRealIpFallback: true` is explicitly set.
+
+Good reverse proxy behavior (overwrite incoming forwarding headers):
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Real-IP $remote_addr;
+```
+
+Bad reverse proxy behavior (append/preserve untrusted forwarding headers):
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
 
 ## Local session logs live on disk
 

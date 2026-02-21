@@ -301,6 +301,45 @@ describe("gateway auth", () => {
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
   });
 
+  it("ignores X-Real-IP fallback by default for rate-limit checks", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-real-ip": "203.0.113.77" },
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+  });
+
+  it("uses X-Real-IP when fallback is explicitly enabled", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-real-ip": "203.0.113.77" },
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.check).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
+  });
+
   it("passes custom rate-limit scope to limiter operations", async () => {
     const limiter = createLimiterSpy();
     const res = await authorizeGatewayConnect({
