@@ -769,11 +769,23 @@ export function buildWorkspaceSkillCommandSpecs(
       return { kind: "tool", toolName, argMode: "raw" } as const;
     })();
 
+    // Parse bypass-model and exec-command for direct command execution
+    const bypassModelRaw =
+      entry.frontmatter?.["bypass-model"] ?? entry.frontmatter?.["bypass_model"] ?? "";
+    const bypassModel = String(bypassModelRaw).toLowerCase() === "true";
+
+    const execCommand = (
+      entry.frontmatter?.["exec-command"] ??
+      entry.frontmatter?.["exec_command"] ??
+      ""
+    ).trim();
+
     specs.push({
       name: unique,
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+      ...(bypassModel && execCommand ? { bypassModel, execCommand } : {}),
     });
   }
   return specs;
