@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 
 describe("resolveMatrixRoomConfig", () => {
+  it("returns matchSource=direct for explicit matches, wildcard for * matches", () => {
+    const rooms = {
+      "!explicit:example.org": { allow: true },
+      "*": { allow: false },
+    };
+
+    const explicit = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!explicit:example.org",
+      aliases: [],
+      name: null,
+    });
+    expect(explicit.matchSource).toBe("direct");
+    expect(explicit.allowed).toBe(true);
+
+    const wildcard = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!other:example.org",
+      aliases: [],
+      name: null,
+    });
+    expect(wildcard.matchSource).toBe("wildcard");
+    expect(wildcard.allowed).toBe(false);
+    expect(wildcard.config).toBeDefined();
+  });
+
   it("matches room IDs and aliases, not names", () => {
     const rooms = {
       "!room:example.org": { allow: true },
