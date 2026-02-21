@@ -86,7 +86,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     })
     .action(async (opts) => {
       try {
-        const autoUpdateHandled = handleAutoUpdateOptions(opts);
+        const autoUpdateHandled = await handleAutoUpdateOptions(opts);
         if (autoUpdateHandled) {
           return;
         }

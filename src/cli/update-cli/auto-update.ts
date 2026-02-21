@@ -12,7 +12,8 @@
  * src/cli/update-cli/shared.ts
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import fs from "node:fs/promises";
 import { join } from "path";
 import chalk from "chalk";
 import { Option, type Command } from "commander";
@@ -28,12 +29,12 @@ function getAutoUpdateConfigPath(): string {
 }
 
 // Load config
-export function loadAutoUpdateConfig(): AutoUpdateConfig {
+export async function loadAutoUpdateConfig(): Promise<AutoUpdateConfig> {
   const configPath = getAutoUpdateConfigPath();
   try {
-    if (existsSync(configPath)) {
-      return JSON.parse(readFileSync(configPath, "utf-8"));
-    }
+    await fs.access(configPath);
+    const content = await fs.readFile(configPath, "utf-8");
+    return JSON.parse(content);
   } catch {
     // Ignore errors
   }
@@ -51,16 +52,15 @@ function getDefaultConfig(): AutoUpdateConfig {
 }
 
 // Save config
-export function saveAutoUpdateConfig(config: AutoUpdateConfig): void {
+export async function saveAutoUpdateConfig(config: AutoUpdateConfig): Promise<void> {
   const configPath = getAutoUpdateConfigPath();
   const dir = join(configPath, "..");
 
-  // Ensure directory exists
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 
-  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2));
 }
 
 // Auto-update config interface
@@ -103,8 +103,10 @@ export function registerAutoUpdateOptions(update: Command): void {
 }
 
 // Handle auto-update options
-export function handleAutoUpdateOptions(options: ExtendedUpdateCommandOptions): boolean {
-  const config = loadAutoUpdateConfig();
+export async function handleAutoUpdateOptions(
+  options: ExtendedUpdateCommandOptions,
+): Promise<boolean> {
+  const config = await loadAutoUpdateConfig();
   let changed = false;
 
   if (options.auto !== undefined) {
@@ -134,15 +136,15 @@ export function handleAutoUpdateOptions(options: ExtendedUpdateCommandOptions): 
   }
 
   if (changed) {
-    saveAutoUpdateConfig(config);
+    await saveAutoUpdateConfig(config);
   }
 
   return changed;
 }
 
 // Display auto-update status
-export function displayAutoUpdateStatus(): void {
-  const config = loadAutoUpdateConfig();
+export async function displayAutoUpdateStatus(): Promise<void> {
+  const config = await loadAutoUpdateConfig();
 
   console.log("\n" + chalk.bold("Auto-Update Settings"));
   console.log("─".repeat(40));
@@ -156,21 +158,21 @@ export function displayAutoUpdateStatus(): void {
 }
 
 // Check if should skip version
-export function shouldSkipVersion(version: string): boolean {
-  const config = loadAutoUpdateConfig();
+export async function shouldSkipVersion(version: string): Promise<boolean> {
+  const config = await loadAutoUpdateConfig();
   return config.skipVersions.includes(version);
 }
 
 // Record update check time
-export function recordUpdateCheck(): void {
-  const config = loadAutoUpdateConfig();
+export async function recordUpdateCheck(): Promise<void> {
+  const config = await loadAutoUpdateConfig();
   config.lastCheck = new Date().toISOString();
-  saveAutoUpdateConfig(config);
+  await saveAutoUpdateConfig(config);
 }
 
 // Get next check time
-export function getNextCheckTime(): Date | null {
-  const config = loadAutoUpdateConfig();
+export async function getNextCheckTime(): Promise<Date | null> {
+  const config = await loadAutoUpdateConfig();
 
   if (!config.enabled || config.interval === "manual") {
     return null;
