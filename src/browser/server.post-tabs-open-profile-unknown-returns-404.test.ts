@@ -17,6 +17,9 @@ const state = getBrowserControlServerTestState();
 const cdpMocks = getCdpMocks();
 const pwMocks = getPwMocks();
 
+let prevGatewayToken: string | undefined;
+let prevGatewayPassword: string | undefined;
+
 describe("browser control server", () => {
   installBrowserControlServerHooks();
 
@@ -65,6 +68,10 @@ describe("profile CRUD endpoints", () => {
     state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     vi.stubGlobal(
       "fetch",
@@ -82,6 +89,16 @@ describe("profile CRUD endpoints", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     restoreGatewayPortEnv(state.prevGatewayPort);
+    if (prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
+    }
+    if (prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = prevGatewayPassword;
+    }
     await stopBrowserControlServer();
   });
 
