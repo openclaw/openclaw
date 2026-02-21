@@ -144,6 +144,7 @@ describe("discordOutbound", () => {
       expect.objectContaining({
         webhookId: "wh-1",
         webhookToken: "tok-1",
+        accountId: "default",
         threadId: "thread-1",
         replyTo: "reply-1",
         username: "Codex",

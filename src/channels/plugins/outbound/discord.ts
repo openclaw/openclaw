@@ -65,6 +65,7 @@ async function maybeSendDiscordWebhookText(params: {
   const result = await sendWebhookMessageDiscord(params.text, {
     webhookId: binding.webhookId,
     webhookToken: binding.webhookToken,
+    accountId: binding.accountId,
     threadId: binding.threadId,
     replyTo: params.replyToId ?? undefined,
     username: persona.username,

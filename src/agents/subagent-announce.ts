@@ -9,8 +9,10 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
+import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../routing/session-key.js";
+import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
@@ -343,11 +345,57 @@ async function resolveSubagentCompletionOrigin(params: {
   childRunId?: string;
   spawnMode?: SpawnSubagentMode;
   expectsCompletionMessage: boolean;
-}): Promise<DeliveryContext | undefined> {
+}): Promise<{
+  origin?: DeliveryContext;
+  routeMode: "bound" | "fallback" | "hook";
+}> {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const requesterConversation = (() => {
+    const channel = requesterOrigin?.channel?.trim().toLowerCase();
+    const to = requesterOrigin?.to?.trim();
+    const accountId = normalizeAccountId(requesterOrigin?.accountId);
+    const threadId =
+      requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
+        ? String(requesterOrigin.threadId).trim()
+        : undefined;
+    const conversationId =
+      threadId || (to?.startsWith("channel:") ? to.slice("channel:".length) : "");
+    if (!channel || !conversationId) {
+      return undefined;
+    }
+    const ref: ConversationRef = {
+      channel,
+      accountId,
+      conversationId,
+    };
+    return ref;
+  })();
+  const route = createBoundDeliveryRouter().resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: params.childSessionKey,
+    requester: requesterConversation,
+    failClosed: false,
+  });
+  if (route.mode === "bound" && route.binding) {
+    const boundOrigin: DeliveryContext = {
+      channel: route.binding.conversation.channel,
+      accountId: route.binding.conversation.accountId,
+      to: `channel:${route.binding.conversation.conversationId}`,
+      threadId: route.binding.conversation.conversationId,
+    };
+    return {
+      // Bound target is authoritative; requester hints fill only missing fields.
+      origin: mergeDeliveryContext(boundOrigin, requesterOrigin),
+      routeMode: "bound",
+    };
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("subagent_delivery_target")) {
-    return requesterOrigin;
+    return {
+      origin: requesterOrigin,
+      routeMode: "fallback",
+    };
   }
   try {
     const result = await hookRunner.runSubagentDeliveryTarget(
@@ -367,15 +415,27 @@ async function resolveSubagentCompletionOrigin(params: {
     );
     const hookOrigin = normalizeDeliveryContext(result?.origin);
     if (!hookOrigin) {
-      return requesterOrigin;
+      return {
+        origin: requesterOrigin,
+        routeMode: "fallback",
+      };
     }
     if (hookOrigin.channel && !isDeliverableMessageChannel(hookOrigin.channel)) {
-      return requesterOrigin;
+      return {
+        origin: requesterOrigin,
+        routeMode: "fallback",
+      };
     }
     // Hook-provided origin should override requester defaults when present.
-    return mergeDeliveryContext(hookOrigin, requesterOrigin);
+    return {
+      origin: mergeDeliveryContext(hookOrigin, requesterOrigin),
+      routeMode: "hook",
+    };
   } catch {
-    return requesterOrigin;
+    return {
+      origin: requesterOrigin,
+      routeMode: "fallback",
+    };
   }
 }
 
@@ -523,6 +583,8 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   completionMessage?: string;
   expectsCompletionMessage: boolean;
+  completionRouteMode?: "bound" | "fallback" | "hook";
+  spawnMode?: SpawnSubagentMode;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
@@ -553,16 +615,29 @@ async function sendSubagentAnnounceDirectly(params: {
       hasCompletionDirectTarget &&
       params.completionMessage?.trim()
     ) {
-      let activeDescendantRuns = 0;
-      try {
-        const { countActiveDescendantRuns } = await import("./subagent-registry.js");
-        activeDescendantRuns = Math.max(0, countActiveDescendantRuns(canonicalRequesterSessionKey));
-      } catch {
-        // Best-effort only; when unavailable keep historical direct-send behavior.
+      const forceBoundSessionDirectDelivery =
+        params.spawnMode === "session" &&
+        (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
+      let shouldSendCompletionDirectly = true;
+      if (!forceBoundSessionDirectDelivery) {
+        let activeDescendantRuns = 0;
+        try {
+          const { countActiveDescendantRuns } = await import("./subagent-registry.js");
+          activeDescendantRuns = Math.max(
+            0,
+            countActiveDescendantRuns(canonicalRequesterSessionKey),
+          );
+        } catch {
+          // Best-effort only; when unavailable keep historical direct-send behavior.
+        }
+        // Keep non-bound completion announcements coordinated via requester
+        // session routing while sibling/descendant runs are still active.
+        if (activeDescendantRuns > 0) {
+          shouldSendCompletionDirectly = false;
+        }
       }
-      // Keep completion announcements coordinated via requester session routing
-      // while sibling/descendant runs are still active.
-      if (activeDescendantRuns === 0) {
+
+      if (shouldSendCompletionDirectly) {
         const completionThreadId =
           completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
             ? String(completionDirectOrigin.threadId)
@@ -634,6 +709,8 @@ async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  completionRouteMode?: "bound" | "fallback" | "hook";
+  spawnMode?: SpawnSubagentMode;
   directIdempotencyKey: string;
 }): Promise<SubagentAnnounceDeliveryResult> {
   // Non-completion mode mirrors historical behavior: try queued/steered delivery first,
@@ -660,6 +737,8 @@ async function deliverSubagentAnnouncement(params: {
     completionMessage: params.completionMessage,
     directIdempotencyKey: params.directIdempotencyKey,
     completionDirectOrigin: params.completionDirectOrigin,
+    completionRouteMode: params.completionRouteMode,
+    spawnMode: params.spawnMode,
     directOrigin: params.directOrigin,
     requesterIsSubagent: params.requesterIsSubagent,
     expectsCompletionMessage: params.expectsCompletionMessage,
@@ -1050,7 +1129,7 @@ export async function runSubagentAnnounceFlow(params: {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
-    const completionDirectOrigin =
+    const completionResolution =
       expectsCompletionMessage && !requesterIsSubagent
         ? await resolveSubagentCompletionOrigin({
             childSessionKey: params.childSessionKey,
@@ -1060,7 +1139,11 @@ export async function runSubagentAnnounceFlow(params: {
             spawnMode: params.spawnMode,
             expectsCompletionMessage,
           })
-        : targetRequesterOrigin;
+        : {
+            origin: targetRequesterOrigin,
+            routeMode: "fallback" as const,
+          };
+    const completionDirectOrigin = completionResolution.origin;
     // Use a deterministic idempotency key so the gateway dedup cache
     // catches duplicates if this announce is also queued by the gateway-
     // level message queue while the main session is busy (#17122).
@@ -1080,6 +1163,8 @@ export async function runSubagentAnnounceFlow(params: {
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
+      completionRouteMode: completionResolution.routeMode,
+      spawnMode: params.spawnMode,
       directIdempotencyKey,
     });
     didAnnounce = delivery.delivered;

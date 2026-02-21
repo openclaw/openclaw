@@ -1,5 +1,11 @@
 import { Routes } from "discord-api-types/v10";
 import { logVerbose } from "../../globals.js";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type BindingTargetKind,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createDiscordRestClient } from "../client.js";
 import {
@@ -19,6 +25,7 @@ import {
 import {
   BINDINGS_BY_THREAD_ID,
   forgetThreadBindingToken,
+  getThreadBindingToken,
   MANAGERS_BY_ACCOUNT_ID,
   PERSIST_BY_ACCOUNT_ID,
   ensureBindingsLoaded,
@@ -71,6 +78,59 @@ function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
   };
 }
 
+function toSessionBindingTargetKind(raw: string): BindingTargetKind {
+  return raw === "subagent" ? "subagent" : "session";
+}
+
+function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
+  return raw === "subagent" ? "subagent" : "acp";
+}
+
+function toSessionBindingRecord(record: ThreadBindingRecord): SessionBindingRecord {
+  const bindingId =
+    resolveBindingRecordKey({
+      accountId: record.accountId,
+      threadId: record.threadId,
+    }) ?? `${record.accountId}:${record.threadId}`;
+  return {
+    bindingId,
+    targetSessionKey: record.targetSessionKey,
+    targetKind: toSessionBindingTargetKind(record.targetKind),
+    conversation: {
+      channel: "discord",
+      accountId: record.accountId,
+      conversationId: record.threadId,
+      parentConversationId: record.channelId,
+    },
+    status: "active",
+    boundAt: record.boundAt,
+    expiresAt: record.expiresAt,
+    metadata: {
+      agentId: record.agentId,
+      label: record.label,
+      webhookId: record.webhookId,
+      webhookToken: record.webhookToken,
+      boundBy: record.boundBy,
+    },
+  };
+}
+
+function resolveThreadIdFromBindingId(params: {
+  accountId: string;
+  bindingId?: string;
+}): string | undefined {
+  const bindingId = params.bindingId?.trim();
+  if (!bindingId) {
+    return undefined;
+  }
+  const prefix = `${params.accountId}:`;
+  if (!bindingId.startsWith(prefix)) {
+    return undefined;
+  }
+  const threadId = bindingId.slice(prefix.length).trim();
+  return threadId || undefined;
+}
+
 export function createThreadBindingManager(
   params: {
     accountId?: string;
@@ -93,6 +153,7 @@ export function createThreadBindingManager(
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
   const sessionTtlMs = normalizeThreadBindingTtlMs(params.sessionTtlMs);
+  const resolveCurrentToken = () => getThreadBindingToken(accountId) ?? params.token;
 
   let sweepTimer: NodeJS.Timeout | null = null;
 
@@ -143,7 +204,7 @@ export function createThreadBindingManager(
         threadId =
           (await createThreadForBinding({
             accountId,
-            token: params.token,
+            token: resolveCurrentToken(),
             channelId,
             threadName: bindParams.threadName?.trim() || threadName,
           })) ?? undefined;
@@ -157,7 +218,7 @@ export function createThreadBindingManager(
         channelId =
           (await resolveChannelIdForBinding({
             accountId,
-            token: params.token,
+            token: resolveCurrentToken(),
             threadId,
             channelId: bindParams.channelId,
           })) ?? "";
@@ -182,7 +243,7 @@ export function createThreadBindingManager(
       if (!webhookId || !webhookToken) {
         const createdWebhook = await createWebhookForChannel({
           accountId,
-          token: params.token,
+          token: resolveCurrentToken(),
           channelId,
         });
         webhookId = createdWebhook.webhookId ?? "";
@@ -281,6 +342,10 @@ export function createThreadBindingManager(
         sweepTimer = null;
       }
       unregisterManager(accountId, manager);
+      unregisterSessionBindingAdapter({
+        channel: "discord",
+        accountId,
+      });
       forgetThreadBindingToken(accountId);
     },
   };
@@ -294,7 +359,10 @@ export function createThreadBindingManager(
         }
         let rest;
         try {
-          rest = createDiscordRestClient({ accountId, token: params.token }).rest;
+          rest = createDiscordRestClient({
+            accountId,
+            token: resolveCurrentToken(),
+          }).rest;
         } catch {
           return;
         }
@@ -352,6 +420,80 @@ export function createThreadBindingManager(
     }, THREAD_BINDINGS_SWEEP_INTERVAL_MS);
     sweepTimer.unref?.();
   }
+
+  registerSessionBindingAdapter({
+    channel: "discord",
+    accountId,
+    bind: async (input) => {
+      if (input.conversation.channel !== "discord") {
+        return null;
+      }
+      const targetSessionKey = input.targetSessionKey.trim();
+      if (!targetSessionKey) {
+        return null;
+      }
+      const conversationId = input.conversation.conversationId.trim();
+      const metadata = input.metadata ?? {};
+      const label =
+        typeof metadata.label === "string" ? metadata.label.trim() || undefined : undefined;
+      const threadName =
+        typeof metadata.threadName === "string"
+          ? metadata.threadName.trim() || undefined
+          : undefined;
+      const introText =
+        typeof metadata.introText === "string" ? metadata.introText.trim() || undefined : undefined;
+      const boundBy =
+        typeof metadata.boundBy === "string" ? metadata.boundBy.trim() || undefined : undefined;
+      const agentId =
+        typeof metadata.agentId === "string" ? metadata.agentId.trim() || undefined : undefined;
+      const bound = await manager.bindTarget({
+        threadId: conversationId || undefined,
+        channelId: input.conversation.parentConversationId?.trim() || undefined,
+        createThread: !conversationId,
+        threadName,
+        targetKind: toThreadBindingTargetKind(input.targetKind),
+        targetSessionKey,
+        agentId,
+        label,
+        boundBy,
+        introText,
+      });
+      return bound ? toSessionBindingRecord(bound) : null;
+    },
+    listBySession: (targetSessionKey) =>
+      manager.listBySessionKey(targetSessionKey).map(toSessionBindingRecord),
+    resolveByConversation: (ref) => {
+      if (ref.channel !== "discord") {
+        return null;
+      }
+      const binding = manager.getByThreadId(ref.conversationId);
+      return binding ? toSessionBindingRecord(binding) : null;
+    },
+    touch: () => {
+      // Thread bindings are activity-touched by inbound/outbound message flows.
+    },
+    unbind: async (input) => {
+      if (input.targetSessionKey?.trim()) {
+        const removed = manager.unbindBySessionKey({
+          targetSessionKey: input.targetSessionKey,
+          reason: input.reason,
+        });
+        return removed.map(toSessionBindingRecord);
+      }
+      const threadId = resolveThreadIdFromBindingId({
+        accountId,
+        bindingId: input.bindingId,
+      });
+      if (!threadId) {
+        return [];
+      }
+      const removed = manager.unbindThread({
+        threadId,
+        reason: input.reason,
+      });
+      return removed ? [toSessionBindingRecord(removed)] : [];
+    },
+  });
 
   registerManager(manager);
   return manager;

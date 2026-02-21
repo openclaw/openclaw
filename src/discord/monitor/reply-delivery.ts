@@ -81,6 +81,7 @@ async function sendDiscordChunkWithFallback(params: {
       await sendWebhookMessageDiscord(text, {
         webhookId: binding.webhookId,
         webhookToken: binding.webhookToken,
+        accountId: binding.accountId,
         threadId: binding.threadId,
         replyTo: params.replyTo,
         username: params.username,

@@ -136,6 +136,7 @@ export async function maybeSendBindingMessage(params: {
       await sendWebhookMessageDiscord(text, {
         webhookId: record.webhookId,
         webhookToken: record.webhookToken,
+        accountId: record.accountId,
         threadId: record.threadId,
         username: summarizeBindingPersona(record),
       });

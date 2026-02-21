@@ -402,6 +402,46 @@ describe("thread binding ttl", () => {
     });
   });
 
+  it("refreshes manager token when an existing manager is reused", async () => {
+    createThreadBindingManager({
+      accountId: "runtime",
+      token: "token-old",
+      persist: false,
+      enableSweeper: false,
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+    });
+    const manager = createThreadBindingManager({
+      accountId: "runtime",
+      token: "token-new",
+      persist: false,
+      enableSweeper: false,
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+    });
+
+    hoisted.createThreadDiscord.mockClear();
+    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-token-refresh" });
+    hoisted.createDiscordRestClient.mockClear();
+
+    const bound = await manager.bindTarget({
+      createThread: true,
+      channelId: "parent-runtime",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:token-refresh",
+      agentId: "main",
+    });
+
+    expect(bound).not.toBeNull();
+    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+      "parent-runtime",
+      expect.objectContaining({ autoArchiveMinutes: 60 }),
+      expect.objectContaining({ accountId: "runtime", token: "token-new" }),
+    );
+    const usedTokenNew = hoisted.createDiscordRestClient.mock.calls.some(
+      (call) => (call?.[0] as { token?: string } | undefined)?.token === "token-new",
+    );
+    expect(usedTokenNew).toBe(true);
+  });
+
   it("keeps overlapping thread ids isolated per account", async () => {
     const a = createThreadBindingManager({
       accountId: "a",

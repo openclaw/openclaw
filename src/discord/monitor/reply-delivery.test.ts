@@ -170,6 +170,7 @@ describe("deliverDiscordReply", () => {
       expect.objectContaining({
         webhookId: "wh_1",
         webhookToken: "tok_1",
+        accountId: "default",
         threadId: "thread-1",
         replyTo: "reply-1",
       }),

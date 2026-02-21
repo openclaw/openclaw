@@ -298,6 +298,7 @@ export async function sendMessageDiscord(
 type DiscordWebhookSendOpts = {
   webhookId: string;
   webhookToken: string;
+  accountId?: string;
   threadId?: string | number;
   replyTo?: string;
   username?: string;
@@ -365,6 +366,19 @@ export async function sendWebhookMessageDiscord(
     id?: string;
     channel_id?: string;
   };
+  try {
+    const account = resolveDiscordAccount({
+      cfg: loadConfig(),
+      accountId: opts.accountId,
+    });
+    recordChannelActivity({
+      channel: "discord",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+  } catch {
+    // Best-effort telemetry only.
+  }
   return {
     messageId: payload.id ? String(payload.id) : "unknown",
     channelId: payload.channel_id
