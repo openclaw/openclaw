@@ -125,4 +125,87 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it("rejects symlinked assets that resolve outside control-ui root", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const assetsDir = path.join(tmp, "assets");
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-outside-"));
+        try {
+          const outsideFile = path.join(outsideDir, "secret.txt");
+          await fs.mkdir(assetsDir, { recursive: true });
+          await fs.writeFile(outsideFile, "outside-secret\n");
+          await fs.symlink(outsideFile, path.join(assetsDir, "leak.txt"));
+
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: "/assets/leak.txt", method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+            },
+          );
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(404);
+          expect(end).toHaveBeenCalledWith("Not Found");
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("allows symlinked assets that resolve inside control-ui root", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const assetsDir = path.join(tmp, "assets");
+        await fs.mkdir(assetsDir, { recursive: true });
+        await fs.writeFile(path.join(assetsDir, "actual.txt"), "inside-ok\n");
+        await fs.symlink(path.join(assetsDir, "actual.txt"), path.join(assetsDir, "linked.txt"));
+
+        const { res, end } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/assets/linked.txt", method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("inside-ok\n");
+      },
+    });
+  });
+
+  it("rejects symlinked SPA fallback index.html outside control-ui root", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-index-outside-"));
+        try {
+          const outsideIndex = path.join(outsideDir, "index.html");
+          await fs.writeFile(outsideIndex, "<html>outside</html>\n");
+          await fs.rm(path.join(tmp, "index.html"));
+          await fs.symlink(outsideIndex, path.join(tmp, "index.html"));
+
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: "/app/route", method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+            },
+          );
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(404);
+          expect(end).toHaveBeenCalledWith("Not Found");
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
 });
