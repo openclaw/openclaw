@@ -4,6 +4,16 @@ import path from "node:path";
 import { pathExists } from "../utils.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
+export type GlobalInstallArgsOptions = {
+  prefix?: string;
+  npmExecutable?: string;
+};
+
+export type CompanionPrefixInstall = {
+  manager: "npm";
+  prefix: string;
+  npmExecutable: string;
+};
 
 export type CommandRunner = (
   argv: string[],
@@ -127,14 +137,57 @@ export async function detectGlobalInstallManagerByPresence(
   return null;
 }
 
-export function globalInstallArgs(manager: GlobalInstallManager, spec: string): string[] {
+export async function detectCompanionPrefixInstallForRoot(
+  pkgRoot: string,
+): Promise<CompanionPrefixInstall | null> {
+  const pkgReal = await tryRealpath(pkgRoot);
+  const prefix = path.dirname(path.dirname(path.dirname(pkgReal)));
+  const expectedPkgRoot = path.join(prefix, "lib", "node_modules", PRIMARY_PACKAGE_NAME);
+  if (path.resolve(expectedPkgRoot) !== path.resolve(pkgReal)) {
+    return null;
+  }
+  if (path.basename(prefix) !== ".openclaw") {
+    return null;
+  }
+
+  const npmCandidates = [
+    path.join(prefix, "tools", "node", "bin", "npm"),
+    path.join(prefix, "bin", "npm"),
+  ];
+  for (const candidate of npmCandidates) {
+    if (await pathExists(candidate)) {
+      return {
+        manager: "npm",
+        prefix,
+        npmExecutable: candidate,
+      };
+    }
+  }
+
+  return {
+    manager: "npm",
+    prefix,
+    npmExecutable: "npm",
+  };
+}
+
+export function globalInstallArgs(
+  manager: GlobalInstallManager,
+  spec: string,
+  options: GlobalInstallArgsOptions = {},
+): string[] {
   if (manager === "pnpm") {
-    return ["pnpm", "add", "-g", spec];
+    return options.prefix
+      ? ["pnpm", "add", "-g", "--prefix", options.prefix, spec]
+      : ["pnpm", "add", "-g", spec];
   }
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  const npmBin = options.npmExecutable?.trim() || "npm";
+  return options.prefix
+    ? [npmBin, "i", "-g", "--prefix", options.prefix, spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS]
+    : [npmBin, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
