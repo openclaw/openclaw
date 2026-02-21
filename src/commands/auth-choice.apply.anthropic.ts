@@ -56,7 +56,7 @@ export async function applyAuthChoiceAnthropic(
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: namedProfileId,
       provider,
-      mode: "token",
+      mode: params.authChoice === "oauth" ? "oauth" : "token",
     });
     if (params.setDefaultModel) {
       nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
