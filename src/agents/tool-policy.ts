@@ -1,3 +1,18 @@
+import type { AnyAgentTool } from "./tools/common.js";
+
+// Keep tool-policy browser-safe: do not import tools/common at runtime.
+function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
+  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error("Tool restricted to owner senders.");
+    },
+  };
+}
+
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
@@ -24,6 +39,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
+    "subagents",
     "session_status",
   ],
   // UI helpers
@@ -47,6 +63,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
+    "subagents",
     "session_status",
     "memory_search",
     "memory_get",
@@ -55,6 +72,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "image",
   ],
 };
+
+const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>(["whatsapp_login", "cron", "gateway"]);
 
 const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
@@ -78,6 +97,27 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 export function normalizeToolName(name: string) {
   const normalized = name.trim().toLowerCase();
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
+}
+
+export function isOwnerOnlyToolName(name: string) {
+  return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));
+}
+
+function isOwnerOnlyTool(tool: AnyAgentTool) {
+  return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
+}
+
+export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+  const withGuard = tools.map((tool) => {
+    if (!isOwnerOnlyTool(tool)) {
+      return tool;
+    }
+    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+  });
+  if (senderIsOwner) {
+    return withGuard;
+  }
+  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
 }
 
 export function normalizeToolList(list?: string[]) {
@@ -259,4 +299,14 @@ export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | 
     allow: resolved.allow ? [...resolved.allow] : undefined,
     deny: resolved.deny ? [...resolved.deny] : undefined,
   };
+}
+
+export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
+  policy: TPolicy | undefined,
+  alsoAllow?: string[],
+): TPolicy | undefined {
+  if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
+    return policy;
+  }
+  return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
 }

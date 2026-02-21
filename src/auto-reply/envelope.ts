@@ -1,7 +1,13 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveTimezone,
+  formatUtcTimestamp,
+  formatZonedTimestamp,
+} from "../infra/format-time/format-datetime.ts";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -45,6 +51,17 @@ type ResolvedEnvelopeTimezone =
   | { mode: "local" }
   | { mode: "iana"; timeZone: string };
 
+function sanitizeEnvelopeHeaderPart(value: string): string {
+  // Header parts are metadata and must not be able to break the bracketed prefix.
+  // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replaceAll("[", "(")
+    .replaceAll("]", ")")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
   return {
@@ -66,15 +83,6 @@ function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEn
   };
 }
 
-function resolveExplicitTimezone(value: string): string | undefined {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
-    return value;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
   const trimmed = options.timezone?.trim();
   if (!trimmed) {
@@ -90,44 +98,8 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   if (lowered === "user") {
     return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
   }
-  const explicit = resolveExplicitTimezone(trimmed);
+  const explicit = resolveTimezone(trimmed);
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
-}
-
-function formatUtcTimestamp(date: Date): string {
-  const yyyy = String(date.getUTCFullYear()).padStart(4, "0");
-  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(date.getUTCDate()).padStart(2, "0");
-  const hh = String(date.getUTCHours()).padStart(2, "0");
-  const min = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}T${hh}:${min}Z`;
-}
-
-export function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "short",
-  }).formatToParts(date);
-  const pick = (type: string) => parts.find((part) => part.type === type)?.value;
-  const yyyy = pick("year");
-  const mm = pick("month");
-  const dd = pick("day");
-  const hh = pick("hour");
-  const min = pick("minute");
-  const tz = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-  if (!yyyy || !mm || !dd || !hh || !min) {
-    return undefined;
-  }
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}${tz ? ` ${tz}` : ""}`;
 }
 
 function formatTimestamp(
@@ -146,64 +118,66 @@ function formatTimestamp(
     return undefined;
   }
   const zone = resolveEnvelopeTimezone(resolved);
-  if (zone.mode === "utc") {
-    return formatUtcTimestamp(date);
-  }
-  if (zone.mode === "local") {
-    return formatZonedTimestamp(date);
-  }
-  return formatZonedTimestamp(date, zone.timeZone);
-}
+  // Include a weekday prefix so models do not need to derive DOW from the date
+  // (small models are notoriously unreliable at that).
+  const weekday = (() => {
+    try {
+      if (zone.mode === "utc") {
+        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
+      }
+      if (zone.mode === "local") {
+        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+      }
+      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
+        date,
+      );
+    } catch {
+      return undefined;
+    }
+  })();
 
-function formatElapsedTime(currentMs: number, previousMs: number): string | undefined {
-  const elapsedMs = currentMs - previousMs;
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+  const formatted =
+    zone.mode === "utc"
+      ? formatUtcTimestamp(date)
+      : zone.mode === "local"
+        ? formatZonedTimestamp(date)
+        : formatZonedTimestamp(date, { timeZone: zone.timeZone });
+
+  if (!formatted) {
     return undefined;
   }
-
-  const seconds = Math.floor(elapsedMs / 1000);
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours}h`;
-  }
-
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
+  return weekday ? `${weekday} ${formatted}` : formatted;
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const channel = params.channel?.trim() || "Channel";
+  const channel = sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel");
   const parts: string[] = [channel];
   const resolved = normalizeEnvelopeOptions(params.envelope);
-  const elapsed =
-    resolved.includeElapsed && params.timestamp && params.previousTimestamp
-      ? formatElapsedTime(
-          params.timestamp instanceof Date ? params.timestamp.getTime() : params.timestamp,
-          params.previousTimestamp instanceof Date
-            ? params.previousTimestamp.getTime()
-            : params.previousTimestamp,
-        )
-      : undefined;
+  let elapsed: string | undefined;
+  if (resolved.includeElapsed && params.timestamp && params.previousTimestamp) {
+    const currentMs =
+      params.timestamp instanceof Date ? params.timestamp.getTime() : params.timestamp;
+    const previousMs =
+      params.previousTimestamp instanceof Date
+        ? params.previousTimestamp.getTime()
+        : params.previousTimestamp;
+    const elapsedMs = currentMs - previousMs;
+    elapsed =
+      Number.isFinite(elapsedMs) && elapsedMs >= 0
+        ? formatTimeAgo(elapsedMs, { suffix: false })
+        : undefined;
+  }
   if (params.from?.trim()) {
-    const from = params.from.trim();
+    const from = sanitizeEnvelopeHeaderPart(params.from.trim());
     parts.push(elapsed ? `${from} +${elapsed}` : from);
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
   if (params.host?.trim()) {
-    parts.push(params.host.trim());
+    parts.push(sanitizeEnvelopeHeaderPart(params.host.trim()));
   }
   if (params.ip?.trim()) {
-    parts.push(params.ip.trim());
+    parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
   }
   const ts = formatTimestamp(params.timestamp, resolved);
   if (ts) {
@@ -226,7 +200,8 @@ export function formatInboundEnvelope(params: {
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
-  const resolvedSender = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
   const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
   return formatAgentEnvelope({
     channel: params.channel,

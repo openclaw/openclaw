@@ -42,6 +42,13 @@ export type MattermostAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
+  /** Action toggles for this account. */
+  actions?: {
+    /** Enable message reaction actions. Default: true. */
+    reactions?: boolean;
+  };
 };
 
 export type MattermostConfig = {

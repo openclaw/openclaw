@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
+import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
   MemorySyncProgressUpdate,
 } from "./types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
@@ -19,13 +19,17 @@ export type MemorySearchManagerResult = {
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
+    const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
-    const cached = QMD_MANAGER_CACHE.get(cacheKey);
-    if (cached) {
-      return { manager: cached };
+    if (!statusOnly) {
+      const cached = QMD_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
+      }
     }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
@@ -33,8 +37,12 @@ export async function getMemorySearchManager(params: {
         cfg: params.cfg,
         agentId: params.agentId,
         resolved,
+        mode: statusOnly ? "status" : "full",
       });
       if (primary) {
+        if (statusOnly) {
+          return { manager: primary };
+        }
         const wrapper = new FallbackMemoryManager(
           {
             primary,
@@ -68,6 +76,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   private fallback: MemorySearchManager | null = null;
   private primaryFailed = false;
   private lastError?: string;
+  private cacheEvicted = false;
 
   constructor(
     private readonly deps: {
@@ -89,6 +98,8 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.lastError = err instanceof Error ? err.message : String(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
         await this.deps.primary.close?.().catch(() => {});
+        // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
+        this.evictCacheEntry();
       }
     }
     const fallback = await this.ensureFallback();
@@ -173,20 +184,35 @@ class FallbackMemoryManager implements MemorySearchManager {
   async close() {
     await this.deps.primary.close?.();
     await this.fallback?.close?.();
-    this.onClose?.();
+    this.evictCacheEntry();
   }
 
   private async ensureFallback(): Promise<MemorySearchManager | null> {
     if (this.fallback) {
       return this.fallback;
     }
-    const fallback = await this.deps.fallbackFactory();
-    if (!fallback) {
-      log.warn("memory fallback requested but builtin index is unavailable");
+    let fallback: MemorySearchManager | null;
+    try {
+      fallback = await this.deps.fallbackFactory();
+      if (!fallback) {
+        log.warn("memory fallback requested but builtin index is unavailable");
+        return null;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`memory fallback unavailable: ${message}`);
       return null;
     }
     this.fallback = fallback;
     return this.fallback;
+  }
+
+  private evictCacheEntry(): void {
+    if (this.cacheEvicted) {
+      return;
+    }
+    this.cacheEvicted = true;
+    this.onClose?.();
   }
 }
 

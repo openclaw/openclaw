@@ -97,7 +97,7 @@ x-i18n:
 - **精确定时**：支持带时区的 5 字段 cron 表达式。
 - **会话隔离**：在 `cron:<jobId>` 中运行，不会污染主会话历史。
 - **模型覆盖**：可按任务使用更便宜或更强大的模型。
-- **投递控制**：可直接投递到渠道；默认仍会向主会话发布摘要（可配置）。
+- **投递控制**：隔离任务默认以 `announce` 投递摘要，可选 `none` 仅内部运行。
 - **无需智能体上下文**：即使主会话空闲或已压缩，也能运行。
 - **一次性支持**：`--at` 用于精确的未来时间戳。
 
@@ -111,7 +111,7 @@ openclaw cron add \
   --session isolated \
   --message "Generate today's briefing: weather, calendar, top emails, news summary." \
   --model opus \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```
@@ -180,7 +180,7 @@ openclaw cron add \
 
 ```bash
 # 每天早上 7 点的早间简报
-openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated --message "..." --deliver
+openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated --message "..." --announce
 
 # 每周一上午 9 点的项目回顾
 openclaw cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated --message "..." --model opus
@@ -219,13 +219,13 @@ Lobster 是用于**多步骤工具管道**的工作流运行时，适用于需�
 
 心跳和定时任务都可以与主会话交互，但方式不同：
 
-|        | 心跳                     | 定时任务（主会话）     | 定时任务（隔离式） |
-| ------ | ------------------------ | ---------------------- | ------------------ |
-| 会话   | 主会话                   | 主会话（通过系统事件） | `cron:<jobId>`     |
-| 历史   | 共享                     | 共享                   | 每次运行全新       |
-| 上下文 | 完整                     | 完整                   | 无（从零开始）     |
-| 模型   | 主会话模型               | 主会话模型             | 可覆盖             |
-| 输出   | 非 `HEARTBEAT_OK` 时投递 | 心跳提示 + 事件        | 摘要发布到主会话   |
+|        | 心跳                     | 定时任务（主会话）     | 定时任务（隔离式）    |
+| ------ | ------------------------ | ---------------------- | --------------------- |
+| 会话   | 主会话                   | 主会话（通过系统事件） | `cron:<jobId>`        |
+| 历史   | 共享                     | 共享                   | 每次运行全新          |
+| 上下文 | 完整                     | 完整                   | 无（从零开始）        |
+| 模型   | 主会话模型               | 主会话模型             | 可覆盖                |
+| 输出   | 非 `HEARTBEAT_OK` 时投递 | 心跳提示 + 事件        | announce 摘要（默认） |
 
 ### 何时使用主会话定时任务
 
@@ -250,7 +250,7 @@ openclaw cron add \
 
 - 无先前上下文的全新环境
 - 不同的模型或思维设置
-- 输出直接投递到渠道（摘要默认仍会发布到主会话）
+- 输出可通过 `announce` 直接投递摘要（或用 `none` 仅内部运行）
 - 不会把主会话搞得杂乱的历史记录
 
 ```bash
@@ -261,7 +261,7 @@ openclaw cron add \
   --message "Weekly codebase analysis..." \
   --model opus \
   --thinking high \
-  --deliver
+  --announce
 ```
 
 ## 成本考量

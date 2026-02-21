@@ -18,9 +18,17 @@ struct NodeInfo: Identifiable, Codable {
     let paired: Bool?
     let connected: Bool?
 
-    var id: String { self.nodeId }
-    var isConnected: Bool { self.connected ?? false }
-    var isPaired: Bool { self.paired ?? false }
+    var id: String {
+        self.nodeId
+    }
+
+    var isConnected: Bool {
+        self.connected ?? false
+    }
+
+    var isPaired: Bool {
+        self.paired ?? false
+    }
 }
 
 private struct NodeListResponse: Codable {

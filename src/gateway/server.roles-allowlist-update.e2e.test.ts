@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { CONFIG_PATH } from "../config/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
+import type { GatewayClient } from "./client.js";
 
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(async () => ({
@@ -16,32 +17,19 @@ vi.mock("../infra/update-runner.js", () => ({
   })),
 }));
 
-import { sleep } from "../utils.js";
-import {
-  connectOk,
-  installGatewayTestHooks,
-  onceMessage,
-  rpcReq,
-  startServerWithClient,
-} from "./test-helpers.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
+import { connectGatewayClient } from "./test-helpers.e2e.js";
+import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: WebSocket;
 let port: number;
 
-beforeAll(async () => {
-  const started = await startServerWithClient();
-  server = started.server;
+installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
   port = started.port;
-  await connectOk(ws);
-});
-
-afterAll(async () => {
-  ws.close();
-  await server.close();
 });
 
 const connectNodeClient = async (params: {
@@ -51,15 +39,13 @@ const connectNodeClient = async (params: {
   displayName?: string;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) => {
-  let settled = false;
-  let resolveReady: (() => void) | null = null;
-  let rejectReady: ((err: Error) => void) | null = null;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  const client = new GatewayClient({
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN;
+  if (!token) {
+    throw new Error("OPENCLAW_GATEWAY_TOKEN is required for node test clients");
+  }
+  return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
+    token,
     role: "node",
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientVersion: "1.0.0",
@@ -70,53 +56,34 @@ const connectNodeClient = async (params: {
     scopes: [],
     commands: params.commands,
     onEvent: params.onEvent,
-    onHelloOk: () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolveReady?.();
-    },
-    onConnectError: (err) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      rejectReady?.(err);
-    },
-    onClose: (code, reason) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
-    },
+    timeoutMessage: "timeout waiting for node to connect",
   });
-  client.start();
-  await Promise.race([
-    ready,
-    sleep(10_000).then(() => {
-      throw new Error("timeout waiting for node to connect");
-    }),
-  ]);
-  return client;
 };
 
-async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (check()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+const approveAllPendingPairings = async () => {
+  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const list = await listDevicePairing();
+  for (const pending of list.pending) {
+    await approveDevicePairing(pending.requestId);
   }
-  throw new Error("timeout");
-}
+};
+
+const connectNodeClientWithPairing = async (params: Parameters<typeof connectNodeClient>[0]) => {
+  try {
+    return await connectNodeClient(params);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("pairing required")) {
+      throw error;
+    }
+    await approveAllPendingPairings();
+    return await connectNodeClient(params);
+  }
+};
 
 describe("gateway role enforcement", () => {
   test("enforces operator and node permissions", async () => {
-    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+    let nodeClient: GatewayClient | undefined;
 
     try {
       const eventRes = await rpcReq(ws, "node.event", { event: "test", payload: { ok: true } });
@@ -131,26 +98,22 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      await connectOk(nodeWs, {
-        role: "node",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          version: "1.0.0",
-          platform: "ios",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
+      nodeClient = await connectNodeClientWithPairing({
+        port,
         commands: [],
+        instanceId: "node-role-enforcement",
+        displayName: "node-role-enforcement",
       });
 
-      const binsRes = await rpcReq<{ bins?: unknown[] }>(nodeWs, "skills.bins", {});
-      expect(binsRes.ok).toBe(true);
-      expect(Array.isArray(binsRes.payload?.bins)).toBe(true);
+      const binsPayload = await nodeClient.request<{ bins?: unknown[] }>("skills.bins", {});
+      expect(Array.isArray(binsPayload?.bins)).toBe(true);
 
-      const statusRes = await rpcReq(nodeWs, "status", {});
-      expect(statusRes.ok).toBe(false);
-      expect(statusRes.error?.message ?? "").toContain("unauthorized role");
+      await expect(nodeClient.request("status", {})).rejects.toThrow("unauthorized role");
+
+      const healthPayload = await nodeClient.request("health", {});
+      expect(healthPayload).toBeDefined();
     } finally {
-      nodeWs.close();
+      nodeClient?.stop();
     }
   });
 });
@@ -173,13 +136,15 @@ describe("gateway update.run", () => {
           },
         }),
       );
-      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
+      const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
       expect(res.ok).toBe(true);
 
-      await waitForSignal(() => sigusr1.mock.calls.length > 0);
+      await vi.waitFor(
+        () => {
+          expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
+        },
+        { timeout: 2_000, interval: 10 },
+      );
       expect(sigusr1).toHaveBeenCalled();
 
       const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
@@ -189,6 +154,35 @@ describe("gateway update.run", () => {
       };
       expect(parsed.payload?.kind).toBe("update");
       expect(parsed.payload?.stats?.mode).toBe("git");
+    } finally {
+      process.off("SIGUSR1", sigusr1);
+    }
+  });
+
+  test("uses configured update channel", async () => {
+    const sigusr1 = vi.fn();
+    process.on("SIGUSR1", sigusr1);
+
+    try {
+      await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+      await fs.writeFile(CONFIG_PATH, JSON.stringify({ update: { channel: "beta" } }, null, 2));
+      const updateMock = vi.mocked(runGatewayUpdate);
+      updateMock.mockClear();
+
+      const id = "req-update-channel";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "update.run",
+          params: {
+            restartDelayMs: 0,
+          },
+        }),
+      );
+      const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
+      expect(res.ok).toBe(true);
+      expect(updateMock).toHaveBeenCalledOnce();
     } finally {
       process.off("SIGUSR1", sigusr1);
     }
@@ -228,7 +222,7 @@ describe("gateway node command allowlist", () => {
     let allowedClient: GatewayClient | undefined;
 
     try {
-      systemClient = await connectNodeClient({
+      systemClient = await connectNodeClientWithPairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -246,7 +240,7 @@ describe("gateway node command allowlist", () => {
       systemClient.stop();
       await waitForConnectedCount(0);
 
-      emptyClient = await connectNodeClient({
+      emptyClient = await connectNodeClientWithPairing({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -269,7 +263,7 @@ describe("gateway node command allowlist", () => {
         new Promise<{ id?: string; nodeId?: string }>((resolve) => {
           resolveInvoke = resolve;
         });
-      allowedClient = await connectNodeClient({
+      allowedClient = await connectNodeClientWithPairing({
         port,
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",

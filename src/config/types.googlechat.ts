@@ -54,6 +54,8 @@ export type GoogleChatAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Optional allowlist for space senders (user ids or emails). */
   groupAllowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Per-space configuration keyed by space id or name. */
   groups?: Record<string, GoogleChatGroupConfig>;
   /** Service account JSON (inline string or object). */
@@ -98,6 +100,8 @@ export type GoogleChatAccountConfig = {
    *   If configured, falls back to message mode with a warning.
    */
   typingIndicator?: "none" | "message" | "reaction";
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type GoogleChatConfig = {

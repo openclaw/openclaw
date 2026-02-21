@@ -5,6 +5,8 @@ describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
     expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
     expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
+    expect(buildFtsQuery("金银价格")).toBe('"金银价格"');
+    expect(buildFtsQuery("価格 2026年")).toBe('"価格" AND "2026年"');
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
@@ -15,8 +17,8 @@ describe("memory hybrid helpers", () => {
     expect(bm25RankToScore(-100)).toBeCloseTo(1);
   });
 
-  it("mergeHybridResults unions by id and combines weighted scores", () => {
-    const merged = mergeHybridResults({
+  it("mergeHybridResults unions by id and combines weighted scores", async () => {
+    const merged = await mergeHybridResults({
       vectorWeight: 0.7,
       textWeight: 0.3,
       vector: [
@@ -50,8 +52,8 @@ describe("memory hybrid helpers", () => {
     expect(b?.score).toBeCloseTo(0.3 * 1.0);
   });
 
-  it("mergeHybridResults prefers keyword snippet when ids overlap", () => {
-    const merged = mergeHybridResults({
+  it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
+    const merged = await mergeHybridResults({
       vectorWeight: 0.5,
       textWeight: 0.5,
       vector: [

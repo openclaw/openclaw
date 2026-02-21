@@ -1,33 +1,31 @@
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
-import type { ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
+import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   formatDirectiveAck,
-  formatElevatedEvent,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
-  formatReasoningEvent,
+  enqueueModeSwitchEvents,
   withOptions,
 } from "./directive-handling.shared.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 
 function resolveExecDefaults(params: {
   cfg: OpenClawConfig;
@@ -58,34 +56,9 @@ function resolveExecDefaults(params: {
   };
 }
 
-export async function handleDirectiveOnly(params: {
-  cfg: OpenClawConfig;
-  directives: InlineDirectives;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath?: string;
-  elevatedEnabled: boolean;
-  elevatedAllowed: boolean;
-  elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-  >;
-  resetModelOverride: boolean;
-  provider: string;
-  model: string;
-  initialModelLabel: string;
-  formatModelSwitchEvent: (label: string, alias?: string) => string;
-  currentThinkLevel?: ThinkLevel;
-  currentVerboseLevel?: VerboseLevel;
-  currentReasoningLevel?: ReasoningLevel;
-  currentElevatedLevel?: ElevatedLevel;
-}): Promise<ReplyPayload | undefined> {
+export async function handleDirectiveOnly(
+  params: HandleDirectiveOnlyParams,
+): Promise<ReplyPayload | undefined> {
   const {
     directives,
     sessionEntry,
@@ -132,6 +105,8 @@ export async function handleDirectiveOnly(params: {
     aliasIndex,
     allowedModelCatalog,
     resetModelOverride,
+    surface: params.surface,
+    sessionEntry,
   });
   if (modelInfo) {
     return modelInfo;
@@ -307,11 +282,7 @@ export async function handleDirectiveOnly(params: {
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
-    if (directives.thinkLevel === "off") {
-      delete sessionEntry.thinkingLevel;
-    } else {
-      sessionEntry.thinkingLevel = directives.thinkLevel;
-    }
+    sessionEntry.thinkingLevel = directives.thinkLevel;
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";
@@ -392,20 +363,13 @@ export async function handleDirectiveOnly(params: {
       });
     }
   }
-  if (elevatedChanged) {
-    const nextElevated = (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
-    enqueueSystemEvent(formatElevatedEvent(nextElevated), {
-      sessionKey,
-      contextKey: "mode:elevated",
-    });
-  }
-  if (reasoningChanged) {
-    const nextReasoning = (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
-    enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
-      sessionKey,
-      contextKey: "mode:reasoning",
-    });
-  }
+  enqueueModeSwitchEvents({
+    enqueueSystemEvent,
+    sessionEntry,
+    sessionKey,
+    elevatedChanged,
+    reasoningChanged,
+  });
 
   const parts: string[] = [];
   if (directives.hasThinkDirective && directives.thinkLevel) {

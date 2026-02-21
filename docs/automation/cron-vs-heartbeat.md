@@ -74,7 +74,9 @@ See [Heartbeat](/gateway/heartbeat) for full configuration.
 
 ## Cron: Precise Scheduling
 
-Cron jobs run at **exact times** and can run in isolated sessions without affecting main context.
+Cron jobs run at precise times and can run in isolated sessions without affecting main context.
+Recurring top-of-hour schedules are automatically spread by a deterministic
+per-job offset in a 0-5 minute window.
 
 ### When to use cron
 
@@ -87,10 +89,13 @@ Cron jobs run at **exact times** and can run in isolated sessions without affect
 
 ### Cron advantages
 
-- **Exact timing**: 5-field cron expressions with timezone support.
+- **Precise timing**: 5-field or 6-field (seconds) cron expressions with timezone support.
+- **Built-in load spreading**: recurring top-of-hour schedules are staggered by up to 5 minutes by default.
+- **Per-job control**: override stagger with `--stagger <duration>` or force exact timing with `--exact`.
 - **Session isolation**: Runs in `cron:<jobId>` without polluting main history.
 - **Model overrides**: Use a cheaper or more powerful model per job.
-- **Delivery control**: Can deliver directly to a channel; still posts a summary to main by default (configurable).
+- **Delivery control**: Isolated jobs default to `announce` (summary); choose `none` as needed.
+- **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
 
@@ -104,12 +109,12 @@ openclaw cron add \
   --session isolated \
   --message "Generate today's briefing: weather, calendar, top emails, news summary." \
   --model opus \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```
 
-This runs at exactly 7:00 AM New York time, uses Opus for quality, and delivers directly to WhatsApp.
+This runs at exactly 7:00 AM New York time, uses Opus for quality, and announces a summary directly to WhatsApp.
 
 ### Cron example: One-shot reminder
 
@@ -173,7 +178,7 @@ The most efficient setup uses **both**:
 
 ```bash
 # Daily morning briefing at 7am
-openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated --message "..." --deliver
+openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated --message "..." --announce
 
 # Weekly project review on Mondays at 9am
 openclaw cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated --message "..." --model opus
@@ -206,7 +211,7 @@ For ad-hoc workflows, call Lobster directly.
 - Lobster runs as a **local subprocess** (`lobster` CLI) in tool mode and returns a **JSON envelope**.
 - If the tool returns `needs_approval`, you resume with a `resumeToken` and `approve` flag.
 - The tool is an **optional plugin**; enable it additively via `tools.alsoAllow: ["lobster"]` (recommended).
-- If you pass `lobsterPath`, it must be an **absolute path**.
+- Lobster expects the `lobster` CLI to be available on `PATH`.
 
 See [Lobster](/tools/lobster) for full usage and examples.
 
@@ -214,13 +219,13 @@ See [Lobster](/tools/lobster) for full usage and examples.
 
 Both heartbeat and cron can interact with the main session, but differently:
 
-|         | Heartbeat                       | Cron (main)              | Cron (isolated)        |
-| ------- | ------------------------------- | ------------------------ | ---------------------- |
-| Session | Main                            | Main (via system event)  | `cron:<jobId>`         |
-| History | Shared                          | Shared                   | Fresh each run         |
-| Context | Full                            | Full                     | None (starts clean)    |
-| Model   | Main session model              | Main session model       | Can override           |
-| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Summary posted to main |
+|         | Heartbeat                       | Cron (main)              | Cron (isolated)            |
+| ------- | ------------------------------- | ------------------------ | -------------------------- |
+| Session | Main                            | Main (via system event)  | `cron:<jobId>`             |
+| History | Shared                          | Shared                   | Fresh each run             |
+| Context | Full                            | Full                     | None (starts clean)        |
+| Model   | Main session model              | Main session model       | Can override               |
+| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default) |
 
 ### When to use main session cron
 
@@ -245,7 +250,7 @@ Use `--session isolated` when you want:
 
 - A clean slate without prior context
 - Different model or thinking settings
-- Output delivered directly to a channel (summary still posts to main by default)
+- Announce summaries directly to a channel
 - History that doesn't clutter main session
 
 ```bash
@@ -256,7 +261,7 @@ openclaw cron add \
   --message "Weekly codebase analysis..." \
   --model opus \
   --thinking high \
-  --deliver
+  --announce
 ```
 
 ## Cost Considerations

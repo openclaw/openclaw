@@ -307,4 +307,4 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 - [Tailscale 集成](/gateway/tailscale) — 完整的 Tailscale 文档
 - [Gateway 网关配置](/gateway/configuration) — 所有配置选项
 - [DigitalOcean 指南](/platforms/digitalocean) — 如果你想要付费 + 更容易注册
-- [Hetzner 指南](/platforms/hetzner) — 基于 Docker 的替代方案
+- [Hetzner 指南](/install/hetzner) — 基于 Docker 的替代方案
