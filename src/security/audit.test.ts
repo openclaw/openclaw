@@ -2322,4 +2322,27 @@ description: test skill
       expect(getAuth()?.token).toBe("fallback-local-token");
     });
   });
+
+  it("identifies claude-opus-4-6 as a strong model (>= 4.5)", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const weakFinding = res.findings.find(
+      (f) => f.checkId === "models.hygiene" && f.detail.includes("Below Claude 4.5"),
+    );
+    expect(weakFinding).toBeUndefined();
+  });
 });
