@@ -51,7 +51,7 @@ function buildMemorySection(params: {
   }
   const lines = [
     "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on ./MEMORY.md + ./memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
   ];
   if (params.citationsMode === "off") {
     lines.push(
@@ -424,7 +424,7 @@ export function buildAgentSystemPrompt(params: {
           "- subagents: list/steer/kill sub-agent runs",
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
-    "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
+    "./TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
@@ -589,12 +589,17 @@ export function buildAgentSystemPrompt(params: {
     lines.push("# Project Context", "", "The following project context files have been loaded:");
     if (hasSoulFile) {
       lines.push(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+        "If ./SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
       );
     }
     lines.push("");
     for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
+      // Prefix bare filenames (e.g. "SOUL.md") with "./" to prevent .md TLD resolution
+      const displayPath =
+        !file.path.includes("/") && !file.path.includes("\\") && !file.path.startsWith("./")
+          ? `./${file.path}`
+          : file.path;
+      lines.push(`## ${displayPath}`, "", file.content, "");
     }
   }
 

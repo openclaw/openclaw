@@ -323,9 +323,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("# Project Context");
-    expect(prompt).toContain("## AGENTS.md");
+    expect(prompt).toContain("## ./AGENTS.md");
     expect(prompt).toContain("Alpha");
-    expect(prompt).toContain("## IDENTITY.md");
+    expect(prompt).toContain("## ./IDENTITY.md");
     expect(prompt).toContain("Bravo");
   });
 
@@ -340,7 +340,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("# Project Context");
-    expect(prompt).toContain("## AGENTS.md");
+    expect(prompt).toContain("## ./AGENTS.md");
     expect(prompt).toContain("Alpha");
     expect(prompt).not.toContain("Missing path");
     expect(prompt).not.toContain("Blank path");
@@ -356,7 +356,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      "If ./SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
     );
   });
 
