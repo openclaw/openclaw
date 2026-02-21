@@ -1,18 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
-
-const connectOverCdpMock = vi.fn();
-const getChromeWebSocketUrlMock = vi.fn();
-
-vi.mock("playwright-core", () => ({
-  chromium: {
-    connectOverCDP: (...args: unknown[]) => connectOverCdpMock(...args),
-  },
-}));
-
-vi.mock("./chrome.js", () => ({
-  getChromeWebSocketUrl: (...args: unknown[]) => getChromeWebSocketUrlMock(...args),
-}));
+import { connectOverCdpMock, getChromeWebSocketUrlMock } from "./pw-session.mock-setup.js";
 
 describe("pw-session getPageForTargetId", () => {
   it("falls back to the only page when CDP session attachment is blocked (extension relays)", async () => {
