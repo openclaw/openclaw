@@ -1,0 +1,30 @@
+# Source files (dist/ is shipped instead)
+src/
+index.ts
+tsconfig.json
+
+# Dev/build
+node_modules/
+*.tsbuildinfo
+
+# Runtime data (NEVER ship)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*-certs/
+*.crt
+*.key
+*.pem
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test
+__tests__/
+*.test.ts
+*.spec.ts
+coverage/

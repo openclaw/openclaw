@@ -1,0 +1,67 @@
+{
+  "name": "@koba42/openclaw-chia-watcher",
+  "version": "0.1.0",
+  "description": "Chia blockchain wallet watcher plugin for OpenClaw — real-time P2P monitoring with memo decoding and multi-channel notifications",
+  "license": "MIT",
+  "author": "KOBA42 Corp <dev@koba42.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/chia-watcher"
+  },
+  "homepage": "https://github.com/openclaw/chia-watcher#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/chia-watcher/issues"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "chia",
+    "chia-blockchain",
+    "wallet-watcher",
+    "xch",
+    "memo-decoder",
+    "notifications",
+    "telegram",
+    "discord"
+  ],
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "openclaw": {
+    "extensions": [
+      "./dist/index.mjs"
+    ]
+  },
+  "files": [
+    "dist/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.mjs --external:chia-wallet-sdk --external:better-sqlite3",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.7.0",
+    "chia-wallet-sdk": "0.29.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.0"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  }
+}
