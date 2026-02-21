@@ -1,11 +1,11 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-import type { ResolvedBrowserConfig } from "./config.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
+import type { ResolvedBrowserConfig } from "./config.js";
 import { registerBrowserRoutes } from "./routes/index.js";
+import type { BrowserRouteRegistrar } from "./routes/types.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
@@ -30,6 +30,7 @@ export async function startBrowserBridgeServer(params: {
   authToken?: string;
   authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
+  resolveSandboxNoVncToken?: (token: string) => string | null;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
@@ -39,6 +40,23 @@ export async function startBrowserBridgeServer(params: {
 
   const app = express();
   installBrowserCommonMiddleware(app);
+
+  if (params.resolveSandboxNoVncToken) {
+    app.get("/sandbox/novnc", (req, res) => {
+      const rawToken = typeof req.query?.token === "string" ? req.query.token.trim() : "";
+      if (!rawToken) {
+        res.status(400).send("Missing token");
+        return;
+      }
+      const redirectUrl = params.resolveSandboxNoVncToken?.(rawToken);
+      if (!redirectUrl) {
+        res.status(404).send("Invalid or expired token");
+        return;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.redirect(302, redirectUrl);
+    });
+  }
 
   const authToken = params.authToken?.trim() || undefined;
   const authPassword = params.authPassword?.trim() || undefined;

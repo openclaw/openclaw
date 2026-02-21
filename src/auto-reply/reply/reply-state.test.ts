@@ -35,6 +35,15 @@ async function seedSessionStore(params: {
   );
 }
 
+async function createCompactionSessionFixture(entry: SessionEntry) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
+  const storePath = path.join(tmp, "sessions.json");
+  const sessionKey = "main";
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+  await seedSessionStore({ storePath, sessionKey, entry });
+  return { storePath, sessionKey, sessionStore };
+}
+
 describe("history helpers", () => {
   it("returns current message when history is empty", () => {
     const result = buildHistoryContext({
@@ -323,9 +332,6 @@ describe("incrementCompactionCount", () => {
   });
 
   it("updates totalTokens when tokensAfter is provided", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -334,8 +340,7 @@ describe("incrementCompactionCount", () => {
       inputTokens: 170_000,
       outputTokens: 10_000,
     } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -354,17 +359,13 @@ describe("incrementCompactionCount", () => {
   });
 
   it("does not update totalTokens when tokensAfter is not provided", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
     } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,

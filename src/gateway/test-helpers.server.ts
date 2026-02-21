@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { GatewayServerOptions } from "./server.js";
 import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
@@ -21,6 +20,7 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
+import type { GatewayServerOptions } from "./server.js";
 import {
   agentCommand,
   cronIsolatedRun,
@@ -43,18 +43,22 @@ async function getServerModule() {
   return await serverModulePromise;
 }
 
-let previousHome: string | undefined;
-let previousUserProfile: string | undefined;
-let previousStateDir: string | undefined;
-let previousConfigPath: string | undefined;
-let previousSkipBrowserControl: string | undefined;
-let previousSkipGmailWatcher: string | undefined;
-let previousSkipCanvasHost: string | undefined;
-let previousBundledPluginsDir: string | undefined;
-let previousSkipChannels: string | undefined;
-let previousSkipProviders: string | undefined;
-let previousSkipCron: string | undefined;
-let previousMinimalGateway: string | undefined;
+const GATEWAY_TEST_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+  "OPENCLAW_SKIP_GMAIL_WATCHER",
+  "OPENCLAW_SKIP_CANVAS_HOST",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_SKIP_CHANNELS",
+  "OPENCLAW_SKIP_PROVIDERS",
+  "OPENCLAW_SKIP_CRON",
+  "OPENCLAW_TEST_MINIMAL_GATEWAY",
+] as const;
+
+let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 
@@ -87,18 +91,7 @@ export async function writeSessionStore(params: {
 }
 
 async function setupGatewayTestHome() {
-  previousHome = process.env.HOME;
-  previousUserProfile = process.env.USERPROFILE;
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  previousSkipBrowserControl = process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-  previousSkipGmailWatcher = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-  previousSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
-  previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-  previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-  previousSkipCron = process.env.OPENCLAW_SKIP_CRON;
-  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  gatewayEnvSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -176,66 +169,8 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetLogger();
   if (options.restoreEnv) {
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
-    if (previousSkipBrowserControl === undefined) {
-      delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-    } else {
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = previousSkipBrowserControl;
-    }
-    if (previousSkipGmailWatcher === undefined) {
-      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    } else {
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previousSkipGmailWatcher;
-    }
-    if (previousSkipCanvasHost === undefined) {
-      delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-    } else {
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
-    }
-    if (previousBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-    }
-    if (previousSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-    } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-    }
-    if (previousSkipProviders === undefined) {
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    } else {
-      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-    }
-    if (previousSkipCron === undefined) {
-      delete process.env.OPENCLAW_SKIP_CRON;
-    } else {
-      process.env.OPENCLAW_SKIP_CRON = previousSkipCron;
-    }
-    if (previousMinimalGateway === undefined) {
-      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-    } else {
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
-    }
+    gatewayEnvSnapshot?.restore();
+    gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
     await fs.rm(tempHome, {
@@ -296,9 +231,20 @@ export async function occupyPort(): Promise<{
   });
 }
 
-export function onceMessage<T = unknown>(
+type GatewayTestMessage = {
+  type?: string;
+  id?: string;
+  ok?: boolean;
+  event?: string;
+  payload?: Record<string, unknown> | null;
+  seq?: number;
+  stateVersion?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   ws: WebSocket,
-  filter: (obj: unknown) => boolean,
+  filter: (obj: T) => boolean,
   // Full-suite runs can saturate the event loop (581+ files). Keep this high
   // enough to avoid flaky RPC timeouts, but still fail fast when a response
   // never arrives.
@@ -312,12 +258,12 @@ export function onceMessage<T = unknown>(
       reject(new Error(`closed ${code}: ${reason.toString()}`));
     };
     const handler = (data: WebSocket.RawData) => {
-      const obj = JSON.parse(rawDataToString(data));
+      const obj = JSON.parse(rawDataToString(data)) as T;
       if (filter(obj)) {
         clearTimeout(timer);
         ws.off("message", handler);
         ws.off("close", closeHandler);
-        resolve(obj as T);
+        resolve(obj);
       }
     };
     ws.on("message", handler);
@@ -430,7 +376,7 @@ type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: unknown;
+  payload?: Record<string, unknown>;
   error?: { message?: string };
 };
 
@@ -562,7 +508,44 @@ export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectR
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T = unknown>(
+export async function connectWebchatClient(params: {
+  port: number;
+  origin?: string;
+  client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
+}): Promise<WebSocket> {
+  const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
+  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
+    headers: { origin },
+  });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const onOpen = () => {
+      clearTimeout(timer);
+      ws.off("error", onError);
+      resolve();
+    };
+    const onError = (err: Error) => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      reject(err);
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+  });
+  await connectOk(ws, {
+    client:
+      params.client ??
+      ({
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      } as NonNullable<Parameters<typeof connectReq>[1]>["client"]),
+  });
+  return ws;
+}
+
+export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
   params?: unknown,
@@ -575,7 +558,7 @@ export async function rpcReq<T = unknown>(
     type: "res";
     id: string;
     ok: boolean;
-    payload?: T;
+    payload?: T | null | undefined;
     error?: { message?: string; code?: string };
   }>(
     ws,

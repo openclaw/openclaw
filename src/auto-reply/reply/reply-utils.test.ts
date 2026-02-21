@@ -369,9 +369,9 @@ describe("createTypingSignaler", () => {
     });
 
     await signaler.signalTextDelta("hello");
-    typing.startTypingLoop.mockClear();
-    typing.startTypingOnText.mockClear();
-    typing.refreshTypingTtl.mockClear();
+    (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
+    (typing.startTypingOnText as ReturnType<typeof vi.fn>).mockClear();
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalToolStart();
 
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
@@ -643,6 +643,34 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.text).toBe("Hi");
     expect(result?.replyToId).toBe("abc-123");
     expect(result?.replyToTag).toBe(true);
+  });
+
+  it("keeps explicit reply ids sticky across subsequent renderable chunks", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    expect(accumulator.consume("[[reply_to: abc-123]]")).toBeNull();
+
+    const first = accumulator.consume("test 1");
+    expect(first?.replyToId).toBe("abc-123");
+    expect(first?.replyToTag).toBe(true);
+
+    const second = accumulator.consume("test 2");
+    expect(second?.replyToId).toBe("abc-123");
+    expect(second?.replyToTag).toBe(true);
+  });
+
+  it("clears sticky reply context on reset", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    expect(accumulator.consume("[[reply_to_current]]")).toBeNull();
+    expect(accumulator.consume("first")?.replyToCurrent).toBe(true);
+
+    accumulator.reset();
+
+    const afterReset = accumulator.consume("second");
+    expect(afterReset?.replyToCurrent).toBe(false);
+    expect(afterReset?.replyToTag).toBe(false);
+    expect(afterReset?.replyToId).toBeUndefined();
   });
 });
 

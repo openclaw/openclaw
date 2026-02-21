@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
 describe("buildEmbeddedRunPayloads", () => {
@@ -15,31 +16,12 @@ describe("buildEmbeddedRunPayloads", () => {
   },
   "request_id": "req_011CX7DwS7tSvggaNHmefwWg"
 }`;
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-    role: "assistant",
-    api: "openai-responses",
-    provider: "openai",
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    timestamp: 0,
-    stopReason: "error",
-    errorMessage: errorJson,
-    content: [{ type: "text", text: errorJson }],
-    ...overrides,
-  });
+  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
+    makeAssistantMessageFixture({
+      errorMessage: errorJson,
+      content: [{ type: "text", text: errorJson }],
+      ...overrides,
+    });
 
   type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
   const buildPayloads = (overrides: Partial<BuildPayloadParams> = {}) =>
@@ -96,17 +78,19 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
-  it("includes provider context for billing errors", () => {
+  it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
+        model: "claude-3-5-sonnet",
         errorMessage: "insufficient credits",
         content: [{ type: "text", text: "insufficient credits" }],
       }),
       provider: "Anthropic",
+      model: "claude-3-5-sonnet",
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic"));
+    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
     expect(payloads[0]?.isError).toBe(true);
   });
 
@@ -161,7 +145,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("All good");
   });
 
-  it("adds tool error fallback when the assistant only invoked tools", () => {
+  it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
@@ -176,12 +160,36 @@ describe("buildEmbeddedRunPayloads", () => {
         ],
       }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+      verboseLevel: "on",
     });
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("Exec");
     expect(payloads[0]?.text).toContain("code 1");
+  });
+
+  it("does not add tool error fallback when assistant text exists after tool calls", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Checked the page and recovered with final answer."],
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_01",
+            name: "browser",
+            arguments: { action: "search", query: "openclaw docs" },
+          },
+        ],
+      }),
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBeUndefined();
+    expect(payloads[0]?.text).toContain("recovered");
   });
 
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
@@ -229,6 +237,15 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("connection timeout");
   });
 
+  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command not found" },
+      suppressToolErrorWarnings: true,
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("shows recoverable tool errors for mutating tools", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "message", meta: "reply", error: "text required" },
@@ -242,7 +259,7 @@ describe("buildEmbeddedRunPayloads", () => {
   it("shows mutating tool errors even when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
     });
 
@@ -255,7 +272,7 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: {
         toolName: "session_status",
         error: "model required",
@@ -280,7 +297,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],
-      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: {
         toolName: "write",
         error: "file missing",

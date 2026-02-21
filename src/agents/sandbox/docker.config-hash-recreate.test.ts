@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SandboxConfig } from "./types.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { ensureSandboxContainer } from "./docker.js";
+import type { SandboxConfig } from "./types.js";
 
 type SpawnCall = {
   command: string;
@@ -106,6 +106,7 @@ function createSandboxConfig(dns: string[]): SandboxConfig {
       enabled: false,
       image: "openclaw-browser:test",
       containerPrefix: "oc-browser-",
+      network: "openclaw-sandbox-browser",
       cdpPort: 9222,
       vncPort: 5900,
       noVncPort: 6080,

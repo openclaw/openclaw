@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -41,6 +42,56 @@ function writePlugin(params: {
     "utf-8",
   );
   return { dir, file, id: params.id };
+}
+
+function loadBundledMemoryPluginRegistry(options?: {
+  packageMeta?: { name: string; version: string; description?: string };
+  pluginBody?: string;
+  pluginFilename?: string;
+}) {
+  const bundledDir = makeTempDir();
+  let pluginDir = bundledDir;
+  let pluginFilename = options?.pluginFilename ?? "memory-core.js";
+
+  if (options?.packageMeta) {
+    pluginDir = path.join(bundledDir, "memory-core");
+    pluginFilename = "index.js";
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: options.packageMeta.name,
+          version: options.packageMeta.version,
+          description: options.packageMeta.description,
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  }
+
+  writePlugin({
+    id: "memory-core",
+    body:
+      options?.pluginBody ?? `export default { id: "memory-core", kind: "memory", register() {} };`,
+    dir: pluginDir,
+    filename: pluginFilename,
+  });
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+  return loadOpenClawPlugins({
+    cache: false,
+    config: {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    },
+  });
 }
 
 afterEach(() => {
@@ -145,63 +196,21 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("enables bundled memory plugin when selected by slot", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "memory-core",
-      body: `export default { id: "memory-core", kind: "memory", register() {} };`,
-      dir: bundledDir,
-      filename: "memory-core.js",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-core",
-          },
-        },
-      },
-    });
+    const registry = loadBundledMemoryPluginRegistry();
 
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");
     expect(memory?.status).toBe("loaded");
   });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
-    const bundledDir = makeTempDir();
-    const pluginDir = path.join(bundledDir, "memory-core");
-    fs.mkdirSync(pluginDir, { recursive: true });
-
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
+    const registry = loadBundledMemoryPluginRegistry({
+      packageMeta: {
         name: "@openclaw/memory-core",
         version: "1.2.3",
         description: "Memory plugin package",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-      "utf-8",
-    );
-    writePlugin({
-      id: "memory-core",
-      body: `export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };`,
-      dir: pluginDir,
-      filename: "index.js",
-    });
-
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-core",
-          },
-        },
       },
+      pluginBody:
+        'export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
     });
 
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");
@@ -480,5 +489,112 @@ describe("loadOpenClawPlugins", () => {
     const overridden = entries.find((entry) => entry.status === "disabled");
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
+  });
+  it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "warn-open-allow",
+      body: `export default { id: "warn-open-allow", register() {} };`,
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      logger: {
+        info: () => {},
+        warn: (msg) => warnings.push(msg),
+        error: () => {},
+      },
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+    });
+    expect(
+      warnings.some((msg) => msg.includes("plugins.allow is empty") && msg.includes(plugin.id)),
+    ).toBe(true);
+  });
+
+  it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "rogue");
+      fs.mkdirSync(globalDir, { recursive: true });
+      writePlugin({
+        id: "rogue",
+        body: `export default { id: "rogue", register() {} };`,
+        dir: globalDir,
+        filename: "index.js",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        logger: {
+          info: () => {},
+          warn: (msg) => warnings.push(msg),
+          error: () => {},
+        },
+        config: {
+          plugins: {
+            allow: ["rogue"],
+          },
+        },
+      });
+
+      const rogue = registry.plugins.find((entry) => entry.id === "rogue");
+      expect(rogue?.status).toBe("loaded");
+      expect(
+        warnings.some(
+          (msg) =>
+            msg.includes("rogue") && msg.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("rejects plugin entry files that escape plugin root via symlink", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const pluginDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.js");
+    const linkedEntry = path.join(pluginDir, "entry.js");
+    fs.writeFileSync(
+      outsideEntry,
+      'export default { id: "symlinked", register() { throw new Error("should not run"); } };',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "symlinked",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [linkedEntry] },
+          allow: ["symlinked"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "symlinked");
+    expect(record?.status).not.toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 });

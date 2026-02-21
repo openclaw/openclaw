@@ -1,38 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { MsgContext } from "../templating.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
-
-describe("buildInboundUserContextPrefix", () => {
-  it("omits conversation label block for direct chats", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
-      ConversationLabel: "openclaw-tui",
-    } as TemplateContext);
-
-    expect(text).toBe("");
-  });
-
-  it("keeps conversation label for group chats", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      ConversationLabel: "ops-room",
-    } as TemplateContext);
-
-    expect(text).toContain("Conversation info (untrusted metadata):");
-    expect(text).toContain('"conversation_label": "ops-room"');
-  });
-});
 
 describe("normalizeInboundTextNewlines", () => {
   it("converts CRLF to LF", () => {
@@ -612,7 +590,7 @@ let previousRuntimeError: typeof defaultRuntime.error;
 
 beforeAll(() => {
   previousRuntimeError = defaultRuntime.error;
-  defaultRuntime.error = undefined;
+  defaultRuntime.error = (() => {}) as typeof defaultRuntime.error;
 });
 
 afterAll(() => {
@@ -1146,7 +1124,7 @@ describe("createReplyDispatcher", () => {
     const deliver = vi.fn(async (_payload, info) => {
       delivered.push(info.kind);
       if (info.kind === "tool") {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await Promise.resolve();
       }
     });
     const dispatcher = createReplyDispatcher({ deliver });
@@ -1160,7 +1138,8 @@ describe("createReplyDispatcher", () => {
   });
 
   it("fires onIdle when the queue drains", async () => {
-    const deliver = vi.fn(async () => await new Promise((resolve) => setTimeout(resolve, 5)));
+    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
+      await Promise.resolve();
     const onIdle = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onIdle });
 

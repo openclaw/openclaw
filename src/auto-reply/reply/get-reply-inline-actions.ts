@@ -1,38 +1,30 @@
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
+import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
+import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
+import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  listReservedChatSlashCommandNames,
+  listSkillCommandsForWorkspace,
+  resolveSkillCommandInvocation,
+} from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.js";
-import type { createModelSelectionState } from "./model-selection.js";
-import type { TypingController } from "./typing.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.js";
-import { getChannelDock } from "../../channels/dock.js";
-import { logVerbose } from "../../globals.js";
-import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
-import { listChatCommands } from "../commands-registry.js";
-import { listSkillCommandsForWorkspace, resolveSkillCommandInvocation } from "../skill-commands.js";
 import { getAbortMemory } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
+import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
+import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
+import type { TypingController } from "./typing.js";
 
 const builtinSlashCommands = (() => {
-  const reserved = new Set<string>();
-  for (const command of listChatCommands()) {
-    if (command.nativeName) {
-      reserved.add(command.nativeName.toLowerCase());
-    }
-    for (const alias of command.textAliases) {
-      const trimmed = alias.trim();
-      if (!trimmed.startsWith("/")) {
-        continue;
-      }
-      reserved.add(trimmed.slice(1).toLowerCase());
-    }
-  }
-  for (const name of [
+  return listReservedChatSlashCommandNames([
     "think",
     "verbose",
     "reasoning",
@@ -41,10 +33,7 @@ const builtinSlashCommands = (() => {
     "model",
     "status",
     "queue",
-  ]) {
-    reserved.add(name);
-  }
-  return reserved;
+  ]);
 })();
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
@@ -75,20 +64,7 @@ function extractTextFromToolResult(result: any): string | null {
     const trimmed = content.trim();
     return trimmed ? trimmed : null;
   }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(rec.text);
-    }
-  }
+  const parts = collectTextContentBlocks(content);
   const out = parts.join("");
   const trimmed = out.trim();
   return trimmed ? trimmed : null;
@@ -226,8 +202,9 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
       });
+      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
-      const tool = tools.find((candidate) => candidate.name === dispatch.toolName);
+      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
@@ -300,6 +277,7 @@ export async function handleInlineActions(params: {
       command,
       sessionEntry,
       sessionKey,
+      parentSessionKey: ctx.ParentSessionKey,
       sessionScope,
       provider,
       model,

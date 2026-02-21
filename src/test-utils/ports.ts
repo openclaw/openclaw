@@ -92,3 +92,18 @@ export async function getDeterministicFreePortBlock(params?: {
 
   throw new Error("failed to acquire a free port block");
 }
+
+export async function getFreePortBlockWithPermissionFallback(params: {
+  offsets: number[];
+  fallbackBase: number;
+}): Promise<number> {
+  try {
+    return await getDeterministicFreePortBlock({ offsets: params.offsets });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES") {
+      return params.fallbackBase + (process.pid % 10_000);
+    }
+    throw err;
+  }
+}

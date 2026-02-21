@@ -137,6 +137,60 @@ describe("docker-setup.sh", () => {
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
   });
 
+  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
+    if (!sandbox) {
+      throw new Error("sandbox missing");
+    }
+
+    const result = spawnSync("bash", [sandbox.scriptPath], {
+      cwd: sandbox.rootDir,
+      env: createEnv(sandbox, {
+        OPENCLAW_EXTRA_MOUNTS: "/tmp:/tmp\n  evil-service:\n    image: alpine",
+      }),
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_EXTRA_MOUNTS cannot contain control characters");
+  });
+
+  it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", async () => {
+    if (!sandbox) {
+      throw new Error("sandbox missing");
+    }
+
+    const result = spawnSync("bash", [sandbox.scriptPath], {
+      cwd: sandbox.rootDir,
+      env: createEnv(sandbox, {
+        OPENCLAW_EXTRA_MOUNTS: "bad mount spec",
+      }),
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Invalid mount format");
+  });
+
+  it("rejects invalid OPENCLAW_HOME_VOLUME names", async () => {
+    if (!sandbox) {
+      throw new Error("sandbox missing");
+    }
+
+    const result = spawnSync("bash", [sandbox.scriptPath], {
+      cwd: sandbox.rootDir,
+      env: createEnv(sandbox, {
+        OPENCLAW_HOME_VOLUME: "bad name",
+      }),
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
+  });
+
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
     const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);

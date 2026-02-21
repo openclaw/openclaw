@@ -100,7 +100,7 @@ This maps to:
 
 **Channel note:** For non-Telegram channels, block streaming is **off unless**
 `*.blockStreaming` is explicitly set to `true`. Telegram can stream a live preview
-(`channels.telegram.streamMode`) without block replies.
+(`channels.telegram.streaming`) without block replies.
 
 Config location reminder: the `blockStreaming*` defaults live under
 `agents.defaults`, not the root config.
@@ -110,11 +110,7 @@ Config location reminder: the `blockStreaming*` defaults live under
 Telegram is the only channel with live preview streaming:
 
 - Uses Bot API `sendMessage` (first update) + `editMessageText` (subsequent updates).
-- `channels.telegram.streamMode: "partial" | "block" | "off"`.
-  - `partial`: preview updates with latest stream text.
-  - `block`: preview updates in chunked blocks (same chunker rules).
-  - `off`: no preview streaming.
-- Preview chunk config (only for `streamMode: "block"`): `channels.telegram.draftChunk` (defaults: `minChars: 200`, `maxChars: 800`).
+- `channels.telegram.streaming: true | false` (default: `true`).
 - Preview streaming is separate from block streaming.
 - When Telegram block streaming is explicitly enabled, preview streaming is skipped to avoid double-streaming.
 - Text-only finals are applied by editing the preview message in place.
@@ -124,8 +120,7 @@ Telegram is the only channel with live preview streaming:
 ```
 Telegram
   └─ sendMessage (temporary preview message)
-       ├─ streamMode=partial → edit latest text
-       └─ streamMode=block   → chunker + edit updates
+       └─ streaming=true → edit latest text
   └─ final text-only reply → final edit on same message
   └─ fallback: cleanup preview + normal final delivery (media/complex)
 ```

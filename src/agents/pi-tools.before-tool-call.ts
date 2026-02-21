@@ -1,12 +1,15 @@
-import type { AnyAgentTool } from "./tools/common.js";
+import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
-type HookContext = {
+export type HookContext = {
   agentId?: string;
   sessionKey?: string;
+  loopDetection?: ToolLoopDetectionConfig;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -15,6 +18,58 @@ const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+const LOOP_WARNING_BUCKET_SIZE = 10;
+const MAX_LOOP_WARNING_KEYS = 256;
+
+function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
+  if (!state.toolLoopWarningBuckets) {
+    state.toolLoopWarningBuckets = new Map();
+  }
+  const bucket = Math.floor(count / LOOP_WARNING_BUCKET_SIZE);
+  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? 0;
+  if (bucket <= lastBucket) {
+    return false;
+  }
+  state.toolLoopWarningBuckets.set(warningKey, bucket);
+  if (state.toolLoopWarningBuckets.size > MAX_LOOP_WARNING_KEYS) {
+    const oldest = state.toolLoopWarningBuckets.keys().next().value;
+    if (oldest) {
+      state.toolLoopWarningBuckets.delete(oldest);
+    }
+  }
+  return true;
+}
+
+async function recordLoopOutcome(args: {
+  ctx?: HookContext;
+  toolName: string;
+  toolParams: unknown;
+  toolCallId?: string;
+  result?: unknown;
+  error?: unknown;
+}): Promise<void> {
+  if (!args.ctx?.sessionKey) {
+    return;
+  }
+  try {
+    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
+    const { recordToolCallOutcome } = await import("./tool-loop-detection.js");
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx?.agentId,
+    });
+    recordToolCallOutcome(sessionState, {
+      toolName: args.toolName,
+      toolParams: args.toolParams,
+      toolCallId: args.toolCallId,
+      result: args.result,
+      error: args.error,
+      config: args.ctx.loopDetection,
+    });
+  } catch (err) {
+    log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
+  }
+}
 
 export async function runBeforeToolCallHook(args: {
   toolName: string;
@@ -24,6 +79,58 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  if (args.ctx?.sessionKey) {
+    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
+    const { logToolLoopAction } = await import("../logging/diagnostic.js");
+    const { detectToolCallLoop, recordToolCall } = await import("./tool-loop-detection.js");
+
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx?.agentId,
+    });
+
+    const loopResult = detectToolCallLoop(sessionState, toolName, params, args.ctx.loopDetection);
+
+    if (loopResult.stuck) {
+      if (loopResult.level === "critical") {
+        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
+        logToolLoopAction({
+          sessionKey: args.ctx.sessionKey,
+          sessionId: args.ctx?.agentId,
+          toolName,
+          level: "critical",
+          action: "block",
+          detector: loopResult.detector,
+          count: loopResult.count,
+          message: loopResult.message,
+          pairedToolName: loopResult.pairedToolName,
+        });
+        return {
+          blocked: true,
+          reason: loopResult.message,
+        };
+      } else {
+        const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+        if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
+          log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+          logToolLoopAction({
+            sessionKey: args.ctx.sessionKey,
+            sessionId: args.ctx?.agentId,
+            toolName,
+            level: "warning",
+            action: "warn",
+            detector: loopResult.detector,
+            count: loopResult.count,
+            message: loopResult.message,
+            pairedToolName: loopResult.pairedToolName,
+          });
+        }
+      }
+    }
+
+    recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+  }
 
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
@@ -95,12 +202,32 @@ export function wrapToolWithBeforeToolCallHook(
           }
         }
       }
-      return await execute(toolCallId, outcome.params, signal, onUpdate);
+      const normalizedToolName = normalizeToolName(toolName || "tool");
+      try {
+        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        await recordLoopOutcome({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: outcome.params,
+          toolCallId,
+          result,
+        });
+        return result;
+      } catch (err) {
+        await recordLoopOutcome({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: outcome.params,
+          toolCallId,
+          error: err,
+        });
+        throw err;
+      }
     },
   };
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
-    enumerable: false,
+    enumerable: true,
   });
   return wrappedTool;
 }

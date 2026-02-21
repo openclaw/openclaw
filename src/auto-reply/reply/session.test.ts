@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -866,11 +867,11 @@ describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -896,14 +897,14 @@ describe("applyResetModelOverride", () => {
   it("clears auth profile overrides when reset applies a model", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       authProfileOverride: "anthropic:default",
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -929,11 +930,11 @@ describe("applyResetModelOverride", () => {
   it("skips when resetTriggered is false", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -1290,5 +1291,112 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(250_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+});
+
+describe("initSessionState stale threadId fallback", () => {
+  async function seedSessionStore(params: {
+    storePath: string;
+    sessionKey: string;
+    entry: Record<string, unknown>;
+  }) {
+    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+      "utf-8",
+    );
+  }
+
+  it("ignores persisted lastThreadId on main sessions for non-thread messages", async () => {
+    const storePath = await createStorePath("stale-main-thread-");
+    const sessionKey = "agent:main:main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:123",
+          threadId: 42,
+        },
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello from DM",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastThreadId).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext?.threadId).toBeUndefined();
+  });
+
+  it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
+    const storePath = await createStorePath("stale-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    // First interaction: inside a DM topic (thread session)
+    const threadResult = await initSessionState({
+      ctx: {
+        Body: "hello from topic",
+        SessionKey: "agent:main:main:thread:42",
+        MessageThreadId: 42,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(threadResult.sessionEntry.lastThreadId).toBe(42);
+
+    // Second interaction: plain DM (non-thread session), same store
+    // The main session should NOT inherit threadId=42
+    const mainResult = await initSessionState({
+      ctx: {
+        Body: "hello from DM",
+        SessionKey: "agent:main:main",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
+  });
+
+  it("preserves lastThreadId within the same thread session", async () => {
+    const storePath = await createStorePath("preserve-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    // First message in thread
+    await initSessionState({
+      ctx: {
+        Body: "first",
+        SessionKey: "agent:main:main:thread:99",
+        MessageThreadId: 99,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Second message in same thread (MessageThreadId still present)
+    const result = await initSessionState({
+      ctx: {
+        Body: "second",
+        SessionKey: "agent:main:main:thread:99",
+        MessageThreadId: 99,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(result.sessionEntry.lastThreadId).toBe(99);
   });
 });
