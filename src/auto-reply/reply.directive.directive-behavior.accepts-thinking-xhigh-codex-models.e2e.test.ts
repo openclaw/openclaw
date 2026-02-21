@@ -57,7 +57,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const texts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
       expect(texts).toContain(
-        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
+        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex, github-copilot/gpt-5.2, anthropic/claude-opus-4-6 or anthropic/claude-opus-4.6.',
       );
     });
   });
