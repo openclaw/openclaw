@@ -106,5 +106,24 @@ export function createInboundDebouncer<T>(params: {
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  const flushAll = async () => {
+    const keys = Array.from(buffers.keys());
+    for (const key of keys) {
+      const buffer = buffers.get(key);
+      if (buffer) {
+        await flushBuffer(key, buffer);
+      }
+    }
+  };
+
+  const close = () => {
+    for (const [, buffer] of buffers) {
+      if (buffer.timeout) {
+        clearTimeout(buffer.timeout);
+      }
+    }
+    buffers.clear();
+  };
+
+  return { enqueue, flushKey, flushAll, close };
 }

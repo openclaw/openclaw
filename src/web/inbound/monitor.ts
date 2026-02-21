@@ -392,6 +392,8 @@ export async function monitorWebInbox(options: {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
         }
+        debouncer.close();
+        groupMetaCache.clear();
         sock.ws?.close();
       } catch (err) {
         logVerbose(`Socket close failed: ${String(err)}`);
