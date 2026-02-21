@@ -170,7 +170,14 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentConfigOverride = normalizedRequested
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
-  const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  // Exclude sandbox from the shallow merge — sandbox resolution is handled separately
+  // by resolveSandboxConfigForAgent which properly merges agents.defaults.sandbox
+  // with the per-agent sandbox config from agents.list[].sandbox.
+  const {
+    model: overrideModel,
+    sandbox: _sandboxOverride,
+    ...agentOverrideRest
+  } = agentConfigOverride ?? {};
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
