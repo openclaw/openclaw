@@ -220,6 +220,106 @@ describe("applyCustomApiConfig", () => {
       }),
     ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
   });
+
+  it("uses custom contextWindow and maxTokens when provided", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 32000,
+      maxTokens: 8192,
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+    const model = provider?.models?.find((m: { id: string }) => m.id === "foo-large");
+    expect(model?.contextWindow).toBe(32000);
+    expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("defaults contextWindow to 16000 and maxTokens to 4096 when omitted", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+    const model = provider?.models?.find((m: { id: string }) => m.id === "foo-large");
+    expect(model?.contextWindow).toBe(16000);
+    expect(model?.maxTokens).toBe(4096);
+  });
+
+  it("rejects contextWindow below 16000", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        contextWindow: 8000,
+      }),
+    ).toThrow("Custom context window must be an integer >= 16000.");
+  });
+
+  it("rejects maxTokens below 1000", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        maxTokens: 500,
+      }),
+    ).toThrow("Custom max tokens must be an integer >= 1000.");
+  });
+
+  it("rejects non-integer contextWindow", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        contextWindow: 16000.5,
+      }),
+    ).toThrow("Custom context window must be an integer >= 16000.");
+  });
+
+  it("rejects non-integer maxTokens", () => {
+    expect(() =>
+      applyCustomApiConfig({
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        maxTokens: 1000.7,
+      }),
+    ).toThrow("Custom max tokens must be an integer >= 1000.");
+  });
+
+  it("updates contextWindow and maxTokens when re-onboarding an existing model", () => {
+    const first = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 16000,
+      maxTokens: 4096,
+    });
+    const second = applyCustomApiConfig({
+      config: first.config,
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 64000,
+      maxTokens: 16384,
+    });
+    const provider = second.config.models?.providers?.[second.providerId!];
+    const models = provider?.models?.filter((m: { id: string }) => m.id === "foo-large");
+    expect(models).toHaveLength(1);
+    expect(models![0].contextWindow).toBe(64000);
+    expect(models![0].maxTokens).toBe(16384);
+  });
 });
 
 describe("parseNonInteractiveCustomApiFlags", () => {

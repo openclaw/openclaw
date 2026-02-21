@@ -9,8 +9,10 @@ import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = 4096;
+const DEFAULT_CONTEXT_WINDOW = 16000;
 const DEFAULT_MAX_TOKENS = 4096;
+const MIN_CONTEXT_WINDOW = 16000;
+const MIN_MAX_TOKENS = 1000;
 const VERIFY_TIMEOUT_MS = 10000;
 
 /**
@@ -65,6 +67,8 @@ export type ApplyCustomApiConfigParams = {
   apiKey?: string;
   providerId?: string;
   alias?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 export type ParseNonInteractiveCustomApiFlagsParams = {
@@ -89,7 +93,9 @@ export type CustomApiErrorCode =
   | "invalid_base_url"
   | "invalid_model_id"
   | "invalid_provider_id"
-  | "invalid_alias";
+  | "invalid_alias"
+  | "invalid_context_window"
+  | "invalid_max_tokens";
 
 export class CustomApiError extends Error {
   readonly code: CustomApiErrorCode;
@@ -484,6 +490,24 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
 
+  if (params.contextWindow !== undefined) {
+    if (!Number.isInteger(params.contextWindow) || params.contextWindow < MIN_CONTEXT_WINDOW) {
+      throw new CustomApiError(
+        "invalid_context_window",
+        `Custom context window must be an integer >= ${MIN_CONTEXT_WINDOW}.`,
+      );
+    }
+  }
+
+  if (params.maxTokens !== undefined) {
+    if (!Number.isInteger(params.maxTokens) || params.maxTokens < MIN_MAX_TOKENS) {
+      throw new CustomApiError(
+        "invalid_max_tokens",
+        `Custom max tokens must be an integer >= ${MIN_MAX_TOKENS}.`,
+      );
+    }
+  }
+
   // Transform Azure URLs to include the deployment path for API calls
   const resolvedBaseUrl = isAzureUrl(baseUrl) ? transformAzureUrl(baseUrl, modelId) : baseUrl;
 
@@ -509,16 +533,20 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const existingProvider = providers[providerId];
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
+  const contextWindow = params.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const maxTokens = params.maxTokens ?? DEFAULT_MAX_TOKENS;
   const nextModel = {
     id: modelId,
     name: `${modelId} (Custom Provider)`,
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow,
+    maxTokens,
     input: ["text"] as ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
   };
-  const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
+  const mergedModels = hasModel
+    ? existingModels.map((m) => (m.id === modelId ? nextModel : m))
+    : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
     params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);

@@ -90,6 +90,11 @@ export function registerOnboardCommand(program: Command) {
       "--custom-compatibility <mode>",
       "Custom provider API compatibility: openai|anthropic (default: openai)",
     )
+    .option(
+      "--custom-context-window <size>",
+      "Custom provider context window size (default: 16000)",
+    )
+    .option("--custom-max-tokens <size>", "Custom provider max tokens (default: 4096)")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -157,6 +162,12 @@ export function registerOnboardCommand(program: Command) {
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
           customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          customContextWindow: opts.customContextWindow
+            ? Number.parseInt(opts.customContextWindow as string, 10)
+            : undefined,
+          customMaxTokens: opts.customMaxTokens
+            ? Number.parseInt(opts.customMaxTokens as string, 10)
+            : undefined,
           gatewayPort:
             typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
               ? gatewayPort
