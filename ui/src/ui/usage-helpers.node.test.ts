@@ -40,4 +40,95 @@ describe("usage-helpers", () => {
     expect(res.tools[0]?.[0]).toBe("read");
     expect(res.tools[0]?.[1]).toBe(2);
   });
+
+  it("handles null/undefined agentId when filtering by agent name", () => {
+    const sessionWithAgent = {
+      key: "session-1",
+      agentId: "test-agent",
+      usage: { totalTokens: 100, totalCost: 0 },
+    };
+    const sessionWithoutAgent = {
+      key: "session-2",
+      agentId: undefined,
+      usage: { totalTokens: 50, totalCost: 0 },
+    };
+    const sessionWithNullAgent = {
+      key: "session-3",
+      agentId: null,
+      usage: { totalTokens: 75, totalCost: 0 },
+    };
+
+    // Should not crash when filtering sessions with null/undefined agentIds
+    const result = filterSessionsByQuery(
+      [sessionWithAgent, sessionWithoutAgent, sessionWithNullAgent],
+      "agent:test",
+    );
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.key).toBe("session-1");
+  });
+
+  it("handles null/undefined channel, chatType, and label in filters", () => {
+    const sessionWithNulls = {
+      key: "session-null",
+      channel: null,
+      chatType: undefined,
+      label: null,
+      usage: { totalTokens: 50, totalCost: 0 },
+    };
+    const sessionWithValues = {
+      key: "session-values",
+      channel: "telegram",
+      chatType: "dm",
+      label: "Test Session",
+      usage: { totalTokens: 100, totalCost: 0 },
+    };
+
+    // None of these should crash
+    expect(() => filterSessionsByQuery([sessionWithNulls], "channel:telegram")).not.toThrow();
+    expect(() => filterSessionsByQuery([sessionWithNulls], "chat:dm")).not.toThrow();
+    expect(() => filterSessionsByQuery([sessionWithNulls], "label:test")).not.toThrow();
+
+    // Should filter correctly
+    expect(
+      filterSessionsByQuery([sessionWithNulls, sessionWithValues], "channel:telegram").sessions,
+    ).toHaveLength(1);
+    expect(
+      filterSessionsByQuery([sessionWithNulls, sessionWithValues], "channel:telegram").sessions[0]
+        ?.key,
+    ).toBe("session-values");
+  });
+
+  it("handles null/undefined sessionId in session/id filter", () => {
+    const sessionWithoutSessionId = {
+      key: "session-key-1",
+      sessionId: undefined,
+      usage: { totalTokens: 50, totalCost: 0 },
+    };
+    const sessionWithNullSessionId = {
+      key: "session-key-2",
+      sessionId: null,
+      usage: { totalTokens: 75, totalCost: 0 },
+    };
+    const sessionWithSessionId = {
+      key: "session-key-3",
+      sessionId: "abc-123-def",
+      usage: { totalTokens: 100, totalCost: 0 },
+    };
+
+    // Should not crash when filtering sessions with null/undefined sessionIds
+    expect(() =>
+      filterSessionsByQuery([sessionWithoutSessionId, sessionWithNullSessionId], "session:abc"),
+    ).not.toThrow();
+    expect(() =>
+      filterSessionsByQuery([sessionWithoutSessionId, sessionWithNullSessionId], "id:abc"),
+    ).not.toThrow();
+
+    // Should filter correctly and only match the session with the sessionId
+    const result = filterSessionsByQuery(
+      [sessionWithoutSessionId, sessionWithNullSessionId, sessionWithSessionId],
+      "session:abc",
+    );
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.sessionId).toBe("abc-123-def");
+  });
 });
