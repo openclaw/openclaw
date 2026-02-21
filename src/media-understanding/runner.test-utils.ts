@@ -15,7 +15,7 @@ export async function withAudioFixture(
   filePrefix: string,
   run: (params: AudioFixtureParams) => Promise<void>,
 ) {
-  const tmpPath = path.join(os.tmpdir(), `${filePrefix}-${Date.now()}.wav`);
+  const tmpPath = path.join(os.tmpdir(), filePrefix + "-" + Date.now().toString() + ".wav");
   await fs.writeFile(tmpPath, Buffer.from("RIFF"));
   const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
   const media = normalizeMediaAttachments(ctx);
