@@ -1,4 +1,4 @@
-import { createWriteStream } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -46,8 +46,14 @@ const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT = "archive entry count exceeds lim
 const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
   "archive entry extracted size exceeds limit";
 const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
+const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
+const OPEN_WRITE_FLAGS =
+  fsConstants.O_WRONLY |
+  fsConstants.O_CREAT |
+  fsConstants.O_TRUNC |
+  (process.platform !== "win32" && "O_NOFOLLOW" in fsConstants ? fsConstants.O_NOFOLLOW : 0);
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   const lower = filePath.toLowerCase();
@@ -190,6 +196,112 @@ function createExtractBudgetTransform(params: {
   });
 }
 
+function isNodeError(value: unknown): value is NodeJS.ErrnoException {
+  return Boolean(
+    value && typeof value === "object" && "code" in (value as Record<string, unknown>),
+  );
+}
+
+function isNotFoundError(value: unknown): boolean {
+  return isNodeError(value) && (value.code === "ENOENT" || value.code === "ENOTDIR");
+}
+
+function isSymlinkOpenError(value: unknown): boolean {
+  return (
+    isNodeError(value) &&
+    (value.code === "ELOOP" || value.code === "EINVAL" || value.code === "ENOTSUP")
+  );
+}
+
+function symlinkTraversalError(originalPath: string): Error {
+  return new Error(`${ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK}: ${originalPath}`);
+}
+
+async function assertDestinationDirReady(destDir: string): Promise<string> {
+  const stat = await fs.lstat(destDir);
+  if (stat.isSymbolicLink()) {
+    throw new Error("archive destination is a symlink");
+  }
+  if (!stat.isDirectory()) {
+    throw new Error("archive destination is not a directory");
+  }
+  return await fs.realpath(destDir);
+}
+
+function pathInside(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+async function assertNoSymlinkTraversal(params: {
+  rootDir: string;
+  relPath: string;
+  originalPath: string;
+}): Promise<void> {
+  const parts = params.relPath.split("/").filter(Boolean);
+  let current = path.resolve(params.rootDir);
+  for (const part of parts) {
+    current = path.join(current, part);
+    let stat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      stat = await fs.lstat(current);
+    } catch (err) {
+      if (isNotFoundError(err)) {
+        continue;
+      }
+      throw err;
+    }
+    if (stat.isSymbolicLink()) {
+      throw symlinkTraversalError(params.originalPath);
+    }
+  }
+}
+
+async function assertResolvedInsideDestination(params: {
+  destinationRealDir: string;
+  targetPath: string;
+  originalPath: string;
+}): Promise<void> {
+  let resolved: string;
+  try {
+    resolved = await fs.realpath(params.targetPath);
+  } catch (err) {
+    if (isNotFoundError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (!pathInside(params.destinationRealDir, resolved)) {
+    throw symlinkTraversalError(params.originalPath);
+  }
+}
+
+async function openZipOutputFile(outPath: string, originalPath: string) {
+  try {
+    return await fs.open(outPath, OPEN_WRITE_FLAGS, 0o666);
+  } catch (err) {
+    if (isSymlinkOpenError(err)) {
+      throw symlinkTraversalError(originalPath);
+    }
+    throw err;
+  }
+}
+
+async function cleanupPartialRegularFile(filePath: string): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stat = await fs.lstat(filePath);
+  } catch (err) {
+    if (isNotFoundError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (stat.isFile()) {
+    await fs.unlink(filePath).catch(() => undefined);
+  }
+}
+
 type ZipEntry = {
   name: string;
   dir: boolean;
@@ -214,6 +326,7 @@ async function extractZip(params: {
   limits?: ArchiveExtractLimits;
 }): Promise<void> {
   const limits = resolveExtractLimits(params.limits);
+  const destinationRealDir = await assertDestinationDirReady(params.destDir);
   const stat = await fs.stat(params.archivePath);
   if (stat.size > limits.maxArchiveBytes) {
     throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
@@ -242,23 +355,40 @@ async function extractZip(params: {
       relPath,
       originalPath: entry.name,
     });
+    await assertNoSymlinkTraversal({
+      rootDir: params.destDir,
+      relPath,
+      originalPath: entry.name,
+    });
     if (entry.dir) {
       await fs.mkdir(outPath, { recursive: true });
+      await assertResolvedInsideDestination({
+        destinationRealDir,
+        targetPath: outPath,
+        originalPath: entry.name,
+      });
       continue;
     }
 
     await fs.mkdir(path.dirname(outPath), { recursive: true });
+    await assertResolvedInsideDestination({
+      destinationRealDir,
+      targetPath: path.dirname(outPath),
+      originalPath: entry.name,
+    });
+    const handle = await openZipOutputFile(outPath, entry.name);
     budget.startEntry();
     const readable = await readZipEntryStream(entry);
+    const writable = handle.createWriteStream();
 
     try {
       await pipeline(
         readable,
         createExtractBudgetTransform({ onChunkBytes: budget.addBytes }),
-        createWriteStream(outPath),
+        writable,
       );
     } catch (err) {
-      await fs.unlink(outPath).catch(() => undefined);
+      await cleanupPartialRegularFile(outPath).catch(() => undefined);
       throw err;
     }
 

@@ -79,6 +79,32 @@ describe("archive utils", () => {
     ).rejects.toThrow(/(escapes destination|absolute)/i);
   });
 
+  it("rejects zip entries that traverse pre-existing destination symlinks", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.zip");
+    const extractDir = path.join(workDir, "extract");
+    const outsideDir = path.join(workDir, "outside");
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.symlink(outsideDir, path.join(extractDir, "escape"));
+
+    const zip = new JSZip();
+    zip.file("escape/pwn.txt", "owned");
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/symlink/i);
+
+    const outsideFile = path.join(outsideDir, "pwn.txt");
+    const outsideExists = await fs
+      .stat(outsideFile)
+      .then(() => true)
+      .catch(() => false);
+    expect(outsideExists).toBe(false);
+  });
+
   it("extracts tar archives", async () => {
     const workDir = await makeTempDir();
     const archivePath = path.join(workDir, "bundle.tar");
