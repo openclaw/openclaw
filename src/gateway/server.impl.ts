@@ -11,6 +11,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
+  type OpenClawConfig,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
@@ -45,6 +46,12 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -107,6 +114,7 @@ const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
+const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
@@ -248,7 +256,64 @@ export async function startGatewayServer(
     }
   }
 
-  let cfgAtStart = loadConfig();
+  let secretsDegraded = false;
+  const activateRuntimeSecrets = async (
+    config: OpenClawConfig,
+    params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
+  ) => {
+    try {
+      const prepared = await prepareSecretsRuntimeSnapshot({ config });
+      if (params.activate) {
+        activateSecretsRuntimeSnapshot(prepared);
+      }
+      for (const warning of prepared.warnings) {
+        logSecrets.warn(`[${warning.code}] ${warning.message}`);
+      }
+      if (secretsDegraded) {
+        logSecrets.info(
+          "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered; runtime remained on last-known-good during the outage.",
+        );
+      }
+      secretsDegraded = false;
+      return prepared;
+    } catch (err) {
+      const details = String(err);
+      if (!secretsDegraded) {
+        logSecrets.error(`[SECRETS_RELOADER_DEGRADED] ${details}`);
+      } else {
+        logSecrets.warn(`[SECRETS_RELOADER_DEGRADED] ${details}`);
+      }
+      secretsDegraded = true;
+      if (params.reason === "startup") {
+        throw new Error(`Startup failed: required secrets are unavailable. ${details}`, {
+          cause: err,
+        });
+      }
+      throw err;
+    }
+  };
+
+  // Fail fast before startup if required refs are unresolved.
+  let cfgAtStart: OpenClawConfig;
+  {
+    const freshSnapshot = await readConfigFileSnapshot();
+    if (!freshSnapshot.valid) {
+      const issues =
+        freshSnapshot.issues.length > 0
+          ? freshSnapshot.issues
+              .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+              .join("\n")
+          : "Unknown validation issue.";
+      throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
+    }
+    const prepared = await activateRuntimeSecrets(freshSnapshot.config, {
+      reason: "startup",
+      activate: true,
+    });
+    cfgAtStart = prepared.config;
+  }
+
+  cfgAtStart = loadConfig();
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: cfgAtStart,
     env: process.env,
@@ -268,6 +333,12 @@ export async function startGatewayServer(
       );
     }
   }
+  cfgAtStart = (
+    await activateRuntimeSecrets(cfgAtStart, {
+      reason: "startup",
+      activate: true,
+    })
+  ).config;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
@@ -738,8 +809,27 @@ export async function startGatewayServer(
         return startGatewayConfigReloader({
           initialConfig: cfgAtStart,
           readSnapshot: readConfigFileSnapshot,
-          onHotReload: applyHotReload,
-          onRestart: requestGatewayRestart,
+          onHotReload: async (plan, nextConfig) => {
+            const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+            const prepared = await activateRuntimeSecrets(nextConfig, {
+              reason: "reload",
+              activate: true,
+            });
+            try {
+              await applyHotReload(plan, prepared.config);
+            } catch (err) {
+              if (previousSnapshot) {
+                activateSecretsRuntimeSnapshot(previousSnapshot);
+              } else {
+                clearSecretsRuntimeSnapshot();
+              }
+              throw err;
+            }
+          },
+          onRestart: async (plan, nextConfig) => {
+            await activateRuntimeSecrets(nextConfig, { reason: "restart-check", activate: false });
+            requestGatewayRestart(plan, nextConfig);
+          },
           log: {
             info: (msg) => logReload.info(msg),
             warn: (msg) => logReload.warn(msg),
@@ -794,6 +884,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      clearSecretsRuntimeSnapshot();
       await close(opts);
     },
   };

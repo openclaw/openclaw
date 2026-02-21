@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
@@ -541,7 +542,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
-    params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);
+    normalizeOptionalSecretInput(params.apiKey) ?? normalizeOptionalSecretInput(existingApiKey);
 
   let config: OpenClawConfig = {
     ...params.config,
