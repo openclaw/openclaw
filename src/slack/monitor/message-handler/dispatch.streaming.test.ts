@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  resolveSlackReplyTeamId,
+  resolveSlackStreamingThreadHint,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled when config is undefined", () => {
@@ -41,5 +45,29 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("slack stream recipient team id", () => {
+  it("uses message team_id when available", () => {
+    expect(
+      resolveSlackReplyTeamId({
+        messageTeamId: "T_TEAM",
+        ctxTeamId: "T_CTX",
+      }),
+    ).toBe("T_TEAM");
+  });
+
+  it("falls back to context teamId when message team_id is missing", () => {
+    expect(
+      resolveSlackReplyTeamId({
+        messageTeamId: undefined,
+        ctxTeamId: "T_CTX",
+      }),
+    ).toBe("T_CTX");
+  });
+
+  it("returns undefined if no team id is available", () => {
+    expect(resolveSlackReplyTeamId({})).toBeUndefined();
   });
 });

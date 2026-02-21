@@ -26,6 +26,13 @@ function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 }
 
+export function resolveSlackReplyTeamId(params: {
+  messageTeamId?: string;
+  ctxTeamId?: string;
+}): string | undefined {
+  return params.messageTeamId || params.ctxTeamId || undefined;
+}
+
 export function isSlackStreamingEnabled(streaming: boolean | undefined): boolean {
   return streaming !== false;
 }
@@ -199,7 +206,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
-          teamId: ctx.teamId,
+          teamId: resolveSlackReplyTeamId({
+            messageTeamId: message.team_id,
+            ctxTeamId: ctx.teamId,
+          }),
           userId: message.user,
         });
         replyPlan.markSent();

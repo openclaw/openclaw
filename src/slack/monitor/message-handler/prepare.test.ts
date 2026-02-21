@@ -5,7 +5,7 @@ import type { App } from "@slack/bolt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import * as routeResolver from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -184,6 +184,46 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectInboundContextContract(prepared!.ctxPayload as any);
   });
 
+  it("uses incoming event team_id for route resolution when available", async () => {
+    const resolveAgentRouteSpy = vi.spyOn(routeResolver, "resolveAgentRoute").mockReturnValue({
+      agentId: "support",
+      channel: "slack",
+      accountId: "default",
+      sessionKey: "agent:support:slack:channel:c123",
+      mainSessionKey: "agent:support:main",
+      matchedBy: "default",
+    } as never);
+    try {
+      const ctx = createInboundSlackCtx({
+        cfg: {
+          channels: { slack: { enabled: true } },
+        } as OpenClawConfig,
+        defaultRequireMention: false,
+      });
+      const message: SlackMessageEvent = {
+        type: "message",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "Hello team",
+        team_id: "T_EVENT",
+      };
+
+      const prepared = await prepareMessageWith(
+        { ...ctx, teamId: "T_CONTEXT" },
+        createSlackAccount(),
+        message,
+      );
+
+      expect(prepared).not.toBeNull();
+      expect(resolveAgentRouteSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ teamId: "T_EVENT" }),
+      );
+    } finally {
+      resolveAgentRouteSpy.mockRestore();
+    }
+  });
+
   it("includes forwarded shared attachment text in raw body", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
@@ -324,7 +364,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       session: { store: storePath },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
     } as OpenClawConfig;
-    const route = resolveAgentRoute({
+    const route = routeResolver.resolveAgentRoute({
       cfg,
       channel: "slack",
       accountId: "default",

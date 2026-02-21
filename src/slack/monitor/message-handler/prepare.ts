@@ -191,7 +191,7 @@ export async function prepareSlackMessage(params: {
     cfg,
     channel: "slack",
     accountId: account.accountId,
-    teamId: ctx.teamId || undefined,
+    teamId: message.team_id || ctx.teamId || undefined,
     peer: {
       kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
       id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
