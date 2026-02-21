@@ -1307,15 +1307,17 @@ describe("QmdMemoryManager", () => {
       } | null;
       resolveDocLocation: (docid?: string) => Promise<unknown>;
     };
+    const busyStmt: { all: () => never; get: () => never } = {
+      all: () => {
+        throw new Error("SQLITE_BUSY: database is locked");
+      },
+      get: () => {
+        throw new Error("SQLITE_BUSY: database is locked");
+      },
+    };
+
     inner.db = {
-      prepare: () => ({
-        all: () => {
-          throw new Error("SQLITE_BUSY: database is locked");
-        },
-        get: () => {
-          throw new Error("SQLITE_BUSY: database is locked");
-        },
-      }),
+      prepare: () => busyStmt,
       close: () => {},
     };
     await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
