@@ -848,6 +848,11 @@ export async function recordSessionMetaFromInbound(params: {
         return null;
       }
       const next = mergeSessionEntry(existing, patch);
+      if (existing && Number.isFinite(existing.updatedAt)) {
+        // Metadata refresh should not advance session freshness; initSessionState
+        // controls lifecycle resets using updatedAt.
+        next.updatedAt = existing.updatedAt;
+      }
       store[sessionKey] = next;
       return next;
     },
@@ -865,8 +870,10 @@ export async function updateLastRoute(params: {
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
+  preserveUpdatedAt?: boolean;
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
+  const preserveUpdatedAt = params.preserveUpdatedAt ?? false;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
@@ -915,8 +922,12 @@ export async function updateLastRoute(params: {
           groupResolution: params.groupResolution,
         })
       : null;
+    const resolvedUpdatedAt =
+      preserveUpdatedAt && Number.isFinite(existing?.updatedAt)
+        ? (existing?.updatedAt ?? now)
+        : Math.max(existing?.updatedAt ?? 0, now);
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      updatedAt: resolvedUpdatedAt,
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
@@ -927,6 +938,9 @@ export async function updateLastRoute(params: {
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
+    if (preserveUpdatedAt && Number.isFinite(existing?.updatedAt)) {
+      next.updatedAt = existing?.updatedAt ?? next.updatedAt;
+    }
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store, { activeSessionKey: sessionKey });
     return next;

@@ -7,6 +7,7 @@ import {
   buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
+  recordSessionMetaFromInbound,
   resolveSessionFilePath,
   resolveSessionKey,
   resolveSessionTranscriptPath,
@@ -238,6 +239,86 @@ describe("sessions", () => {
       to: "222",
     });
     expect(store[mainSessionKey]?.lastThreadId).toBeUndefined();
+  });
+
+  it("updateLastRoute can preserve updatedAt for inbound metadata writes", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await createCaseDir("updateLastRoute");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [mainSessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 123,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:123",
+      },
+      preserveUpdatedAt: true,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.updatedAt).toBe(123);
+    expect(store[mainSessionKey]?.lastChannel).toBe("discord");
+    expect(store[mainSessionKey]?.lastTo).toBe("channel:123");
+  });
+
+  it("recordSessionMetaFromInbound preserves updatedAt on existing sessions", async () => {
+    const sessionKey = "agent:main:discord:channel:123";
+    const dir = await createCaseDir("recordSessionMeta");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 456,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "channel",
+        From: "discord:channel:123",
+        To: "channel:123",
+        GroupSubject: "#general",
+      },
+      groupResolution: {
+        key: "discord:channel:123",
+        channel: "discord",
+        id: "123",
+        chatType: "channel",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBe(456);
+    expect(store[sessionKey]?.channel).toBe("discord");
+    expect(store[sessionKey]?.groupId).toBe("123");
+    expect(store[sessionKey]?.origin?.provider).toBe("discord");
   });
 
   it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
