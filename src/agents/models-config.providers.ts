@@ -176,6 +176,16 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// ZHIPU OpenAI-compatible base (Phase 1A) with API key from ZHIPU_API_KEY.
+const ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/";
+const ZHIPU_DEFAULT_CONTEXT_WINDOW = 128000;
+const ZHIPU_DEFAULT_MAX_TOKENS = 8192;
+const ZHIPU_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 const log = createSubsystemLogger("agents/model-providers");
 
 interface OllamaModel {
@@ -734,6 +744,87 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+export function buildZhipuProvider(): ProviderConfig {
+  return {
+    baseUrl: ZHIPU_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "glm-5",
+        name: "GLM-5",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.7",
+        name: "GLM-4.7",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.6",
+        name: "GLM-4.6",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.5-air",
+        name: "GLM-4.5 Air",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.7-flash",
+        name: "GLM-4.7 Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.5-flash",
+        name: "GLM-4.5 Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.6v",
+        name: "GLM-4.6V",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.6v-flash",
+        name: "GLM-4.6V Flash",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -912,6 +1003,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const zhipuKey =
+    resolveEnvApiKeyVarName("zhipu") ??
+    resolveApiKeyFromProfiles({ provider: "zhipu", store: authStore });
+  if (zhipuKey) {
+    providers.zhipu = { ...buildZhipuProvider(), apiKey: zhipuKey };
   }
 
   return providers;

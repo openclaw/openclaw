@@ -16,6 +16,10 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import {
+  extractZhipuAssistantText,
+  zhipuChatCompletions,
+} from "../providers/zhipu/zhipu-client.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -62,6 +66,36 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 
 function resolveMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
+}
+
+async function noteZhipuProviderHealth() {
+  const apiKey = process.env.ZHIPU_API_KEY?.trim();
+  if (!apiKey) {
+    note('- FAIL: Missing ZHIPU_API_KEY. Set "ZHIPU_API_KEY" and rerun doctor.', "ZHIPU Provider");
+    return;
+  }
+
+  try {
+    const response = await zhipuChatCompletions({
+      model: "glm-4.5-flash",
+      messages: [{ role: "user", content: "reply with OK" }],
+      stream: false,
+      max_tokens: 64,
+      temperature: 0,
+    });
+    const assistantText = extractZhipuAssistantText(response);
+    if (assistantText.trim()) {
+      note("- PASS: Chat connectivity check succeeded.", "ZHIPU Provider");
+      return;
+    }
+    note(
+      "- FAIL: Chat connectivity check returned empty response content/reasoning_content.",
+      "ZHIPU Provider",
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    note(`- FAIL: Chat connectivity check failed: ${message}`, "ZHIPU Provider");
+  }
 }
 
 export async function doctorCommand(
@@ -265,6 +299,7 @@ export async function doctorCommand(
 
   noteWorkspaceStatus(cfg);
   await noteMemorySearchHealth(cfg);
+  await noteZhipuProviderHealth();
 
   // Check and fix shell completion
   await doctorShellCompletion(runtime, prompter, {
