@@ -40,6 +40,22 @@ describe("env test utils", () => {
     expect(process.env[key]).toBe(prev);
   });
 
+  it("withEnv can delete a key only inside callback", () => {
+    const key = "OPENCLAW_ENV_TEST_SYNC_DELETE";
+    const prev = process.env[key];
+    process.env[key] = "outer";
+
+    const seen = withEnv({ [key]: undefined }, () => process.env[key]);
+
+    expect(seen).toBeUndefined();
+    expect(process.env[key]).toBe("outer");
+    if (prev === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = prev;
+    }
+  });
+
   it("withEnvAsync restores values when callback throws", async () => {
     const key = "OPENCLAW_ENV_TEST_ASYNC";
     const prev = process.env[key];
@@ -62,5 +78,21 @@ describe("env test utils", () => {
 
     expect(seen).toBe("inside");
     expect(process.env[key]).toBe(prev);
+  });
+
+  it("withEnvAsync can delete a key only inside callback", async () => {
+    const key = "OPENCLAW_ENV_TEST_ASYNC_DELETE";
+    const prev = process.env[key];
+    process.env[key] = "outer";
+
+    const seen = await withEnvAsync({ [key]: undefined }, async () => process.env[key]);
+
+    expect(seen).toBeUndefined();
+    expect(process.env[key]).toBe("outer");
+    if (prev === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = prev;
+    }
   });
 });
