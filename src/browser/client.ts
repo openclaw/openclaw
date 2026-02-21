@@ -3,6 +3,7 @@ import { fetchBrowserJson } from "./client-fetch.js";
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
+  driver?: "openclaw" | "extension";
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
@@ -23,6 +24,7 @@ export type BrowserStatus = {
 
 export type ProfileStatus = {
   name: string;
+  driver: "openclaw" | "extension";
   cdpPort: number;
   cdpUrl: string;
   color: string;

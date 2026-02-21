@@ -71,6 +71,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     res.json({
       enabled: current.resolved.enabled,
       profile: profileCtx.profile.name,
+      driver: profileCtx.profile.driver === "extension" ? "extension" : "openclaw",
       running: cdpReady,
       cdpReady,
       cdpHttp,

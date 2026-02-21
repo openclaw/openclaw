@@ -161,4 +161,28 @@ describe("profile CRUD endpoints", () => {
     const deleteInvalidBody = (await deleteInvalid.json()) as { error: string };
     expect(deleteInvalidBody.error).toContain("invalid profile name");
   });
+
+  it("includes driver in status and profile responses", async () => {
+    await startBrowserControlServerFromConfig();
+    const base = getBrowserControlServerBaseUrl();
+
+    const statusRes = await realFetch(`${base}/`);
+    expect(statusRes.status).toBe(200);
+    const status = (await statusRes.json()) as { profile?: string; driver?: string };
+    expect(status.profile).toBe("openclaw");
+    expect(status.driver).toBe("openclaw");
+
+    const profilesRes = await realFetch(`${base}/profiles`);
+    expect(profilesRes.status).toBe(200);
+    const profilesBody = (await profilesRes.json()) as {
+      profiles?: Array<{ name?: string; driver?: string }>;
+    };
+    const profiles = profilesBody.profiles ?? [];
+    expect(profiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "openclaw", driver: "openclaw" }),
+        expect.objectContaining({ name: "chrome", driver: "extension" }),
+      ]),
+    );
+  });
 });

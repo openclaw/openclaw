@@ -218,6 +218,26 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+function resolveConfiguredProfileDriver(
+  profileName: string | undefined,
+): "openclaw" | "extension" | undefined {
+  const normalizedProfile = profileName?.trim();
+  if (!normalizedProfile) {
+    return undefined;
+  }
+  try {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const profile = resolved.profiles[normalizedProfile];
+    if (!profile) {
+      return undefined;
+    }
+    return profile.driver === "extension" ? "extension" : "openclaw";
+  } catch {
+    return undefined;
+  }
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -245,6 +265,7 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
+      const profileDriver = resolveConfiguredProfileDriver(profile);
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
@@ -252,7 +273,7 @@ export function createBrowserTool(opts?: {
         throw new Error('node is only supported with target="node".');
       }
 
-      if (!target && !requestedNode && profile === "chrome") {
+      if (!target && !requestedNode && profileDriver === "extension") {
         // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
         target = "host";
       }
@@ -796,7 +817,7 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           } catch (err) {
             const msg = String(err);
-            if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
+            if (msg.includes("404:") && msg.includes("tab not found") && profileDriver === "extension") {
               const tabs = proxyRequest
                 ? ((
                     (await proxyRequest({

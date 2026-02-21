@@ -54,6 +54,10 @@ const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
     controlPort: 18791,
+    profiles: {
+      chrome: { driver: "extension" },
+      openclaw: { driver: "openclaw" },
+    },
   })),
 }));
 vi.mock("../../browser/config.js", () => browserConfigMocks);
@@ -209,6 +213,44 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("defaults to host when using an extension-driven custom profile", async () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValueOnce({
+      enabled: true,
+      controlPort: 18791,
+      profiles: {
+        work: { driver: "extension" },
+      },
+    });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.("call-1", { action: "snapshot", profile: "work", snapshotFormat: "ai" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "work",
+      }),
+    );
+  });
+
+  it("keeps sandbox target for non-extension profiles named chrome", async () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValueOnce({
+      enabled: true,
+      controlPort: 18791,
+      profiles: {
+        chrome: { driver: "openclaw" },
+      },
+    });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.("call-1", { action: "snapshot", profile: "chrome", snapshotFormat: "ai" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      "http://127.0.0.1:9999",
+      expect.objectContaining({
+        profile: "chrome",
+      }),
+    );
+  });
+
   it("routes to node proxy when target=node", async () => {
     nodesUtilsMocks.listNodes.mockResolvedValue([
       {
@@ -271,6 +313,52 @@ describe("browser tool snapshot maxChars", () => {
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("shows extension tab guidance for extension-driven profiles", async () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValueOnce({
+      enabled: true,
+      controlPort: 18791,
+      profiles: {
+        work: { driver: "extension" },
+      },
+    });
+    browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockResolvedValueOnce([]);
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        profile: "work",
+        request: { kind: "click", ref: "e1" },
+      }),
+    ).rejects.toThrow(/No Chrome tabs are attached via the OpenClaw Browser Relay extension/i);
+    expect(browserClientMocks.browserTabs).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "work" }),
+    );
+  });
+
+  it("does not apply extension tab guidance to non-extension profiles named chrome", async () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValueOnce({
+      enabled: true,
+      controlPort: 18791,
+      profiles: {
+        chrome: { driver: "openclaw" },
+      },
+    });
+    browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        profile: "chrome",
+        request: { kind: "click", ref: "e1" },
+      }),
+    ).rejects.toThrow(/404: tab not found/i);
+    expect(browserClientMocks.browserTabs).not.toHaveBeenCalled();
   });
 });
 
