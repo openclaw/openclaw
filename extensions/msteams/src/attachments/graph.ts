@@ -5,6 +5,7 @@ import {
   GRAPH_ROOT,
   inferPlaceholder,
   isRecord,
+  isUrlAllowed,
   normalizeContentType,
   resolveRequestUrl,
   resolveAllowedHosts,
@@ -30,6 +31,25 @@ type GraphAttachment = {
   thumbnailUrl?: string | null;
   content?: unknown;
 };
+
+function isRedirectStatus(status: number): boolean {
+  return [301, 302, 303, 307, 308].includes(status);
+}
+
+function readRedirectUrl(baseUrl: string, res: Response): string | null {
+  if (!isRedirectStatus(res.status)) {
+    return null;
+  }
+  const location = res.headers.get("location");
+  if (!location) {
+    return null;
+  }
+  try {
+    return new URL(location, baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
 
 function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
   let current: unknown = value;
@@ -264,6 +284,9 @@ export async function downloadMSTeamsGraphMedia(params: {
         try {
           // SharePoint URLs need to be accessed via Graph shares API
           const shareUrl = att.contentUrl!;
+          if (!isUrlAllowed(shareUrl, allowHosts)) {
+            continue;
+          }
           const encodedUrl = Buffer.from(shareUrl).toString("base64url");
           const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
@@ -274,13 +297,20 @@ export async function downloadMSTeamsGraphMedia(params: {
             contentTypeHint: "application/octet-stream",
             preserveFilenames: params.preserveFilenames,
             fetchImpl: async (input, init) => {
+              const requestUrl = resolveRequestUrl(input);
               const headers = new Headers(init?.headers);
               headers.set("Authorization", `Bearer ${accessToken}`);
-              return await fetchFn(resolveRequestUrl(input), {
+              const res = await fetchFn(requestUrl, {
                 ...init,
                 headers,
-                redirect: "follow",
               });
+              const redirectUrl = readRedirectUrl(requestUrl, res);
+              if (redirectUrl && !isUrlAllowed(redirectUrl, allowHosts)) {
+                throw new Error(
+                  `MSTeams media redirect target blocked by allowlist: ${redirectUrl}`,
+                );
+              }
+              return res;
             },
           });
           sharePointMedia.push(media);
