@@ -372,4 +372,78 @@ describe("hooks mapping", () => {
     });
     expect(result?.ok).toBe(false);
   });
+
+  describe("prototype pollution protection", () => {
+    it("blocks __proto__ traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "proto-test",
+            messageTemplate: "value: {{__proto__}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { __proto__: { polluted: true } } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("value: ");
+        }
+      }
+    });
+
+    it("blocks constructor traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "constructor-test",
+            messageTemplate: "type: {{constructor.name}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { constructor: { name: "INJECTED" } } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("type: ");
+        }
+      }
+    });
+
+    it("blocks prototype traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "prototype-test",
+            messageTemplate: "val: {{prototype}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { prototype: "leaked" } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("val: ");
+        }
+      }
+    });
+  });
 });
