@@ -204,8 +204,16 @@ Use these with `openclaw message send` or cron delivery:
 
 ## Bundled skill
 
-The Tlon plugin includes a bundled skill (`@tloncorp/tlon-skill`) that provides CLI access to
-Tlon operations: managing groups, creating channels, updating profiles, sending DMs, and more.
+The Tlon plugin includes a bundled skill ([`@tloncorp/tlon-skill`](https://github.com/tloncorp/tlon-skill))
+that provides CLI access to Tlon operations:
+
+- **Contacts**: get/update profiles, list contacts
+- **Channels**: list, create, post messages, fetch history
+- **Groups**: list, create, manage members
+- **DMs**: send messages, react to messages
+- **Reactions**: add/remove emoji reactions to posts and DMs
+- **Settings**: manage plugin permissions via slash commands
+
 The skill is automatically available when the plugin is installed.
 
 ## Capabilities
@@ -217,7 +225,7 @@ The skill is automatically available when the plugin is installed.
 | Threads         | ✅ Supported (auto-replies in thread)   |
 | Rich text       | ✅ Markdown converted to Tlon format    |
 | Images          | ✅ Uploaded to Tlon storage             |
-| Reactions       | ❌ Not yet supported                    |
+| Reactions       | ✅ Via [bundled skill](#bundled-skill)  |
 | Polls           | ❌ Not yet supported                    |
 | Native commands | ✅ Supported (owner-only by default)    |
 
