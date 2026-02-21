@@ -1,4 +1,5 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import type { MaskedSecrets } from "../security/masked-secrets/index.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 export type ExecToolDefaults = {
@@ -21,6 +22,7 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  maskedSecrets?: MaskedSecrets;
 };
 
 export type ExecElevatedDefaults = {

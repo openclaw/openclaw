@@ -508,6 +508,11 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      maskedSecretNames: (
+        (params.config as Record<string, unknown> | undefined)?.security as
+          | { maskedSecrets?: { mask?: string[] } }
+          | undefined
+      )?.maskedSecrets?.mask,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

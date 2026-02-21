@@ -294,6 +294,22 @@ export const OpenClawSchema = z
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
     tools: ToolsSchema,
+    security: z
+      .object({
+        maskedSecrets: z
+          .object({
+            enabled: z.boolean().default(true),
+            mask: z.array(z.string()).default([]),
+            outputPatterns: z.array(z.string()).optional(),
+            blockedCommands: z.array(z.string()).optional(),
+            blockSecretFileReads: z.boolean().default(true),
+            secretFilePaths: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
     audio: AudioSchema,

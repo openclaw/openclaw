@@ -10,6 +10,7 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { createMaskedSecrets, type MaskedSecrets } from "../security/masked-secrets/index.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -280,6 +281,13 @@ export function createOpenClawCodingTools(options?: {
   ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveFsConfig({ cfg: options?.config, agentId });
+  // Initialize masked secrets from config (lazy singleton per tool creation).
+  const maskedSecretsConfig = (options?.config as Record<string, unknown> | undefined)?.security as
+    | { maskedSecrets?: Record<string, unknown> }
+    | undefined;
+  const maskedSecrets: MaskedSecrets | undefined = maskedSecretsConfig?.maskedSecrets
+    ? createMaskedSecrets(maskedSecretsConfig.maskedSecrets)
+    : undefined;
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
@@ -378,10 +386,12 @@ export function createOpenClawCodingTools(options?: {
           env: sandbox.docker.env,
         }
       : undefined,
+    maskedSecrets,
   });
   const processTool = createProcessTool({
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
+    maskedSecrets,
   });
   const applyPatchTool =
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)

@@ -468,6 +468,11 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      maskedSecretNames: (
+        (params.config as Record<string, unknown> | undefined)?.security as
+          | { maskedSecrets?: { mask?: string[] } }
+          | undefined
+      )?.maskedSecrets?.mask,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
