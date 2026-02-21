@@ -296,6 +296,52 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call.startsWith("npm i -g"))).toBe(false);
   });
 
+  it("updates companion-prefix npm installs when manager root lookup fails", async () => {
+    const companionPrefix = path.join(tempDir, ".openclaw");
+    const pkgRoot = path.join(companionPrefix, "lib", "node_modules", "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const npmBin = path.join(companionPrefix, "tools", "node", "bin", "npm");
+    await fs.mkdir(path.dirname(npmBin), { recursive: true });
+    await fs.writeFile(npmBin, "#!/bin/sh\nexit 0\n", "utf-8");
+
+    const companionPrefixReal = await fs.realpath(companionPrefix);
+    const npmBinReal = await fs.realpath(npmBin);
+    const expectedInstallCommand = `${npmBinReal} i -g --prefix ${companionPrefixReal} openclaw@latest --no-fund --no-audit --loglevel=error`;
+    const calls: string[] = [];
+
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === expectedInstallCommand) {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(result.before?.version).toBe("1.0.0");
+    expect(result.after?.version).toBe("2.0.0");
+    expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
+  });
+
   async function runNpmGlobalUpdateCase(params: {
     expectedInstallCommand: string;
     channel?: "stable" | "beta";
