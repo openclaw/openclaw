@@ -32,7 +32,7 @@ openclaw plugins install ./extensions/tlon
 
 Details: [Plugins](/tools/plugin)
 
-## Setup
+## Onboarding
 
 1. Install the Tlon plugin.
 2. Gather your ship URL and login code.
