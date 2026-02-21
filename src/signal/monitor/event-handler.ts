@@ -47,8 +47,141 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import type {
+  SignalEventHandlerDeps,
+  SignalReceivePayload,
+  SignalTextStyleRange,
+} from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+
+function attachmentLooksLikeVoiceNote(attachment: {
+  voiceNote?: boolean | null;
+  filename?: string | null;
+}): boolean {
+  if (attachment.voiceNote === true) {
+    return true;
+  }
+  const fileName = attachment.filename?.trim().toLowerCase() ?? "";
+  if (fileName.includes("voice") || fileName.includes("ptt")) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeDimensionValue(value?: number | null): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.round(value);
+}
+
+function normalizeCaptionValue(value?: string | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
+const SIGNAL_MARKDOWN_STYLE_MARKERS: Record<string, { open: string; close: string }> = {
+  BOLD: { open: "**", close: "**" },
+  ITALIC: { open: "_", close: "_" },
+  MONOSPACE: { open: "`", close: "`" },
+  STRIKETHROUGH: { open: "~~", close: "~~" },
+  SPOILER: { open: "||", close: "||" },
+};
+
+function applySignalTextStyles(text: string, styles?: SignalTextStyleRange[] | null): string {
+  if (!text || !Array.isArray(styles) || styles.length === 0) {
+    return text;
+  }
+
+  const opens = new Map<number, string[]>();
+  const closes = new Map<number, string[]>();
+
+  const normalizedRanges = styles
+    .map((style) => {
+      const marker = style.style ? SIGNAL_MARKDOWN_STYLE_MARKERS[style.style] : undefined;
+      if (!marker) {
+        return null;
+      }
+      if (typeof style.start !== "number" || typeof style.length !== "number") {
+        return null;
+      }
+      if (!Number.isFinite(style.start) || !Number.isFinite(style.length)) {
+        return null;
+      }
+      const start = Math.max(0, Math.trunc(style.start));
+      const length = Math.max(0, Math.trunc(style.length));
+      if (length <= 0 || start >= text.length) {
+        return null;
+      }
+      const end = Math.min(text.length, start + length);
+      if (end <= start) {
+        return null;
+      }
+      return { start, end, marker };
+    })
+    .filter(
+      (range): range is { start: number; end: number; marker: { open: string; close: string } } =>
+        Boolean(range),
+    )
+    .toSorted((a, b) => {
+      if (a.start !== b.start) {
+        return b.start - a.start;
+      }
+      return b.end - a.end;
+    });
+
+  for (const range of normalizedRanges) {
+    const openList = opens.get(range.start) ?? [];
+    openList.push(range.marker.open);
+    opens.set(range.start, openList);
+
+    const closeList = closes.get(range.end) ?? [];
+    closeList.push(range.marker.close);
+    closes.set(range.end, closeList);
+  }
+
+  let output = text;
+  for (let index = text.length; index >= 0; index -= 1) {
+    const closeList = closes.get(index);
+    const openList = opens.get(index);
+    if (!closeList && !openList) {
+      continue;
+    }
+    const insertion = `${(closeList ?? []).join("")}${(openList ?? []).join("")}`;
+    output = `${output.slice(0, index)}${insertion}${output.slice(index)}`;
+  }
+
+  return output;
+}
+
+function buildSignalLinkPreviewContext(
+  previews?: Array<{
+    url?: string | null;
+    title?: string | null;
+    description?: string | null;
+  }> | null,
+): string[] {
+  if (!Array.isArray(previews) || previews.length === 0) {
+    return [];
+  }
+
+  const context: string[] = [];
+  for (const preview of previews) {
+    const url = preview.url?.trim();
+    if (!url) {
+      continue;
+    }
+    const title = preview.title?.trim();
+    const description = preview.description?.trim();
+    const label = title && description ? `${title} - ${description}` : title || description || url;
+    context.push(`Link preview: ${label} (${url})`);
+  }
+  return context;
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
@@ -61,10 +194,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    bodyTextPlain: string;
     timestamp?: number;
     messageId?: string;
+    editTargetTimestamp?: number;
+    isEdit?: boolean;
     mediaPath?: string;
     mediaType?: string;
+    mediaCaption?: string;
+    mediaPaths?: string[];
+    mediaTypes?: string[];
+    mediaCaptions?: string[];
+    mediaDimension?: { width?: number; height?: number };
+    mediaDimensions?: Array<{ width?: number; height?: number }>;
+    untrustedContext?: string[];
+    replyToId?: string;
+    replyToBody?: string;
+    replyToSender?: string;
+    replyToIsQuote?: boolean;
     commandAuthorized: boolean;
     wasMentioned?: boolean;
   };
@@ -159,10 +306,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
+      EditTargetTimestamp: entry.editTargetTimestamp,
+      ReplyToId: entry.replyToId,
+      ReplyToBody: entry.replyToBody,
+      ReplyToSender: entry.replyToSender,
+      ReplyToIsQuote: entry.replyToIsQuote,
+      UntrustedContext: entry.untrustedContext,
       Timestamp: entry.timestamp ?? undefined,
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
+      MediaCaption: entry.mediaCaption,
       MediaUrl: entry.mediaPath,
+      MediaPaths: entry.mediaPaths,
+      MediaUrls: entry.mediaPaths,
+      MediaTypes: entry.mediaTypes,
+      MediaCaptions: entry.mediaCaptions,
+      MediaDimension: entry.mediaDimension,
+      MediaDimensions: entry.mediaDimensions,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
@@ -284,10 +444,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!entry.bodyText.trim()) {
         return false;
       }
-      if (entry.mediaPath || entry.mediaType) {
+      if (entry.isEdit) {
         return false;
       }
-      return !hasControlCommand(entry.bodyText, deps.cfg);
+      if (
+        entry.mediaPath ||
+        entry.mediaType ||
+        entry.mediaCaption ||
+        (Array.isArray(entry.mediaPaths) && entry.mediaPaths.length > 0) ||
+        (Array.isArray(entry.mediaTypes) && entry.mediaTypes.length > 0) ||
+        (Array.isArray(entry.mediaCaptions) && entry.mediaCaptions.length > 0)
+      ) {
+        return false;
+      }
+      return !hasControlCommand(entry.bodyTextPlain, deps.cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -302,14 +472,32 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .map((entry) => entry.bodyText)
         .filter(Boolean)
         .join("\\n");
+      const combinedTextPlain = entries
+        .map((entry) => entry.bodyTextPlain)
+        .filter(Boolean)
+        .join("\\n");
       if (!combinedText.trim()) {
         return;
       }
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
+        bodyTextPlain: combinedTextPlain,
         mediaPath: undefined,
         mediaType: undefined,
+        mediaCaption: undefined,
+        mediaPaths: undefined,
+        mediaTypes: undefined,
+        mediaCaptions: undefined,
+        mediaDimension: undefined,
+        mediaDimensions: undefined,
+        untrustedContext: undefined,
+        replyToId: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
+        editTargetTimestamp: undefined,
+        isEdit: undefined,
       });
     },
     onError: (err) => {
@@ -351,6 +539,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+    const editTargetTimestamp =
+      typeof envelope.editMessage?.targetSentTimestamp === "number" &&
+      Number.isFinite(envelope.editMessage.targetSentTimestamp)
+        ? envelope.editMessage.targetSentTimestamp
+        : undefined;
+    const isEditMessage = Boolean(envelope.editMessage);
     const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)
@@ -360,12 +554,99 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // Replace ￼ (object replacement character) with @uuid or @phone from mentions
     // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
     const rawMessage = dataMessage?.message ?? "";
-    const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
-    const messageText = normalizedMessage.trim();
+    const mentionResult = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const normalizedMessage = mentionResult.text;
 
-    const quoteText = dataMessage?.quote?.text?.trim() ?? "";
+    // Adjust text style offsets to account for mention expansions
+    // textStyles from Signal reference the original message offsets, but we need them
+    // to reference the expanded message (after @uuid replacements)
+    const adjustedTextStyles =
+      dataMessage?.textStyles && mentionResult.offsetShifts.size > 0
+        ? (() => {
+            const sortedShiftPositions = Array.from(mentionResult.offsetShifts.keys()).toSorted(
+              (a, b) => a - b,
+            );
+            return dataMessage.textStyles.map((style) => {
+              if (typeof style.start !== "number") {
+                return style;
+              }
+              // Calculate cumulative shift up to this style's start position
+              let cumulativeShift = 0;
+              for (const shiftPos of sortedShiftPositions) {
+                if (shiftPos <= style.start) {
+                  cumulativeShift += mentionResult.offsetShifts.get(shiftPos) ?? 0;
+                } else {
+                  break;
+                }
+              }
+              return {
+                ...style,
+                start: style.start + cumulativeShift,
+              };
+            });
+          })()
+        : dataMessage?.textStyles;
+
+    const styledMessage =
+      deps.preserveTextStyles !== false
+        ? applySignalTextStyles(normalizedMessage, adjustedTextStyles)
+        : normalizedMessage;
+    const messageTextPlain = normalizedMessage.trim();
+    const messageText = styledMessage.trim();
+
+    const quote = dataMessage?.quote;
+    const quoteText = quote?.text?.trim() ?? "";
+    const quoteReplyId = (() => {
+      const raw = quote?.id ?? quote?.timestamp;
+      if (raw == null) {
+        return undefined;
+      }
+      const value = String(raw).trim();
+      return value || undefined;
+    })();
+    const quoteReplySender = (() => {
+      const raw = quote?.authorUuid ?? quote?.authorNumber ?? quote?.author;
+      if (typeof raw !== "string") {
+        return undefined;
+      }
+      const value = raw.trim();
+      return value || undefined;
+    })();
+    const sticker = dataMessage?.sticker;
+    const stickerPackId = (() => {
+      const raw = sticker?.packId;
+      if (raw == null) {
+        return undefined;
+      }
+      const value = String(raw).trim();
+      return value || undefined;
+    })();
+    const stickerId = (() => {
+      const raw = sticker?.stickerId;
+      if (raw == null) {
+        return undefined;
+      }
+      const value = String(raw).trim();
+      return value || undefined;
+    })();
+    const stickerContext = [
+      stickerPackId ? `Signal sticker packId: ${stickerPackId}` : undefined,
+      stickerId ? `Signal stickerId: ${stickerId}` : undefined,
+    ].filter((entry): entry is string => Boolean(entry));
+    const linkPreviewContext =
+      deps.injectLinkPreviews !== false ? buildSignalLinkPreviewContext(dataMessage?.previews) : [];
+    const attachments = dataMessage?.attachments ?? [];
+    const allAttachments = sticker?.attachment ? [...attachments, sticker.attachment] : attachments;
+    const voiceNoteIndices = allAttachments.flatMap((attachment, index) =>
+      attachmentLooksLikeVoiceNote(attachment) ? [index + 1] : [],
+    );
+    const voiceContext =
+      voiceNoteIndices.length > 0
+        ? [`Signal voice note attachment indexes: ${voiceNoteIndices.join(",")}`]
+        : [];
+    const firstAttachmentIsVoiceNote = voiceNoteIndices.includes(1);
     const hasBodyContent =
-      Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
+      Boolean(messageText || quoteText) || Boolean(!reaction && allAttachments.length > 0);
 
     if (reaction && !hasBodyContent) {
       if (reaction.isRemove) {
@@ -504,7 +785,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, effectiveDmAllow);
     const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
-    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
+    const hasControlCommandInMessage = hasControlCommand(messageTextPlain, deps.cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
@@ -535,7 +816,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const wasMentioned = isGroup && matchesMentionPatterns(messageTextPlain, mentionRegexes);
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -564,18 +845,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         reason: "no mention",
         target: senderDisplay,
       });
-      const quoteText = dataMessage.quote?.text?.trim() || "";
       const pendingPlaceholder = (() => {
-        if (!dataMessage.attachments?.length) {
+        if (dataMessage.sticker) {
+          return "<media:sticker>";
+        }
+        if (allAttachments.length === 0) {
           return "";
         }
         // When we're skipping a message we intentionally avoid downloading attachments.
         // Still record a useful placeholder for pending-history context.
         if (deps.ignoreAttachments) {
+          if (firstAttachmentIsVoiceNote) {
+            return "<media:audio> (voice note)";
+          }
           return "<media:attachment>";
         }
-        const firstContentType = dataMessage.attachments?.[0]?.contentType;
+        const firstContentType = allAttachments[0]?.contentType;
         const pendingKind = mediaKindFromMime(firstContentType ?? undefined);
+        if (pendingKind === "audio" && firstAttachmentIsVoiceNote) {
+          return "<media:audio> (voice note)";
+        }
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteText;
@@ -597,35 +886,93 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
+    let mediaCaption: string | undefined;
+    let mediaPaths: string[] | undefined;
+    let mediaTypes: string[] | undefined;
+    let mediaCaptions: string[] | undefined;
+    let mediaDimension: { width?: number; height?: number } | undefined;
+    let mediaDimensions: Array<{ width?: number; height?: number }> | undefined;
     let placeholder = "";
-    const firstAttachment = dataMessage.attachments?.[0];
-    if (firstAttachment?.id && !deps.ignoreAttachments) {
-      try {
-        const fetched = await deps.fetchAttachment({
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          attachment: firstAttachment,
-          sender: senderRecipient,
-          groupId,
-          maxBytes: deps.mediaMaxBytes,
-        });
-        if (fetched) {
-          mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? firstAttachment.contentType ?? undefined;
+    if (!deps.ignoreAttachments && allAttachments.length > 0) {
+      const fetchedMedia: Array<{
+        path: string;
+        contentType?: string;
+        caption?: string;
+        width?: number;
+        height?: number;
+      }> = [];
+      const fetchResults = await Promise.allSettled(
+        allAttachments.map(async (attachment) => {
+          if (!attachment?.id) {
+            return null;
+          }
+          const fetched = await deps.fetchAttachment({
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            attachment,
+            sender: senderRecipient,
+            groupId,
+            maxBytes: deps.mediaMaxBytes,
+          });
+          if (!fetched) {
+            return null;
+          }
+          return {
+            path: fetched.path,
+            contentType: fetched.contentType ?? attachment.contentType ?? undefined,
+            caption: normalizeCaptionValue(attachment.caption),
+            width: normalizeDimensionValue(attachment.width),
+            height: normalizeDimensionValue(attachment.height),
+          };
+        }),
+      );
+      for (const result of fetchResults) {
+        if (result.status === "rejected") {
+          deps.runtime.error?.(danger(`attachment fetch failed: ${String(result.reason)}`));
+          continue;
         }
-      } catch (err) {
-        deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+        if (result.value) {
+          fetchedMedia.push(result.value);
+        }
       }
+      mediaPath = fetchedMedia[0]?.path;
+      mediaType =
+        fetchedMedia.length > 0
+          ? (fetchedMedia[0]?.contentType ?? "application/octet-stream")
+          : undefined;
+      mediaCaption = fetchedMedia[0]?.caption;
+      mediaPaths = fetchedMedia.length > 0 ? fetchedMedia.map((entry) => entry.path) : undefined;
+      mediaTypes =
+        fetchedMedia.length > 0
+          ? fetchedMedia.map((entry) => entry.contentType ?? "application/octet-stream")
+          : undefined;
+      mediaCaptions =
+        fetchedMedia.length > 0 ? fetchedMedia.map((entry) => entry.caption ?? "") : undefined;
+      if (mediaCaptions && !mediaCaptions.some((entry) => entry.trim().length > 0)) {
+        mediaCaptions = undefined;
+      }
+      const fetchedDimensions = fetchedMedia.map((entry) => ({
+        width: entry.width,
+        height: entry.height,
+      }));
+      const hasAnyDimensions = fetchedDimensions.some((entry) => entry.width || entry.height);
+      mediaDimension = hasAnyDimensions ? fetchedDimensions[0] : undefined;
+      mediaDimensions = hasAnyDimensions ? fetchedDimensions : undefined;
     }
 
-    const kind = mediaKindFromMime(mediaType ?? undefined);
-    if (kind) {
+    const firstAttachmentContentType = allAttachments[0]?.contentType ?? undefined;
+    const kind = mediaKindFromMime(mediaType ?? firstAttachmentContentType);
+    if (sticker) {
+      placeholder = "<media:sticker>";
+    } else if (firstAttachmentIsVoiceNote) {
+      placeholder = "<media:audio> (voice note)";
+    } else if (kind) {
       placeholder = `<media:${kind}>`;
-    } else if (dataMessage.attachments?.length) {
+    } else if (allAttachments.length) {
       placeholder = "<media:attachment>";
     }
 
-    const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    const bodyText = messageText || placeholder || quoteText;
     if (!bodyText) {
       return;
     }
@@ -667,10 +1014,27 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      bodyTextPlain: messageTextPlain,
       timestamp: envelope.timestamp ?? undefined,
       messageId,
+      editTargetTimestamp,
+      isEdit: isEditMessage,
       mediaPath,
       mediaType,
+      mediaCaption,
+      mediaPaths,
+      mediaTypes,
+      mediaCaptions,
+      mediaDimension,
+      mediaDimensions,
+      untrustedContext:
+        stickerContext.length > 0 || voiceContext.length > 0 || linkPreviewContext.length > 0
+          ? [...stickerContext, ...voiceContext, ...linkPreviewContext]
+          : undefined,
+      replyToId: quoteReplyId,
+      replyToBody: quoteText || undefined,
+      replyToSender: quoteReplySender,
+      replyToIsQuote: quote ? true : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
     });

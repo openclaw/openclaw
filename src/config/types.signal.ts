@@ -88,6 +88,10 @@ export type SignalAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Extract link preview metadata into UntrustedContext (default: true). */
+  injectLinkPreviews?: boolean;
+  /** Apply Signal text styles (bold/italic/monospace/strikethrough/spoiler) to message text (default: true). */
+  preserveTextStyles?: boolean;
 };
 
 export type SignalConfig = {
