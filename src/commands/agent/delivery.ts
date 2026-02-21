@@ -157,7 +157,13 @@ export async function deliverAgentCommandResult(params: {
   const ttsProcessedPayloads = shouldApplyTts
     ? await Promise.all(
         payloads.map((payload) =>
-          maybeApplyTtsToPayload({ payload, cfg, channel: deliveryChannel, kind: "final" }),
+          maybeApplyTtsToPayload({
+            payload,
+            cfg,
+            channel: deliveryChannel,
+            kind: "final",
+            ttsAuto: sessionEntry?.ttsAuto,
+          }),
         ),
       )
     : payloads;
