@@ -94,6 +94,14 @@ class SecurePrefs(context: Context) {
   private val _talkEnabled = MutableStateFlow(prefs.getBoolean("talk.enabled", false))
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
 
+  private val _notificationsEnabled =
+    MutableStateFlow(prefs.getBoolean("notifications.enabled", false))
+  val notificationsEnabled: StateFlow<Boolean> = _notificationsEnabled
+
+  private val _notificationsBatchWindowSec =
+    MutableStateFlow(prefs.getInt("notifications.batchWindowSec", 30))
+  val notificationsBatchWindowSec: StateFlow<Int> = _notificationsBatchWindowSec
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     prefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -248,6 +256,16 @@ class SecurePrefs(context: Context) {
   fun setTalkEnabled(value: Boolean) {
     prefs.edit { putBoolean("talk.enabled", value) }
     _talkEnabled.value = value
+  }
+
+  fun setNotificationsEnabled(value: Boolean) {
+    prefs.edit { putBoolean("notifications.enabled", value) }
+    _notificationsEnabled.value = value
+  }
+
+  fun setNotificationsBatchWindowSec(value: Int) {
+    prefs.edit { putInt("notifications.batchWindowSec", value) }
+    _notificationsBatchWindowSec.value = value
   }
 
   private fun loadVoiceWakeMode(): VoiceWakeMode {

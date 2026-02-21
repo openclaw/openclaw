@@ -5,6 +5,7 @@ import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
+import ai.openclaw.android.protocol.OpenClawNotificationCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
 
@@ -17,9 +18,11 @@ class InvokeDispatcher(
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val appUpdateHandler: AppUpdateHandler,
+  private val notificationHandler: NotificationHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
+  private val notificationsEnabled: () -> Boolean,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     // Check foreground requirement for canvas/camera/screen commands
@@ -50,6 +53,14 @@ class InvokeDispatcher(
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_DISABLED",
         message = "LOCATION_DISABLED: enable Location in Settings",
+      )
+    }
+
+    // Check notifications enabled
+    if (command.startsWith(OpenClawNotificationCommand.NamespacePrefix) && !notificationsEnabled()) {
+      return GatewaySession.InvokeResult.error(
+        code = "NOTIFICATIONS_DISABLED",
+        message = "NOTIFICATIONS_DISABLED: enable Notifications in Settings",
       )
     }
 
@@ -158,6 +169,10 @@ class InvokeDispatcher(
 
       // SMS command
       OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+
+      // Notification commands
+      OpenClawNotificationCommand.Dismiss.rawValue -> notificationHandler.handleDismiss(paramsJson)
+      OpenClawNotificationCommand.List.rawValue -> notificationHandler.handleList(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()

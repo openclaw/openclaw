@@ -76,6 +76,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
+  val notificationsEnabled by viewModel.notificationsEnabled.collectAsState()
+  val notificationsListenerConnected by viewModel.notificationsListenerConnected.collectAsState()
   val wakeWords by viewModel.wakeWords.collectAsState()
   val voiceWakeMode by viewModel.voiceWakeMode.collectAsState()
   val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
@@ -678,6 +680,52 @@ fun SettingsSheet(viewModel: MainViewModel) {
         "Always may require Android Settings to allow background location.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+    }
+
+    item { HorizontalDivider() }
+
+    // Notifications
+    item { Text("Notifications", style = MaterialTheme.typography.titleSmall) }
+    item {
+      ListItem(
+        headlineContent = { Text("Notification Intelligence") },
+        supportingContent = { Text("Allow AI to read and triage app notifications.") },
+        trailingContent = {
+          Switch(
+            checked = notificationsEnabled,
+            onCheckedChange = { enabled ->
+              if (enabled) {
+                val cn = android.content.ComponentName(context, ai.openclaw.android.notification.OpenClawNotificationListener::class.java)
+                val flat = android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+                val isGranted = flat != null && flat.contains(cn.flattenToString())
+                if (!isGranted) {
+                  context.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                }
+                viewModel.setNotificationsEnabled(true)
+              } else {
+                viewModel.setNotificationsEnabled(false)
+              }
+            },
+          )
+        },
+      )
+    }
+    if (notificationsEnabled) {
+      item {
+        ListItem(
+          headlineContent = { Text("Listener Status") },
+          supportingContent = {
+            Text(if (notificationsListenerConnected) "Active" else "Not connected")
+          },
+        )
+      }
+      item {
+        Text(
+          "Banking, health, and authenticator apps are excluded by default. " +
+            "Notification content is never stored permanently.",
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
 
     item { HorizontalDivider() }
