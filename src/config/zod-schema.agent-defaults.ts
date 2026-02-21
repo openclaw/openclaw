@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
+import { GuardModelConfigSchema } from "./types.security.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -13,7 +14,6 @@ import {
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
-import { GuardModelConfigSchema } from "./zod-schema.providers-core.js";
 
 export const AgentDefaultsSchema = z
   .object({
