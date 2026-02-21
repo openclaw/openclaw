@@ -108,10 +108,8 @@ export async function resolveGatewayRuntimeConfig(params: {
 
   assertGatewayAuthConfigured(resolvedAuth);
 
-  // CRITICAL-3: Block auth mode "none" on non-loopback binds.
-  // The resolved type only allows "token"|"password", but untyped JSON config
-  // could smuggle "none" at runtime — this is defense-in-depth.
-  if ((authMode as string) === "none" && !isLoopbackHost(bindHost)) {
+  // CRITICAL-3: Block auth mode "none" on non-loopback binds (defense-in-depth).
+  if (authMode === "none" && !isLoopbackHost(bindHost)) {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} with auth.mode=none ` +
         `(mode "none" is only allowed with bind=loopback; set gateway.auth.token/password)`,
