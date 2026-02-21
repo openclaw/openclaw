@@ -86,7 +86,9 @@ const XIAOMI_DEFAULT_COST = {
 };
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
-const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+// Fix for issue #15730: Use correct model ID format
+// Moonshot API expects "kimi-k2-0905-preview" not "kimi-k2.5"
+const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2-0905-preview";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 const MOONSHOT_DEFAULT_COST = {
@@ -483,8 +485,35 @@ function buildMoonshotProvider(): ProviderConfig {
     models: [
       {
         id: MOONSHOT_DEFAULT_MODEL_ID,
-        name: "Kimi K2.5",
+        name: "Kimi K2 (0905 Preview)",
         reasoning: false,
+        input: ["text"],
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "kimi-k2-turbo-preview",
+        name: "Kimi K2 Turbo",
+        reasoning: false,
+        input: ["text"],
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "kimi-k2-thinking",
+        name: "Kimi K2 Thinking",
+        reasoning: true,
+        input: ["text"],
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "kimi-k2-thinking-turbo",
+        name: "Kimi K2 Thinking Turbo",
+        reasoning: true,
         input: ["text"],
         cost: MOONSHOT_DEFAULT_COST,
         contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
