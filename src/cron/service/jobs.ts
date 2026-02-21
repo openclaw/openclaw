@@ -342,6 +342,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
         ? true
         : undefined;
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
+  const historyLimit = typeof input.historyLimit === "number" ? input.historyLimit : undefined;
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
@@ -350,6 +351,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     description: normalizeOptionalText(input.description),
     enabled,
     deleteAfterRun,
+    historyLimit,
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
@@ -379,6 +381,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;
+  }
+  if (typeof patch.historyLimit === "number") {
+    job.historyLimit = patch.historyLimit;
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {
@@ -561,6 +566,7 @@ function mergeCronDelivery(
     channel: existing?.channel,
     to: existing?.to,
     bestEffort: existing?.bestEffort,
+    directText: existing?.directText,
   };
 
   if (typeof patch.mode === "string") {
@@ -576,6 +582,9 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if (typeof patch.directText === "boolean") {
+    next.directText = patch.directText;
   }
 
   return next;

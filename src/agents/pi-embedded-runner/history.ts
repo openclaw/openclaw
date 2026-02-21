@@ -16,7 +16,7 @@ export function limitHistoryTurns(
   messages: AgentMessage[],
   limit: number | undefined,
 ): AgentMessage[] {
-  if (!limit || limit <= 0 || messages.length === 0) {
+  if (limit === undefined || limit < 0 || messages.length === 0) {
     return messages;
   }
 

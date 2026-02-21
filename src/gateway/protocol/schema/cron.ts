@@ -27,6 +27,7 @@ const CronCommonOptionalFields = {
   description: Type.Optional(Type.String()),
   enabled: Type.Optional(Type.Boolean()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
+  historyLimit: Type.Optional(Type.Integer({ minimum: 0 })),
 };
 
 function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
@@ -100,6 +101,8 @@ export const CronPayloadPatchSchema = Type.Union([
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
   bestEffort: Type.Optional(Type.Boolean()),
+  /** When true, deliver text payloads directly (skip announce conversion). */
+  directText: Type.Optional(Type.Boolean()),
 };
 
 const CronDeliveryNoopSchema = Type.Object(
@@ -170,6 +173,7 @@ export const CronJobSchema = Type.Object(
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
     deleteAfterRun: Type.Optional(Type.Boolean()),
+    historyLimit: Type.Optional(Type.Integer({ minimum: 0 })),
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,

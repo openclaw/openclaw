@@ -23,6 +23,8 @@ export type CronDelivery = {
   channel?: CronMessageChannel;
   to?: string;
   bestEffort?: boolean;
+  /** When true, deliver text payloads directly (skip announce conversion). */
+  directText?: boolean;
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
@@ -104,6 +106,8 @@ export type CronJob = {
   description?: string;
   enabled: boolean;
   deleteAfterRun?: boolean;
+  /** History turn cap for this job (0 = unlimited). */
+  historyLimit?: number;
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;

@@ -19,9 +19,6 @@ function buildSkillsSection(params: {
   isMinimal: boolean;
   readToolName: string;
 }) {
-  if (params.isMinimal) {
-    return [];
-  }
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];

@@ -59,6 +59,8 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
+      .option("--direct-text", "Deliver text payloads directly (skip announce conversion)")
+      .option("--history-limit <n>", "History turn limit for this job (0=unlimited)")
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -199,6 +201,10 @@ export function registerCronEditCommand(cron: Command) {
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
+          const hasDirectText = typeof opts.directText === "boolean";
+          const hasHistoryLimit =
+            typeof opts.historyLimit === "string" &&
+            Number.isFinite(Number.parseInt(String(opts.historyLimit), 10));
           const hasAgentTurnPatch =
             typeof opts.message === "string" ||
             Boolean(model) ||
@@ -206,7 +212,9 @@ export function registerCronEditCommand(cron: Command) {
             hasTimeoutSeconds ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
-            hasBestEffort;
+            hasBestEffort ||
+            hasDirectText ||
+            hasHistoryLimit;
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
           }
@@ -224,7 +232,12 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
+          if (hasHistoryLimit) {
+            const n = Math.max(0, Math.floor(Number.parseInt(String(opts.historyLimit), 10)));
+            patch.historyLimit = n;
+          }
+
+          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort || hasDirectText) {
             const deliveryMode =
               opts.announce || opts.deliver === true
                 ? "announce"
@@ -242,6 +255,9 @@ export function registerCronEditCommand(cron: Command) {
             }
             if (typeof opts.bestEffortDeliver === "boolean") {
               delivery.bestEffort = opts.bestEffortDeliver;
+            }
+            if (typeof opts.directText === "boolean") {
+              delivery.directText = opts.directText;
             }
             patch.delivery = delivery;
           }

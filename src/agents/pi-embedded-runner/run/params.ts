@@ -107,4 +107,6 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /** Override prior-turn history limit for this run (0 = unlimited). */
+  historyTurnLimit?: number;
 };

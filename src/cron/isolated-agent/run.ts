@@ -101,6 +101,13 @@ function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return false;
 }
 
+function resolveCronDeliveryDirectText(job: CronJob): boolean {
+  if (typeof job.delivery?.directText === "boolean") {
+    return job.delivery.directText;
+  }
+  return false;
+}
+
 async function resolveCronAnnounceSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -492,6 +499,7 @@ export async function runCronIsolatedAgentTurn(params: {
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
+          historyTurnLimit: params.job.historyLimit,
         });
       },
     });
@@ -572,6 +580,7 @@ export async function runCronIsolatedAgentTurn(params: {
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
+  const directTextDelivery = resolveCronDeliveryDirectText(params.job);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
@@ -620,11 +629,10 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
-    // Route text-only cron announce output back through the main session so it
-    // follows the same system-message injection path as subagent completions.
-    // Keep direct outbound delivery only for structured payloads (media/channel
-    // data), which cannot be represented by the shared announce flow.
-    if (deliveryPayloadHasStructuredContent) {
+    // Route delivery:
+    // - Direct outbound for structured payloads OR when directTextDelivery is requested.
+    // - Otherwise use announce flow for text-only to ensure consistent user updates.
+    if (deliveryPayloadHasStructuredContent || (directTextDelivery && synthesizedText)) {
       try {
         const payloadsForDelivery =
           deliveryPayloads.length > 0
