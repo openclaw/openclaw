@@ -23,6 +23,10 @@ export const FeishuDocSchema = Type.Union([
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
   }),
   Type.Object({
+    action: Type.Literal("get_public_permission"),
+    doc_token: Type.String({ description: "Document token" }),
+  }),
+  Type.Object({
     action: Type.Literal("list_blocks"),
     doc_token: Type.String({ description: "Document token" }),
   }),
