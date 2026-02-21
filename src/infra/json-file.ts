@@ -18,6 +18,14 @@ export function saveJsonFile(pathname: string, data: unknown) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    fs.chmodSync(pathname, 0o600);
+  } catch {
+    // writeFileSync already set the mode; chmod is best-effort for
+    // pre-existing files whose permissions drifted.
+  }
 }
