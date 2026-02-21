@@ -55,6 +55,9 @@ Docker 是**可选的**。仅当你想要容器化的 Gateway 网关或验证 Do
 
 可选环境变量：
 
+- `OPENCLAW_IMAGE_SOURCE` — `local`（默认）或 `registry` 镜像来源。
+  - `local`：从仓库构建 `openclaw:local`
+  - `registry`：使用仓库已构建镜像（默认 `openclaw:latest`，可通过 `OPENCLAW_IMAGE` 覆盖）
 - `OPENCLAW_DOCKER_APT_PACKAGES` — 在构建期间安装额外的 apt 包
 - `OPENCLAW_EXTRA_MOUNTS` — 添加额外的主机绑定挂载
 - `OPENCLAW_HOME_VOLUME` — 在命名卷中持久化 `/home/node`

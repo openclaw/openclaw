@@ -4,9 +4,42 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
-IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
+
+choose_image_source() {
+  local choice=""
+  local source="${1,,}"
+
+  if [[ "$source" == "local" || "$source" == "registry" ]]; then
+    printf '%s\n' "$source"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "non-interactive shell detected, defaulting to local image build" >&2
+    printf '%s\n' "local"
+    return 0
+  fi
+
+  while true; do
+    echo "Select OpenClaw Docker image source:"
+    echo "  [1] Build image locally (default)"
+    echo "  [2] Use pre-built image from registry"
+    read -r -p "Select [1/2] (default: 1): " choice
+    choice="${choice:-1}"
+    case "$choice" in
+      1) source="local" ;;
+      2) source="registry" ;;
+      *)
+        echo "Invalid option '$choice'. Enter 1 or 2."
+        continue
+        ;;
+    esac
+    printf '%s\n' "$source"
+    return 0
+  done
+}
 
 fail() {
   echo "ERROR: $*" >&2
@@ -66,6 +99,19 @@ fi
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+IMAGE_SOURCE_INPUT="${OPENCLAW_IMAGE_SOURCE:-}"
+IMAGE_SOURCE="${IMAGE_SOURCE_INPUT,,}"
+if [[ -z "$IMAGE_SOURCE" ]]; then
+  IMAGE_SOURCE="$(choose_image_source "$IMAGE_SOURCE")"
+fi
+if [[ "$IMAGE_SOURCE" != "local" && "$IMAGE_SOURCE" != "registry" ]]; then
+  fail "OPENCLAW_IMAGE_SOURCE must be 'local' or 'registry'."
+fi
+if [[ "$IMAGE_SOURCE" == "registry" ]]; then
+  IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:latest}"
+else
+  IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
+fi
 
 validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
 validate_mount_path_value "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
@@ -88,6 +134,7 @@ export OPENCLAW_WORKSPACE_DIR
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+export OPENCLAW_IMAGE_SOURCE="$IMAGE_SOURCE"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
@@ -239,17 +286,22 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_BRIDGE_PORT \
   OPENCLAW_GATEWAY_BIND \
   OPENCLAW_GATEWAY_TOKEN \
+  OPENCLAW_IMAGE_SOURCE \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES
 
-echo "==> Building Docker image: $IMAGE_NAME"
-docker build \
-  --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
-  -t "$IMAGE_NAME" \
-  -f "$ROOT_DIR/Dockerfile" \
-  "$ROOT_DIR"
+if [[ "$IMAGE_SOURCE" == "local" ]]; then
+  echo "==> Building Docker image: $IMAGE_NAME"
+  docker build \
+    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    -t "$IMAGE_NAME" \
+    -f "$ROOT_DIR/Dockerfile" \
+    "$ROOT_DIR"
+else
+  echo "==> Using pre-built Docker image: $IMAGE_NAME"
+fi
 
 echo ""
 echo "==> Onboarding (interactive)"

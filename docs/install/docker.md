@@ -48,6 +48,9 @@ This script:
 
 Optional env vars:
 
+- `OPENCLAW_IMAGE_SOURCE` — `local` (default) or `registry` image source.
+  - `local`: build `openclaw:local` from the repo
+  - `registry`: use pre-built image from registry (default `openclaw:latest`, overridable with `OPENCLAW_IMAGE`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume

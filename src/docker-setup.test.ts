@@ -126,6 +126,7 @@ describe("docker-setup.sh", () => {
     });
     expect(result.status).toBe(0);
     const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_IMAGE_SOURCE=local");
     expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home");
@@ -135,6 +136,33 @@ describe("docker-setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readFile(sandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+  });
+
+  it("supports pre-built image source and skips local docker build", async () => {
+    if (!sandbox) {
+      throw new Error("sandbox missing");
+    }
+
+    await writeFile(sandbox.logPath, "");
+
+    const result = spawnSync("bash", [sandbox.scriptPath], {
+      cwd: sandbox.rootDir,
+      env: createEnv(sandbox, {
+        OPENCLAW_IMAGE_SOURCE: "registry",
+        OPENCLAW_IMAGE: "ghcr.io/openclaw/openclaw:latest",
+        OPENCLAW_HOME_VOLUME: undefined,
+        OPENCLAW_EXTRA_MOUNTS: undefined,
+      }),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_IMAGE_SOURCE=registry");
+    expect(envFile).toContain("OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:latest");
+    const log = await readFile(sandbox.logPath, "utf8");
+    expect(log).not.toContain("build --build-arg");
+    expect(log).toContain("openclaw-cli onboard --no-install-daemon");
   });
 
   it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
