@@ -21,11 +21,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
-import {
-  buildNpmInstallRecordFields,
-  logPinnedNpmSpecMessages,
-  resolvePinnedNpmSpec,
-} from "./npm-resolution.js";
+import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -625,24 +621,18 @@ export function registerPluginsCli(program: Command) {
       clearPluginManifestRegistryCache();
 
       let next = enablePluginInConfig(cfg, result.pluginId).config;
-      const pinInfo = resolvePinnedNpmSpec({
-        rawSpec: raw,
-        pin: Boolean(opts.pin),
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-      });
-      logPinnedNpmSpecMessages(
-        pinInfo,
-        (message) => defaultRuntime.log(message),
-        (message) => defaultRuntime.log(theme.warn(message)),
+      const installRecord = resolvePinnedNpmInstallRecordForCli(
+        raw,
+        Boolean(opts.pin),
+        result.targetDir,
+        result.version,
+        result.npmResolution,
+        defaultRuntime.log,
+        theme.warn,
       );
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
-        ...buildNpmInstallRecordFields({
-          spec: pinInfo.recordSpec,
-          installPath: result.targetDir,
-          version: result.version,
-          resolution: result.npmResolution,
-        }),
+        ...installRecord,
       });
       const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
       next = slotResult.config;
