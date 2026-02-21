@@ -201,80 +201,106 @@ describe("edge cases", () => {
     expect(result).toBe("README.md");
   });
 
-  it("wraps supported TLD extensions (.am, .at, .be, .cc)", () => {
-    const result = markdownToTelegramHtml("Makefile.am and code.at and app.be and main.cc");
-    expect(result).toContain("<code>Makefile.am</code>");
-    expect(result).toContain("<code>code.at</code>");
-    expect(result).toContain("<code>app.be</code>");
-    expect(result).toContain("<code>main.cc</code>");
-  });
-
-  it("does not wrap popular domain TLDs (.ai, .io, .tv, .fm)", () => {
-    // These are commonly used as real domains (x.ai, vercel.io, github.io)
-    const result = markdownToTelegramHtml("Check x.ai and vercel.io and app.tv and radio.fm");
-    // Should be links, not code
-    expect(result).toContain('<a href="http://x.ai">');
-    expect(result).toContain('<a href="http://vercel.io">');
-    expect(result).toContain('<a href="http://app.tv">');
-    expect(result).toContain('<a href="http://radio.fm">');
-  });
-
-  it("keeps .co domains as links", () => {
-    const result = markdownToTelegramHtml("Visit t.co and openclaw.co");
-    expect(result).toContain('<a href="http://t.co">');
-    expect(result).toContain('<a href="http://openclaw.co">');
-    expect(result).not.toContain("<code>t.co</code>");
-    expect(result).not.toContain("<code>openclaw.co</code>");
-  });
-
-  it("does not wrap non-TLD extensions", () => {
-    const result = markdownToTelegramHtml("image.png and style.css and script.js");
-    expect(result).not.toContain("<code>image.png</code>");
-    expect(result).not.toContain("<code>style.css</code>");
-    expect(result).not.toContain("<code>script.js</code>");
-  });
-
-  it("handles file refs at message boundaries", () => {
+  it("classifies extension-like tokens as file refs or domains", () => {
     const cases = [
-      ["README.md is important", "<code>README.md</code> is important"],
-      ["Check the README.md", "Check the <code>README.md</code>"],
+      {
+        name: "supported file-style extensions",
+        input: "Makefile.am and code.at and app.be and main.cc",
+        contains: [
+          "<code>Makefile.am</code>",
+          "<code>code.at</code>",
+          "<code>app.be</code>",
+          "<code>main.cc</code>",
+        ],
+      },
+      {
+        name: "popular domain TLDs stay links",
+        input: "Check x.ai and vercel.io and app.tv and radio.fm",
+        contains: [
+          '<a href="http://x.ai">',
+          '<a href="http://vercel.io">',
+          '<a href="http://app.tv">',
+          '<a href="http://radio.fm">',
+        ],
+      },
+      {
+        name: ".co stays links",
+        input: "Visit t.co and openclaw.co",
+        contains: ['<a href="http://t.co">', '<a href="http://openclaw.co">'],
+        notContains: ["<code>t.co</code>", "<code>openclaw.co</code>"],
+      },
+      {
+        name: "non-target extensions stay plain text",
+        input: "image.png and style.css and script.js",
+        notContains: ["<code>image.png</code>", "<code>style.css</code>", "<code>script.js</code>"],
+      },
     ] as const;
-    for (const [input, expected] of cases) {
-      expect(markdownToTelegramHtml(input), input).toBe(expected);
+    for (const testCase of cases) {
+      const result = markdownToTelegramHtml(testCase.input);
+      for (const expected of testCase.contains ?? []) {
+        expect(result, testCase.name).toContain(expected);
+      }
+      for (const unexpected of testCase.notContains ?? []) {
+        expect(result, testCase.name).not.toContain(unexpected);
+      }
     }
   });
 
-  it("handles multiple file refs in sequence", () => {
-    const result = markdownToTelegramHtml("README.md CHANGELOG.md LICENSE.md");
-    expect(result).toContain("<code>README.md</code>");
-    expect(result).toContain("<code>CHANGELOG.md</code>");
-    expect(result).toContain("<code>LICENSE.md</code>");
-  });
-
-  it("handles nested path without domain-like segments", () => {
-    const result = markdownToTelegramHtml("src/utils/helpers/format.go");
-    expect(result).toContain("<code>src/utils/helpers/format.go</code>");
-  });
-
-  it("wraps path with version-like segment (not a domain)", () => {
-    // v1.0/README.md is not linkified by markdown-it (no TLD), so it's wrapped
-    const result = markdownToTelegramHtml("v1.0/README.md");
-    expect(result).toContain("<code>v1.0/README.md</code>");
-  });
-
-  it("preserves domain path with version segment", () => {
-    // example.com/v1.0/README.md IS linkified (has domain), preserved as link
-    const result = markdownToTelegramHtml("example.com/v1.0/README.md");
-    expect(result).toContain('<a href="http://example.com/v1.0/README.md">');
-  });
-
-  it("wraps hyphen/underscore filenames and uppercase extensions", () => {
-    const first = markdownToTelegramHtml("my-file_name.md");
-    expect(first).toContain("<code>my-file_name.md</code>");
-
-    const second = markdownToTelegramHtml("README.MD and SCRIPT.PY");
-    expect(second).toContain("<code>README.MD</code>");
-    expect(second).toContain("<code>SCRIPT.PY</code>");
+  it("wraps file refs across boundaries, sequences, and path variants", () => {
+    const cases = [
+      {
+        name: "message start boundary",
+        input: "README.md is important",
+        expectedExact: "<code>README.md</code> is important",
+      },
+      {
+        name: "message end boundary",
+        input: "Check the README.md",
+        expectedExact: "Check the <code>README.md</code>",
+      },
+      {
+        name: "multiple file refs",
+        input: "README.md CHANGELOG.md LICENSE.md",
+        contains: [
+          "<code>README.md</code>",
+          "<code>CHANGELOG.md</code>",
+          "<code>LICENSE.md</code>",
+        ],
+      },
+      {
+        name: "nested path",
+        input: "src/utils/helpers/format.go",
+        contains: ["<code>src/utils/helpers/format.go</code>"],
+      },
+      {
+        name: "version-like non-domain path",
+        input: "v1.0/README.md",
+        contains: ["<code>v1.0/README.md</code>"],
+      },
+      {
+        name: "domain with version path",
+        input: "example.com/v1.0/README.md",
+        contains: ['<a href="http://example.com/v1.0/README.md">'],
+      },
+      {
+        name: "hyphen underscore and uppercase extensions",
+        input: "my-file_name.md README.MD and SCRIPT.PY",
+        contains: [
+          "<code>my-file_name.md</code>",
+          "<code>README.MD</code>",
+          "<code>SCRIPT.PY</code>",
+        ],
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const result = markdownToTelegramHtml(testCase.input);
+      if ("expectedExact" in testCase) {
+        expect(result, testCase.name).toBe(testCase.expectedExact);
+      }
+      for (const expected of testCase.contains ?? []) {
+        expect(result, testCase.name).toContain(expected);
+      }
+    }
   });
 
   it("handles nested code tags (depth tracking)", () => {
@@ -325,24 +351,6 @@ describe("edge cases", () => {
     expect(result).toBe("<code>x.md</code> <b>bold</b>");
   });
 
-  it("does not wrap orphaned TLD inside existing code tags", () => {
-    // R&D.md is already inside <code>, orphaned pass should NOT wrap D.md again
-    const input = "<code>R&D.md</code>";
-    const result = wrapFileReferencesInHtml(input);
-    // Should remain unchanged - no nested code tags
-    expect(result).toBe(input);
-    expect(result).not.toContain("<code><code>");
-    expect(result).not.toContain("</code></code>");
-  });
-
-  it("does not wrap orphaned TLD inside anchor link text", () => {
-    // R&D.md inside anchor text should NOT have D.md wrapped
-    const input = '<a href="https://example.com">R&D.md</a>';
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toBe(input);
-    expect(result).not.toContain("<code>D.md</code>");
-  });
-
   it("handles malformed HTML with stray closing tags (negative depth)", () => {
     // Stray </code> before content shouldn't break protection logic
     // (depth should clamp at 0, not go negative)
@@ -356,15 +364,19 @@ describe("edge cases", () => {
     expect(result).not.toContain("<code><code>");
   });
 
-  it("does not wrap orphaned TLD fragments inside HTML attributes", () => {
+  it("does not wrap orphaned TLD fragments inside protected HTML contexts", () => {
     const cases = [
+      "<code>R&D.md</code>",
+      '<a href="https://example.com">R&D.md</a>',
       '<a href="http://example.com/R&D.md">link</a>',
       '<img src="logo/R&D.md" alt="R&D.md">',
     ] as const;
     for (const input of cases) {
       const result = wrapFileReferencesInHtml(input);
-      expect(result).toBe(input);
-      expect(result).not.toContain("<code>D.md</code>");
+      expect(result, input).toBe(input);
+      expect(result, input).not.toContain("<code>D.md</code>");
+      expect(result, input).not.toContain("<code><code>");
+      expect(result, input).not.toContain("</code></code>");
     }
   });
 
