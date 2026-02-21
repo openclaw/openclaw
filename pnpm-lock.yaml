@@ -461,6 +461,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/synology-chat:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/telegram:
     devDependencies:
       openclaw:
