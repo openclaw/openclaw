@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   formatUsageReportLines,
@@ -302,9 +303,7 @@ describe("provider usage loading", () => {
   });
 
   it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
-    const cookieSnapshot = process.env.CLAUDE_AI_SESSION_KEY;
-    process.env.CLAUDE_AI_SESSION_KEY = "sk-ant-web-1";
-    try {
+    await withEnvAsync({ CLAUDE_AI_SESSION_KEY: "sk-ant-web-1" }, async () => {
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(403, {
@@ -336,13 +335,7 @@ describe("provider usage loading", () => {
       const claude = expectSingleAnthropicProvider(summary);
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
-    } finally {
-      if (cookieSnapshot === undefined) {
-        delete process.env.CLAUDE_AI_SESSION_KEY;
-      } else {
-        process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
-      }
-    }
+    });
   });
 
   it("loads snapshots for copilot antigravity gemini codex and xiaomi", async () => {
