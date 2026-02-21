@@ -37,13 +37,22 @@ describe("docker base image pinning", () => {
   it("pins selected Dockerfile FROM lines to immutable sha256 digests", async () => {
     for (const dockerfilePath of DIGEST_PINNED_DOCKERFILES) {
       const dockerfile = await readFile(resolve(repoRoot, dockerfilePath), "utf8");
-      const fromLine = dockerfile
+      const fromLines = dockerfile
         .split(/\r?\n/)
-        .find((line) => line.trimStart().startsWith("FROM "));
-      expect(fromLine, `${dockerfilePath} should define a FROM line`).toBeDefined();
-      expect(fromLine, `${dockerfilePath} FROM must be digest-pinned`).toMatch(
-        /^FROM\s+\S+@sha256:[a-f0-9]{64}$/,
-      );
+        .filter((line) => line.trimStart().startsWith("FROM "));
+      expect(
+        fromLines.length,
+        `${dockerfilePath} should define at least one FROM line`,
+      ).toBeGreaterThan(0);
+      for (const fromLine of fromLines) {
+        // Skip COPY --from references and FROM scratch
+        if (fromLine.includes("--from=") || fromLine.includes("scratch")) {
+          continue;
+        }
+        expect(fromLine, `${dockerfilePath} FROM must be digest-pinned`).toMatch(
+          /^FROM\s+\S+@sha256:[a-f0-9]{64}(\s+AS\s+\S+)?$/,
+        );
+      }
     }
   });
 
