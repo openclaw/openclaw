@@ -5,7 +5,7 @@ import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
+import { registerSafetyPlugin } from "../security/safety-plugin.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
@@ -360,6 +360,30 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
+
+  // Register built-in safety plugin before external plugins.
+  // Safety hooks load at high priorities (1000-800) so they run before any external hooks.
+  if (!validateOnly) {
+    const safetyRecord = createPluginRecord({
+      id: "openclaw-safety",
+      name: "OpenClaw Safety",
+      description: "Built-in safety, alignment, and oversight plugin",
+      version: "1.0.0",
+      source: "builtin:safety",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    registry.plugins.push(safetyRecord);
+    const safetyApi = createApi(safetyRecord, { config: cfg });
+    try {
+      registerSafetyPlugin(safetyApi, cfg.security);
+    } catch (err) {
+      logger.error(`[plugins] safety plugin failed: ${String(err)}`);
+      safetyRecord.status = "error";
+      safetyRecord.error = String(err);
+    }
+  }
 
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,

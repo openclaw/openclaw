@@ -10,36 +10,37 @@ import { randomBytes } from "node:crypto";
  * system prompts or treated as trusted instructions.
  */
 
-/**
- * Patterns that may indicate prompt injection attempts.
- * These are logged for monitoring but content is still processed (wrapped safely).
- */
-const SUSPICIOUS_PATTERNS = [
-  /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
-  /disregard\s+(all\s+)?(previous|prior|above)/i,
-  /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
-  /you\s+are\s+now\s+(a|an)\s+/i,
-  /new\s+instructions?:/i,
-  /system\s*:?\s*(prompt|override|command)/i,
-  /\bexec\b.*command\s*=/i,
-  /elevated\s*=\s*true/i,
-  /rm\s+-rf/i,
-  /delete\s+all\s+(emails?|files?|data)/i,
-  /<\/?system>/i,
-  /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
-];
+import type { SecurityContentPolicy } from "../config/types.openclaw.js";
+import {
+  evaluateContentSecurity,
+  getClassifiedPatterns,
+  type ContentSecurityResult,
+} from "./content-security-policy.js";
 
 /**
  * Check if content contains suspicious patterns that may indicate injection.
+ * Delegates to the classified patterns in content-security-policy.ts.
  */
 export function detectSuspiciousPatterns(content: string): string[] {
   const matches: string[] = [];
-  for (const pattern of SUSPICIOUS_PATTERNS) {
-    if (pattern.test(content)) {
-      matches.push(pattern.source);
+  for (const { regex } of getClassifiedPatterns()) {
+    if (regex.test(content)) {
+      matches.push(regex.source);
     }
   }
   return matches;
+}
+
+/**
+ * Evaluate content against the content security policy.
+ * Returns a result with action (allow/quarantine/block), matches, and optionally
+ * quarantined/blocked content replacement.
+ */
+export function evaluateExternalContent(
+  content: string,
+  policy?: SecurityContentPolicy,
+): ContentSecurityResult {
+  return evaluateContentSecurity(content, policy);
 }
 
 /**
@@ -198,6 +199,8 @@ export type WrapExternalContentOptions = {
   subject?: string;
   /** Whether to include detailed security warning */
   includeWarning?: boolean;
+  /** Content security policy to apply (default: log-only) */
+  contentPolicy?: SecurityContentPolicy;
 };
 
 /**
@@ -217,7 +220,18 @@ export type WrapExternalContentOptions = {
  * ```
  */
 export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
-  const { source, sender, subject, includeWarning = true } = options;
+  const { source, sender, subject, includeWarning = true, contentPolicy } = options;
+
+  // Apply content security policy if configured beyond default "log"
+  if (contentPolicy) {
+    const result = evaluateExternalContent(content, contentPolicy);
+    if (result.action === "block" && result.quarantinedContent) {
+      return result.quarantinedContent;
+    }
+    if (result.action === "quarantine" && result.quarantinedContent) {
+      content = result.quarantinedContent;
+    }
+  }
 
   const sanitized = replaceMarkers(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";

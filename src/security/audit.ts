@@ -694,6 +694,76 @@ async function maybeProbeGateway(params: {
   };
 }
 
+function collectSafetyConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const security = cfg.security;
+
+  // Content policy - log-only is default but worth noting
+  if (!security?.contentPolicy || security.contentPolicy.action === "log") {
+    findings.push({
+      checkId: "safety.content_policy_log_only",
+      severity: "info",
+      title: "Content security policy is log-only",
+      detail:
+        "Prompt injection detection is enabled but set to log-only mode. Suspicious content is not blocked or quarantined.",
+      remediation:
+        'Set security.contentPolicy.action to "quarantine" or "block" in your config to actively filter prompt injection attempts.',
+    });
+  }
+
+  // Secret scanning
+  if (security?.secretScanning?.enabled === false) {
+    findings.push({
+      checkId: "safety.secret_scanning_disabled",
+      severity: "warn",
+      title: "Secret scanning is disabled",
+      detail:
+        "Output-side secret scanning is disabled. Secrets may leak in outgoing messages or tool parameters.",
+      remediation: "Set security.secretScanning.enabled to true in your config.",
+    });
+  }
+
+  // Secret store backend
+  if (!security?.secretStore || security.secretStore.backend === "plaintext") {
+    findings.push({
+      checkId: "safety.secret_store_plaintext",
+      severity: "warn",
+      title: "Secrets stored in plaintext",
+      detail:
+        "API keys and tokens are stored as plaintext environment variables. Consider using an encrypted backend.",
+      remediation:
+        'Set security.secretStore.backend to "keychain" (macOS) or "encrypted-file" for encrypted storage. Run "openclaw security migrate-secrets" to migrate.',
+    });
+  }
+
+  // Constitutional alignment
+  if (security?.alignment?.enabled === false) {
+    findings.push({
+      checkId: "safety.alignment_disabled",
+      severity: "warn",
+      title: "Constitutional alignment is disabled",
+      detail:
+        "The alignment system is disabled. Immutable safety principles are still enforced in the system prompt, but the full constitution is not injected.",
+      remediation:
+        "Set security.alignment.enabled to true (default) to enable full constitutional alignment.",
+    });
+  }
+
+  // Rate limiting
+  if (security?.rateLimiting?.enabled === false) {
+    findings.push({
+      checkId: "safety.rate_limiting_disabled",
+      severity: "info",
+      title: "Rate limiting is disabled",
+      detail:
+        "Per-session rate limiting for tool calls is disabled. This may allow resource exhaustion.",
+      remediation: "Set security.rateLimiting.enabled to true in your config.",
+    });
+  }
+
+  return findings;
+}
+
 export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const cfg = opts.config;
@@ -722,6 +792,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectModelHygieneFindings(cfg));
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
+  findings.push(...collectSafetyConfigFindings(cfg));
 
   const configSnapshot =
     opts.includeFilesystem !== false
