@@ -102,4 +102,39 @@ describe("chutes-oauth", () => {
     expect(refreshed.refresh).toBe("rt_old");
     expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);
   });
+
+  it("refreshes tokens and ignores empty refresh_token values", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlToString(input);
+      if (url !== CHUTES_TOKEN_ENDPOINT) {
+        return new Response("not found", { status: 404 });
+      }
+      expect(init?.method).toBe("POST");
+      return new Response(
+        JSON.stringify({
+          access_token: "at_new",
+          refresh_token: "",
+          expires_in: 1800,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const now = 3_000_000;
+    const refreshed = await refreshChutesTokens({
+      credential: {
+        access: "at_old",
+        refresh: "rt_old",
+        expires: now - 10_000,
+        email: "fred",
+        clientId: "cid_test",
+      } as unknown as Parameters<typeof refreshChutesTokens>[0]["credential"],
+      fetchFn,
+      now,
+    });
+
+    expect(refreshed.access).toBe("at_new");
+    expect(refreshed.refresh).toBe("rt_old");
+    expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);
+  });
 });
