@@ -40,6 +40,20 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches Chinese context overflow error messages from proxy providers", () => {
+    const chinesePatterns = [
+      "上下文过长",
+      "错误：上下文过长，请减少输入",
+      "上下文超出限制",
+      "上下文长度超出模型最大限制",
+      "超出最大上下文长度",
+      "请压缩上下文后重试",
+    ];
+    for (const sample of chinesePatterns) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores unrelated errors", () => {
     expect(isContextOverflowError("rate limit exceeded")).toBe(false);
     expect(isContextOverflowError("request size exceeds upload limit")).toBe(false);
