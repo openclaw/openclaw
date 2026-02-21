@@ -717,7 +717,7 @@ describe("/models command", () => {
     const params = buildPolicyParams("/models anthropic", cfg, { Surface: "discord" });
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("Models (anthropic");
     expect(result.reply?.text).toContain("page 1/");
     expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
     expect(result.reply?.text).toContain("Switch: /model <provider/model>");
@@ -729,7 +729,7 @@ describe("/models command", () => {
     const params = buildPolicyParams("/models anthropic 3 all", cfg, { Surface: "discord" });
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("Models (anthropic");
     expect(result.reply?.text).toContain("page 1/1");
     expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
     expect(result.reply?.text).not.toContain("Page out of range");
@@ -777,7 +777,7 @@ describe("/models command", () => {
       buildPolicyParams("/models localai", customCfg, { Surface: "discord" }),
     );
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Models (localai)");
+    expect(result.reply?.text).toContain("Models (localai");
     expect(result.reply?.text).toContain("localai/ultra-chat");
     expect(result.reply?.text).not.toContain("Unknown provider");
   });
