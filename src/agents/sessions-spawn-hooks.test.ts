@@ -208,7 +208,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
 
     expect(result.details).toMatchObject({ status: "error" });
-    const details = result.details as { error?: string };
+    const details = result.details as { error?: string; childSessionKey?: string };
     expect(details.error).toMatch(/thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     const callGatewayMock = getCallGatewayMock();
@@ -218,6 +218,13 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
     expect(calledMethods).toContain("sessions.delete");
     expect(calledMethods).not.toContain("agent");
+    const deleteCall = callGatewayMock.mock.calls
+      .map((call: [unknown]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "sessions.delete");
+    expect(deleteCall?.params).toMatchObject({
+      key: details.childSessionKey,
+      emitLifecycleHooks: false,
+    });
   });
 
   it("rejects mode=session when thread=true is not requested", async () => {

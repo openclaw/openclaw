@@ -357,7 +357,7 @@ export async function spawnSubagentDirect(
       try {
         await callGateway({
           method: "sessions.delete",
-          params: { key: childSessionKey },
+          params: { key: childSessionKey, emitLifecycleHooks: false },
           timeoutMs: 10_000,
         });
       } catch {
