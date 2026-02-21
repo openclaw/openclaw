@@ -443,6 +443,11 @@ export async function runEmbeddedAttempt(
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
+      ownerDisplay: params.config?.commands?.ownerDisplay,
+      ownerDisplaySecret:
+        params.config?.commands?.ownerDisplaySecret ??
+        params.config?.gateway?.auth?.token ??
+        params.config?.gateway?.remote?.token,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
