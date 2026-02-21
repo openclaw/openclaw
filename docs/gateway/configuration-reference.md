@@ -235,6 +235,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
           accentColor: "#5865F2",
         },
       },
+      threadBindings: {
+        enabled: true,
+        ttlHours: 24,
+        spawnSubagentSessions: false, // opt-in for sessions_spawn({ thread: true })
+      },
       voice: {
         enabled: true,
         autoJoin: [
@@ -264,6 +269,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.threadBindings` controls Discord thread-bound routing:
+  - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session ttl`, and bound delivery/routing)
+  - `ttlHours`: Discord override for auto-unfocus TTL (`0` disables)
+  - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
@@ -1222,6 +1231,10 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       maxEntries: 500,
       rotateBytes: "10mb",
     },
+    threadBindings: {
+      enabled: true,
+      ttlHours: 24, // default auto-unfocus TTL for thread-bound sessions (0 disables)
+    },
     mainKey: "main", // legacy (runtime always uses "main")
     agentToAgent: { maxPingPongTurns: 5 },
     sendPolicy: {
@@ -1245,6 +1258,9 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: `warn` warns the active session on eviction; `enforce` applies pruning and rotation.
+- **`threadBindings`**: global defaults for thread-bound session features.
+  - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
+  - `ttlHours`: default auto-unfocus TTL in hours (`0` disables; providers can override)
 
 </Accordion>
 

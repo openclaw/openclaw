@@ -627,6 +627,49 @@ Default slash command settings:
 
   </Accordion>
 
+  <Accordion title="Thread-bound sessions for subagents">
+    Discord can bind a thread to a session target so follow-up messages in that thread keep routing to the same session (including subagent sessions).
+
+    Commands:
+
+    - `/focus <target>` bind current/new thread to a subagent/session target
+    - `/unfocus` remove current thread binding
+    - `/agents` show active runs and binding state
+    - `/session ttl <duration|off>` inspect/update auto-unfocus TTL for focused bindings
+
+    Config:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      ttlHours: 24,
+    },
+  },
+  channels: {
+    discord: {
+      threadBindings: {
+        enabled: true,
+        ttlHours: 24,
+        spawnSubagentSessions: false, // opt-in
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - `session.threadBindings.*` sets global defaults.
+    - `channels.discord.threadBindings.*` overrides Discord behavior.
+    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
+    - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
+
+    See [Sub-agents](/tools/subagents) and [Configuration Reference](/gateway/configuration-reference).
+
+  </Accordion>
+
   <Accordion title="Reaction notifications">
     Per-guild reaction notification mode:
 
