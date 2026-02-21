@@ -295,6 +295,8 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
+
 File attachments:
 
 - `file` blocks must point to an attachment reference (`attachment://<filename>`)
@@ -614,7 +616,7 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - parent thread metadata can be used for parent-session linkage
     - thread config inherits parent channel config unless a thread-specific entry exists
 
-    Channel topics are injected as untrusted context and also included in trusted inbound metadata on new sessions.
+    Channel topics are injected as **untrusted** context (not as system prompt).
 
   </Accordion>
 

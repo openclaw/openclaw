@@ -17,9 +17,7 @@ describe("runCapability deepgram provider options", () => {
     await fs.writeFile(tmpPath, Buffer.from("RIFF"));
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
     const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media, {
-      localPathRoots: [os.tmpdir()],
-    });
+    const cache = createMediaAttachmentCache(media);
 
     let seenQuery: Record<string, string | number | boolean> | undefined;
     let seenBaseUrl: string | undefined;
