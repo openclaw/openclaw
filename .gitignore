@@ -97,5 +97,9 @@ package-lock.json
 .agents
 .agent/
 
+# Local workspace and OMC state
+workspace/
+.omc/
+
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
