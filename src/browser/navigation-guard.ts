@@ -7,6 +7,11 @@ import {
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
 
+function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
+  // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
+  return SAFE_NON_NETWORK_URLS.has(parsed.href);
+}
+
 export class InvalidBrowserNavigationUrlError extends Error {
   constructor(message: string) {
     super(message);
@@ -43,7 +48,7 @@ export async function assertBrowserNavigationAllowed(
   }
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
-    if (SAFE_NON_NETWORK_URLS.has(parsed.href)) {
+    if (isAllowedNonNetworkNavigationUrl(parsed)) {
       return;
     }
     throw new InvalidBrowserNavigationUrlError(
