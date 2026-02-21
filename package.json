@@ -176,6 +176,7 @@
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
     "linkedom": "^0.18.12",
+    "lit": "^3.3.2",
     "markdown-it": "^14.1.1",
     "node-edge-tts": "^1.2.10",
     "opusscript": "^0.0.8",
