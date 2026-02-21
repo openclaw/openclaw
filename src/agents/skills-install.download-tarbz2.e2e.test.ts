@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempWorkspace, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
@@ -9,7 +8,6 @@ const mocks = {
   scanSummary: vi.fn(),
   fetchGuard: vi.fn(),
 };
-let envSnapshot: ReturnType<typeof captureEnv>;
 
 function mockDownloadResponse() {
   mocks.fetchGuard.mockResolvedValue({
@@ -91,7 +89,6 @@ vi.mock("../security/skill-scanner.js", async (importOriginal) => {
 
 describe("installSkill download extraction safety (tar.bz2)", () => {
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     mocks.runCommand.mockReset();
     mocks.scanSummary.mockReset();
     mocks.fetchGuard.mockReset();
@@ -102,10 +99,6 @@ describe("installSkill download extraction safety (tar.bz2)", () => {
       info: 0,
       findings: [],
     });
-  });
-
-  afterEach(() => {
-    envSnapshot.restore();
   });
 
   it("rejects tar.bz2 traversal before extraction", async () => {
