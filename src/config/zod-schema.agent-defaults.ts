@@ -168,6 +168,18 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    verifier: z
+      .object({
+        enabled: z.boolean().optional(),
+        verifyAll: z.boolean().optional(),
+        verifyHeartbeat: z.boolean().optional(),
+        model: z.string().optional(),
+        maxAttempts: z.number().int().positive().optional(),
+        triggerKeywords: z.array(z.string()).optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
