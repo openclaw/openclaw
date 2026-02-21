@@ -59,6 +59,26 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export function formatGatewayError(error?: {
+  code: string;
+  message: string;
+  details?: unknown;
+}): string {
+  const message = error?.message ?? "request failed";
+  const details = error?.details;
+  if (details === undefined || details === null) {
+    return message;
+  }
+  if (typeof details === "string") {
+    return `${message}: ${details}`;
+  }
+  try {
+    return `${message}: ${JSON.stringify(details)}`;
+  } catch {
+    return `${message}: ${String(details)}`;
+  }
+}
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -280,7 +300,7 @@ export class GatewayBrowserClient {
       if (res.ok) {
         pending.resolve(res.payload);
       } else {
-        pending.reject(new Error(res.error?.message ?? "request failed"));
+        pending.reject(new Error(formatGatewayError(res.error)));
       }
       return;
     }

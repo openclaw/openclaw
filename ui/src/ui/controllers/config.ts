@@ -127,6 +127,20 @@ function serializeFormForSubmit(state: ConfigState): string {
   return serializeConfigForm(form);
 }
 
+export function formatUiError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 export async function saveConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;
@@ -144,7 +158,7 @@ export async function saveConfig(state: ConfigState) {
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
-    state.lastError = String(err);
+    state.lastError = formatUiError(err);
   } finally {
     state.configSaving = false;
   }
@@ -171,7 +185,7 @@ export async function applyConfig(state: ConfigState) {
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
-    state.lastError = String(err);
+    state.lastError = formatUiError(err);
   } finally {
     state.configApplying = false;
   }
@@ -188,7 +202,7 @@ export async function runUpdate(state: ConfigState) {
       sessionKey: state.applySessionKey,
     });
   } catch (err) {
-    state.lastError = String(err);
+    state.lastError = formatUiError(err);
   } finally {
     state.updateRunning = false;
   }
