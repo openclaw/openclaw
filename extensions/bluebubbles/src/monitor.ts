@@ -42,10 +42,16 @@ type BlueBubblesDebounceEntry = {
 
 /**
  * Default debounce window for inbound message coalescing (ms).
- * This helps combine URL text + link preview balloon messages that BlueBubbles
- * sends as separate webhook events when no explicit inbound debounce config exists.
+ *
+ * macOS splits "text + URL" iMessages into two separate chat.db rows with
+ * different GUIDs and no associatedMessageGuid. BlueBubbles delivers them as
+ * separate webhooks ~870ms apart. The window must exceed that gap so both
+ * events land in the same debounce bucket.
+ *
+ * 1000ms covers the observed ~870ms balloon delay with margin, while staying
+ * well below typical human inter-message gaps (usually 2s+).
  */
-const DEFAULT_INBOUND_DEBOUNCE_MS = 500;
+const DEFAULT_INBOUND_DEBOUNCE_MS = 1000;
 
 /**
  * Combines multiple debounced messages into a single message for processing.
@@ -126,6 +132,31 @@ type BlueBubblesDebouncer = {
  */
 const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
 
+/**
+ * Builds a type-prefixed chat key for debounce bucketing.
+ * Uses the same prefix convention as `formatGroupAllowlistEntry` to avoid
+ * cross-identifier-type collisions (e.g. a chatGuid and chatId that happen
+ * to stringify to the same value).
+ */
+function buildChatKey(msg: {
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+}): string {
+  const guid = msg.chatGuid?.trim();
+  if (guid) {
+    return `chat_guid:${guid}`;
+  }
+  if (typeof msg.chatId === "number" && Number.isFinite(msg.chatId)) {
+    return `chat_id:${msg.chatId}`;
+  }
+  const identifier = msg.chatIdentifier?.trim();
+  if (identifier) {
+    return `chat_identifier:${identifier}`;
+  }
+  return "dm";
+}
+
 function resolveBlueBubblesDebounceMs(
   config: OpenClawConfig,
   core: BlueBubblesCoreRuntime,
@@ -166,16 +197,30 @@ function getOrCreateDebouncer(target: WebhookTarget) {
         return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
       }
 
+      // Inbound messages: use sender+chat key so a URL balloon (different GUID,
+      // no associatedMessageGuid) lands in the same bucket as the preceding text.
+      //
+      // Both the text and the balloon must share the same key for coalescing to
+      // work, so this applies to all inbound messages — not just balloons.
+      //
+      // This matches the iMessage native channel's debounce strategy
+      // (see monitorIMessageProvider in src/imessage/monitor/monitor-provider.ts).
+      //
+      // Risk of merging genuinely separate messages is low: the 1000ms window is
+      // well below typical human inter-message gaps (2s+), and combineDebounceEntries
+      // preserves all text content (joined with space), so no user input is lost
+      // even if two rapid messages do coalesce.
+      if (!msg.fromMe) {
+        return `bluebubbles:${account.accountId}:${buildChatKey(msg)}:${msg.senderId}`;
+      }
+
+      // From-me: keep message-id keying to avoid merging distinct outbound messages
       const messageId = msg.messageId?.trim();
       if (messageId) {
         return `bluebubbles:${account.accountId}:msg:${messageId}`;
       }
 
-      const chatKey =
-        msg.chatGuid?.trim() ??
-        msg.chatIdentifier?.trim() ??
-        (msg.chatId ? String(msg.chatId) : "dm");
-      return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
+      return `bluebubbles:${account.accountId}:${buildChatKey(msg)}:${msg.senderId}`;
     },
     shouldDebounce: (entry) => {
       const msg = entry.message;
