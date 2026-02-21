@@ -649,6 +649,8 @@ export async function runTui(opts: TuiOptions) {
     renderStatus();
   };
 
+  let _getPendingAttachmentCount: (() => number) | null = null;
+
   const updateFooter = () => {
     const sessionKeyLabel = formatSessionKey(currentSessionKey);
     const sessionLabel = sessionInfo.displayName
@@ -666,6 +668,7 @@ export async function runTui(opts: TuiOptions) {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const pendingCount = _getPendingAttachmentCount?.() ?? 0;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
@@ -674,6 +677,7 @@ export async function runTui(opts: TuiOptions) {
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
+      pendingCount > 0 ? `📎 ${pendingCount}` : null,
     ].filter(Boolean);
     footer.setText(theme.dim(footerParts.join(" | ")));
   };
@@ -725,27 +729,36 @@ export async function runTui(opts: TuiOptions) {
     clearLocalRunIds,
   });
 
-  const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
-    createCommandHandlers({
-      client,
-      chatLog,
-      tui,
-      opts,
-      state,
-      deliverDefault,
-      openOverlay,
-      closeOverlay,
-      refreshSessionInfo,
-      applySessionInfoFromPatch,
-      loadHistory,
-      setSession,
-      refreshAgents,
-      abortActive,
-      setActivityStatus,
-      formatSessionKey,
-      noteLocalRunId,
-      forgetLocalRunId,
-    });
+  const {
+    handleCommand,
+    sendMessage,
+    openModelSelector,
+    openAgentSelector,
+    openSessionSelector,
+    getPendingAttachmentCount,
+    attachImageFromPath,
+  } = createCommandHandlers({
+    client,
+    chatLog,
+    tui,
+    opts,
+    state,
+    deliverDefault,
+    openOverlay,
+    closeOverlay,
+    refreshSessionInfo,
+    applySessionInfoFromPatch,
+    loadHistory,
+    setSession,
+    refreshAgents,
+    abortActive,
+    setActivityStatus,
+    formatSessionKey,
+    noteLocalRunId,
+    forgetLocalRunId,
+  });
+
+  _getPendingAttachmentCount = getPendingAttachmentCount;
 
   const { runLocalShellLine } = createLocalShellRunner({
     chatLog,
@@ -808,6 +821,11 @@ export async function runTui(opts: TuiOptions) {
   editor.onCtrlT = () => {
     showThinking = !showThinking;
     void loadHistory();
+  };
+
+  editor.onPastedImagePath = (path: string) => {
+    void attachImageFromPath(path);
+    return true;
   };
 
   client.onEvent = (evt) => {
