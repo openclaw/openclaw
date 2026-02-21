@@ -256,4 +256,100 @@ describe("config form renderer", () => {
     const analysis = analyzeConfigSchema(schema);
     expect(analysis.unsupportedPaths).toContain("extra");
   });
+
+  it("preserves parent map when only nested children are unsupported", () => {
+    // Telegram-like schema: accounts is a map with typed additionalProperties
+    const schema = {
+      type: "object",
+      properties: {
+        accounts: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              token: { type: "string" },
+              webhookSecret: { type: "string" },
+              unsupportedUnion: {
+                anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    // Parent map should NOT be blocked
+    expect(analysis.unsupportedPaths).not.toContain("accounts");
+    // The unsupported nested field should be flagged with wildcard path
+    expect(analysis.unsupportedPaths).toContain("accounts.*.unsupportedUnion");
+  });
+
+  it("preserves parent array when only nested children are unsupported", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              complex: {
+                anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("items");
+    expect(analysis.unsupportedPaths).toContain("items.*.complex");
+  });
+
+  it("renders accounts map section instead of unsupported error", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        accounts: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              token: { type: "string" },
+              unsupportedUnion: {
+                anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { accounts: { mybot: { token: "abc" } } },
+        onPatch,
+      }),
+      container,
+    );
+
+    // The accounts section should render (not blocked by unsupported error)
+    const errorDivs = Array.from(container.querySelectorAll(".cfg-field--error"));
+    const accountsError = errorDivs.find(
+      (div) => div.querySelector(".cfg-field__label")?.textContent?.trim() === "Accounts",
+    );
+    expect(accountsError).toBeUndefined();
+
+    // The nested unsupported field should still show an error
+    const unsupportedError = errorDivs.find(
+      (div) => div.querySelector(".cfg-field__label")?.textContent?.trim() === "Unsupported Union",
+    );
+    expect(unsupportedError).not.toBeUndefined();
+  });
 });
