@@ -876,7 +876,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         [
           `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
-          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
+          `- For IDs above 2^53 use quoted strings in config to avoid precision loss; run "${formatCliCommand("openclaw doctor --fix")}" to convert to strings.`,
         ].join("\n"),
         "Doctor warnings",
       );
