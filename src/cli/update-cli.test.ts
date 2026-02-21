@@ -200,6 +200,26 @@ describe("update-cli", () => {
       ...overrides,
     }) as UpdateRunResult;
 
+  const runRestartFallbackScenario = async (params: { daemonInstall: "ok" | "fail" }) => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    if (params.daemonInstall === "fail") {
+      vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
+    } else {
+      vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    }
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runDaemonInstall).toHaveBeenCalledWith({
+      force: true,
+      json: undefined,
+    });
+    expect(runDaemonRestart).toHaveBeenCalled();
+  };
+
   const setupNonInteractiveDowngrade = async () => {
     const tempDir = createCaseDir("openclaw-update");
     setTty(false);
@@ -552,49 +572,11 @@ describe("update-cli", () => {
   });
 
   it("updateCommand falls back to restart when env refresh install fails", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
-    prepareRestartScript.mockResolvedValue(null);
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-
-    await updateCommand({});
-
-    expect(runDaemonInstall).toHaveBeenCalledWith({
-      force: true,
-      json: undefined,
-    });
-    expect(runDaemonRestart).toHaveBeenCalled();
+    await runRestartFallbackScenario({ daemonInstall: "fail" });
   });
 
   it("updateCommand falls back to restart when no detached restart script is available", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
-    prepareRestartScript.mockResolvedValue(null);
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-
-    await updateCommand({});
-
-    expect(runDaemonInstall).toHaveBeenCalledWith({
-      force: true,
-      json: undefined,
-    });
-    expect(runDaemonRestart).toHaveBeenCalled();
+    await runRestartFallbackScenario({ daemonInstall: "ok" });
   });
 
   it("updateCommand does not refresh service env when --no-restart is set", async () => {
