@@ -1,7 +1,6 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "rolldown";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../../../..");
@@ -39,7 +38,7 @@ function resolveUiDependency(moduleId) {
   );
 }
 
-export default defineConfig({
+export default {
   input: fromHere("bootstrap.js"),
   experimental: {
     attachDebugInfo: "none",
@@ -56,7 +55,7 @@ export default defineConfig({
       "@lit-labs/signals/": resolveUiDependency("@lit-labs/signals/"),
       lit: resolveUiDependency("lit"),
       "lit/": resolveUiDependency("lit/"),
-      "signal-utils": resolveUiDependency("signal-utils"),
+      "signal-utils/": resolveUiDependency("signal-utils/"),
     },
   },
   output: {
@@ -65,4 +64,4 @@ export default defineConfig({
     codeSplitting: false,
     sourcemap: false,
   },
-});
+};
