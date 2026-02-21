@@ -52,6 +52,7 @@ import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { resolveProbeMode } from "./runs.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -172,7 +173,7 @@ export async function runEmbeddedPiAgent(
         ? "markdown"
         : "plain"
       : "markdown");
-  const isProbeSession = params.probeMode ?? params.sessionId?.startsWith("probe-") ?? false;
+  const isProbeSession = resolveProbeMode(params.sessionId, params.probeMode);
 
   return enqueueSession(() =>
     enqueueGlobal(async () => {

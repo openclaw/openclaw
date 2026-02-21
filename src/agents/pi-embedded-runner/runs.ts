@@ -18,6 +18,10 @@ type EmbeddedRunWaiter = {
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
+export function resolveProbeMode(sessionId: string, probeMode?: boolean): boolean {
+  return probeMode ?? sessionId.startsWith("probe-");
+}
+
 export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
@@ -123,7 +127,7 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
-  if (!(opts?.probeMode ?? sessionId.startsWith("probe-"))) {
+  if (!resolveProbeMode(sessionId, opts?.probeMode)) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
 }
@@ -136,7 +140,7 @@ export function clearActiveEmbeddedRun(
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     logSessionStateChange({ sessionId, state: "idle", reason: "run_completed" });
-    if (!(opts?.probeMode ?? sessionId.startsWith("probe-"))) {
+    if (!resolveProbeMode(sessionId, opts?.probeMode)) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
     notifyEmbeddedRunEnded(sessionId);

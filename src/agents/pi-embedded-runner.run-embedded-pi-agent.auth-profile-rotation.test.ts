@@ -575,6 +575,121 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     }
   });
 
+  it("probe mode rotates on prompt failover errors without persisting cooldown penalties", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            promptError: new Error("rate limit"),
+            assistantTexts: [],
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:probe-prompt-error",
+        sessionKey: "agent:test:probe-prompt-error",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:probe-prompt-error",
+        probeMode: true,
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(result.payloads?.some((payload) => payload.text === "ok")).toBe(true);
+
+      const stored = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+      ) as {
+        usageStats?: Record<
+          string,
+          { cooldownUntil?: number; lastFailureAt?: number; lastUsed?: number }
+        >;
+      };
+      expect(stored.usageStats?.["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(stored.usageStats?.["openai:p1"]?.lastFailureAt).toBeUndefined();
+      expect(typeof stored.usageStats?.["openai:p2"]?.lastUsed).toBe("number");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normal mode keeps cooldown persistence for prompt failover errors", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            promptError: new Error("rate limit"),
+            assistantTexts: [],
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:normal-prompt-error",
+        sessionKey: "agent:test:normal-prompt-error",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:normal-prompt-error",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(result.payloads?.some((payload) => payload.text === "ok")).toBe(true);
+
+      const stored = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+      ) as {
+        usageStats?: Record<string, { cooldownUntil?: number; lastFailureAt?: number }>;
+      };
+      expect(typeof stored.usageStats?.["openai:p1"]?.cooldownUntil).toBe("number");
+      expect(typeof stored.usageStats?.["openai:p1"]?.lastFailureAt).toBe("number");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats probe-like session ids as probe mode when flag is unset", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));

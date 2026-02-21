@@ -76,6 +76,7 @@ import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
+  resolveProbeMode,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
 } from "../runs.js";
@@ -675,10 +676,10 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
-      setActiveEmbeddedRun(params.sessionId, queueHandle, { probeMode: params.probeMode });
+      const isProbeSession = resolveProbeMode(params.sessionId, params.probeMode);
+      setActiveEmbeddedRun(params.sessionId, queueHandle, { probeMode: isProbeSession });
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
-      const isProbeSession = params.probeMode ?? params.sessionId?.startsWith("probe-") ?? false;
       const abortTimer = setTimeout(
         () => {
           if (!isProbeSession) {
@@ -898,7 +899,7 @@ export async function runEmbeddedAttempt(
         }
         unsubscribe();
         clearActiveEmbeddedRun(params.sessionId, queueHandle, {
-          probeMode: params.probeMode,
+          probeMode: isProbeSession,
         });
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
