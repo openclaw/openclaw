@@ -1,339 +1,356 @@
-# Pre-Redact — Self-Training System Design
+# Pre-Redact — Agent-Driven Self-Training System
 
-> Designed Feb 2026. Built to leverage user behavior as free, high-quality training signal.
-
----
-
-## The Core Insight
-
-Every user interaction with Pre-Redact is a labeled training example:
-
-| User Action                                  | Training Signal                                               |
-| -------------------------------------------- | ------------------------------------------------------------- |
-| Accepts all detections → proceeds to AI Chat | **CONFIRMED** — model was right                               |
-| Reveals (toggles off) an entity              | **FALSE POSITIVE** — model hallucinated this entity           |
-| Manually adds an entity the model missed     | **FALSE NEGATIVE** — model missed a real entity               |
-| Saves a template with custom fields          | **DOMAIN SIGNAL** — user encoding their domain's PII patterns |
-| Switches models (detection context)          | **PREFERENCE SIGNAL** — model quality feedback                |
-
-Most NER training pipelines pay annotators $0.05–0.20 per labeled entity.
-You're getting this from real users on real documents, for free.
+> Designed Feb 2026.
+> Core premise: The AI agents (Claude, GPT-4O, etc.) ARE the detection model.
+> Training = improving the logic the agents use to detect PII.
+> Target accuracy: 90-100%.
 
 ---
 
-## Architecture: Four Layers
+## The Core Premise
+
+Pre-Redact doesn't use a separate NER model. AI agents DO the detection.
+That means "training the model" = "improving the prompts and rules the agent runs."
+
+The agent can improve itself. It can:
+
+- Analyze its own false positives ("I tagged 'March' as GIVENNAME — that was wrong")
+- Reason about failure patterns across hundreds of documents
+- Write better detection rules and update its own prompt
+- Evaluate the improvement before deploying
+
+This is **agent-driven self-improvement**, not traditional ML fine-tuning.
+No GPU. No training infrastructure. Just signal capture + an agent that learns from mistakes.
+
+---
+
+## The Loop
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  LAYER 1: SIGNAL CAPTURE (in the app)                   │
-│  Every toggle, reveal, add, confirm → event emitted     │
-└─────────────────────────┬───────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────┐
-│  LAYER 2: SIGNAL PIPELINE                               │
-│  Validate → Deduplicate → Anonymize → Enrich → Store    │
-└─────────────────────────┬───────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────┐
-│  LAYER 3: TRAINING LOOP                                 │
-│  Aggregate → Fine-tune/Prompt-update → Evaluate → Gate  │
-└─────────────────────────┬───────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────┐
-│  LAYER 4: DEPLOYMENT & MONITORING                       │
-│  A/B test → Gradual rollout → Drift detection           │
-└─────────────────────────────────────────────────────────┘
+Document uploaded
+      ↓
+DETECTION AGENT runs
+(structured prompt → entity tags)
+      ↓
+User reviews in Pre-Redact UI
+(toggle/reveal/add entities)
+      ↓
+Correction signals stored
+(FP: revealed, FN: manually added, CONFIRMED: accepted all)
+      ↓
+TRAINING AGENT wakes (triggered or scheduled)
+- Reviews batch of corrections
+- Clusters failure patterns
+- Reasons about root causes
+- Proposes updated detection logic
+      ↓
+Review Gate (human approves, or auto-deploy if high-confidence update)
+      ↓
+Updated detection prompt → deployed
+      ↓
+Evaluated against canonical test set
+      ↓
+(loop — continuously improving)
 ```
 
 ---
 
-## Layer 1: Signal Capture
+## Detection Agent
 
-### Events to Emit
+This is the agent that runs every time a user uploads a document.
 
-Every signal event should be a structured payload. Fire-and-forget (non-blocking).
+### System Prompt Structure (v1 baseline)
+
+```
+You are a PII detection agent. Your job is to identify ALL sensitive entities
+in the document below and return them as structured JSON.
+
+## Entity Types to Detect
+
+NAMES:
+  GIVENNAME — first names, given names
+  SURNAME   — last names, family names
+  NOTE: Month names (January, February, March...) are NOT names.
+        Title words (Dr., Mr., Mrs.) are NOT names on their own.
+
+FINANCIAL:
+  ACCOUNTNUM  — account numbers, policy numbers with account-style formatting
+  SOCIALNUMB  — social security numbers (XXX-XX-XXXX format)
+  CURRENCY    — specific dollar amounts tied to an individual
+
+CONTACT:
+  TELEPHONENUMB — phone numbers in any format
+  EMAIL         — email addresses
+
+IDENTIFIERS:
+  IDENTIFIER — insurance policy numbers (e.g., BC-2026-449161), ID numbers,
+               reference numbers tied to an individual
+  NOTE: Insurance provider names (Blue Cross, Aetna, United) are NOT identifiers —
+        they are organization names, not PII.
+
+LOCATIONS:
+  CITY        — city names when they identify where a specific person is
+  STREET      — street addresses
+  BUILDINGNUMB — building or suite numbers
+
+## Document Context
+Type: {documentType}  (medical | legal | financial | contract | other)
+Use this context to weight entity likelihood.
+
+## Output Format
+Return JSON array:
+[
+  {
+    "text": "exact text from document",
+    "type": "ENTITYTYPE",
+    "subtype": "ENTITYSUBTYPE",
+    "startIndex": 0,
+    "endIndex": 0,
+    "confidence": 0.0-1.0,
+    "reasoning": "why this is PII"
+  }
+]
+
+## Document
+{document}
+```
+
+### Key Properties
+
+- Always returns confidence scores (enables thresholding)
+- Always returns reasoning (enables the training agent to learn from mistakes)
+- Document type aware (medical vs. legal vs. contract → different entity weights)
+- Structured JSON output (parseable, diffable, testable)
+
+---
+
+## Signal Capture Schema
+
+Every user correction emits a signal. The training agent feeds on these.
 
 ```typescript
-type CorrectionType = "FALSE_POSITIVE" | "FALSE_NEGATIVE" | "CONFIRMED";
+interface CorrectionSignal {
+  // What happened
+  correctionType: "FALSE_POSITIVE" | "FALSE_NEGATIVE" | "CONFIRMED";
 
-interface TrainingSignal {
-  // Identity (hashed — never raw)
-  documentId: string; // sha256 of document content
-  sessionId: string; // session hash (not user ID)
+  // What entity
+  entityType: string; // NAMES | FINANCIAL | CONTACT | IDENTIFIERS | LOCATIONS
+  entitySubtype: string; // GIVENNAME | ACCOUNTNUM | etc.
 
-  // The entity
-  entityType: EntityCategory; // NAMES | FINANCIAL | CONTACT | IDENTIFIERS | LOCATIONS
-  entitySubtype: string; // GIVENNAME | SURNAME | ACCOUNTNUM | etc.
-  correctionType: CorrectionType;
+  // Context window — NEVER the entity value itself
+  // ±5 tokens surrounding the entity position
+  contextBefore: string[]; // e.g., ["appointment", "on", "March"]  ← "March" was wrongly tagged
+  contextAfter: string[]; // e.g., ["15,", "2026", "at"]
 
-  // Context window (NEVER the entity value itself)
-  // ±3 tokens around where the entity was/should-be
-  precedingTokens: string[]; // e.g., ["Dear", "Dr."]
-  followingTokens: string[]; // e.g., [",", "this", "confirms"]
+  // What the detection agent said
+  agentReasoning: string; // the "reasoning" field from the detection output
+  agentConfidence: number; // confidence score the agent assigned
 
-  // Detection metadata
-  modelVersion: string; // detection model/prompt version that fired
-  confidenceScore?: number; // if the model outputs confidence
-  documentType?: string; // 'medical' | 'legal' | 'financial' | 'contract' | 'other'
+  // Document context
+  documentType: string; // medical | legal | financial | contract | other
+  documentId: string; // sha256 hash — never raw content
 
-  // Timing
-  timestamp: string; // ISO 8601
-  timeToCorrection?: number; // ms from page load to toggle (speed = confidence proxy)
+  // Metadata
+  modelVersion: string; // which detection prompt version was used
+  timestamp: string;
 }
 ```
 
-### Where to Fire Signals
+The `agentReasoning` field is critical — it lets the training agent understand
+not just WHAT was wrong, but WHY the detection agent thought it was right.
 
-```typescript
-// FALSE POSITIVE: user reveals an entity (model was wrong)
-onEntityToggle(entity, isRevealed) {
-  if (isRevealed) captureSignal({ correctionType: 'FALSE_POSITIVE', ...entityContext })
-}
+---
 
-// FALSE NEGATIVE: user manually adds an entity (model missed it)
-onEntityManualAdd(entity) {
-  captureSignal({ correctionType: 'FALSE_NEGATIVE', ...entityContext })
-}
+## Training Agent
 
-// CONFIRMED: user clicks "Continue to AI Chat" without any reveals
-// (signals all detections were correct for this session)
-onProceedToAIChat(sessionEntityCount, revealCount) {
-  if (revealCount === 0) {
-    captureSignal({ correctionType: 'CONFIRMED', ...sessionSummary })
+This is the agent that improves the detection logic. Runs on a schedule or
+when signal volume crosses a threshold (e.g., 200+ new corrections).
+
+### Training Agent Prompt
+
+```
+You are a PII detection training agent. Your job is to review correction signals
+from real user sessions, identify patterns in detection failures, and propose
+specific improvements to the detection prompt.
+
+## Your Task
+
+1. ANALYZE the correction signals below
+2. CLUSTER similar failures by root cause
+3. IDENTIFY specific rules that would have prevented each cluster of failures
+4. PROPOSE an updated detection system prompt that incorporates the fixes
+5. EXPLAIN your reasoning for each change
+
+## Correction Signals (batch of N)
+{correctionSignals}
+
+## Current Detection Prompt
+{currentDetectionPrompt}
+
+## Canonical Test Set Results (current accuracy)
+{testSetMetrics}
+
+## Output Format
+{
+  "analysis": {
+    "totalSignals": N,
+    "falsePositives": N,
+    "falseNegatives": N,
+    "confirmedCorrect": N
+  },
+  "failureClusters": [
+    {
+      "pattern": "Short description of the failure pattern",
+      "count": N,
+      "rootCause": "Why the detection agent made this mistake",
+      "exampleContexts": [["token1", "token2", ...], ...],
+      "proposedFix": "Specific rule or instruction to add/change"
+    }
+  ],
+  "promptChanges": [
+    {
+      "section": "which section of the prompt to modify",
+      "before": "current text",
+      "after": "proposed updated text",
+      "rationale": "why this change fixes the identified failures"
+    }
+  ],
+  "updatedPrompt": "FULL updated detection system prompt with all changes applied",
+  "expectedImpact": {
+    "estimatedFPReduction": "X%",
+    "estimatedFNReduction": "X%",
+    "riskOfRegression": "low | medium | high",
+    "regressionRisk": "explain any risk of making currently-correct detections worse"
   }
 }
-
-// DOMAIN SIGNAL: user saves a template
-onTemplateSave(template) {
-  captureTemplateSignal({ customFields: template.fields, documentType: template.type })
-}
 ```
 
-### Deduplication (Session-Scoped)
+### Training Agent Behavior
 
-Users toggle back and forth. Deduplicate within a session:
+The training agent should:
 
-- Last state wins: if entity was toggled off then back on → treat as CONFIRMED, not FP
-- Minimum 2 seconds between same-entity events before recording
-- If user toggles same entity 3+ times in a session → discard as indecisive
+- **Be specific** — not "improve name detection" but "add: month names preceded by 'on', 'in', 'by', 'during' are dates, not given names"
+- **Be conservative** — prefer targeted fixes over broad changes; regressions are worse than stagnation
+- **Explain reasoning** — every change must have a rationale tied to actual signals
+- **Flag risk** — if a proposed fix could break currently-correct detections, say so
 
 ---
 
-## Layer 2: Signal Pipeline
+## Review Gate
 
-### Validation
+Before any updated prompt goes to production:
 
-- Reject signals missing required fields
-- Reject signals where `documentId` matches known synthetic/test docs
-- Reject signals with `timeToCorrection < 500ms` (bot-speed, not human)
+### Auto-Deploy Criteria (no human review required)
 
-### Anonymization
+- Proposed change is an **addition only** (new NOTE or exception clause added)
+- Training agent rates regression risk as **low**
+- Change addresses ≥ 5 signals from the batch (not a one-off)
+- Canonical test set F1 is **equal or better** with the new prompt
 
-- Strip session IDs after pipeline processing
-- Context tokens: remove any tokens that are themselves PII (check against the doc's entity map)
-- Never store the entity value that was revealed — only the correction type + context
+### Human Review Required
 
-### Enrichment
+- Any change that **modifies or removes** existing detection rules
+- Regression risk rated **medium or high**
+- Change addresses a new entity subtype not previously in the prompt
+- F1 drops on any entity subtype (even if overall F1 improves)
 
-- Tag with document type (if inferrable from template or upload filename)
-- Tag with entity frequency in document (rare vs. repeated entity)
-- Tag with detection confidence bucket (high/medium/low if model provides it)
-
-### Storage Schema
-
-```sql
-training_signals (
-  id            UUID PRIMARY KEY,
-  document_hash TEXT,          -- sha256
-  entity_type   TEXT,          -- NAMES | FINANCIAL | ...
-  entity_subtype TEXT,         -- GIVENNAME | SURNAME | ...
-  correction    TEXT,          -- FALSE_POSITIVE | FALSE_NEGATIVE | CONFIRMED
-  context_pre   JSONB,         -- preceding tokens array
-  context_post  JSONB,         -- following tokens array
-  model_version TEXT,
-  doc_type      TEXT,
-  confidence    FLOAT,
-  created_at    TIMESTAMPTZ,
-
-  -- Aggregation flags (set by pipeline)
-  is_deduplicated BOOLEAN DEFAULT false,
-  batch_id        TEXT         -- which training batch this fed into
-)
-```
+Human review = Donny or team member reads the `promptChanges` diff and approves.
+Takes 5 minutes. The training agent does the heavy lifting.
 
 ---
 
-## Layer 3: Training Loop
+## Canonical Test Set
 
-### When to Train
+50 documents with gold-standard entity labels. Locked — never used for training.
 
-Not continuously — training on noise is worse than not training. Gate on:
+### Composition
 
-| Trigger           | Condition                                         |
-| ----------------- | ------------------------------------------------- |
-| Signal volume     | 500+ new signals since last training run          |
-| Error rate spike  | FP rate > 15% on any entity subtype               |
-| New document type | Template with new `documentType` reaches 20+ uses |
-| Weekly cadence    | Regardless of volume, every Sunday at 2am         |
+- 15 medical documents (appointment letters, lab results, prescriptions)
+- 15 legal/contract documents (operating agreements, NDAs, employment contracts)
+- 10 financial documents (statements, invoices, loan docs)
+- 10 mixed / edge cases (documents with tricky false-positive candidates)
 
-### Training Approaches (choose by current architecture)
+### Metrics Tracked Per Entity Subtype
 
-#### Option A: Prompt-Based Detection (if using LLM for detection)
+| Subtype       | Precision | Recall | F1  |
+| ------------- | --------- | ------ | --- |
+| GIVENNAME     |           |        |     |
+| SURNAME       |           |        |     |
+| ACCOUNTNUM    |           |        |     |
+| SOCIALNUMB    |           |        |     |
+| TELEPHONENUMB |           |        |     |
+| EMAIL         |           |        |     |
+| IDENTIFIER    |           |        |     |
+| CITY          |           |        |     |
+| STREET        |           |        |     |
 
-Use signals to improve the system prompt. The training loop generates prompt updates:
+Target: **F1 ≥ 0.92 on every subtype** (90% accuracy floor, targeting 100%).
 
-```
-Current prompt: "Detect names, financial info, contact details, identifiers, locations."
+### Hard Regression Rule
 
-Signal analysis shows: 85% FP rate on "March" (detected as GIVENNAME)
-                       22% FP rate on "Blue Cross" (sometimes detected as NAME)
-                       12% FN rate on policy number prefixes ("BC-", "AC-")
-
-Proposed prompt update:
-  - Add: "Month names (January, February, March...) are NOT given names."
-  - Add: "Insurance provider names (Blue Cross, Aetna, UnitedHealth) are IDENTIFIERS, not NAMES."
-  - Add: "Policy number prefixes like 'BC-', 'AC-' should be included as part of the IDENTIFIER entity."
-```
-
-Evaluate the updated prompt on a held-out labeled set before deploying.
-
-#### Option B: Fine-Tuned NER Model (if using dedicated NER)
-
-1. Convert signals to CoNLL/BIO format training examples
-2. Fine-tune on corrected examples (weighted: FP/FN corrections weighted 3x vs CONFIRMED)
-3. Evaluate on canonical test set — require F1 improvement ≥ 1% to promote
-4. A/B test at 10% traffic for 48h before full rollout
-
-#### Option C: Hybrid (recommended for Pre-Redact's stage)
-
-- Use LLM-based detection with a **rule layer on top**
-- Rules encode high-confidence patterns learned from signals
-- Signals feed rule generation + prompt refinement (no GPU/fine-tuning needed to start)
-- Graduate to fine-tuned model when labeled corpus reaches 10k+ examples
-
-```
-Signal → Rule Generator → New Rules
-  e.g., "March" FP on 847 documents →
-  Rule: token("March") preceded by "on|in|by|during" → DATE, not GIVENNAME
-```
-
-### Evaluation — Canonical Test Set
-
-Maintain a locked test set of 50 documents with gold-standard entity labels.
-Sources: synthetic docs, public domain medical/legal docs with hand-labeled PII.
-
-**Metrics to track (per entity subtype):**
-
-- Precision (FP rate inverse)
-- Recall (FN rate inverse)
-- F1
-- Exact match vs. boundary match (did we get the right span?)
-
-**Regression gate:** New model/prompt must not regress F1 by more than 0.5% on any subtype.
+No prompt change ships if it causes F1 to drop ≥ 0.01 on any subtype.
+The agent that improves Names cannot break Financial.
 
 ---
 
-## Layer 4: Deployment & Monitoring
+## Known Failure Patterns (Seed Knowledge)
 
-### Rollout Strategy
+Pre-populate the training agent's knowledge with known issues from the demos:
 
-1. Shadow mode: run new model alongside old, log differences (don't show new results yet)
-2. 10% rollout: show new results to 10% of sessions, capture signal rate
-3. Full rollout if: FP rate ≤ old model AND FN rate ≤ old model after 48h
-4. Instant rollback trigger: FP rate rises > 5% above baseline in any 1-hour window
-
-### Metrics Dashboard (track these)
-
-| Metric                      | Target | Alert if                |
-| --------------------------- | ------ | ----------------------- |
-| Overall FP rate             | < 5%   | > 10%                   |
-| Overall FN rate             | < 8%   | > 15%                   |
-| Names FP rate               | < 3%   | > 8%                    |
-| Financial FP rate           | < 2%   | > 5%                    |
-| Time-to-correction (median) | > 3s   | < 1s (bot activity?)    |
-| Signals per session         | 0-2    | > 5 (model degradation) |
-| CONFIRMED sessions (%)      | > 70%  | < 50%                   |
-
-### Drift Detection
-
-- Monitor signal distribution over time
-- Alert if a new document type appears with high error rates (new domain the model hasn't seen)
-- Alert if a previously reliable entity subtype starts spiking FPs (upstream data change)
+| Pattern                                                        | Type | Fix                                                             |
+| -------------------------------------------------------------- | ---- | --------------------------------------------------------------- |
+| "March" tagged as GIVENNAME                                    | FP   | Month names preceded by date-context tokens (on, in, by) → DATE |
+| "Blue Cross" tagged as NAMES                                   | FP   | Insurance provider names → not PII; add to known-providers list |
+| Policy prefix "BC-" left unredacted                            | FN   | Policy identifier spans must include provider prefix            |
+| "Dr." title included as separate GIVENNAME                     | FP   | Salutations (Dr., Mr., Mrs., Ms.) → exclude from entity span    |
+| Party labels ("Operator:", "Client:") captured as NAMES        | FP   | Contract role labels → COMPANY or exclude depending on context  |
+| Adjacent identifying fragments (SSN: left before [SOCIALNUMB]) | FN   | Labeled prefixes adjacent to PII → include in redaction span    |
 
 ---
 
-## Document-Type-Aware Detection
+## Implementation Phases
 
-This is the biggest accuracy lever after the basic loop.
+### Phase 1 — Wire the Loop (Week 1-2)
 
-### Problem
+- [ ] Detection agent: finalize structured prompt + JSON output format
+- [ ] Signal capture: instrument toggle/reveal/add in the app
+- [ ] Signal storage: DB table (see schema above)
+- [ ] Manual training run: Donny reviews first batch of signals with training agent
 
-A single model trained on all document types performs mediocre on all of them.
-A model that knows it's looking at a medical letter vs. an aircraft operating agreement
-will dramatically outperform on both.
+### Phase 2 — Automate the Training Run (Month 1)
 
-### Implementation
+- [ ] Training agent prompt finalized and tested
+- [ ] Trigger: run training agent when 200+ new signals accumulated
+- [ ] Review gate: human approval flow for prompt changes
+- [ ] Canonical test set: 50 documents labeled and locked
 
-1. **Document type classifier** (lightweight, runs first):
-   - Input: first 200 tokens of document
-   - Output: `medical | legal | financial | contract | hr | other`
-   - Can be a simple prompt: "What type of document is this? Respond with one word."
+### Phase 3 — Measure and Improve (Month 2-3)
 
-2. **Type-specific detection rules** (augment the base model):
+- [ ] Accuracy dashboard: FP/FN rates per entity subtype, per week
+- [ ] Auto-deploy: low-risk addition-only changes go live without manual review
+- [ ] Document type classifier: lightweight pre-pass to improve detection context
+- [ ] Type-aware detection: medical vs. legal vs. contract detection profiles
 
-   ```
-   medical:   prioritize GIVENNAME, SURNAME, DATE, TELEPHONE, EMAIL, SOCIALNUMB, ACCOUNTNUM
-              watch for: doctor titles, medication names (not PII), condition names (not PII)
+### Phase 4 — Compound (Month 3+)
 
-   legal/contract: prioritize COMPANY, PERSON, DATE, IDENTIFIER, CURRENCY, LOCATION
-                   watch for: party labels ("Operator", "Client") that prefix real entity names
-
-   financial: prioritize ACCOUNTNUM, CURRENCY, SOCIALNUMB, ROUTING, DATE
-              watch for: amounts that aren't account numbers
-   ```
-
-3. **Templates as type signals**: when a user saves a template, they're implicitly labeling the document type. Harvest this.
+- [ ] Signal volume sufficient for reliable weekly training runs
+- [ ] Accuracy metrics publicly visible (trust signal for enterprise customers)
+- [ ] Edge case library: catalog of all known tricky patterns + how they're handled
+- [ ] Per-industry detection profiles: healthcare, legal, financial, HR
 
 ---
 
-## What to Build First (Sequenced)
+## Why This Works
 
-### Phase 1 (Now — 2 weeks)
+| Traditional ML Training      | Pre-Redact Agent Training                                     |
+| ---------------------------- | ------------------------------------------------------------- |
+| Requires labeled datasets    | Users generate labels in real-time                            |
+| Requires ML engineers + GPUs | Needs only prompt engineering                                 |
+| Months to iterate            | Days to iterate                                               |
+| Black box improvements       | Transparent: every change is readable English                 |
+| Hard to debug regressions    | Easy: diff the prompt, read the reasoning                     |
+| Expensive at scale           | Gets cheaper as detection improves (fewer corrections needed) |
 
-- [ ] Signal capture events in the app (toggle, add, confirm)
-- [ ] Signal storage (even just a DB table or append-only log)
-- [ ] Admin dashboard: FP/FN rates per entity type, per week
-
-### Phase 2 (Month 1)
-
-- [ ] Canonical test set: 50 labeled documents
-- [ ] Weekly batch: aggregate signals → generate rule updates → evaluate
-- [ ] Prompt refinement loop (manual review of suggested updates before deploy)
-
-### Phase 3 (Month 2-3)
-
-- [ ] Automated rule generation from signal clusters
-- [ ] Document type classifier
-- [ ] Type-aware detection layer
-- [ ] A/B testing infrastructure for model rollout
-
-### Phase 4 (Month 3+)
-
-- [ ] Fine-tuned NER model (when labeled corpus is large enough)
-- [ ] Real-time drift detection + alerting
-- [ ] Shadow mode rollout for new model versions
-
----
-
-## Why This Beats Most Training Pipelines
-
-| Typical NER Training            | Pre-Redact Self-Training                                         |
-| ------------------------------- | ---------------------------------------------------------------- |
-| Annotators label synthetic data | Real users correct real documents                                |
-| One-time training run           | Continuous improvement loop                                      |
-| Generic entity types            | Domain-specific subtypes (ACCOUNTNUM, SOCIALNUMB, TELEPHONENUMB) |
-| No deployment feedback          | User corrections ARE the feedback                                |
-| Expensive to scale              | Gets better as product grows                                     |
-| Cold start problem              | Every correction improves next user's experience                 |
-
-The compounding effect: more users → more signals → better detection → fewer corrections needed → more confident users → more users.
+The agent trains itself. You review the diffs.
+Target: 90%+ accuracy in 3 months, 95%+ in 6 months.
+The user correction rate drops as accuracy improves — the system earns its own trust.
