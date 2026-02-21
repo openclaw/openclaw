@@ -10,6 +10,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
+import type { GuardModelConfig } from "./types.security.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
@@ -237,6 +238,8 @@ export type AgentDefaultsConfig = {
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
+  /** Guard model for prompt injection sanitization. */
+  guardModel?: GuardModelConfig;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
