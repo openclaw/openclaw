@@ -1,0 +1,55 @@
+{
+  "tiers": {
+    "T1": {
+      "agents": ["tim", "xavier", "amadeus", "julia"],
+      "label": "VP / C-Suite",
+      "reviewedBy": ["T1"],
+      "fallbackReviewer": "main"
+    },
+    "T2": {
+      "agents": ["sandy", "tony", "roman", "claire"],
+      "label": "Senior / Staff",
+      "reviewedBy": ["T2", "T1"],
+      "fallbackReviewer": null
+    },
+    "T3": {
+      "agents": ["harry", "larry", "luis"],
+      "label": "Mid",
+      "reviewedBy": ["T2"],
+      "fallbackReviewer": null
+    },
+    "T4": {
+      "agents": ["barry", "nate", "oscar", "vince", "jerry", "piper", "quinn", "reed", "sam"],
+      "label": "Engineer",
+      "reviewedBy": ["T3", "T2"],
+      "fallbackReviewer": null
+    }
+  },
+  "squads": {
+    "platform-core": {
+      "lead": "roman",
+      "members": ["roman", "sandy", "barry", "nate", "oscar", "vince"],
+      "channel": "#cb-platform"
+    },
+    "product-ui": {
+      "lead": "claire",
+      "members": ["claire", "luis", "tony", "jerry", "piper", "quinn", "reed", "sam"],
+      "channel": "#cb-frontend"
+    },
+    "leadership": {
+      "lead": "xavier",
+      "members": ["xavier", "tim", "amadeus", "julia", "stephan", "drew", "robert", "tyler"],
+      "channel": "#cb-engineering"
+    }
+  },
+  "sla": {
+    "P0": { "minutes": 15, "escalation": "next-tier-and-inbox" },
+    "P1": { "minutes": 30, "escalation": "squad-lead" },
+    "P2": { "minutes": 120, "escalation": "reminder" },
+    "P3": { "minutes": 480, "escalation": "none" }
+  },
+  "defaults": {
+    "priority": "P2",
+    "repo": "openclaw/openclaw"
+  }
+}
