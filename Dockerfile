@@ -56,6 +56,12 @@ ENV NODE_ENV=production
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
+# Init script support: runs user scripts from /openclaw-init.d/ before the main process.
+# Mount a directory of executable scripts to customize container startup:
+#   volumes:
+#     - ./my-init-scripts:/openclaw-init.d:ro
+ENTRYPOINT ["scripts/docker-entrypoint.sh"]
+
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #
