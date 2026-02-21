@@ -453,6 +453,36 @@ export function createAgentEventHandler({
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
+
+      // Flush any pending text buffer before tool events to prevent data loss.
+      // The 150ms throttle in emitChatDelta can leave text unbuffered when tool
+      // events arrive; this ensures all text is broadcast before tool processing.
+      if (isToolEvent && !isAborted) {
+        const pendingText = chatRunState.buffers.get(clientRunId);
+        const lastSent = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
+        if (pendingText && Date.now() - lastSent >= 1) {
+          // Force flush the buffer as a delta
+          chatRunState.deltaSentAt.set(clientRunId, Date.now());
+          const payload = {
+            runId: clientRunId,
+            sessionKey,
+            seq: evt.seq,
+            state: "delta" as const,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: pendingText }],
+              timestamp: Date.now(),
+            },
+          };
+          if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+            broadcast("chat", payload);
+          }
+          nodeSendToSession(sessionKey, "chat", payload);
+          // Clear buffer after flushing to prevent duplicate in emitChatFinal
+          chatRunState.buffers.delete(clientRunId);
+        }
+      }
+
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
