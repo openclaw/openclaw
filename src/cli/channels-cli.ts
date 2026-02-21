@@ -17,6 +17,7 @@ import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 
 const optionNamesAdd = [
   "channel",
@@ -57,6 +58,7 @@ const optionNamesAdd = [
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 
 function runChannelsCommand(action: () => Promise<void>) {
+  ensurePluginRegistryLoaded();
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
