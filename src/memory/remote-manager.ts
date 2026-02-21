@@ -186,12 +186,17 @@ export class RemoteVectorStoreManager implements MemorySearchManager {
     if (!relPath) {
       throw new Error("path required");
     }
-    const absPath = path.resolve(this.workspaceDir, relPath);
-    if (!this.isWithinWorkspace(absPath)) {
+    const resolved = path.resolve(this.workspaceDir, relPath);
+    if (!this.isWithinWorkspace(resolved)) {
       throw new Error("path escapes workspace");
     }
-    const stat = await fs.lstat(absPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
+    // Use realpath to resolve symlinks, then re-check containment
+    const absPath = await fs.realpath(resolved);
+    if (!this.isWithinWorkspace(absPath)) {
+      throw new Error("path escapes workspace via symlink");
+    }
+    const stat = await fs.stat(absPath);
+    if (!stat.isFile()) {
       throw new Error("path required");
     }
     const content = await fs.readFile(absPath, "utf-8");
@@ -376,9 +381,12 @@ export class RemoteVectorStoreManager implements MemorySearchManager {
   }
 
   private isWithinWorkspace(absPath: string): boolean {
-    const normalizedWorkspace = this.workspaceDir.endsWith(path.sep)
-      ? this.workspaceDir
-      : `${this.workspaceDir}${path.sep}`;
-    return absPath === this.workspaceDir || absPath.startsWith(normalizedWorkspace);
+    const normalized = path.normalize(absPath);
+    const normalizedWorkspace = path.normalize(
+      this.workspaceDir.endsWith(path.sep) ? this.workspaceDir : `${this.workspaceDir}${path.sep}`,
+    );
+    return (
+      normalized === path.normalize(this.workspaceDir) || normalized.startsWith(normalizedWorkspace)
+    );
   }
 }
