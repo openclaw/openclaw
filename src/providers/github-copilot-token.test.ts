@@ -85,6 +85,38 @@ describe("github-copilot token", () => {
     expect(saved.githubTokenHash).toBe(account2Hash);
   });
 
+  it("re-fetches when cache has no githubTokenHash (backward compat)", async () => {
+    const now = Date.now();
+    loadJsonFile.mockReturnValue({
+      token: "old-cached;proxy-ep=proxy.example.com;",
+      expiresAt: now + 60 * 60 * 1000,
+      updatedAt: now,
+      // no githubTokenHash — pre-upgrade cache file
+    });
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "fresh;proxy-ep=https://proxy.example.com;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    const res = await resolveCopilotApiToken({
+      githubToken: "gh",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(res.token).toBe("fresh;proxy-ep=https://proxy.example.com;");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    expect(saveJsonFile.mock.calls[0][1].githubTokenHash).toBeTruthy();
+  });
+
   it("fetches and stores token when cache is missing", async () => {
     loadJsonFile.mockReturnValue(undefined);
 
