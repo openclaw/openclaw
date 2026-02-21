@@ -29,6 +29,24 @@ function registerTempSessionStore(
   });
 }
 
+function writeTranscript(tmpDir: string, sessionId: string, lines: unknown[]): string {
+  const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+  fs.writeFileSync(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+  return transcriptPath;
+}
+
+function buildBasicSessionTranscript(
+  sessionId: string,
+  userText = "Hello world",
+  assistantText = "Hi there",
+): unknown[] {
+  return [
+    { type: "session", version: 1, id: sessionId },
+    { message: { role: "user", content: userText } },
+    { message: { role: "assistant", content: assistantText } },
+  ];
+}
+
 describe("readFirstUserMessageFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
@@ -404,13 +422,7 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
 
   test("returns cached values without re-reading when unchanged", () => {
     const sessionId = "test-cache-1";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "Hello world" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi there" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId));
 
     const readSpy = vi.spyOn(fs, "readSync");
 
@@ -426,13 +438,11 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
 
   test("invalidates cache when transcript changes", () => {
     const sessionId = "test-cache-2";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "First" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Old" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const transcriptPath = writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "First", "Old"),
+    );
 
     const readSpy = vi.spyOn(fs, "readSync");
 
