@@ -170,7 +170,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               cfg,
               to: chatId,
               text: chunk,
-              replyToMessageId,
+              replyToMessageId: first ? replyToMessageId : undefined,
               mentions: first ? mentionTargets : undefined,
               accountId,
             });
@@ -187,7 +187,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               cfg,
               to: chatId,
               text: chunk,
-              replyToMessageId,
+              replyToMessageId: first ? replyToMessageId : undefined,
               mentions: first ? mentionTargets : undefined,
               accountId,
             });
