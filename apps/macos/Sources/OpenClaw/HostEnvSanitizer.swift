@@ -4,25 +4,30 @@ enum HostEnvSanitizer {
     /// Keep in sync with src/infra/host-env-security-policy.json.
     /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
     private static let blockedKeys: Set<String> = [
-        "NODE_OPTIONS",
-        "NODE_PATH",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYLIB",
-        "RUBYOPT",
         "BASH_ENV",
         "ENV",
         "GCONV_PATH",
+        "GLIBC_TUNABLES",
         "IFS",
+        "JAVA_TOOL_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "LD_AUDIT",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PERL5LIB",
+        "PERL5OPT",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "RUBYLIB",
+        "RUBYOPT",
         "SSLKEYLOGFILE",
     ]
 
     private static let blockedPrefixes: [String] = [
+        "BASH_FUNC_",
         "DYLD_",
         "LD_",
-        "BASH_FUNC_",
+        "OPENCLAW_",
     ]
 
     private static func isBlocked(_ upperKey: String) -> Bool {
