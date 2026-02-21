@@ -23,6 +23,16 @@ async function withFixtureRoot<T>(
 }
 
 describe("resolveExistingPathsWithinRoot", () => {
+  function expectInvalidResult(
+    result: Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>,
+    expectedSnippet: string,
+  ) {
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(expectedSnippet);
+    }
+  }
+
   it("accepts existing files under the upload root", async () => {
     await withFixtureRoot(async ({ uploadsDir }) => {
       const nestedDir = path.join(uploadsDir, "nested");
@@ -54,10 +64,19 @@ describe("resolveExistingPathsWithinRoot", () => {
         scopeLabel: "uploads directory",
       });
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("must stay within uploads directory");
-      }
+      expectInvalidResult(result, "must stay within uploads directory");
+    });
+  });
+
+  it("rejects blank paths", async () => {
+    await withFixtureRoot(async ({ uploadsDir }) => {
+      const result = await resolveExistingPathsWithinRoot({
+        rootDir: uploadsDir,
+        requestedPaths: ["  "],
+        scopeLabel: "uploads directory",
+      });
+
+      expectInvalidResult(result, "path is required");
     });
   });
 
@@ -87,10 +106,7 @@ describe("resolveExistingPathsWithinRoot", () => {
         scopeLabel: "uploads directory",
       });
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("regular non-symlink file");
-      }
+      expectInvalidResult(result, "regular non-symlink file");
     });
   });
 
@@ -109,10 +125,7 @@ describe("resolveExistingPathsWithinRoot", () => {
           scopeLabel: "uploads directory",
         });
 
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toContain("regular non-symlink file");
-        }
+        expectInvalidResult(result, "regular non-symlink file");
       });
     },
   );
