@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -209,7 +210,12 @@ describe("msteams messenger", () => {
             },
           },
           context: ctx,
-          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl: localFile }],
+          messages: [
+            {
+              text: "Hello @[John](29:08q2j2o3jc09au90eucae)",
+              mediaUrl: pathToFileURL(localFile).toString(),
+            },
+          ],
           tokenProvider: {
             getAccessToken: async () => "token",
           },
