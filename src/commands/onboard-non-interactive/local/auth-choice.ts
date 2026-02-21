@@ -2,9 +2,7 @@ import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { shortenHomePath } from "../../../utils.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
@@ -32,6 +30,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setByteplusApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -42,6 +41,7 @@ import {
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setVolcengineApiKey,
   setXaiApiKey,
   setVeniceApiKey,
   setTogetherApiKey,
@@ -317,14 +317,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    if (resolved.source !== "profile") {
-      const result = upsertSharedEnvVar({
-        key: "VOLCANO_ENGINE_API_KEY",
-        value: resolved.key,
-      });
-      process.env.VOLCANO_ENGINE_API_KEY = resolved.key;
-      runtime.log(`Saved VOLCANO_ENGINE_API_KEY to ${shortenHomePath(result.path)}`);
-    }
+    await setVolcengineApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "volcengine:default",
+      provider: "volcengine",
+      mode: "api_key",
+    });
     return applyPrimaryModel(nextConfig, "volcengine-plan/ark-code-latest");
   }
 
@@ -340,14 +338,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    if (resolved.source !== "profile") {
-      const result = upsertSharedEnvVar({
-        key: "BYTEPLUS_API_KEY",
-        value: resolved.key,
-      });
-      process.env.BYTEPLUS_API_KEY = resolved.key;
-      runtime.log(`Saved BYTEPLUS_API_KEY to ${shortenHomePath(result.path)}`);
-    }
+    await setByteplusApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "byteplus:default",
+      provider: "byteplus",
+      mode: "api_key",
+    });
     return applyPrimaryModel(nextConfig, "byteplus-plan/ark-code-latest");
   }
 
