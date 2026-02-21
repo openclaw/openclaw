@@ -2,7 +2,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { type SignalSseEvent, streamSignalEvents } from "./client.js";
+import { type SignalAdapterEvent, streamSignalEventsAdapter } from "./client-adapter.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -16,7 +16,7 @@ type RunSignalSseLoopParams = {
   account?: string;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
-  onEvent: (event: SignalSseEvent) => void;
+  onEvent: (event: SignalAdapterEvent) => void;
   policy?: Partial<BackoffPolicy>;
 };
 
@@ -43,13 +43,17 @@ export async function runSignalSseLoop({
 
   while (!abortSignal?.aborted) {
     try {
-      await streamSignalEvents({
+      await streamSignalEventsAdapter({
         baseUrl,
         account,
         abortSignal,
-        onEvent: (event) => {
+        onEvent: (event: SignalAdapterEvent) => {
           reconnectAttempts = 0;
           onEvent(event);
+        },
+        logger: {
+          log: runtime.log,
+          error: runtime.error,
         },
       });
       if (abortSignal?.aborted) {
@@ -57,16 +61,16 @@ export async function runSignalSseLoop({
       }
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      logReconnectVerbose(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
+      logReconnectVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
     } catch (err) {
       if (abortSignal?.aborted) {
         return;
       }
-      runtime.error?.(`Signal SSE stream error: ${String(err)}`);
+      runtime.error?.(`Signal stream error: ${String(err)}`);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
+      runtime.log?.(`Signal connection lost, reconnecting in ${delayMs / 1000}s...`);
       try {
         await sleepWithAbort(delayMs, abortSignal);
       } catch (sleepErr) {
