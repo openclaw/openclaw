@@ -36,4 +36,77 @@ describe("resolveMatrixRoomConfig", () => {
     expect(byName.allowed).toBe(false);
     expect(byName.config).toBeUndefined();
   });
+
+  describe("BUG #19278: Case-insensitive room ID matching", () => {
+    it("matches room IDs with different cases", () => {
+      const rooms = {
+        "!araq:example.org": {
+          allow: true,
+          requireMention: false,
+        },
+      };
+
+      // Event from Matrix comes with uppercase room ID
+      const result = resolveMatrixRoomConfig({
+        rooms,
+        roomId: "!ArAQ:example.org",
+        aliases: [],
+        name: "Test Room",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.config?.requireMention).toBe(false);
+      expect(result.matchKey).toBe("!araq:example.org");
+    });
+
+    it("matches aliases with different cases", () => {
+      const rooms = {
+        "#myroom:example.org": {
+          allow: true,
+          requireMention: true,
+        },
+      };
+
+      const result = resolveMatrixRoomConfig({
+        rooms,
+        roomId: "!someId:example.org",
+        aliases: ["#MyRoom:example.org"],
+        name: "Test Room",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.config?.requireMention).toBe(true);
+      expect(result.matchKey).toBe("#myroom:example.org");
+    });
+
+    it("handles mixed case room IDs in config and events", () => {
+      const rooms = {
+        "!ArAQ:example.org": { allow: true },
+      };
+
+      const result = resolveMatrixRoomConfig({
+        rooms,
+        roomId: "!araq:example.org",
+        aliases: [],
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.matchKey).toBe("!ArAQ:example.org");
+    });
+
+    it("respects requireMention setting for case-insensitive matches", () => {
+      const rooms = {
+        "!TestRoom123:example.org": {
+          allow: true,
+          requireMention: false,
+        },
+      };
+
+      // Simulate the bug: incoming room ID has different case
+      const result = resolveMatrixRoomConfig({
+        rooms,
+        roomId: "!testroom123:example.org",
+        aliases: [],
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.config?.requireMention).toBe(false);
+    });
+  });
 });

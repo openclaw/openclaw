@@ -1,4 +1,7 @@
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "openclaw/plugin-sdk";
+import {
+  buildChannelKeyCandidates,
+  resolveChannelEntryMatchWithFallback,
+} from "openclaw/plugin-sdk";
 import type { MatrixRoomConfig } from "../../types.js";
 
 export type MatrixRoomConfigResolved = {
@@ -18,20 +21,25 @@ export function resolveMatrixRoomConfig(params: {
   const rooms = params.rooms ?? {};
   const keys = Object.keys(rooms);
   const allowlistConfigured = keys.length > 0;
+  // Normalize room IDs to lowercase for case-insensitive matching
+  // Matrix room IDs should be treated case-insensitively
+  const normalizedRoomId = params.roomId.toLowerCase();
+  const normalizedAliases = params.aliases.map((alias) => alias.toLowerCase());
   const candidates = buildChannelKeyCandidates(
-    params.roomId,
-    `room:${params.roomId}`,
-    ...params.aliases,
+    normalizedRoomId,
+    `room:${normalizedRoomId}`,
+    ...normalizedAliases,
   );
   const {
     entry: matched,
     key: matchedKey,
     wildcardEntry,
     wildcardKey,
-  } = resolveChannelEntryMatch({
+  } = resolveChannelEntryMatchWithFallback({
     entries: rooms,
     keys: candidates,
     wildcardKey: "*",
+    normalizeKey: (k: string) => k.toLowerCase(),
   });
   const resolved = matched ?? wildcardEntry;
   const allowed = resolved ? resolved.enabled !== false && resolved.allow !== false : false;
