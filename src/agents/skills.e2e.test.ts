@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -11,39 +12,12 @@ import {
   loadWorkspaceSkillEntries,
 } from "./skills.js";
 
-type SkillFixture = {
-  dir: string;
-  name: string;
-  description: string;
-  metadata?: string;
-  body?: string;
-  frontmatterExtra?: string;
-};
-
 const tempDirs: string[] = [];
 
 const makeWorkspace = async () => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
   tempDirs.push(workspaceDir);
   return workspaceDir;
-};
-
-const writeSkill = async (params: SkillFixture) => {
-  const { dir, name, description, metadata, body, frontmatterExtra } = params;
-  await fs.mkdir(dir, { recursive: true });
-  const frontmatter = [
-    `name: ${name}`,
-    `description: ${description}`,
-    metadata ? `metadata: ${metadata}` : "",
-    frontmatterExtra ?? "",
-  ]
-    .filter((line) => line.trim().length > 0)
-    .join("\n");
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\n${frontmatter}\n---\n\n${body ?? `# ${name}\n`}`,
-    "utf-8",
-  );
 };
 
 const withClearedEnv = <T>(
