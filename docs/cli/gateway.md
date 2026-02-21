@@ -13,6 +13,8 @@ The Gateway is OpenClaw’s WebSocket server (channels, nodes, sessions, hooks).
 
 Subcommands in this page live under `openclaw gateway …`.
 
+There is no standalone `clawrouter` binary. Routing/proxy behavior is part of the Gateway process (`openclaw gateway`).
+
 Related docs:
 
 - [/gateway/bonjour](/gateway/bonjour)
