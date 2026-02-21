@@ -1,4 +1,9 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
+import { extensionForMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 
 export type ChatAttachment = {
@@ -17,6 +22,8 @@ export type ChatImageContent = {
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  mediaPaths: string[];
+  mediaTypes: string[];
 };
 
 type AttachmentLog = {
@@ -73,6 +80,34 @@ function normalizeAttachment(
   return { label, mime, base64 };
 }
 
+function sanitizeAttachmentLabel(label: string): string {
+  const base = path.parse(label).name;
+  const trimmed = base.trim();
+  if (!trimmed) {
+    return "upload";
+  }
+  const sanitized = trimmed.replace(/[^\p{L}\p{N}._-]+/gu, "_");
+  const compact = sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return compact.slice(0, 48) || "upload";
+}
+
+async function persistImageAttachment(params: {
+  base64: string;
+  mimeType: string;
+  label: string;
+  uploadDir?: string;
+}): Promise<string> {
+  const uploadDir = params.uploadDir
+    ? path.resolve(params.uploadDir)
+    : path.join(resolvePreferredOpenClawTmpDir(), "uploads", "webchat");
+  await fs.mkdir(uploadDir, { recursive: true, mode: 0o700 });
+  const ext = extensionForMime(params.mimeType) ?? ".bin";
+  const fileName = `${sanitizeAttachmentLabel(params.label)}-${crypto.randomUUID()}${ext}`;
+  const filePath = path.join(uploadDir, fileName);
+  await fs.writeFile(filePath, Buffer.from(params.base64, "base64"), { mode: 0o600 });
+  return filePath;
+}
+
 function validateAttachmentBase64OrThrow(
   normalized: NormalizedAttachment,
   opts: { maxBytes: number },
@@ -97,15 +132,22 @@ function validateAttachmentBase64OrThrow(
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number; log?: AttachmentLog },
+  opts?: {
+    maxBytes?: number;
+    log?: AttachmentLog;
+    persistImagesToDisk?: boolean;
+    uploadDir?: string;
+  },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
   const log = opts?.log;
   if (!attachments || attachments.length === 0) {
-    return { message, images: [] };
+    return { message, images: [], mediaPaths: [], mediaTypes: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const mediaPaths: string[] = [];
+  const mediaTypes: string[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -139,9 +181,24 @@ export async function parseMessageWithAttachments(
       data: b64,
       mimeType: sniffedMime ?? providedMime ?? mime,
     });
+    const resolvedMime = sniffedMime ?? providedMime ?? mime;
+    if (opts?.persistImagesToDisk) {
+      try {
+        const persistedPath = await persistImageAttachment({
+          base64: b64,
+          mimeType: resolvedMime,
+          label,
+          uploadDir: opts.uploadDir,
+        });
+        mediaPaths.push(persistedPath);
+        mediaTypes.push(resolvedMime);
+      } catch (err) {
+        log?.warn(`attachment ${label}: failed to persist upload (${String(err)})`);
+      }
+    }
   }
 
-  return { message, images };
+  return { message, images, mediaPaths, mediaTypes };
 }
 
 /**
