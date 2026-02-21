@@ -40,6 +40,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
+  resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   type SessionEntry,
@@ -359,6 +360,7 @@ export async function agentCommand(
         storePath,
         entry: next,
       });
+      sessionEntry = next;
     }
 
     const agentModelPrimary = resolveAgentModelPrimary(cfg, sessionAgentId);
@@ -505,27 +507,20 @@ export async function agentCommand(
         });
       }
     }
-    const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
+    let sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
       agentId: sessionAgentId,
     });
     if (sessionStore && sessionKey) {
-      const current = sessionStore[sessionKey] ??
-        sessionEntry ?? { sessionId, updatedAt: Date.now() };
-      if (current.sessionFile !== sessionFile) {
-        const next: SessionEntry = {
-          ...current,
-          sessionId,
-          updatedAt: Date.now(),
-          sessionFile,
-        };
-        await persistSessionEntry({
-          sessionStore,
-          sessionKey,
-          storePath,
-          entry: next,
-        });
-        sessionEntry = next;
-      }
+      const resolvedSessionFile = await resolveAndPersistSessionFile({
+        sessionId,
+        sessionKey,
+        sessionStore,
+        storePath,
+        sessionEntry,
+        agentId: sessionAgentId,
+      });
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
     }
 
     const startedAt = Date.now();
