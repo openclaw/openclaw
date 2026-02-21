@@ -134,6 +134,61 @@ Config:
 - `channels.mattermost.actions.reactions`: enable/disable reaction actions (default true).
 - Per-account override: `channels.mattermost.accounts.<id>.actions.reactions`.
 
+## Interactive buttons (message tool)
+
+Send messages with clickable buttons. When a user clicks a button, the agent receives the
+selection and can respond.
+
+Enable buttons by adding `inlineButtons` to the channel capabilities:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      capabilities: ["inlineButtons"],
+    },
+  },
+}
+```
+
+Use `message action=send` with a `buttons` parameter. Buttons are a 2D array (rows of buttons):
+
+```
+message action=send channel=mattermost target=channel:<channelId> buttons=[[{"text":"Yes","callback_data":"yes"},{"text":"No","callback_data":"no"}]]
+```
+
+Button fields:
+
+- `text` (required): display label.
+- `callback_data` (required): value sent back on click (used as the action ID).
+- `style` (optional): `"default"`, `"primary"`, or `"danger"`.
+
+When a user clicks a button:
+
+1. All buttons are replaced with a confirmation line (e.g., "✓ **Yes** selected by @user").
+2. The agent receives the selection as an inbound message and responds.
+
+Notes:
+
+- Button callbacks use HMAC-SHA256 verification (automatic, no config needed).
+- Mattermost strips callback data from its API responses (security feature), so all buttons
+  are removed on click — partial removal is not possible.
+- Action IDs containing hyphens or underscores are sanitized automatically
+  (Mattermost routing limitation).
+
+Config:
+
+- `channels.mattermost.capabilities`: array of capability strings. Add `"inlineButtons"` to
+  enable the buttons tool description in the agent system prompt.
+
+## Directory adapter
+
+The Mattermost plugin includes a directory adapter that resolves channel and user names
+via the Mattermost API. This enables `#channel-name` and `@username` targets in
+`openclaw message send` and cron/webhook deliveries.
+
+No configuration is needed — the adapter uses the bot token from the account config.
+
 ## Multi-account
 
 Mattermost supports multiple accounts under `channels.mattermost.accounts`:
@@ -156,3 +211,6 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
+- Buttons appear as white boxes: the agent may be sending malformed button data. Check that each button has both `text` and `callback_data` fields.
+- Buttons render but clicks do nothing: verify `AllowedUntrustedInternalConnections` in Mattermost server config includes `127.0.0.1 localhost`, and that `EnablePostActionIntegration` is `true` in ServiceSettings.
+- Agent doesn't know about buttons: add `capabilities: ["inlineButtons"]` to the Mattermost channel config.
