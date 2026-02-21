@@ -232,12 +232,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const sessionFile = currentSessionFile || undefined;
 
-    // Read message count from hook config (default: 15)
+    // Read hook config (message count + optional model override)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
     const messageCount =
       typeof hookConfig?.messages === "number" && hookConfig.messages > 0
         ? hookConfig.messages
         : 15;
+    const slugModel =
+      typeof hookConfig?.model === "string" && hookConfig.model.trim()
+        ? hookConfig.model.trim()
+        : undefined;
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
@@ -261,7 +265,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
         log.debug("Generated slug", { slug });
       }
     }

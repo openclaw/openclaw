@@ -59,9 +59,10 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
 
 The hook supports optional configuration:
 
-| Option     | Type   | Default | Description                                                     |
-| ---------- | ------ | ------- | --------------------------------------------------------------- |
-| `messages` | number | 15      | Number of user/assistant messages to include in the memory file |
+| Option     | Type   | Default         | Description                                                     |
+| ---------- | ------ | --------------- | --------------------------------------------------------------- |
+| `messages` | number | 15              | Number of user/assistant messages to include in the memory file |
+| `model`    | string | (primary model) | Model to use for slug generation (e.g. `google/gemini-3-flash`) |
 
 Example configuration:
 
@@ -72,7 +73,8 @@ Example configuration:
       "entries": {
         "session-memory": {
           "enabled": true,
-          "messages": 25
+          "messages": 25,
+          "model": "google/gemini-3-flash"
         }
       }
     }
