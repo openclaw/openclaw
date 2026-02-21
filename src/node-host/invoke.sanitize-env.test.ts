@@ -90,7 +90,8 @@ describe("validateWorkingDirectory", () => {
   });
 
   it("returns a clear error when cwd points to a file", () => {
-    const filePath = new URL(import.meta.url).pathname;
+    const fileUrl = new URL(import.meta.url);
+    const filePath = process.platform === "win32" ? fileUrl.pathname.slice(1) : fileUrl.pathname;
     expect(validateWorkingDirectory(filePath)).toBe(
       `working directory is not a directory: ${filePath}`,
     );
