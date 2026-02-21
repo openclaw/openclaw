@@ -5,20 +5,23 @@ const DEDUP_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // cleanup every 5 minutes
 const processedMessageIds = new Map<string, number>(); // messageId -> timestamp
 let lastCleanupTime = Date.now();
 
-export function tryRecordMessage(messageId: string): boolean {
+export function tryRecordMessage(messageId: string, accountId: string = "default"): boolean {
   const now = Date.now();
+  // Combine account ID + message ID to prevent cross-bot deduplication collisions
+  // when multiple bots receive the same message event in a group chat.
+  const uniqueKey = `${accountId}:${messageId}`;
 
   // Throttled cleanup: evict expired entries at most once per interval.
   if (now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
-    for (const [id, ts] of processedMessageIds) {
+    for (const [key, ts] of processedMessageIds) {
       if (now - ts > DEDUP_TTL_MS) {
-        processedMessageIds.delete(id);
+        processedMessageIds.delete(key);
       }
     }
     lastCleanupTime = now;
   }
 
-  if (processedMessageIds.has(messageId)) {
+  if (processedMessageIds.has(uniqueKey)) {
     return false;
   }
 
@@ -28,6 +31,6 @@ export function tryRecordMessage(messageId: string): boolean {
     processedMessageIds.delete(first);
   }
 
-  processedMessageIds.set(messageId, now);
+  processedMessageIds.set(uniqueKey, now);
   return true;
 }
