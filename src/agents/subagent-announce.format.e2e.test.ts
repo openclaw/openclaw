@@ -379,7 +379,7 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1); // Agent also called so parent can chain
     const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     const rawMessage = call?.params?.message;
     const msg = typeof rawMessage === "string" ? rawMessage : "";
@@ -697,7 +697,7 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1); // Agent also called so parent can chain
     const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
@@ -735,7 +735,7 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1); // Agent also called so parent can chain
     const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");

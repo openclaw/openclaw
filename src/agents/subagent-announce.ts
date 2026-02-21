@@ -676,11 +676,7 @@ async function sendSubagentAnnounceDirectly(params: {
           },
           timeoutMs: 15_000,
         });
-
-        return {
-          delivered: true,
-          path: "direct",
-        };
+        // Fall through to also call method: "agent" so the parent gets a turn to chain
       }
     }
 
