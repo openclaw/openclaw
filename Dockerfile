@@ -53,6 +53,11 @@ ENV NODE_ENV=production
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
+# Configure npm to use a user-writable directory for global packages
+# This prevents EACCES errors when installing skills via ClawHub or npm install -g
+RUN mkdir -p /home/node/.npm-global && npm config set prefix /home/node/.npm-global
+ENV PATH="/home/node/.npm-global/bin:${PATH}"
+
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #
