@@ -1,52 +1,31 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { isTruthyEnvValue, normalizeZaiEnv } from "./env.js";
 
 describe("normalizeZaiEnv", () => {
-  function withZaiEnv(env: { zaiApiKey?: string; legacyZaiApiKey?: string }, run: () => void) {
-    const prevZai = process.env.ZAI_API_KEY;
-    const prevLegacy = process.env.Z_AI_API_KEY;
-    if (env.zaiApiKey === undefined) {
-      delete process.env.ZAI_API_KEY;
-    } else {
-      process.env.ZAI_API_KEY = env.zaiApiKey;
-    }
-    if (env.legacyZaiApiKey === undefined) {
-      delete process.env.Z_AI_API_KEY;
-    } else {
-      process.env.Z_AI_API_KEY = env.legacyZaiApiKey;
-    }
-    try {
-      run();
-    } finally {
-      if (prevZai === undefined) {
-        delete process.env.ZAI_API_KEY;
-      } else {
-        process.env.ZAI_API_KEY = prevZai;
-      }
-      if (prevLegacy === undefined) {
-        delete process.env.Z_AI_API_KEY;
-      } else {
-        process.env.Z_AI_API_KEY = prevLegacy;
-      }
-    }
-  }
-
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
-    withZaiEnv({ zaiApiKey: "", legacyZaiApiKey: "zai-legacy" }, () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
     });
   });
 
   it("does not override existing ZAI_API_KEY", () => {
-    withZaiEnv({ zaiApiKey: "zai-current", legacyZaiApiKey: "zai-legacy" }, () => {
+    withEnv({ ZAI_API_KEY: "zai-current", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-current");
     });
   });
 
   it("ignores blank legacy Z_AI_API_KEY values", () => {
-    withZaiEnv({ zaiApiKey: "", legacyZaiApiKey: "   " }, () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "   " }, () => {
+      normalizeZaiEnv();
+      expect(process.env.ZAI_API_KEY).toBe("");
+    });
+  });
+
+  it("does not copy when legacy Z_AI_API_KEY is unset", () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: undefined }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("");
     });
