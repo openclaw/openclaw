@@ -228,6 +228,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
 
+      // Drain pending preview updates before deciding final delivery strategy.
+      // Without this, a delayed draft flush can post after final delivery and duplicate replies.
+      await draftStream.flush();
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
@@ -274,6 +277,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       } else if (mediaCount > 0) {
         await draftStream?.clear();
         hasStreamedMessage = false;
+      } else if (streamMode !== "status_final" && draftChannelId && draftMessageId) {
+        // If we cannot finalize by editing the preview (e.g. error payload), clear it before
+        // fallback send so users do not see stale draft text plus a second final message.
+        await draftStream?.clear();
+        hasStreamedMessage = false;
+        appendRenderedText = "";
+        appendSourceText = "";
+        statusUpdateCount = 0;
       }
 
       const replyThreadTs = replyPlan.nextThreadTs();
