@@ -1,0 +1,107 @@
+{
+  "id": "canvas-lms",
+  "name": "Canvas LMS",
+  "description": "Canvas LMS integration plugin for OpenClaw.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "token": {
+        "type": "string"
+      },
+      "oauth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tokenUrl": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "clientSecret": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": ["string", "number"]
+          }
+        }
+      },
+      "defaultPerPage": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100
+      },
+      "maxPages": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 120000
+      },
+      "maxRetries": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5
+      },
+      "allowInlineToken": {
+        "type": "boolean"
+      },
+      "allowInsecureHttp": {
+        "type": "boolean"
+      },
+      "digestPublishSessionKeys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "token": {
+      "sensitive": true,
+      "label": "Canvas API Token"
+    },
+    "oauth": {
+      "label": "Canvas OAuth2 Settings"
+    },
+    "baseUrl": {
+      "label": "Canvas Base URL",
+      "placeholder": "https://canvas.example.edu"
+    },
+    "defaultPerPage": {
+      "label": "Default Page Size"
+    },
+    "maxPages": {
+      "label": "Max Pages"
+    },
+    "requestTimeoutMs": {
+      "label": "Request Timeout (ms)"
+    },
+    "maxRetries": {
+      "label": "Max Retries"
+    },
+    "allowInlineToken": {
+      "label": "Allow Inline Token"
+    },
+    "allowInsecureHttp": {
+      "label": "Allow Insecure HTTP"
+    },
+    "digestPublishSessionKeys": {
+      "label": "Academic Digest Publish Session Keys"
+    }
+  }
+}
