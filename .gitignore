@@ -99,3 +99,8 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Xcode build directories (xcodebuild output)
+apps/ios/build/
+apps/shared/OpenClawKit/build/
+Swabble/build/
