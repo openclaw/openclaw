@@ -86,6 +86,10 @@ function stripUnknownConfigKeys(config: OpenClawConfig): {
 
   const next = structuredClone(config);
   const removed: string[] = [];
+  
+  // Known valid config keys that should not be removed (fix #19432)
+  const preservedKeys = new Set(["logging"]);
+  
   for (const issue of parsed.error.issues) {
     if (!isUnrecognizedKeysIssue(issue)) {
       continue;
@@ -101,6 +105,10 @@ function stripUnknownConfigKeys(config: OpenClawConfig): {
         continue;
       }
       if (!(key in record)) {
+        continue;
+      }
+      // Fix #19432: Preserve known valid config keys
+      if (preservedKeys.has(key)) {
         continue;
       }
       delete record[key];
