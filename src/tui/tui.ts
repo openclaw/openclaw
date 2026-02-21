@@ -7,6 +7,7 @@ import {
   ProcessTerminal,
   Text,
   TUI,
+  truncateToWidth,
 } from "@mariozechner/pi-tui";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
@@ -427,6 +428,10 @@ export async function runTui(opts: TuiOptions) {
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
+  // Set the max width based on terminal width to prevent lines from exceeding it
+  if (process.stdout.columns) {
+    chatLog.setMaxWidth(process.stdout.columns);
+  }
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);
@@ -478,11 +483,10 @@ export async function runTui(opts: TuiOptions) {
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(currentAgentId);
-    header.setText(
-      theme.header(
-        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
-      ),
-    );
+    const headerText = `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`;
+    const maxWidth = Math.max(20, (process.stdout.columns ?? 80) - 2);
+    const truncated = truncateToWidth(headerText, maxWidth, "");
+    header.setText(theme.header(truncated));
   };
 
   const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
@@ -675,7 +679,10 @@ export async function runTui(opts: TuiOptions) {
       reasoningLabel,
       tokens,
     ].filter(Boolean);
-    footer.setText(theme.dim(footerParts.join(" | ")));
+    const footerText = footerParts.join(" | ");
+    const maxWidth = Math.max(20, (process.stdout.columns ?? 80) - 2);
+    const truncated = truncateToWidth(footerText, maxWidth, "");
+    footer.setText(theme.dim(truncated));
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);

@@ -1,4 +1,4 @@
-import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { Container, Spacer, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
@@ -8,6 +8,11 @@ export class ChatLog extends Container {
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private toolsExpanded = false;
+  private maxWidth = 120; // Default width; will be updated as needed
+
+  setMaxWidth(width: number) {
+    this.maxWidth = Math.max(20, width - 2); // Leave some margin, allow narrow terminals
+  }
 
   clearAll() {
     this.clear();
@@ -17,7 +22,8 @@ export class ChatLog extends Container {
 
   addSystem(text: string) {
     this.addChild(new Spacer(1));
-    this.addChild(new Text(theme.system(text), 1, 0));
+    const truncated = truncateToWidth(text, this.maxWidth, "");
+    this.addChild(new Text(theme.system(truncated), 1, 0));
   }
 
   addUser(text: string) {
