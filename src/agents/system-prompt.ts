@@ -80,7 +80,7 @@ function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   const digest = hasSecret
     ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
     : createHash("sha256").update(ownerId).digest("hex");
-  return digest.slice(0, 16);
+  return digest.slice(0, 12);
 }
 
 function buildOwnerIdentityLine(
