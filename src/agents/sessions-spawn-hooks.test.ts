@@ -220,7 +220,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expect(calledMethods).not.toContain("agent");
     const deleteCall = callGatewayMock.mock.calls
       .map((call: [unknown]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find((request) => request.method === "sessions.delete");
+      .find(
+        (request: { method?: string; params?: Record<string, unknown> }) =>
+          request.method === "sessions.delete",
+      );
     expect(deleteCall?.params).toMatchObject({
       key: details.childSessionKey,
       emitLifecycleHooks: false,

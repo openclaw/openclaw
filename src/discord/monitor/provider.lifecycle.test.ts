@@ -22,17 +22,17 @@ const {
 });
 
 vi.mock("../gateway-logging.js", () => ({
-  attachDiscordGatewayLogging: (...args: unknown[]) => attachDiscordGatewayLoggingMock(...args),
+  attachDiscordGatewayLogging: attachDiscordGatewayLoggingMock,
 }));
 
 vi.mock("../monitor.gateway.js", () => ({
-  getDiscordGatewayEmitter: (...args: unknown[]) => getDiscordGatewayEmitterMock(...args),
-  waitForDiscordGatewayStop: (...args: unknown[]) => waitForDiscordGatewayStopMock(...args),
+  getDiscordGatewayEmitter: getDiscordGatewayEmitterMock,
+  waitForDiscordGatewayStop: waitForDiscordGatewayStopMock,
 }));
 
 vi.mock("./gateway-registry.js", () => ({
-  registerGateway: (...args: unknown[]) => registerGatewayMock(...args),
-  unregisterGateway: (...args: unknown[]) => unregisterGatewayMock(...args),
+  registerGateway: registerGatewayMock,
+  unregisterGateway: unregisterGatewayMock,
 }));
 
 describe("runDiscordGatewayLifecycle", () => {

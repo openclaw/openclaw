@@ -88,18 +88,17 @@ vi.mock("../../auto-reply/chunk.js", () => ({
 }));
 
 vi.mock("../../auto-reply/commands-registry.js", () => ({
-  listNativeCommandSpecsForConfig: (...args: unknown[]) =>
-    listNativeCommandSpecsForConfigMock(...args),
+  listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
 }));
 
 vi.mock("../../auto-reply/skill-commands.js", () => ({
-  listSkillCommandsForAgents: (...args: unknown[]) => listSkillCommandsForAgentsMock(...args),
+  listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
 }));
 
 vi.mock("../../config/commands.js", () => ({
   isNativeCommandsExplicitlyDisabled: () => false,
-  resolveNativeCommandsEnabled: (...args: unknown[]) => resolveNativeCommandsEnabledMock(...args),
-  resolveNativeSkillsEnabled: (...args: unknown[]) => resolveNativeSkillsEnabledMock(...args),
+  resolveNativeCommandsEnabled: resolveNativeCommandsEnabledMock,
+  resolveNativeSkillsEnabled: resolveNativeSkillsEnabledMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -126,11 +125,11 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  createNonExitingRuntime: () => ({ log: vi.fn(), error: vi.fn() }),
+  createNonExitingRuntime: () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }),
 }));
 
 vi.mock("../accounts.js", () => ({
-  resolveDiscordAccount: (...args: unknown[]) => resolveDiscordAccountMock(...args),
+  resolveDiscordAccount: resolveDiscordAccountMock,
 }));
 
 vi.mock("../probe.js", () => ({
@@ -198,7 +197,7 @@ vi.mock("./native-command.js", () => ({
   createDiscordCommandArgFallbackButton: () => ({ id: "arg-fallback" }),
   createDiscordModelPickerFallbackButton: () => ({ id: "model-fallback-btn" }),
   createDiscordModelPickerFallbackSelect: () => ({ id: "model-fallback-select" }),
-  createDiscordNativeCommand: (...args: unknown[]) => createDiscordNativeCommandMock(...args),
+  createDiscordNativeCommand: createDiscordNativeCommandMock,
 }));
 
 vi.mock("./presence.js", () => ({
@@ -206,11 +205,11 @@ vi.mock("./presence.js", () => ({
 }));
 
 vi.mock("./provider.allowlist.js", () => ({
-  resolveDiscordAllowlistConfig: (...args: unknown[]) => resolveDiscordAllowlistConfigMock(...args),
+  resolveDiscordAllowlistConfig: resolveDiscordAllowlistConfigMock,
 }));
 
 vi.mock("./provider.lifecycle.js", () => ({
-  runDiscordGatewayLifecycle: (...args: unknown[]) => monitorLifecycleMock(...args),
+  runDiscordGatewayLifecycle: monitorLifecycleMock,
 }));
 
 vi.mock("./rest-fetch.js", () => ({
@@ -218,17 +217,18 @@ vi.mock("./rest-fetch.js", () => ({
 }));
 
 vi.mock("./thread-bindings.js", () => ({
-  createNoopThreadBindingManager: (...args: unknown[]) =>
-    createNoopThreadBindingManagerMock(...args),
-  createThreadBindingManager: (...args: unknown[]) => createThreadBindingManagerMock(...args),
+  createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
+  createThreadBindingManager: createThreadBindingManagerMock,
 }));
 
 describe("monitorDiscordProvider", () => {
-  const baseRuntime = (): RuntimeEnv =>
-    ({
+  const baseRuntime = (): RuntimeEnv => {
+    return {
       log: vi.fn(),
       error: vi.fn(),
-    }) as RuntimeEnv;
+      exit: vi.fn(),
+    };
+  };
 
   const baseConfig = (): OpenClawConfig =>
     ({
