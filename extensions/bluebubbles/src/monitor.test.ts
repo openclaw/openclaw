@@ -452,6 +452,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it("accepts URL-encoded payload wrappers", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          date: Date.now(),
+        },
+      };
+      const encodedBody = new URLSearchParams({
+        payload: JSON.stringify(payload),
+      }).toString();
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", encodedBody);
+      const res = createMockResponse();
+
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("ok");
+    });
+
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
       vi.useFakeTimers();
       try {
@@ -659,15 +698,15 @@ describe("BlueBubbles webhook monitor", () => {
       expect(sinkB).not.toHaveBeenCalled();
     });
 
-    it("does not route to passwordless targets when a password-authenticated target matches", async () => {
+    it("ignores targets without passwords when a password-authenticated target matches", async () => {
       const accountStrict = createMockAccount({ password: "secret-token" });
-      const accountFallback = createMockAccount({ password: undefined });
+      const accountWithoutPassword = createMockAccount({ password: undefined });
       const config: OpenClawConfig = {};
       const core = createMockRuntime();
       setBlueBubblesRuntime(core);
 
       const sinkStrict = vi.fn();
-      const sinkFallback = vi.fn();
+      const sinkWithoutPassword = vi.fn();
 
       const req = createMockRequest("POST", "/bluebubbles-webhook?password=secret-token", {
         type: "new-message",
@@ -691,17 +730,17 @@ describe("BlueBubbles webhook monitor", () => {
         path: "/bluebubbles-webhook",
         statusSink: sinkStrict,
       });
-      const unregisterFallback = registerBlueBubblesWebhookTarget({
-        account: accountFallback,
+      const unregisterNoPassword = registerBlueBubblesWebhookTarget({
+        account: accountWithoutPassword,
         config,
         runtime: { log: vi.fn(), error: vi.fn() },
         core,
         path: "/bluebubbles-webhook",
-        statusSink: sinkFallback,
+        statusSink: sinkWithoutPassword,
       });
       unregister = () => {
         unregisterStrict();
-        unregisterFallback();
+        unregisterNoPassword();
       };
 
       const res = createMockResponse();
@@ -710,7 +749,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(sinkStrict).toHaveBeenCalledTimes(1);
-      expect(sinkFallback).not.toHaveBeenCalled();
+      expect(sinkWithoutPassword).not.toHaveBeenCalled();
     });
 
     it("requires authentication for loopback requests when password is configured", async () => {
@@ -750,77 +789,49 @@ describe("BlueBubbles webhook monitor", () => {
       }
     });
 
-    it("rejects passwordless targets when the request looks proxied (has forwarding headers)", async () => {
+    it("rejects targets without passwords for loopback and proxied-looking requests", async () => {
       const account = createMockAccount({ password: undefined });
       const config: OpenClawConfig = {};
       const core = createMockRuntime();
       setBlueBubblesRuntime(core);
 
-      const req = createMockRequest(
-        "POST",
-        "/bluebubbles-webhook",
-        {
-          type: "new-message",
-          data: {
-            text: "hello",
-            handle: { address: "+15551234567" },
-            isGroup: false,
-            isFromMe: false,
-            guid: "msg-1",
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const headerVariants: Record<string, string>[] = [
+        { host: "localhost" },
+        { host: "localhost", "x-forwarded-for": "203.0.113.10" },
+        { host: "localhost", forwarded: "for=203.0.113.10;proto=https;host=example.com" },
+      ];
+      for (const headers of headerVariants) {
+        const req = createMockRequest(
+          "POST",
+          "/bluebubbles-webhook",
+          {
+            type: "new-message",
+            data: {
+              text: "hello",
+              handle: { address: "+15551234567" },
+              isGroup: false,
+              isFromMe: false,
+              guid: "msg-1",
+            },
           },
-        },
-        { "x-forwarded-for": "203.0.113.10", host: "localhost" },
-      );
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
-        remoteAddress: "127.0.0.1",
-      };
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
-    });
-
-    it("accepts passwordless targets for direct localhost loopback requests (no forwarding headers)", async () => {
-      const account = createMockAccount({ password: undefined });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      const req = createMockRequest("POST", "/bluebubbles-webhook", {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-        },
-      });
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
-        remoteAddress: "127.0.0.1",
-      };
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+          headers,
+        );
+        (req as unknown as { socket: { remoteAddress: string } }).socket = {
+          remoteAddress: "127.0.0.1",
+        };
+        const res = createMockResponse();
+        const handled = await handleBlueBubblesWebhookRequest(req, res);
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+      }
     });
 
     it("ignores unregistered webhook paths", async () => {
@@ -2463,6 +2474,149 @@ describe("BlueBubbles webhook monitor", () => {
       await flushAsync();
 
       // Outbound message ID uses short ID "2" (inbound msg-1 is "1", outbound msg-123 is "2")
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        'Assistant sent "replying now" [message_id:2]',
+        expect.objectContaining({
+          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+        }),
+      );
+    });
+
+    it("falls back to from-me webhook when send response has no message id", async () => {
+      mockEnqueueSystemEvent.mockClear();
+
+      const { sendMessageBlueBubbles } = await import("./send.js");
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+      });
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const inboundPayload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const inboundReq = createMockRequest("POST", "/bluebubbles-webhook", inboundPayload);
+      const inboundRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(inboundReq, inboundRes);
+      await flushAsync();
+
+      // Send response did not include a message id, so nothing should be enqueued yet.
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+
+      const fromMePayload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15557654321" },
+          isGroup: false,
+          isFromMe: true,
+          guid: "msg-out-456",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const fromMeReq = createMockRequest("POST", "/bluebubbles-webhook", fromMePayload);
+      const fromMeRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(fromMeReq, fromMeRes);
+      await flushAsync();
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        'Assistant sent "replying now" [message_id:2]',
+        expect.objectContaining({
+          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+        }),
+      );
+    });
+
+    it("matches from-me fallback by chatIdentifier when chatGuid is missing", async () => {
+      mockEnqueueSystemEvent.mockClear();
+
+      const { sendMessageBlueBubbles } = await import("./send.js");
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+      });
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const inboundPayload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const inboundReq = createMockRequest("POST", "/bluebubbles-webhook", inboundPayload);
+      const inboundRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(inboundReq, inboundRes);
+      await flushAsync();
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+
+      const fromMePayload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15557654321" },
+          isGroup: false,
+          isFromMe: true,
+          guid: "msg-out-789",
+          chatIdentifier: "+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const fromMeReq = createMockRequest("POST", "/bluebubbles-webhook", fromMePayload);
+      const fromMeRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(fromMeReq, fromMeRes);
+      await flushAsync();
+
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({

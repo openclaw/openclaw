@@ -70,6 +70,31 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores execPath when it is not node", async () => {
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === darwinNode) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: {},
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: "/Users/test/.bun/bin/bun",
+    });
+
+    expect(result).toBe(darwinNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(darwinNode, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
+  });
+
   it("uses system node when it meets the minimum version", async () => {
     fsMocks.access.mockImplementation(async (target: string) => {
       if (target === darwinNode) {

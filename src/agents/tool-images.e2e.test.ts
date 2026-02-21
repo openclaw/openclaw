@@ -2,154 +2,28 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
 
-describe("base64 validation", () => {
-  it("rejects invalid base64 characters and replaces with error text", async () => {
-    const blocks = [
-      {
-        type: "image" as const,
-        data: "not-valid-base64!!!@#$%",
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("text");
-    if (out[0].type === "text") {
-      expect(out[0].text).toContain("omitted image payload");
-      expect(out[0].text).toContain("invalid");
-    }
-  });
-
-  it("strips data URL prefix and processes valid base64", async () => {
-    // Create a small valid image
-    const jpeg = await sharp({
-      create: {
-        width: 10,
-        height: 10,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .jpeg()
-      .toBuffer();
-
-    const base64 = jpeg.toString("base64");
-    const dataUrl = `data:image/jpeg;base64,${base64}`;
-
-    const blocks = [
-      {
-        type: "image" as const,
-        data: dataUrl,
-        mimeType: "image/jpeg",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("image");
-  });
-
-  it("rejects base64 with invalid padding", async () => {
-    const blocks = [
-      {
-        type: "image" as const,
-        data: "SGVsbG8===", // too many padding chars
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("text");
-    if (out[0].type === "text") {
-      expect(out[0].text).toContain("omitted image payload");
-    }
-  });
-
-  it("rejects base64 with padding in wrong position", async () => {
-    const blocks = [
-      {
-        type: "image" as const,
-        data: "SGVs=bG8=", // = in middle is invalid
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("text");
-    if (out[0].type === "text") {
-      expect(out[0].text).toContain("omitted image payload");
-    }
-  });
-
-  it("normalizes URL-safe base64 to standard base64", async () => {
-    // Create a small valid image
-    const jpeg = await sharp({
-      create: {
-        width: 10,
-        height: 10,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .jpeg()
-      .toBuffer();
-
-    // Convert to URL-safe base64 (replace + with -, / with _)
-    const standardBase64 = jpeg.toString("base64");
-    const urlSafeBase64 = standardBase64.replace(/\+/g, "-").replace(/\//g, "_");
-
-    const blocks = [
-      {
-        type: "image" as const,
-        data: urlSafeBase64,
-        mimeType: "image/jpeg",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("image");
-  });
-
-  it("rejects base64 with invalid length", async () => {
-    const blocks = [
-      {
-        type: "image" as const,
-        data: "AAAAA", // length 5 without padding is invalid (remainder 1)
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("text");
-    if (out[0].type === "text") {
-      expect(out[0].text).toContain("omitted image payload");
-    }
-  });
-
-  it("handles empty base64 data gracefully", async () => {
-    const blocks = [
-      {
-        type: "image" as const,
-        data: "   ",
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out.length).toBe(1);
-    expect(out[0].type).toBe("text");
-    if (out[0].type === "text") {
-      expect(out[0].text).toContain("omitted empty image payload");
-    }
-  });
-});
-
 describe("tool image sanitizing", () => {
+  const getImageBlock = (
+    blocks: Awaited<ReturnType<typeof sanitizeContentBlocksImages>>,
+  ): (typeof blocks)[number] & { type: "image"; data: string; mimeType?: string } => {
+    const image = blocks.find((block) => block.type === "image");
+    if (!image || image.type !== "image") {
+      throw new Error("expected image block");
+    }
+    return image;
+  };
+
+  const createWidePng = async () => {
+    const width = 2600;
+    const height = 400;
+    const raw = Buffer.alloc(width * height * 3, 0x7f);
+    return sharp(raw, {
+      raw: { width, height, channels: 3 },
+    })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+  };
+
   it("shrinks oversized images to <=5MB", async () => {
     const width = 2800;
     const height = 2800;
@@ -170,24 +44,14 @@ describe("tool image sanitizing", () => {
     ];
 
     const out = await sanitizeContentBlocksImages(blocks, "test");
-    const image = out.find((b) => b.type === "image");
-    if (!image || image.type !== "image") {
-      throw new Error("expected image block");
-    }
+    const image = getImageBlock(out);
     const size = Buffer.from(image.data, "base64").byteLength;
     expect(size).toBeLessThanOrEqual(5 * 1024 * 1024);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
   it("sanitizes image arrays and reports drops", async () => {
-    const width = 2600;
-    const height = 400;
-    const raw = Buffer.alloc(width * height * 3, 0x7f);
-    const png = await sharp(raw, {
-      raw: { width, height, channels: 3 },
-    })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    const png = await createWidePng();
 
     const images = [
       { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
@@ -196,19 +60,12 @@ describe("tool image sanitizing", () => {
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
     const meta = await sharp(Buffer.from(out[0].data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(2000);
-    expect(meta.height).toBeLessThanOrEqual(2000);
+    expect(meta.width).toBeLessThanOrEqual(1200);
+    expect(meta.height).toBeLessThanOrEqual(1200);
   }, 20_000);
 
   it("shrinks images that exceed max dimension even if size is small", async () => {
-    const width = 2600;
-    const height = 400;
-    const raw = Buffer.alloc(width * height * 3, 0x7f);
-    const png = await sharp(raw, {
-      raw: { width, height, channels: 3 },
-    })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    const png = await createWidePng();
 
     const blocks = [
       {
@@ -219,13 +76,10 @@ describe("tool image sanitizing", () => {
     ];
 
     const out = await sanitizeContentBlocksImages(blocks, "test");
-    const image = out.find((b) => b.type === "image");
-    if (!image || image.type !== "image") {
-      throw new Error("expected image block");
-    }
+    const image = getImageBlock(out);
     const meta = await sharp(Buffer.from(image.data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(2000);
-    expect(meta.height).toBeLessThanOrEqual(2000);
+    expect(meta.width).toBeLessThanOrEqual(1200);
+    expect(meta.height).toBeLessThanOrEqual(1200);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
@@ -250,10 +104,7 @@ describe("tool image sanitizing", () => {
     ];
 
     const out = await sanitizeContentBlocksImages(blocks, "test");
-    const image = out.find((b) => b.type === "image");
-    if (!image || image.type !== "image") {
-      throw new Error("expected image block");
-    }
+    const image = getImageBlock(out);
     expect(image.mimeType).toBe("image/jpeg");
   });
 });

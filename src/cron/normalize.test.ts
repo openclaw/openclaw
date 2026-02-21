@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   const normalized = normalizeCronJobCreate({
@@ -135,6 +136,40 @@ describe("normalizeCronJobCreate", () => {
 
   it("coerces schedule.atMs string to schedule.at (UTC)", () => {
     expectNormalizedAtSchedule({ kind: "at", atMs: "2026-01-12T18:00:00" });
+  });
+
+  it("defaults cron stagger for recurring top-of-hour schedules", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+  });
+
+  it("preserves explicit exact cron schedule", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "exact",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.staggerMs).toBe(0);
   });
 
   it("defaults deleteAfterRun for one-shot schedules", () => {
@@ -300,6 +335,18 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.allowUnsafeExternalContent).toBe(true);
   });
 
+  it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy no-timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      timeoutSeconds: 0,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.timeoutSeconds).toBe(0);
+  });
+
   it("coerces sessionTarget and wakeMode casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "casing",
@@ -364,5 +411,14 @@ describe("normalizeCronJobPatch", () => {
       sessionKey: null,
     }) as unknown as Record<string, unknown>;
     expect(cleared.sessionKey).toBeNull();
+  });
+
+  it("normalizes cron stagger values in patch schedules", () => {
+    const normalized = normalizeCronJobPatch({
+      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: "30000" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.staggerMs).toBe(30_000);
   });
 });

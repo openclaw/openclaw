@@ -6,25 +6,63 @@ export type GatewayAttachment = {
   content: string;
 };
 
-export function extractTextFromPrompt(prompt: ContentBlock[]): string {
-  const parts: string[] = [];
-  for (const block of prompt) {
-    if (block.type === "text") {
-      parts.push(block.text);
-      continue;
+function escapeInlineControlChars(value: string): string {
+  const withoutNull = value.replaceAll("\0", "\\0");
+  return withoutNull.replace(/[\r\n\t\v\f\u2028\u2029]/g, (char) => {
+    switch (char) {
+      case "\r":
+        return "\\r";
+      case "\n":
+        return "\\n";
+      case "\t":
+        return "\\t";
+      case "\v":
+        return "\\v";
+      case "\f":
+        return "\\f";
+      case "\u2028":
+        return "\\u2028";
+      case "\u2029":
+        return "\\u2029";
+      default:
+        return char;
     }
-    if (block.type === "resource") {
+  });
+}
+
+function escapeResourceTitle(value: string): string {
+  // Keep title content, but escape characters that can break the resource-link annotation shape.
+  return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
+}
+
+export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
+  const parts: string[] = [];
+  // Track accumulated byte count per block to catch oversized prompts before full concatenation
+  let totalBytes = 0;
+  for (const block of prompt) {
+    let blockText: string | undefined;
+    if (block.type === "text") {
+      blockText = block.text;
+    } else if (block.type === "resource") {
       const resource = block.resource as { text?: string } | undefined;
       if (resource?.text) {
-        parts.push(resource.text);
+        blockText = resource.text;
       }
-      continue;
+    } else if (block.type === "resource_link") {
+      const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
+      const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
+      blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
     }
-    if (block.type === "resource_link") {
-      const title = block.title ? ` (${block.title})` : "";
-      const uri = block.uri ?? "";
-      const line = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
-      parts.push(line);
+    if (blockText !== undefined) {
+      // Guard: reject before allocating the full concatenated string
+      if (maxBytes !== undefined) {
+        const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
+        totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
+        if (totalBytes > maxBytes) {
+          throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
+        }
+      }
+      parts.push(blockText);
     }
   }
   return parts.join("\n");

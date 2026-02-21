@@ -38,6 +38,13 @@ type TimedCronRunOutcome = CronRunOutcome &
     endedAt: number;
   };
 
+function resolveRunConcurrency(state: CronServiceState): number {
+  const raw = state.deps.cronConfig?.maxConcurrentRuns;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(raw));
+}
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
@@ -236,50 +243,91 @@ export async function onTimer(state: CronServiceState) {
       }));
     });
 
-    const results: TimedCronRunOutcome[] = [];
-
-    for (const { id, job } of dueJobs) {
+    const runDueJob = async (params: {
+      id: string;
+      job: CronJob;
+    }): Promise<TimedCronRunOutcome> => {
+      const { id, job } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
-      const jobTimeoutMs =
+      const configuredTimeoutMs =
         job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-          ? job.payload.timeoutSeconds * 1_000
+          ? Math.floor(job.payload.timeoutSeconds * 1_000)
+          : undefined;
+      const jobTimeoutMs =
+        configuredTimeoutMs !== undefined
+          ? configuredTimeoutMs <= 0
+            ? undefined
+            : configuredTimeoutMs
           : DEFAULT_JOB_TIMEOUT_MS;
 
       try {
-        let timeoutId: NodeJS.Timeout;
-        const result = await Promise.race([
-          executeJobCore(state, job),
-          new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(
-              () => reject(new Error("cron: job execution timed out")),
-              jobTimeoutMs,
-            );
-          }),
-        ]).finally(() => clearTimeout(timeoutId!));
-        results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() });
+        const result =
+          typeof jobTimeoutMs === "number"
+            ? await (async () => {
+                let timeoutId: NodeJS.Timeout | undefined;
+                try {
+                  return await Promise.race([
+                    executeJobCore(state, job),
+                    new Promise<never>((_, reject) => {
+                      timeoutId = setTimeout(
+                        () => reject(new Error("cron: job execution timed out")),
+                        jobTimeoutMs,
+                      );
+                    }),
+                  ]);
+                } finally {
+                  if (timeoutId) {
+                    clearTimeout(timeoutId);
+                  }
+                }
+              })()
+            : await executeJobCore(state, job);
+        return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         state.deps.log.warn(
-          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs },
+          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
           `cron: job failed: ${String(err)}`,
         );
-        results.push({
+        return {
           jobId: id,
           status: "error",
           error: String(err),
           startedAt,
           endedAt: state.deps.nowMs(),
-        });
+        };
       }
-    }
+    };
 
-    if (results.length > 0) {
+    const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
+    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
+    let cursor = 0;
+    const workers = Array.from({ length: concurrency }, async () => {
+      for (;;) {
+        const index = cursor++;
+        if (index >= dueJobs.length) {
+          return;
+        }
+        const due = dueJobs[index];
+        if (!due) {
+          return;
+        }
+        results[index] = await runDueJob(due);
+      }
+    });
+    await Promise.all(workers);
+
+    const completedResults: TimedCronRunOutcome[] = results.filter(
+      (entry): entry is TimedCronRunOutcome => entry !== undefined,
+    );
+
+    if (completedResults.length > 0) {
       await locked(state, async () => {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
-        for (const result of results) {
+        for (const result of completedResults) {
           const job = state.store?.jobs.find((j) => j.id === result.jobId);
           if (!job) {
             continue;

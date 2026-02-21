@@ -94,7 +94,7 @@ export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = 
 }
 
 function shortHash(text: string, length = 8): string {
-  return createHash("sha1").update(text).digest("hex").slice(0, length);
+  return createHash("sha256").update(text).digest("hex").slice(0, length);
 }
 
 function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {

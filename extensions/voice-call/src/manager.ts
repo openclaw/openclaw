@@ -47,6 +47,7 @@ export class CallManager {
   private config: VoiceCallConfig;
   private storePath: string;
   private webhookUrl: string | null = null;
+  private activeTurnCalls = new Set<CallId>();
   private transcriptWaiters = new Map<
     CallId,
     {
@@ -137,6 +138,7 @@ export class CallManager {
       config: this.config,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
+      activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       onCallAnswered: (call) => {

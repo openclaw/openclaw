@@ -60,4 +60,54 @@ describe("printCronList", () => {
     expect(() => printCronList([jobWithTarget], mockRuntime)).not.toThrow();
     expect(logs.some((line) => line.includes("isolated"))).toBe(true);
   });
+
+  it("shows stagger label for cron schedules", () => {
+    const logs: string[] = [];
+    const mockRuntime = {
+      log: (msg: string) => logs.push(msg),
+      error: () => {},
+      exit: () => {},
+    } as RuntimeEnv;
+
+    const job: CronJob = {
+      id: "staggered-job",
+      name: "Staggered",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 5 * 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    printCronList([job], mockRuntime);
+    expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
+  });
+
+  it("shows exact label for cron schedules with stagger disabled", () => {
+    const logs: string[] = [];
+    const mockRuntime = {
+      log: (msg: string) => logs.push(msg),
+      error: () => {},
+      exit: () => {},
+    } as RuntimeEnv;
+
+    const job: CronJob = {
+      id: "exact-job",
+      name: "Exact",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    printCronList([job], mockRuntime);
+    expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+  });
 });

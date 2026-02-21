@@ -101,15 +101,13 @@ export function resolveTelegramThreadSpec(params: {
       scope: params.isForum ? "forum" : "none",
     };
   }
-  // DM with forum/topics enabled — treat like a forum, not a flat DM
-  if (params.isForum && params.messageThreadId != null) {
-    return { id: params.messageThreadId, scope: "forum" };
+  if (params.messageThreadId == null) {
+    return { scope: "dm" };
   }
-  // Preserve thread ID for non-forum DM threads (session routing, #8891)
-  if (params.messageThreadId != null) {
-    return { id: params.messageThreadId, scope: "dm" };
-  }
-  return { scope: "dm" };
+  return {
+    id: params.messageThreadId,
+    scope: "dm",
+  };
 }
 
 /**
@@ -156,13 +154,20 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
+  streaming?: boolean;
   streamMode?: TelegramStreamMode;
 }): TelegramStreamMode {
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") {
-    return raw;
+  if (typeof telegramCfg?.streaming === "boolean") {
+    return telegramCfg.streaming ? "partial" : "off";
   }
-  return "partial";
+  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
+  if (raw === "off") {
+    return "off";
+  }
+  if (raw === "partial" || raw === "block") {
+    return "partial";
+  }
+  return "off";
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {

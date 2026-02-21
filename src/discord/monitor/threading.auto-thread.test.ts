@@ -43,6 +43,36 @@ describe("maybeCreateDiscordAutoThread", () => {
     expect(postMock).not.toHaveBeenCalled();
   });
 
+  it("skips auto-thread if channelType is GuildVoice", async () => {
+    const result = await maybeCreateDiscordAutoThread({
+      client: mockClient,
+      message: mockMessage,
+      messageChannelId: "voice1",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThread: true },
+      channelType: ChannelType.GuildVoice,
+      baseText: "test",
+      combinedBody: "test",
+    });
+    expect(result).toBeUndefined();
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("skips auto-thread if channelType is GuildStageVoice", async () => {
+    const result = await maybeCreateDiscordAutoThread({
+      client: mockClient,
+      message: mockMessage,
+      messageChannelId: "stage1",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThread: true },
+      channelType: ChannelType.GuildStageVoice,
+      baseText: "test",
+      combinedBody: "test",
+    });
+    expect(result).toBeUndefined();
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
   it("creates auto-thread if channelType is GuildText", async () => {
     postMock.mockResolvedValueOnce({ id: "thread1" });
     const result = await maybeCreateDiscordAutoThread({
