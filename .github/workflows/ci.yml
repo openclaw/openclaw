@@ -259,6 +259,45 @@ jobs:
       - name: Check types and lint and oxfmt
         run: pnpm check
 
+  # Report-only dead-code scans. Runs after scope detection and stores machine-readable
+  # results as artifacts for later triage before we enable hard gates.
+  # Temporarily disabled in CI while we process initial findings.
+  deadcode:
+    name: dead-code report
+    needs: [docs-scope, changed-scope]
+    # if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: false
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: knip
+            command: pnpm deadcode:report:ci:knip
+          - tool: ts-prune
+            command: pnpm deadcode:report:ci:ts-prune
+          - tool: ts-unused-exports
+            command: pnpm deadcode:report:ci:ts-unused
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run ${{ matrix.tool }} dead-code scan
+        run: ${{ matrix.command }}
+
+      - name: Upload dead-code results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dead-code-${{ matrix.tool }}-${{ github.run_id }}
+          path: .artifacts/deadcode
+
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
