@@ -61,6 +61,8 @@ Plugins/extensions are loaded **in-process** with the Gateway and are treated as
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
+- `https://docs.molt.bot/gateway/security`
+- [Hardball Security Framework (MFA-protected Integrity)](https://docs.molt.bot/concepts/hardball-security)
 - `https://docs.openclaw.ai/gateway/security`
 
 ### Tool filesystem hardening
