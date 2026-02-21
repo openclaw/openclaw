@@ -168,15 +168,19 @@ describe("resolveHeartbeatIntervalMs", () => {
 });
 
 describe("resolveHeartbeatPrompt", () => {
-  it("uses the default prompt when unset", () => {
-    expect(resolveHeartbeatPrompt({})).toBe(HEARTBEAT_PROMPT);
-  });
-
-  it("uses a trimmed override when configured", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
-    };
-    expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
+  it("uses default or trimmed override prompts", () => {
+    const cases = [
+      { cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
+      {
+        cfg: {
+          agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
+        } as OpenClawConfig,
+        expected: "ping",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(resolveHeartbeatPrompt(testCase.cfg)).toBe(testCase.expected);
+    }
   });
 });
 
@@ -323,67 +327,61 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
-  it("parses threadId from :topic: suffix in heartbeat to", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "-100111:topic:42" },
+  it("parses optional telegram :topic: threadId suffix", () => {
+    const cases = [
+      { to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
+      { to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
+    ] as const;
+    for (const testCase of cases) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { target: "telegram", to: testCase.to },
+          },
         },
-      },
-    };
-    const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
-    expect(result.channel).toBe("telegram");
-    expect(result.to).toBe("-100111");
-    expect(result.threadId).toBe(42);
+      };
+      const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
+      expect(result.channel).toBe("telegram");
+      expect(result.to).toBe(testCase.expectedTo);
+      expect(result.threadId).toBe(testCase.expectedThreadId);
+    }
   });
 
-  it("heartbeat to without :topic: has no threadId", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "-100111" },
+  it("handles explicit heartbeat accountId allow/deny", () => {
+    const cases = [
+      {
+        accountId: "work",
+        expected: {
+          channel: "telegram",
+          to: "123",
+          accountId: "work",
+          lastChannel: undefined,
+          lastAccountId: undefined,
         },
       },
-    };
-    const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
-    expect(result.to).toBe("-100111");
-    expect(result.threadId).toBeUndefined();
-  });
+      {
+        accountId: "missing",
+        expected: {
+          channel: "none",
+          reason: "unknown-account",
+          accountId: "missing",
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+    ] as const;
 
-  it("uses explicit heartbeat accountId when provided", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "123", accountId: "work" },
+    for (const testCase of cases) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { target: "telegram", to: "123", accountId: testCase.accountId },
+          },
         },
-      },
-      channels: { telegram: { accounts: { work: { botToken: "token" } } } },
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: "work",
-      lastChannel: undefined,
-      lastAccountId: undefined,
-    });
-  });
-
-  it("skips when explicit heartbeat accountId is unknown", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "123", accountId: "missing" },
-        },
-      },
-      channels: { telegram: { accounts: { work: { botToken: "token" } } } },
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "none",
-      reason: "unknown-account",
-      accountId: "missing",
-      lastChannel: undefined,
-      lastAccountId: undefined,
-    });
+        channels: { telegram: { accounts: { work: { botToken: "token" } } } },
+      };
+      expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(testCase.expected);
+    }
   });
 
   it("prefers per-agent heartbeat overrides when provided", () => {

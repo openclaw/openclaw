@@ -5,13 +5,29 @@
  * support in the OpenResponses `/v1/responses` endpoint.
  */
 
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
+
+let InputImageContentPartSchema: typeof import("./open-responses.schema.js").InputImageContentPartSchema;
+let InputFileContentPartSchema: typeof import("./open-responses.schema.js").InputFileContentPartSchema;
+let ToolDefinitionSchema: typeof import("./open-responses.schema.js").ToolDefinitionSchema;
+let CreateResponseBodySchema: typeof import("./open-responses.schema.js").CreateResponseBodySchema;
+let OutputItemSchema: typeof import("./open-responses.schema.js").OutputItemSchema;
+let buildAgentPrompt: typeof import("./openresponses-http.js").buildAgentPrompt;
 
 describe("OpenResponses Feature Parity", () => {
+  beforeAll(async () => {
+    ({
+      InputImageContentPartSchema,
+      InputFileContentPartSchema,
+      ToolDefinitionSchema,
+      CreateResponseBodySchema,
+      OutputItemSchema,
+    } = await import("./open-responses.schema.js"));
+    ({ buildAgentPrompt } = await import("./openresponses-http.js"));
+  });
+
   describe("Schema Validation", () => {
     it("should validate input_image with url source", async () => {
-      const { InputImageContentPartSchema } = await import("./open-responses.schema.js");
-
       const validImage = {
         type: "input_image" as const,
         source: {
@@ -25,8 +41,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate input_image with base64 source", async () => {
-      const { InputImageContentPartSchema } = await import("./open-responses.schema.js");
-
       const validImage = {
         type: "input_image" as const,
         source: {
@@ -41,8 +55,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should reject input_image with invalid mime type", async () => {
-      const { InputImageContentPartSchema } = await import("./open-responses.schema.js");
-
       const invalidImage = {
         type: "input_image" as const,
         source: {
@@ -57,8 +69,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate input_file with url source", async () => {
-      const { InputFileContentPartSchema } = await import("./open-responses.schema.js");
-
       const validFile = {
         type: "input_file" as const,
         source: {
@@ -72,8 +82,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate input_file with base64 source", async () => {
-      const { InputFileContentPartSchema } = await import("./open-responses.schema.js");
-
       const validFile = {
         type: "input_file" as const,
         source: {
@@ -89,8 +97,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate tool definition", async () => {
-      const { ToolDefinitionSchema } = await import("./open-responses.schema.js");
-
       const validTool = {
         type: "function" as const,
         function: {
@@ -111,8 +117,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should reject tool definition without name", async () => {
-      const { ToolDefinitionSchema } = await import("./open-responses.schema.js");
-
       const invalidTool = {
         type: "function" as const,
         function: {
@@ -128,8 +132,6 @@ describe("OpenResponses Feature Parity", () => {
 
   describe("CreateResponseBody Schema", () => {
     it("should validate request with input_image", async () => {
-      const { CreateResponseBodySchema } = await import("./open-responses.schema.js");
-
       const validRequest = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -158,8 +160,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate request with client tools", async () => {
-      const { CreateResponseBodySchema } = await import("./open-responses.schema.js");
-
       const validRequest = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -192,8 +192,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate request with function_call_output for turn-based tools", async () => {
-      const { CreateResponseBodySchema } = await import("./open-responses.schema.js");
-
       const validRequest = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -210,8 +208,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should validate complete turn-based tool flow", async () => {
-      const { CreateResponseBodySchema } = await import("./open-responses.schema.js");
-
       const turn1Request = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -254,8 +250,6 @@ describe("OpenResponses Feature Parity", () => {
 
   describe("Response Resource Schema", () => {
     it("should validate response with function_call output", async () => {
-      const { OutputItemSchema } = await import("./open-responses.schema.js");
-
       const functionCallOutput = {
         type: "function_call" as const,
         id: "msg_123",
@@ -271,8 +265,6 @@ describe("OpenResponses Feature Parity", () => {
 
   describe("buildAgentPrompt", () => {
     it("should convert function_call_output to tool entry", async () => {
-      const { buildAgentPrompt } = await import("./openresponses-http.js");
-
       const result = buildAgentPrompt([
         {
           type: "function_call_output" as const,
@@ -286,8 +278,6 @@ describe("OpenResponses Feature Parity", () => {
     });
 
     it("should handle mixed message and function_call_output items", async () => {
-      const { buildAgentPrompt } = await import("./openresponses-http.js");
-
       const result = buildAgentPrompt([
         {
           type: "message" as const,

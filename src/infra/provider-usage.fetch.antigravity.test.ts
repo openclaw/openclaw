@@ -164,7 +164,7 @@ describe("fetchAntigravityUsage", () => {
       project: { id: "projects/beta" },
       expectedBody: JSON.stringify({ project: "projects/beta" }),
     },
-  ])("$name", async ({ project, expectedBody }) => {
+  ])("project payload: $name", async ({ project, expectedBody }) => {
     let capturedBody: string | undefined;
     const mockFetch = createEndpointFetch({
       loadCodeAssist: () =>
@@ -228,7 +228,7 @@ describe("fetchAntigravityUsage", () => {
       },
       expectedPlan: "Basic Plan",
     },
-  ])("$name", async ({ loadCodeAssist, expectedPlan }) => {
+  ])("plan label: $name", async ({ loadCodeAssist, expectedPlan }) => {
     const mockFetch = createEndpointFetch({
       loadCodeAssist: () => makeResponse(200, loadCodeAssist),
       fetchAvailableModels: () => makeResponse(500, "Error"),

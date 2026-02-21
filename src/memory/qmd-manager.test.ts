@@ -1507,58 +1507,30 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("treats plain-text no-results stdout as an empty result set", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "No results found.");
-        return child;
-      }
-      return createMockChild();
-    });
+  it("treats plain-text no-results markers from stdout/stderr as empty result sets", async () => {
+    const cases = [
+      { name: "stdout with punctuation", stream: "stdout", payload: "No results found." },
+      { name: "stdout without punctuation", stream: "stdout", payload: "No results found\n\n" },
+      { name: "stderr", stream: "stderr", payload: "No results found.\n" },
+    ] as const;
 
-    const { manager } = await createManager();
+    for (const testCase of cases) {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, testCase.stream, testCase.payload);
+          return child;
+        }
+        return createMockChild();
+      });
 
-    await expect(
-      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
-    await manager.close();
-  });
-
-  it("treats plain-text no-results stdout without punctuation as empty", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "No results found\n\n");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-
-    await expect(
-      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
-    await manager.close();
-  });
-
-  it("treats plain-text no-results stderr as an empty result set", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "No results found.\n");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-
-    await expect(
-      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
-    await manager.close();
+      const { manager } = await createManager();
+      await expect(
+        manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
+        testCase.name,
+      ).resolves.toEqual([]);
+      await manager.close();
+    }
   });
 
   it("throws when stdout is empty without the no-results marker", async () => {

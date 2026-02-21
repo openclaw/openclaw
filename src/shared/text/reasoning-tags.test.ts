@@ -8,24 +8,28 @@ describe("stripReasoningTagsFromText", () => {
       expect(stripReasoningTagsFromText(input)).toBe(input);
     });
 
-    it("strips proper think tags", () => {
-      const input = "Hello <think>internal reasoning</think> world!";
-      expect(stripReasoningTagsFromText(input)).toBe("Hello  world!");
-    });
-
-    it("strips thinking tags", () => {
-      const input = "Before <thinking>some thought</thinking> after";
-      expect(stripReasoningTagsFromText(input)).toBe("Before  after");
-    });
-
-    it("strips thought tags", () => {
-      const input = "A <thought>hmm</thought> B";
-      expect(stripReasoningTagsFromText(input)).toBe("A  B");
-    });
-
-    it("strips antthinking tags", () => {
-      const input = "X <antthinking>internal</antthinking> Y";
-      expect(stripReasoningTagsFromText(input)).toBe("X  Y");
+    it("strips reasoning-tag variants", () => {
+      const cases = [
+        {
+          name: "strips proper think tags",
+          input: "Hello <think>internal reasoning</think> world!",
+          expected: "Hello  world!",
+        },
+        {
+          name: "strips thinking tags",
+          input: "Before <thinking>some thought</thinking> after",
+          expected: "Before  after",
+        },
+        { name: "strips thought tags", input: "A <thought>hmm</thought> B", expected: "A  B" },
+        {
+          name: "strips antthinking tags",
+          input: "X <antthinking>internal</antthinking> Y",
+          expected: "X  Y",
+        },
+      ] as const;
+      for (const { name, input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input), name).toBe(expected);
+      }
     });
 
     it("strips multiple reasoning blocks", () => {
@@ -35,20 +39,19 @@ describe("stripReasoningTagsFromText", () => {
   });
 
   describe("code block preservation (issue #3952)", () => {
-    it("preserves think tags inside fenced code blocks", () => {
-      const input = "Use the tag like this:\n```\n<think>reasoning</think>\n```\nThat's it!";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
-    });
-
-    it("preserves think tags inside inline code", () => {
-      const input =
-        "The `<think>` tag is used for reasoning. Don't forget the closing `</think>` tag.";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
-    });
-
-    it("preserves tags in fenced code blocks with language specifier", () => {
-      const input = "Example:\n```xml\n<think>\n  <thought>nested</thought>\n</think>\n```\nDone!";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
+    it("preserves tags inside code examples", () => {
+      const cases = [
+        "Use the tag like this:\n```\n<think>reasoning</think>\n```\nThat's it!",
+        "The `<think>` tag is used for reasoning. Don't forget the closing `</think>` tag.",
+        "Example:\n```xml\n<think>\n  <thought>nested</thought>\n</think>\n```\nDone!",
+        "Use `<think>` to open and `</think>` to close.",
+        "Example:\n```\n<think>reasoning</think>\n```",
+        "Use `<final>` for final answers in code: ```\n<final>42</final>\n```",
+        "First `<think>` then ```\n<thinking>block</thinking>\n``` then `<thought>`",
+      ] as const;
+      for (const input of cases) {
+        expect(stripReasoningTagsFromText(input)).toBe(input);
+      }
     });
 
     it("handles mixed real tags and code tags", () => {
@@ -56,29 +59,9 @@ describe("stripReasoningTagsFromText", () => {
       expect(stripReasoningTagsFromText(input)).toBe("Visible text with `<think>` example.");
     });
 
-    it("preserves both opening and closing tags in backticks", () => {
-      const input = "Use `<think>` to open and `</think>` to close.";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
-    });
-
-    it("preserves think tags in code block at EOF without trailing newline", () => {
-      const input = "Example:\n```\n<think>reasoning</think>\n```";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
-    });
-
-    it("preserves final tags inside code blocks", () => {
-      const input = "Use `<final>` for final answers in code: ```\n<final>42</final>\n```";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
-    });
-
     it("handles code block followed by real tags", () => {
       const input = "```\n<think>code</think>\n```\n<think>real hidden</think>visible";
       expect(stripReasoningTagsFromText(input)).toBe("```\n<think>code</think>\n```\nvisible");
-    });
-
-    it("handles multiple code blocks with tags", () => {
-      const input = "First `<think>` then ```\n<thinking>block</thinking>\n``` then `<thought>`";
-      expect(stripReasoningTagsFromText(input)).toBe(input);
     });
   });
 
@@ -100,11 +83,8 @@ describe("stripReasoningTagsFromText", () => {
       expect(stripReasoningTagsFromText(input)).toBe("A  B");
     });
 
-    it("handles empty input", () => {
+    it("handles empty and null-ish inputs", () => {
       expect(stripReasoningTagsFromText("")).toBe("");
-    });
-
-    it("handles null-ish input", () => {
       expect(stripReasoningTagsFromText(null as unknown as string)).toBe(null);
     });
 
