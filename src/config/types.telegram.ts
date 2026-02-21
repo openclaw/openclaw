@@ -121,6 +121,24 @@ export type TelegramAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
+  /**
+   * Custom Telegram Bot API base URL (for local Bot API server).
+   * Example: "http://localhost:8081"
+   * Default: "https://api.telegram.org"
+   *
+   * When set, SSRF protection is relaxed for this account and file
+   * downloads from the local Bot API are read directly from disk when
+   * the file_path is an absolute path (scoped to `localApiDataDir`).
+   */
+  apiRoot?: string;
+  /**
+   * Allowed base directory for local Bot API server file reads.
+   * Required when `apiRoot` is set and the server returns absolute
+   * file paths.  Disk reads are restricted to files under this
+   * directory (symlinks resolved, `..` blocked).  No default —
+   * must be set explicitly.
+   */
+  localApiDataDir?: string;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;

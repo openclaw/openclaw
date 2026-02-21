@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import nodePath from "node:path";
 import { type Bot, GrammyError, InputFile } from "grammy";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -12,6 +14,12 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
+import {
+  getTelegramApiBase,
+  isCustomTelegramApi,
+  isLocalBotApiFilePath,
+  validateLocalFilePath,
+} from "../api-base.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
@@ -306,6 +314,8 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  apiRoot?: string,
+  localApiDataDir?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -313,12 +323,31 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
+  const apiBase = getTelegramApiBase(apiRoot);
+  // Relax SSRF / enable direct disk reads when the resolved API base is
+  // not the default Telegram cloud API — i.e. the per-account `apiRoot`
+  // config field signals an explicit opt-in to a private/local server.
+  const isLocal = isCustomTelegramApi(apiBase);
+
   const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    // Local Bot API: absolute disk paths — validate the path is inside the
+    // allowed data directory, then read directly from disk.
+    if (isLocal && isLocalBotApiFilePath(filePath)) {
+      const safePath = await validateLocalFilePath(filePath, localApiDataDir);
+      const array = await readFile(safePath);
+      const buf = Buffer.from(array);
+      const { detectMime: detectMimeLocal } = await import("../../media/mime.js");
+      const mime = await detectMimeLocal({ buffer: buf, filePath: safePath });
+      return saveMediaBuffer(buf, mime, "inbound", maxBytes, nodePath.basename(safePath));
+    }
+
+    const url = `${apiBase}/file/bot${token}/${filePath}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
       filePathHint: filePath,
+      // Relax SSRF for custom/local Bot API servers.
+      ...(isLocal ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
     });
     const originalName = fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);

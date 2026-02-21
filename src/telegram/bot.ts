@@ -25,6 +25,7 @@ import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { getTelegramApiBase, isCustomTelegramApi } from "./api-base.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -146,7 +147,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
       : undefined;
 
-  const bot = new Bot(opts.token, client ? { client } : undefined);
+  const apiRoot = getTelegramApiBase(telegramCfg.apiRoot);
+  const clientWithApiRoot: ApiClientOptions = {
+    ...client,
+    ...(isCustomTelegramApi(apiRoot) ? { apiRoot } : {}),
+  };
+  const hasClientOpts = Object.keys(clientWithApiRoot).length > 0;
+  const bot = new Bot(opts.token, hasClientOpts ? { client: clientWithApiRoot } : undefined);
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
   // Catch all errors from bot middleware to prevent unhandled rejections
