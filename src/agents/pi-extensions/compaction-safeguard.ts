@@ -18,6 +18,9 @@ import { collectTextContentBlocks } from "../content-blocks.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
+
+// Track session managers that have already logged the missing-model warning to avoid log spam.
+const missedModelWarningSessions = new WeakSet<object>();
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -195,8 +198,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    const model = ctx.model;
+    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
+    // Fall back to runtime.model which is explicitly passed when building extension paths.
+    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const model = ctx.model ?? runtime?.model;
     if (!model) {
+      // Log warning once per session when both models are missing (diagnostic for future issues).
+      // Use a WeakSet to track which session managers have already logged the warning.
+      if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
+        missedModelWarningSessions.add(ctx.sessionManager);
+        console.warn(
+          "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
+            "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
+            "was not called and model was not passed through runtime registry.",
+        );
+      }
       return {
         compaction: {
           summary: fallbackSummary,
@@ -220,7 +236,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
-      const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
