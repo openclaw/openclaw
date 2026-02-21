@@ -525,12 +525,8 @@ class NodeRuntime(context: Context) {
   }
 
   fun setNotificationsEnabled(value: Boolean) {
+    // The init-block collector on notificationsEnabled handles activate/deactivate.
     prefs.setNotificationsEnabled(value)
-    if (value) {
-      notificationBridge.activate()
-    } else {
-      notificationBridge.deactivate()
-    }
   }
 
   fun setLocationMode(mode: LocationMode) {

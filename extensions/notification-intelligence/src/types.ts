@@ -1,5 +1,7 @@
 export type CapturedNotification = {
   id: string;
+  /** System key from StatusBarNotification.getKey(), used for cancelNotification(). */
+  key: string;
   packageName: string;
   appLabel: string;
   title: string | null;

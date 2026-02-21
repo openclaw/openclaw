@@ -5,6 +5,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class CapturedNotification(
   val id: String,
+  /** The system key from StatusBarNotification.getKey(), needed for cancelNotification(). */
+  val key: String,
   val packageName: String,
   val appLabel: String,
   val title: String?,

@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
+import { stringEnum } from "openclaw/plugin-sdk";
 import { formatDigest, formatStatus } from "./src/digest.js";
 import { createNotificationStore } from "./src/store.js";
 import { triageBatch } from "./src/triage.js";
@@ -108,12 +109,9 @@ export default function register(api: OpenClawPluginApi) {
       "Get a triaged summary of recent phone notifications from the connected Android device. " +
       "Returns notifications classified by urgency level (critical, important, informational, noise).",
     parameters: Type.Object({
-      action: Type.Union(
-        [Type.Literal("digest"), Type.Literal("recent"), Type.Literal("critical")],
-        {
-          description: "digest: full triaged summary, recent: all recent, critical: critical only",
-        },
-      ),
+      action: stringEnum(["digest", "recent", "critical"] as const, {
+        description: "digest: full triaged summary, recent: all recent, critical: critical only",
+      }),
       since_minutes: Type.Optional(
         Type.Number({ description: "Look-back window in minutes (default 60)" }),
       ),

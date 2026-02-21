@@ -51,6 +51,7 @@ class OpenClawNotificationListener : NotificationListenerService() {
 
       return CapturedNotification(
         id = "${sbn.packageName}:${sbn.id}:${sbn.tag.orEmpty()}",
+        key = sbn.key,
         packageName = sbn.packageName,
         appLabel = appLabel,
         title = title,
