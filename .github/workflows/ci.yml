@@ -303,6 +303,7 @@ jobs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_changed == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
