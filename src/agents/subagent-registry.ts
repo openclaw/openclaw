@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -38,6 +39,7 @@ export type SubagentRunRecord = {
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
+const hookEmittedRuns = new Set<string>();
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -82,6 +84,30 @@ function persistSubagentRuns() {
   } catch {
     // ignore persistence failures
   }
+}
+
+/**
+ * Emit the subagent:complete internal hook event exactly once per runId.
+ * Both the lifecycle listener and the agent.wait path can resolve a run,
+ * so we guard with hookEmittedRuns to guarantee at-most-once delivery.
+ */
+function emitSubagentCompleteHook(entry: SubagentRunRecord) {
+  if (hookEmittedRuns.has(entry.runId)) {
+    return;
+  }
+  hookEmittedRuns.add(entry.runId);
+  void triggerInternalHook(
+    createInternalHookEvent("subagent", "complete", entry.requesterSessionKey, {
+      childSessionKey: entry.childSessionKey,
+      runId: entry.runId,
+      label: entry.label,
+      task: entry.task,
+      outcome: entry.outcome,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      runtimeMs: entry.startedAt && entry.endedAt ? entry.endedAt - entry.startedAt : undefined,
+    }),
+  );
 }
 
 const resumedRuns = new Set<string>();
@@ -251,6 +277,7 @@ async function sweepSubagentRuns() {
       continue;
     }
     subagentRuns.delete(runId);
+    hookEmittedRuns.delete(runId);
     mutated = true;
     try {
       await callGateway({
@@ -307,6 +334,9 @@ function ensureListener() {
     }
     persistSubagentRuns();
 
+    // Emit subagent:complete hook event so external hooks can track deliveries.
+    emitSubagentCompleteHook(entry);
+
     if (suppressAnnounceForSteerRestart(entry)) {
       return;
     }
@@ -356,6 +386,7 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
   }
   if (cleanup === "delete") {
     subagentRuns.delete(runId);
+    hookEmittedRuns.delete(runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(runId);
     return;
@@ -598,6 +629,10 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (mutated) {
       persistSubagentRuns();
     }
+
+    // Emit subagent:complete hook event (agent.wait path).
+    emitSubagentCompleteHook(entry);
+
     if (suppressAnnounceForSteerRestart(entry)) {
       return;
     }
@@ -613,6 +648,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
   resetAnnounceQueuesForTests();
+  hookEmittedRuns.clear();
   stopSweeper();
   restoreAttempted = false;
   if (listenerStop) {
@@ -631,6 +667,7 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 
 export function releaseSubagentRun(runId: string) {
   const didDelete = subagentRuns.delete(runId);
+  hookEmittedRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();
   }
