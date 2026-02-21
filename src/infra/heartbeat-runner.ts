@@ -36,7 +36,7 @@ import {
 } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getQueueSize } from "../process/command-queue.js";
+import { getQueueSize, onLaneIdle } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -63,7 +63,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries } from "./system-events.js";
+import { hasSystemEvents, peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -1169,6 +1169,24 @@ export function startHeartbeatRunner(opts: {
       sessionKey: params.sessionKey,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
+
+  // When the main command lane goes idle after processing a request,
+  // check if any system events were enqueued while the agent was busy.
+  // If so, trigger a heartbeat to drain them promptly instead of waiting
+  // for the next scheduled heartbeat interval.
+  const disposeIdleWatcher = onLaneIdle(CommandLane.Main, () => {
+    if (state.stopped) {
+      return;
+    }
+    for (const agent of state.agents.values()) {
+      const sessionKey = resolveAgentMainSessionKey({ cfg: state.cfg, agentId: agent.agentId });
+      if (hasSystemEvents(sessionKey)) {
+        requestHeartbeatNow({ reason: "pending-system-events" });
+        return;
+      }
+    }
+  });
+
   updateConfig(state.cfg);
 
   const cleanup = () => {
@@ -1177,6 +1195,7 @@ export function startHeartbeatRunner(opts: {
     }
     state.stopped = true;
     disposeWakeHandler();
+    disposeIdleWatcher();
     if (state.timer) {
       clearTimeout(state.timer);
     }

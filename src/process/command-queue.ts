@@ -26,6 +26,8 @@ type QueueEntry = {
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
+type LaneIdleCallback = (lane: string) => void;
+
 type LaneState = {
   lane: string;
   queue: QueueEntry[];
@@ -36,6 +38,7 @@ type LaneState = {
 };
 
 const lanes = new Map<string, LaneState>();
+const laneIdleCallbacks = new Map<string, LaneIdleCallback[]>();
 let nextTaskId = 1;
 
 function getLaneState(lane: string): LaneState {
@@ -112,6 +115,19 @@ function drainLane(lane: string) {
       })();
     }
     state.draining = false;
+    // Notify idle callbacks when the lane has no more work.
+    if (state.queue.length === 0 && state.activeTaskIds.size === 0) {
+      const callbacks = laneIdleCallbacks.get(lane);
+      if (callbacks) {
+        for (const cb of callbacks) {
+          try {
+            cb(lane);
+          } catch {
+            // Idle callbacks must not break the queue.
+          }
+        }
+      }
+    }
   };
 
   pump();
@@ -230,6 +246,29 @@ export function getActiveTaskCount(): number {
     total += s.activeTaskIds.size;
   }
   return total;
+}
+
+/**
+ * Register a callback that fires whenever a lane becomes idle (no active
+ * tasks and no queued entries).  Returns a dispose function to unregister.
+ *
+ * This is used to re-trigger heartbeats when the main command lane finishes
+ * processing and there are undrained system events waiting to be delivered.
+ */
+export function onLaneIdle(lane: string, callback: LaneIdleCallback): () => void {
+  const cleaned = lane.trim() || CommandLane.Main;
+  const existing = laneIdleCallbacks.get(cleaned) ?? [];
+  existing.push(callback);
+  laneIdleCallbacks.set(cleaned, existing);
+  return () => {
+    const callbacks = laneIdleCallbacks.get(cleaned);
+    if (callbacks) {
+      const index = callbacks.indexOf(callback);
+      if (index >= 0) {
+        callbacks.splice(index, 1);
+      }
+    }
+  };
 }
 
 /**
