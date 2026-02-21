@@ -189,86 +189,10 @@ function serveFile(res: ServerResponse, filePath: string) {
   res.end(fs.readFileSync(filePath));
 }
 
-interface ControlUiInjectionOpts {
-  basePath: string;
-  assistantName?: string;
-  assistantAvatar?: string;
-  /** Gateway token to inject into localStorage for reverse proxy auth. */
-  token?: string;
-}
-
-function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): string {
-  const { basePath, assistantName, assistantAvatar, token } = opts;
-  // Build token injection snippet: pre-populate localStorage so the Control UI
-  // picks up the gateway token without requiring ?token= in the URL.
-  // Precedence: ?token= query param (client-side) > header injection (server-side).
-  // The snippet only sets the token when localStorage doesn't already have one,
-  // so the client-side applySettingsFromUrl() always wins if ?token= is present.
-  const tokenSnippet = token
-    ? `(function(){try{` +
-      `var k="openclaw.control.settings.v1",s={};` +
-      `try{s=JSON.parse(localStorage.getItem(k)||"{}")}catch(e){}` +
-      `if(!s.token){` +
-      `s.token=${JSON.stringify(token)};` +
-      `localStorage.setItem(k,JSON.stringify(s));` +
-      `}}catch(e){}})();`
-    : "";
-  const script =
-    `<script>` +
-    `window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};` +
-    `window.__OPENCLAW_ASSISTANT_NAME__=${JSON.stringify(
-      assistantName ?? DEFAULT_ASSISTANT_IDENTITY.name,
-    )};` +
-    `window.__OPENCLAW_ASSISTANT_AVATAR__=${JSON.stringify(
-      assistantAvatar ?? DEFAULT_ASSISTANT_IDENTITY.avatar,
-    )};` +
-    tokenSnippet +
-    `</script>`;
-  // Check if already injected
-  if (html.includes("__OPENCLAW_ASSISTANT_NAME__")) {
-    return html;
-  }
-  const headClose = html.indexOf("</head>");
-  if (headClose !== -1) {
-    return `${html.slice(0, headClose)}${script}${html.slice(headClose)}`;
-  }
-  return `${script}${html}`;
-}
-
-interface ServeIndexHtmlOpts {
-  basePath: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  /** Gateway token extracted from reverse proxy header. */
-  token?: string;
-}
-
-function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
-  const { basePath, config, agentId, token } = opts;
-  const identity = config
-    ? resolveAssistantIdentity({ cfg: config, agentId })
-    : DEFAULT_ASSISTANT_IDENTITY;
-  const resolvedAgentId =
-    typeof (identity as { agentId?: string }).agentId === "string"
-      ? (identity as { agentId?: string }).agentId
-      : agentId;
-  const avatarValue =
-    resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
-      agentId: resolvedAgentId,
-      basePath,
-    }) ?? identity.avatar;
+function serveIndexHtml(res: ServerResponse, indexPath: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  const raw = fs.readFileSync(indexPath, "utf8");
-  res.end(
-    injectControlUiConfig(raw, {
-      basePath,
-      assistantName: identity.name,
-      assistantAvatar: avatarValue,
-      token,
-    }),
-  );
+  res.end(fs.readFileSync(indexPath, "utf8"));
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -365,6 +289,7 @@ export function handleControlUiHttpRequest(
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
+      ...(injectedToken ? { token: injectedToken } : {}),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -431,12 +356,7 @@ export function handleControlUiHttpRequest(
 
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
     if (path.basename(filePath) === "index.html") {
-      serveIndexHtml(res, filePath, {
-        basePath,
-        config: opts?.config,
-        agentId: opts?.agentId,
-        token: injectedToken,
-      });
+      serveIndexHtml(res, filePath);
       return true;
     }
     serveFile(res, filePath);
@@ -456,12 +376,7 @@ export function handleControlUiHttpRequest(
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {
-    serveIndexHtml(res, indexPath, {
-      basePath,
-      config: opts?.config,
-      agentId: opts?.agentId,
-      token: injectedToken,
-    });
+    serveIndexHtml(res, indexPath);
     return true;
   }
 
