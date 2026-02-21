@@ -307,6 +307,50 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toContain("items.*.complex");
   });
 
+  it("renders array items with unsupported children correctly", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              complex: {
+                anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { items: [{ name: "first", complex: "x" }] },
+        onPatch,
+      }),
+      container,
+    );
+
+    // The array itself should render (not blocked)
+    const arraySection = container.querySelector(".cfg-array");
+    expect(arraySection).not.toBeNull();
+
+    // The unsupported child field within the array item should show an error
+    const errorDivs = Array.from(container.querySelectorAll(".cfg-field--error"));
+    const complexError = errorDivs.find(
+      (div) => div.querySelector(".cfg-field__label")?.textContent?.trim() === "Complex",
+    );
+    expect(complexError).not.toBeUndefined();
+  });
+
   it("renders accounts map section instead of unsupported error", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
