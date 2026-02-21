@@ -1,0 +1,79 @@
+version: 1
+name: vtl-operators
+notes:
+  - "Operators are prompt patches. They do not judge aesthetics."
+  - "Triggers are evaluated deterministically against metric values."
+  - "The AI does not modify or invent operators. Edit this file to change behavior."
+  - "Patch language appends geometric constraints — it does not rewrite the subject."
+  - "Based on VTL framework research: https://github.com/rusparrish/Visual-Thinking-Lens"
+
+operators:
+
+  - id: displace_mass
+    label: "Displace mass (break center lock)"
+    triggers:
+      - "abs(delta_x) < 0.05 and abs(delta_y) < 0.05"
+    intent:
+      - "shift visual mass off frame center"
+      - "prevent recentralization"
+    patch:
+      - "Place the primary subject and visual mass in the left or right third of the frame."
+      - "The geometric center of the frame should feel secondary or empty."
+      - "Do not center the composition. Specify the subject's position explicitly as a coordinate, not a style instruction."
+
+  - id: break_radial_prior
+    label: "Break radial prior (reduce frame-centered radial anchoring)"
+    triggers:
+      - "dRC is not None and dRC < -0.06"
+    intent:
+      - "shift radial structure from frame center to subject"
+    patch:
+      - "Organize the image's radial structure around the subject itself, not the frame center."
+      - "Place the subject at a specific offset — for example, upper-left third."
+      - "Let visual weight and depth cues follow the subject's position. The frame center should carry no special gravity."
+
+  - id: increase_tension
+    label: "Increase curvature torque (raise directional strain)"
+    triggers:
+      - "k_var < 0.5"
+    intent:
+      - "introduce directional opposition"
+      - "prevent smooth resolution"
+    patch:
+      - "Introduce directional opposition in the composition. Visual paths should encounter resistance or reversal."
+      - "Avoid smooth, resolved flow. Create competing directional forces across the frame."
+      - "Add partial occlusion or a strong diagonal axis to create turning pressure."
+
+  - id: activate_periphery
+    label: "Activate periphery (redistribute gradient field)"
+    triggers:
+      - "r_v > 0.85"
+    intent:
+      - "push structural energy toward frame edges"
+      - "break central mound behavior"
+    patch:
+      - "Activate the frame edges with secondary structure — subtle environmental elements, architecture, or lateral flow."
+      - "Avoid a single central cluster. Distribute visual interest across at least two regions."
+      - "Introduce a diagonal or lateral element that touches a frame edge."
+
+  - id: decompress_packing
+    label: "Decompress packing (increase breathing room)"
+    triggers:
+      - "rho_r > 15.0"
+    intent:
+      - "reduce material compression"
+      - "separate compositional layers"
+    patch:
+      - "Increase negative space around the subject. Avoid dense textures or compressed mass."
+      - "Separate foreground, subject, and background into distinct planes with clean transitions."
+      - "Prefer larger tonal shapes over micro-detail and repeated patterns."
+
+selection_rules:
+  # Deterministic priority. First applicable operator is selected.
+  # Up to 2 additional applicable operators are offered as alternatives.
+  ordered_priority:
+    - displace_mass
+    - break_radial_prior
+    - activate_periphery
+    - increase_tension
+    - decompress_packing
