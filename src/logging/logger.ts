@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -15,28 +16,7 @@ const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
-function resolveNodeRequire(): ((id: string) => NodeJS.Require) | null {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return null;
-  }
-  try {
-    const moduleNamespace = getBuiltinModule("module") as {
-      createRequire?: (id: string) => NodeJS.Require;
-    };
-    return typeof moduleNamespace.createRequire === "function"
-      ? moduleNamespace.createRequire
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-const requireConfig = resolveNodeRequire()?.(import.meta.url) ?? null;
+const requireConfig = createRequire(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
@@ -55,7 +35,40 @@ export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
-const externalTransports = new Set<LogTransport>();
+const EXTERNAL_TRANSPORTS_KEY = Symbol.for("openclaw.externalLogTransports");
+
+function isLogTransportSet(value: unknown): value is Set<LogTransport> {
+  if (!(value instanceof Set)) {
+    return false;
+  }
+  for (const entry of value) {
+    if (typeof entry !== "function") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveExternalTransports(): Set<LogTransport> {
+  const g = globalThis as typeof globalThis & Record<symbol, unknown>;
+  const existing = g[EXTERNAL_TRANSPORTS_KEY];
+  if (isLogTransportSet(existing)) {
+    return existing;
+  }
+  const created = new Set<LogTransport>();
+  // Preserve valid existing function transports while repairing invalid global state.
+  if (existing instanceof Set) {
+    for (const entry of existing) {
+      if (typeof entry === "function") {
+        created.add(entry as LogTransport);
+      }
+    }
+  }
+  g[EXTERNAL_TRANSPORTS_KEY] = created;
+  return created;
+}
+
+const externalTransports = resolveExternalTransports();
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
@@ -75,12 +88,10 @@ function resolveSettings(): ResolvedSettings {
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
     try {
-      const loaded = requireConfig?.("../config/config.js") as
-        | {
-            loadConfig?: () => OpenClawConfig;
-          }
-        | undefined;
-      cfg = loaded?.loadConfig?.().logging;
+      const loaded = requireConfig("../config/config.js") as {
+        loadConfig?: () => OpenClawConfig;
+      };
+      cfg = loaded.loadConfig?.().logging;
     } catch {
       cfg = undefined;
     }
