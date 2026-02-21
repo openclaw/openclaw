@@ -1,4 +1,8 @@
 import { createServer } from "node:http";
+import type {
+  IncomingMessage as NodeIncomingMessage,
+  ServerResponse as NodeServerResponse,
+} from "node:http";
 import { webhookCallback } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
@@ -26,10 +30,7 @@ const DEFAULT_TELEGRAM_ACCOUNT_ID = "default";
 type WebhookRoute = {
   accountId: string;
   diagnosticsEnabled: boolean;
-  handle: (
-    req: Parameters<Parameters<typeof createServer>[0]>[0],
-    res: Parameters<Parameters<typeof createServer>[0]>[1],
-  ) => void;
+  handle: (req: NodeIncomingMessage, res: NodeServerResponse) => void;
   stopBot: () => void;
 };
 
