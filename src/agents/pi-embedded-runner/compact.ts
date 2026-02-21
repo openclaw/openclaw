@@ -13,9 +13,11 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { getMemorySearchManager } from "../../memory/index.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
@@ -24,13 +26,14 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveMemorySearchConfig } from "../memory-search.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -236,6 +239,54 @@ function classifyCompactionReason(reason?: string): string {
     return "provider_error_5xx";
   }
   return "unknown";
+}
+
+function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
+  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
+  if (mode === "off" || mode === "async" || mode === "await") {
+    return mode;
+  }
+  return "async";
+}
+
+async function syncPostCompactionSessionMemory(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  mode: "off" | "async" | "await";
+}): Promise<void> {
+  if (params.mode === "off" || !params.config) {
+    return;
+  }
+  try {
+    const agentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
+    const resolvedMemory = resolveMemorySearchConfig(params.config, agentId);
+    if (!resolvedMemory || !resolvedMemory.sources.includes("sessions")) {
+      return;
+    }
+    const { manager } = await getMemorySearchManager({
+      cfg: params.config,
+      agentId,
+    });
+    if (!manager?.sync) {
+      return;
+    }
+    const syncTask = manager.sync({
+      reason: "post-compaction",
+      force: resolvedMemory.sync.sessions.postCompactionForce,
+    });
+    if (params.mode === "await") {
+      await syncTask;
+    } else {
+      void syncTask.catch((err) => {
+        log.warn(`memory sync failed (post-compaction): ${String(err)}`);
+      });
+    }
+  } catch (err) {
+    log.warn(`memory sync skipped (post-compaction): ${String(err)}`);
+  }
 }
 
 /**
@@ -660,6 +711,12 @@ export async function compactEmbeddedPiSessionDirect(
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
+        emitSessionTranscriptUpdate(params.sessionFile);
+        await syncPostCompactionSessionMemory({
+          config: params.config,
+          sessionKey: params.sessionKey,
+          mode: resolvePostCompactionIndexSyncMode(params.config),
+        });
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {

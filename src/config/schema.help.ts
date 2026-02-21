@@ -278,6 +278,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Minimum appended bytes before session transcripts trigger reindex (default: 100000).",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages":
     "Minimum appended JSONL lines before session transcripts trigger reindex (default: 50).",
+  "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
+    "Force session reindex after compaction-triggered transcript updates (default: true).",
+  "agents.defaults.compaction.recentTurnsPreserve":
+    "Number of most-recent user/assistant turns preserved verbatim in safeguard summaries (default: 3).",
+  "agents.defaults.compaction.postIndexSync":
+    'Post-compaction session-index sync mode ("off" | "async" | "await", default: "async").',
+  "agents.defaults.compaction.qualityGuard.enabled":
+    "Enable compaction summary quality checks and retry in safeguard mode (default: true).",
+  "agents.defaults.compaction.qualityGuard.maxRetries":
+    "Maximum summary retry attempts when quality checks fail (default: 1). Each retry re-runs summarization and may increase token usage.",
   "plugins.enabled": "Enable plugin/extension loading (default: true).",
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",

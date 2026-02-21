@@ -159,6 +159,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes": "Session Delta Bytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
+  "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
+    "Force Reindex After Compaction",
+  "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
+  "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
+  "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard",
+  "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Retries",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",

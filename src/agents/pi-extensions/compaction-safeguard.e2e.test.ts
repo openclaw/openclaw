@@ -1,5 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import { buildEmbeddedExtensionPaths } from "../pi-embedded-runner/extensions.js";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
@@ -9,6 +11,13 @@ import { __testing } from "./compaction-safeguard.js";
 const {
   collectToolFailures,
   formatToolFailuresSection,
+  splitPreservedRecentTurns,
+  formatPreservedTurnsSection,
+  buildCompactionStructureInstructions,
+  extractOpaqueIdentifiers,
+  auditSummaryQuality,
+  resolveRecentTurnsPreserve,
+  resolveQualityGuardMaxRetries,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   BASE_CHUNK_RATIO,
@@ -247,5 +256,140 @@ describe("compaction-safeguard runtime registry", () => {
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+  });
+
+  it("wires quality guard retries from config and clamps safeguard runtime usage", () => {
+    const sessionManager = {} as unknown as Parameters<
+      typeof buildEmbeddedExtensionPaths
+    >[0]["sessionManager"];
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            recentTurnsPreserve: 99,
+            qualityGuard: { maxRetries: 99 },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    buildEmbeddedExtensionPaths({
+      cfg,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-3-opus",
+      model: {
+        contextWindow: 200_000,
+      } as Parameters<typeof buildEmbeddedExtensionPaths>[0]["model"],
+    });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.qualityGuardMaxRetries).toBe(99);
+    expect(runtime?.recentTurnsPreserve).toBe(99);
+    expect(resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries)).toBe(3);
+    expect(resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve)).toBe(12);
+  });
+});
+
+describe("compaction-safeguard summary quality helpers", () => {
+  it("preserves the most recent user/assistant messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "older ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "older answer" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      { role: "user", content: "recent ask", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "recent answer" }],
+        timestamp: 4,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 1,
+    });
+
+    expect(split.preservedMessages).toHaveLength(2);
+    expect(split.summarizableMessages).toHaveLength(2);
+    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain(
+      "## Recent turns preserved verbatim",
+    );
+  });
+
+  it("builds structured instructions with required sections", () => {
+    const instructions = buildCompactionStructureInstructions("Keep security caveats.");
+    expect(instructions).toContain("## Decisions");
+    expect(instructions).toContain("## Exact identifiers");
+    expect(instructions).toContain("Keep security caveats.");
+  });
+
+  it("extracts opaque identifiers and audits summary quality", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
+    );
+    expect(identifiers.length).toBeGreaterThan(0);
+    expect(identifiers).toContain("A1B2C3D4E5F6");
+
+    const summary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve identifiers.",
+      "## Pending user asks",
+      "Explain post-compaction behavior.",
+      "## Exact identifiers",
+      identifiers.join(", "),
+    ].join("\n");
+
+    const quality = auditSummaryQuality({
+      summary,
+      identifiers,
+      latestAsk: "Explain post-compaction behavior for memory indexing",
+    });
+    expect(quality.ok).toBe(true);
+  });
+
+  it("dedupes identifiers before applying the result cap", () => {
+    const noisyPrefix = Array.from({ length: 10 }, () => "a0b0c0d0").join(" ");
+    const uniqueTail = Array.from(
+      { length: 12 },
+      (_, idx) => `b${idx.toString(16).padStart(7, "0")}`,
+    );
+    const identifiers = extractOpaqueIdentifiers(`${noisyPrefix} ${uniqueTail.join(" ")}`);
+
+    expect(identifiers).toHaveLength(12);
+    expect(new Set(identifiers).size).toBe(12);
+    expect(identifiers).toContain("a0b0c0d0");
+    expect(identifiers).toContain(uniqueTail[10]);
+  });
+
+  it("filters ordinary short numbers and trims wrapped punctuation", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log.",
+    );
+
+    expect(identifiers).not.toContain("2026");
+    expect(identifiers).not.toContain("42");
+    expect(identifiers).not.toContain("18789");
+    expect(identifiers).toContain("123456");
+    expect(identifiers).toContain("https://example.com/a");
+    expect(identifiers).toContain("/tmp/x.log");
+  });
+
+  it("fails quality audit when required sections are missing", () => {
+    const quality = auditSummaryQuality({
+      summary: "Short summary without structure",
+      identifiers: ["abc12345"],
+      latestAsk: "Need a status update",
+    });
+    expect(quality.ok).toBe(false);
+    expect(quality.reasons.length).toBeGreaterThan(0);
   });
 });

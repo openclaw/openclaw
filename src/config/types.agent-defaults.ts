@@ -297,6 +297,12 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
+  recentTurnsPreserve?: number;
+  /** Post-compaction memory session-index sync behavior. */
+  postIndexSync?: "off" | "async" | "await";
+  /** Post-compaction quality guard settings (safeguard mode). */
+  qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };
@@ -310,4 +316,11 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type AgentCompactionQualityGuardConfig = {
+  /** Enable summary quality checks and automatic retry (default: true). */
+  enabled?: boolean;
+  /** Maximum retries when summary quality checks fail (default: 1). */
+  maxRetries?: number;
 };
