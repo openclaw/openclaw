@@ -391,11 +391,24 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
-  // Support media, path, and filePath parameters for attachments
-  const mediaHint =
-    readStringParam(params, "media", { trim: false }) ??
-    readStringParam(params, "path", { trim: false }) ??
-    readStringParam(params, "filePath", { trim: false });
+  // Support media, path, and filePath parameters for attachments.
+  // `media` may be a string (single) or string[] (repeatable --media flags from CLI).
+  const mediaParam = params["media"];
+  const mediaHints: string[] = Array.isArray(mediaParam)
+    ? (mediaParam as unknown[]).filter((v): v is string => typeof v === "string")
+    : typeof mediaParam === "string" && mediaParam.trim()
+      ? [mediaParam]
+      : [];
+  // Include path/filePath fallbacks if no --media flags were provided
+  if (mediaHints.length === 0) {
+    const pathHint =
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
+    if (pathHint) {
+      mediaHints.push(pathHint);
+    }
+  }
+  const mediaHint = mediaHints[0];
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
@@ -425,7 +438,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     seenMedia.add(trimmed);
     mergedMediaUrls.push(trimmed);
   };
-  pushMedia(mediaHint);
+  for (const hint of mediaHints) {
+    pushMedia(hint);
+  }
   for (const url of parsed.mediaUrls ?? []) {
     pushMedia(url);
   }
@@ -443,10 +458,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   if (!params.replyTo && parsed.replyToId) {
     params.replyTo = parsed.replyToId;
   }
-  if (!params.media) {
-    // Use path/filePath if media not set, then fall back to parsed directives
-    params.media = mergedMediaUrls[0] || undefined;
-  }
+  // Normalize params.media to a string for downstream compatibility.
+  // All media sources (CLI --media flags, path, filePath, parsed directives) have
+  // already been merged and deduplicated into mergedMediaUrls above.
+  params.media = mergedMediaUrls[0] || undefined;
+  // Expose the full array so plugins can handle multiple attachments.
+  params.mediaUrls = mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined;
 
   message = await maybeApplyCrossContextMarker({
     cfg,

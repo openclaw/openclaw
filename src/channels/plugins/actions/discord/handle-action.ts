@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
+  jsonResult,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -47,11 +48,20 @@ export async function handleDiscordMessageAction(
       required: !asVoice && !hasComponents,
       allowEmpty: true,
     });
-    // Support media, path, and filePath for media URL
-    const mediaUrl =
+    // Support media, path, and filePath for media URL (single)
+    const singleMediaUrl =
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
+    // Support mediaUrls array for multiple attachments
+    const mediaUrlsParam = params.mediaUrls;
+    const mediaUrls: string[] = Array.isArray(mediaUrlsParam)
+      ? (mediaUrlsParam as unknown[]).filter(
+          (u): u is string => typeof u === "string" && u.trim() !== "",
+        )
+      : singleMediaUrl
+        ? [singleMediaUrl]
+        : [];
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const rawEmbeds = params.embeds;
@@ -59,13 +69,43 @@ export async function handleDiscordMessageAction(
     const silent = params.silent === true;
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
+
+    // Handle multiple media attachments by sending multiple messages
+    if (mediaUrls.length > 1) {
+      const results: unknown[] = [];
+      for (let i = 0; i < mediaUrls.length; i++) {
+        const isFirst = i === 0;
+        const result = await handleDiscordAction(
+          {
+            action: "sendMessage",
+            accountId: accountId ?? undefined,
+            to,
+            // Caption/content only on first message
+            content: isFirst ? content : "",
+            mediaUrl: mediaUrls[i],
+            filename: isFirst ? (filename ?? undefined) : undefined,
+            replyTo: isFirst ? (replyTo ?? undefined) : undefined,
+            components: isFirst ? components : undefined,
+            embeds: isFirst ? embeds : undefined,
+            asVoice,
+            silent,
+            __sessionKey: sessionKey ?? undefined,
+            __agentId: agentId ?? undefined,
+          },
+          cfg,
+        );
+        results.push(result);
+      }
+      return jsonResult({ ok: true, results, multiMedia: true });
+    }
+
     return await handleDiscordAction(
       {
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
         content,
-        mediaUrl: mediaUrl ?? undefined,
+        mediaUrl: mediaUrls[0] ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         components,
