@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { normalizeToolName } from "./tool-policy.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 
@@ -61,7 +62,7 @@ export function extractToolCallsFromAssistant(
     if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
       toolCalls.push({
         id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
+        name: typeof rec.name === "string" ? normalizeToolName(rec.name) : undefined,
       });
     }
   }
