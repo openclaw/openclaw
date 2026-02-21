@@ -1349,9 +1349,10 @@ describe("gateway server auth/connect", () => {
       delete legacy.scopes;
       await writeJsonAtomic(pairedPath, paired);
 
-      ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
-      await new Promise<void>((resolve) => ws2.once("open", resolve));
-      const upgraded = await connectReq(ws2, {
+      const wsUpgrade = new WebSocket(`ws://127.0.0.1:${port}`);
+      ws2 = wsUpgrade;
+      await new Promise<void>((resolve) => wsUpgrade.once("open", resolve));
+      const upgraded = await connectReq(wsUpgrade, {
         token: "secret",
         scopes: ["operator.admin"],
         client,
@@ -1359,7 +1360,7 @@ describe("gateway server auth/connect", () => {
       });
       expect(upgraded.ok).toBe(false);
       expect(upgraded.error?.message ?? "").toContain("pairing required");
-      ws2.close();
+      wsUpgrade.close();
 
       const pendingUpgrade = (await listDevicePairing()).pending.find(
         (entry) => entry.deviceId === identity.deviceId,
