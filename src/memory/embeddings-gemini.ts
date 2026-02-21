@@ -5,7 +5,11 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import {
+  sanitizeHeaders,
+  type EmbeddingProvider,
+  type EmbeddingProviderOptions,
+} from "./embeddings.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -158,7 +162,8 @@ export async function resolveGeminiEmbeddingClient(
   const providerConfig = options.config.models?.providers?.google;
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  // Merge headers while filtering out prototype pollution keys
+  const headerOverrides = sanitizeHeaders(providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     ...headerOverrides,
   };
