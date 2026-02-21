@@ -243,17 +243,37 @@ PR_BODY="$PR_BODY
 ---
 *Opened automatically by ACP Handoff*"
 
+# Detect fork prefix for cross-fork PRs
+FORK_PREFIX=""
+ORIGIN_URL=$(git remote get-url origin 2>/dev/null || echo "")
+UPSTREAM_URL=$(git remote get-url upstream 2>/dev/null || echo "")
+if [[ -n "$UPSTREAM_URL" && -n "$ORIGIN_URL" && "$ORIGIN_URL" != "$UPSTREAM_URL" ]]; then
+  # Working from a fork — extract fork owner for --head
+  FORK_OWNER=$(echo "$ORIGIN_URL" | sed -E 's|.*[:/]([^/]+)/[^/]+(\.git)?$|\1|')
+  FORK_PREFIX="${FORK_OWNER}:"
+  # PR targets the upstream repo
+  REPO=$(echo "$UPSTREAM_URL" | sed -E 's|.*[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
+fi
+
 # Create the PR
-PR_JSON=$(gh pr create \
+PR_OUTPUT=$(gh pr create \
   --repo "$REPO" \
-  --head "$BRANCH" \
+  --head "${FORK_PREFIX}${BRANCH}" \
   --base main \
   --title "$PR_TITLE" \
-  --body "$PR_BODY" \
-  --json number,url 2>&1) || {
+  --body "$PR_BODY" 2>&1) || {
   # If PR already exists, try to get it
-  PR_JSON=$(gh pr view "$BRANCH" --repo "$REPO" --json number,url 2>/dev/null || echo '{"error": "Failed to create or find PR"}')
+  PR_OUTPUT=$(gh pr view "$BRANCH" --repo "$REPO" --json number,url 2>/dev/null || echo "")
 }
+
+# Parse PR URL from output (gh pr create returns just the URL without --json)
+if echo "$PR_OUTPUT" | grep -q "github.com"; then
+  PR_URL=$(echo "$PR_OUTPUT" | grep -oE 'https://github.com/[^ ]+' | head -1)
+  PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+  PR_JSON="{\"number\": $PR_NUMBER, \"url\": \"$PR_URL\"}"
+else
+  PR_JSON="$PR_OUTPUT"
+fi
 
 PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number // empty' 2>/dev/null || echo "")
 PR_URL=$(echo "$PR_JSON" | jq -r '.url // empty' 2>/dev/null || echo "")
