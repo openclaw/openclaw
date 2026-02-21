@@ -37,7 +37,12 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
       return anchor;
     }
     const elapsed = nowMs - anchor;
-    const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
+    // Always return a strictly-future time.  The old ceiling-division
+    // formula `Math.floor((elapsed + everyMs - 1) / everyMs)` returns
+    // `nowMs` itself when `elapsed` is an exact multiple of `everyMs`,
+    // which causes the job to be perpetually "due" and triggers
+    // double-execution on restart (#22895).
+    const steps = Math.floor(elapsed / everyMs) + 1;
     return anchor + steps * everyMs;
   }
 
