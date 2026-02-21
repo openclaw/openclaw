@@ -1353,6 +1353,7 @@
               {
                 "group": "CLI commands",
                 "pages": [
+                  "reference/cli/index",
                   "reference/cli/agent",
                   "reference/cli/agents",
                   "reference/cli/approvals",
@@ -1368,7 +1369,6 @@
                   "reference/cli/gateway",
                   "reference/cli/health",
                   "reference/cli/hooks",
-                  "reference/cli/index",
                   "reference/cli/logs",
                   "reference/cli/memory",
                   "reference/cli/message",
