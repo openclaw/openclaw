@@ -1,11 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 
+type RequiredRead = string | RegExp | { pattern: RegExp; label?: string };
+
 // Default required files — constants, extensible to config later
-const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
+const DEFAULT_REQUIRED_READS: RequiredRead[] = [
   "WORKFLOW_AUTO.md",
-  /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
+  {
+    pattern: /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
+    label: "memory/YYYY-MM-DD.md",
+  },
 ];
+
+function resolveRequiredReadMatcher(required: RequiredRead): {
+  matcher: string | RegExp;
+  label: string;
+} {
+  if (typeof required === "string") {
+    return { matcher: required, label: required };
+  }
+  if (required instanceof RegExp) {
+    return { matcher: required, label: required.source };
+  }
+  const label = required.label?.trim() || required.pattern.source;
+  return { matcher: required.pattern, label };
+}
 
 /**
  * Audit whether agent read required startup files after compaction.
@@ -14,17 +33,19 @@ const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
 export function auditPostCompactionReads(
   readFilePaths: string[],
   workspaceDir: string,
-  requiredReads: Array<string | RegExp> = DEFAULT_REQUIRED_READS,
+  requiredReads: RequiredRead[] = DEFAULT_REQUIRED_READS,
 ): { passed: boolean; missingPatterns: string[] } {
   const normalizedReads = readFilePaths.map((p) => path.resolve(workspaceDir, p));
   const missingPatterns: string[] = [];
 
   for (const required of requiredReads) {
-    if (typeof required === "string") {
-      const requiredResolved = path.resolve(workspaceDir, required);
+    const { matcher, label } = resolveRequiredReadMatcher(required);
+
+    if (typeof matcher === "string") {
+      const requiredResolved = path.resolve(workspaceDir, matcher);
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
-        missingPatterns.push(required);
+        missingPatterns.push(label);
       }
     } else {
       // RegExp — match against relative paths from workspace
@@ -32,10 +53,10 @@ export function auditPostCompactionReads(
         const rel = path.relative(workspaceDir, path.resolve(workspaceDir, p));
         // Normalize to forward slashes for cross-platform RegExp matching
         const normalizedRel = rel.split(path.sep).join("/");
-        return required.test(normalizedRel);
+        return matcher.test(normalizedRel);
       });
       if (!found) {
-        missingPatterns.push(required.source);
+        missingPatterns.push(label);
       }
     }
   }

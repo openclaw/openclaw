@@ -122,7 +122,7 @@ describe("auditPostCompactionReads", () => {
 
     expect(result.passed).toBe(false);
     expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
-    expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
+    expect(result.missingPatterns).toContain("memory/YYYY-MM-DD.md");
   });
 
   it("reports only missing files", () => {
@@ -131,7 +131,7 @@ describe("auditPostCompactionReads", () => {
 
     expect(result.passed).toBe(false);
     expect(result.missingPatterns).not.toContain("WORKFLOW_AUTO.md");
-    expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
+    expect(result.missingPatterns).toEqual(["memory/YYYY-MM-DD.md"]);
   });
 
   it("matches RegExp patterns against relative paths", () => {
@@ -169,6 +169,18 @@ describe("auditPostCompactionReads", () => {
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
+  });
+
+  it("supports custom regex labels for missing patterns", () => {
+    const readPaths = ["WORKFLOW_AUTO.md"];
+    const customRequired = [
+      "WORKFLOW_AUTO.md",
+      { pattern: /memory\/\d{4}-\d{2}-\d{2}\.md/, label: "memory/YYYY-MM-DD.md" },
+    ];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
+
+    expect(result.passed).toBe(false);
+    expect(result.missingPatterns).toEqual(["memory/YYYY-MM-DD.md"]);
   });
 });
 
