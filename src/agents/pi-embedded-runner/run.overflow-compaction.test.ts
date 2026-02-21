@@ -128,7 +128,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       runId: "run-1",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(24);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("retry_limit");
     expect(result.payloads?.[0]?.isError).toBe(true);
