@@ -19,6 +19,7 @@ export type InlineDirectives = {
   cleaned: string;
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
+  thinkAuto?: boolean;
   rawThinkLevel?: string;
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
@@ -71,6 +72,7 @@ export function parseInlineDirectives(
   const {
     cleaned: thinkCleaned,
     thinkLevel,
+    thinkAuto,
     rawLevel: rawThinkLevel,
     hasDirective: hasThinkDirective,
   } = extractThinkDirective(body);
@@ -147,6 +149,7 @@ export function parseInlineDirectives(
     cleaned: queueCleaned,
     hasThinkDirective,
     thinkLevel,
+    thinkAuto,
     rawThinkLevel,
     hasVerboseDirective,
     verboseLevel,

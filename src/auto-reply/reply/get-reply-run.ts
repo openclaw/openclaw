@@ -23,6 +23,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { resolveAutoThinkingLevelWithModel } from "../thinking-auto-model.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -67,6 +68,7 @@ type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+  resolvedThinkAuto?: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -151,6 +153,7 @@ export async function runPreparedReply(
   let {
     sessionEntry,
     resolvedThinkLevel,
+    resolvedThinkAuto,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -295,6 +298,19 @@ export async function runPreparedReply(
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
+  }
+  if (!resolvedThinkLevel && resolvedThinkAuto) {
+    resolvedThinkLevel = await resolveAutoThinkingLevelWithModel({
+      cfg,
+      agentDir,
+      workspaceDir,
+      skillsSnapshot,
+      provider,
+      model,
+      text: rawBodyTrimmed || baseBodyTrimmedRaw,
+      timeoutMs,
+      supportsXHigh: supportsXHighThinking(provider, model),
+    });
   }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();

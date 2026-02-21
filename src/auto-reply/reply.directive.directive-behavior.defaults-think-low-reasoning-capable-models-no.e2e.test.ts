@@ -52,7 +52,7 @@ describe("directive behavior", () => {
 
       const text = replyText(res);
       expect(text).toContain("Current thinking level: low");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, auto.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -75,8 +75,28 @@ describe("directive behavior", () => {
 
       const text = replyText(res);
       expect(text).toContain("Current thinking level: off");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, auto.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("supports /think auto and reports it as current mode", async () => {
+    await withTempHome(async (home) => {
+      const setRes = await getReplyFromConfig(
+        { Body: "/think auto", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+      );
+      expect(replyText(setRes)).toContain("Thinking mode set to auto.");
+
+      const showRes = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+      );
+      const text = replyText(showRes);
+      expect(text).toContain("Current thinking level: auto");
+      expect(text).toContain("Options: off, minimal, low, medium, high, auto.");
     });
   });
   for (const replyTag of ["[[reply_to_current]]", "[[ reply_to_current ]]"]) {

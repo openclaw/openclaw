@@ -7,7 +7,13 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
@@ -37,6 +43,7 @@ export type ReplyDirectiveContinuation = {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: ReturnType<typeof defaultGroupActivation>;
   resolvedThinkLevel: ThinkLevel | undefined;
+  resolvedThinkAuto: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -257,6 +264,7 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        thinkAuto: false,
         hasVerboseDirective: false,
         hasReasoningDirective: false,
         hasStatusDirective: false,
@@ -336,10 +344,17 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
-  const resolvedThinkLevel =
-    directives.thinkLevel ??
-    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+  const sessionThinkLevel = normalizeThinkLevel(sessionEntry?.thinkingLevel);
+  const sessionThinkAuto =
+    String(sessionEntry?.thinkingLevel ?? "")
+      .trim()
+      .toLowerCase() === "auto";
+  const resolvedThinkLevel = directives.hasThinkDirective
+    ? directives.thinkLevel
+    : (sessionThinkLevel ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined));
+  const resolvedThinkAuto = directives.hasThinkDirective
+    ? directives.thinkAuto === true
+    : sessionThinkAuto;
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -462,6 +477,7 @@ export async function resolveReplyDirectives(params: {
       elevatedFailures,
       defaultActivation,
       resolvedThinkLevel,
+      resolvedThinkAuto,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

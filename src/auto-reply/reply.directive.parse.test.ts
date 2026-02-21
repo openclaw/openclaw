@@ -84,6 +84,14 @@ describe("directive parsing", () => {
     expect(res.rawLevel).toBeUndefined();
   });
 
+  it("matches /think auto", () => {
+    const res = extractThinkDirective("/think auto");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkAuto).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.rawLevel).toBe("auto");
+  });
+
   it("matches /t with no argument", () => {
     const res = extractThinkDirective("/t");
     expect(res.hasDirective).toBe(true);

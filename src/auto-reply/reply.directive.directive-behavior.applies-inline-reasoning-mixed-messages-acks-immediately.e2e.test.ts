@@ -156,7 +156,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const text = await runThinkDirectiveAndGetText(home, { thinkingDefault: "high" });
       expect(text).toContain("Current thinking level: high");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, auto.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -164,7 +164,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const text = await runThinkDirectiveAndGetText(home);
       expect(text).toContain("Current thinking level: off");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, auto.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

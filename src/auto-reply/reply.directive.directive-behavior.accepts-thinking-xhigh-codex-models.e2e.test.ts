@@ -201,7 +201,7 @@ describe("directive behavior", () => {
 
       const text = replyText(res);
       expect(text).toContain("Current thinking level: high");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, auto.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

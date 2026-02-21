@@ -56,6 +56,10 @@ function resolveExecDefaults(params: {
   };
 }
 
+function formatThinkingLevelsWithAuto(provider: string, model: string): string {
+  return `${formatThinkingLevels(provider, model)}, auto`;
+}
+
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
 ): Promise<ReplyPayload | undefined> {
@@ -132,19 +136,24 @@ export async function handleDirectiveOnly(
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
 
-  if (directives.hasThinkDirective && !directives.thinkLevel) {
+  if (directives.hasThinkDirective && !directives.thinkLevel && directives.thinkAuto !== true) {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
-      const level = currentThinkLevel ?? "off";
+      const level =
+        String(sessionEntry.thinkingLevel ?? "")
+          .trim()
+          .toLowerCase() === "auto"
+          ? "auto"
+          : (currentThinkLevel ?? "off");
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          formatThinkingLevels(resolvedProvider, resolvedModel),
+          formatThinkingLevelsWithAuto(resolvedProvider, resolvedModel),
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevelsWithAuto(resolvedProvider, resolvedModel)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -260,11 +269,18 @@ export async function handleDirectiveOnly(
     };
   }
 
+  const sessionThinkLevelRaw = String(sessionEntry?.thinkingLevel ?? "")
+    .trim()
+    .toLowerCase();
+  const sessionThinkAuto = sessionThinkLevelRaw === "auto";
   const nextThinkLevel = directives.hasThinkDirective
     ? directives.thinkLevel
-    : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ?? currentThinkLevel);
+    : sessionThinkAuto
+      ? currentThinkLevel
+      : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ?? currentThinkLevel);
   const shouldDowngradeXHigh =
     !directives.hasThinkDirective &&
+    !sessionThinkAuto &&
     nextThinkLevel === "xhigh" &&
     !supportsXHighThinking(resolvedProvider, resolvedModel);
 
@@ -281,8 +297,12 @@ export async function handleDirectiveOnly(
     elevatedAllowed;
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
-  if (directives.hasThinkDirective && directives.thinkLevel) {
-    sessionEntry.thinkingLevel = directives.thinkLevel;
+  if (directives.hasThinkDirective) {
+    if (directives.thinkAuto === true) {
+      sessionEntry.thinkingLevel = "auto";
+    } else if (directives.thinkLevel) {
+      sessionEntry.thinkingLevel = directives.thinkLevel;
+    }
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";
@@ -372,12 +392,16 @@ export async function handleDirectiveOnly(
   });
 
   const parts: string[] = [];
-  if (directives.hasThinkDirective && directives.thinkLevel) {
-    parts.push(
-      directives.thinkLevel === "off"
-        ? "Thinking disabled."
-        : `Thinking level set to ${directives.thinkLevel}.`,
-    );
+  if (directives.hasThinkDirective) {
+    if (directives.thinkAuto === true) {
+      parts.push("Thinking mode set to auto.");
+    } else if (directives.thinkLevel) {
+      parts.push(
+        directives.thinkLevel === "off"
+          ? "Thinking disabled."
+          : `Thinking level set to ${directives.thinkLevel}.`,
+      );
+    }
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
