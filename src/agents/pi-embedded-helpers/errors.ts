@@ -168,16 +168,38 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   );
 }
 
+function extractEmbeddedHttpCode(raw: string): number | null {
+  const payload = parseApiErrorPayload(raw);
+  if (!payload) {
+    return null;
+  }
+  const errObj = payload.error;
+  if (!errObj || typeof errObj !== "object" || Array.isArray(errObj)) {
+    return null;
+  }
+  const code = (errObj as Record<string, unknown>).code;
+  if (typeof code === "number" && Number.isFinite(code)) {
+    return code;
+  }
+  if (typeof code === "string" && /^\d+$/.test(code)) {
+    return Number(code);
+  }
+  return null;
+}
+
 export function isTransientHttpError(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;
   }
   const status = extractLeadingHttpStatus(trimmed);
-  if (!status) {
-    return false;
+  if (status) {
+    return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
   }
-  return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
+  // Also detect JSON-wrapped API errors where no leading status code is present.
+  // Example: Google AI SDK wraps 503 as {"error":{"code":503,"status":"Service Unavailable",...}}.
+  const embeddedCode = extractEmbeddedHttpCode(trimmed);
+  return embeddedCode !== null && TRANSIENT_HTTP_ERROR_CODES.has(embeddedCode);
 }
 
 function stripFinalTagsFromText(text: string): string {

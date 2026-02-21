@@ -164,6 +164,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "timeout";
   }
   if (status === 503) {
+    // Service Unavailable — treat as transient timeout so failover cascade advances.
     return "timeout";
   }
   if (status === 400) {

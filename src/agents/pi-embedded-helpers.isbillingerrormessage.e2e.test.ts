@@ -263,6 +263,20 @@ describe("isTransientHttpError", () => {
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
   });
+
+  it("returns true for Google AI SDK JSON-wrapped 503 UNAVAILABLE", () => {
+    // Google AI SDK wraps errors as {"error":{"code":N,"status":"...","message":"..."}}
+    // without a leading HTTP status prefix — previously classified as non-transient.
+    const googleError503 =
+      '{"error":{"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":503,"status":"Service Unavailable"}}';
+    expect(isTransientHttpError(googleError503)).toBe(true);
+  });
+
+  it("returns false for Google AI SDK JSON-wrapped 429 (rate limit, not transient)", () => {
+    const googleError429 =
+      '{"error":{"message":"You exceeded your current quota.","code":429,"status":"RESOURCE_EXHAUSTED"}}';
+    expect(isTransientHttpError(googleError429)).toBe(false);
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
@@ -348,17 +362,27 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
-  it("classifies provider high-demand / service-unavailable messages as rate_limit", () => {
+  it("classifies plain-text provider high-demand / service-unavailable messages as rate_limit", () => {
     expect(
       classifyFailoverReason(
         "This model is currently experiencing high demand. Please try again later.",
       ),
     ).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
+  });
+
+  it("classifies JSON-wrapped 503 API error as timeout via embedded code detection", () => {
+    // isTransientHttpError now extracts embedded error.code from JSON payloads.
+    // Applies to Google AI SDK and Vertex AI (shared error structure).
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
-    ).toBe("rate_limit");
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":503,"status":"Service Unavailable"}}',
+      ),
+    ).toBe("timeout");
   });
 });

@@ -16,6 +16,13 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
   });
 
+  it("infers timeout from Google AI SDK JSON-wrapped 503 error message", () => {
+    const googleError503 =
+      '{"error":{"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":503,"status":"Service Unavailable"}}';
+    // Also covers Vertex AI which shares the same JSON error structure.
+    expect(resolveFailoverReasonFromError({ message: googleError503 })).toBe("timeout");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({
