@@ -439,6 +439,7 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 - [Health checks](https://docs.openclaw.ai/gateway/health)
 - [Gateway lock](https://docs.openclaw.ai/gateway/gateway-lock)
 - [Background process](https://docs.openclaw.ai/gateway/background-process)
+- [macOS source-run errors (Node/pnpm/token mismatch)](https://docs.openclaw.ai/gateway/troubleshooting#macos-source-run-common-errors-and-fixes)
 - [Browser troubleshooting (Linux)](https://docs.openclaw.ai/tools/browser-linux-troubleshooting)
 - [Logging](https://docs.openclaw.ai/logging)
 

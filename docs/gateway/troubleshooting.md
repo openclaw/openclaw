@@ -89,6 +89,62 @@ Related:
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/remote](/gateway/remote)
 
+### macOS source run common errors and fixes
+
+If you run OpenClaw from a local repo checkout on macOS (`pnpm openclaw ...`), these are the most common failures and fixes.
+
+| Error signature                                                   | Likely cause                                                                 | Fix                                                                         |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `corepack enable` → `EACCES ... /usr/local/bin/pnpm`              | No write permission to global shim path.                                     | Use a user-level path instead of global enable, or run with sudo.           |
+| `Error: spawn pnpm ENOENT` or `Missing UI runner: install pnpm`   | `pnpm` is not available in `PATH` for child processes.                       | Add a user-level `pnpm` shim and ensure `~/.local/bin` is in `PATH`.        |
+| `Error: spawn Unknown system error -8` from `scripts/ui.js`       | The `pnpm` shim exists but is missing a shebang (`#!/usr/bin/env bash`).     | Recreate the shim with a proper shebang.                                    |
+| `Unsupported engine` / `openclaw requires Node >=22.12.0`         | Current shell is using Node 20.x (or older).                                 | Switch to Node 22+ in the current shell (`nvm use 22`).                     |
+| `ELIFECYCLE ...` immediately after onboarding risk prompt         | Onboarding was canceled by selecting `No` at the security confirmation step. | Re-run onboarding and select `Yes` to continue.                             |
+| Browser shows `Unable to connect` at `127.0.0.1:18789`            | Gateway process is not running.                                              | Start gateway (`openclaw gateway ...`) or install/start daemon, then retry. |
+| `unauthorized: gateway token missing` in Control UI               | Dashboard opened without auth token, or token not pasted in UI settings.     | Use `openclaw dashboard --no-open` and open the tokenized URL.              |
+| `unauthorized: gateway token mismatch` or `device token mismatch` | Running gateway token differs from config/UI cached token.                   | Align `gateway.auth.token` with the running gateway token, then reconnect.  |
+
+Known-good recovery sequence:
+
+```bash
+# 1) Node runtime
+source ~/.nvm/nvm.sh
+nvm use 22
+
+# 2) pnpm shim (if pnpm is missing and you cannot use sudo corepack enable)
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/pnpm <<'EOF'
+#!/usr/bin/env bash
+exec corepack pnpm "$@"
+EOF
+chmod +x ~/.local/bin/pnpm
+hash -r
+
+# 3) Build from source
+cd /path/to/openclaw
+corepack prepare pnpm@10.23.0 --activate
+pnpm install
+pnpm ui:build
+
+# 4) Start gateway (foreground)
+pnpm openclaw gateway --allow-unconfigured --port 18789 --token "<token>" --verbose
+
+# 5) Keep config token in sync with runtime token
+pnpm openclaw config set gateway.auth.mode token
+pnpm openclaw config set gateway.auth.token "<token>"
+
+# 6) Open a tokenized dashboard URL
+pnpm openclaw dashboard --no-open
+```
+
+If Control UI still shows stale auth after token changes, clear browser-local device auth state and reload:
+
+```js
+localStorage.removeItem("openclaw.device.auth.v1");
+localStorage.removeItem("openclaw-device-identity-v1");
+location.reload();
+```
+
 ## Gateway service not running
 
 Use this when service is installed but process does not stay up.
