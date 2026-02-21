@@ -1,28 +1,46 @@
 # @openclaw/feishu-media
 
-Feishu 音频语音识别 (STT) 和媒体载荷工具插件。
+Feishu audio speech-to-text (STT) and media payload utilities plugin.
+
+## Enabling the Plugin
+
+This plugin is **disabled by default**. To activate it, set `enabled: true` in the
+`plugins.entries` section of your openclaw configuration:
+
+```jsonc
+// openclaw.json
+{
+  "plugins": {
+    "entries": {
+      "feishu-media": {
+        "enabled": true,
+        "config": {
+          "sttProvider": "auto"
+        }
+      }
+    }
+  }
+}
+```
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Feishu native STT** | 使用飞书原生 `speech_to_text` API 将语音消息转为文字。自动管理 tenant access token 缓存和速率限制重试。 |
-| **Whisper STT** | 通过远程 HTTP 服务或本地 CLI 调用 OpenAI Whisper 进行语音识别，作为飞书 STT 的备选方案。 |
-| **Media payload** | `buildFeishuMediaPayload()` — 构建飞书频道消息的媒体载荷，支持 `Transcript` 字段。 |
-| **Media debug** | `createMediaDebugLogger()` — 媒体理解管道调试日志工具。 |
+| **Feishu native STT** | Uses Feishu's native `speech_to_text` API to convert voice messages to text. Automatically manages tenant access token caching and rate-limit retries. |
+| **Whisper STT** | Transcribes audio via a remote HTTP service or local CLI using OpenAI Whisper, serving as a fallback for Feishu STT. |
+| **Media payload** | `buildFeishuMediaPayload()` — Builds media payload for feishu channel messages with `Transcript` field support. |
+| **Media debug** | `createMediaDebugLogger()` — Debug logging utility for the media understanding pipeline. |
 
 ## Configuration
 
-```jsonc
-// openclaw.plugin.json configSchema fields
-{
-  "sttEnabled": true,        // 启用音频 STT
-  "sttProvider": "auto",     // "feishu" | "whisper" | "auto"
-  "whisperUrl": "",          // Whisper HTTP 服务 URL（可选）
-  "whisperScript": "",       // 本地 whisper_stt.py 路径（可选）
-  "sttTimeoutMs": 30000      // STT HTTP 请求超时（毫秒）
-}
-```
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `sttEnabled` | boolean | `true` | Enable audio speech-to-text recognition |
+| `sttProvider` | string | `"auto"` | STT provider: `"feishu"` (native API), `"whisper"` (external service or local CLI), `"auto"` (try whisper first then feishu) |
+| `whisperUrl` | string | — | Optional Whisper HTTP service URL. Falls back to `OPENCLAW_WHISPER_URL` env var |
+| `whisperScript` | string | — | Path to local `whisper_stt.py` script. Falls back to `OPENCLAW_WHISPER_SCRIPT` env var |
+| `sttTimeoutMs` | number | `30000` | Timeout for STT HTTP requests in milliseconds |
 
 ## Exported API
 
@@ -30,30 +48,30 @@ Feishu 音频语音识别 (STT) 和媒体载荷工具插件。
 
 | Export | Description |
 |--------|-------------|
-| `resolveFeishuApiBase(domain?)` | 解析飞书/Lark API 基础 URL |
-| `getFeishuTenantAccessToken(params)` | 获取（或刷新）tenant access token |
-| `recognizeAudioWithFeishuStt(params)` | 飞书原生语音识别，失败时静默降级返回 `undefined` |
+| `resolveFeishuApiBase(domain?)` | Resolve Feishu/Lark Open-API base URL |
+| `getFeishuTenantAccessToken(params)` | Get (or refresh) a tenant access token |
+| `recognizeAudioWithFeishuStt(params)` | Feishu native speech recognition; silently returns `undefined` on failure |
 
 ### whisper-stt
 
 | Export | Description |
 |--------|-------------|
-| `recognizeAudioWithWhisper(opts)` | Whisper STT（远程 HTTP 或本地 CLI），失败时静默降级 |
+| `recognizeAudioWithWhisper(opts)` | Whisper STT (remote HTTP or local CLI); silently returns `undefined` on failure |
 
 ### media-payload
 
 | Export | Description |
 |--------|-------------|
-| `FeishuMediaInfoExt` | 带 `transcript` 可选字段的媒体信息类型 |
-| `FeishuMediaPayload` | 媒体载荷类型（含 `Transcript`） |
-| `buildFeishuMediaPayload(mediaList)` | 构建飞书媒体载荷 |
+| `FeishuMediaInfoExt` | Media info type with optional `transcript` field |
+| `FeishuMediaPayload` | Media payload type (includes `Transcript`) |
+| `buildFeishuMediaPayload(mediaList)` | Build feishu media payload |
 
 ### media-debug
 
 | Export | Description |
 |--------|-------------|
-| `MediaDebugLogger` | 调试日志器类型 |
-| `createMediaDebugLogger(prefix?)` | 创建媒体理解调试日志器 |
+| `MediaDebugLogger` | Debug logger type |
+| `createMediaDebugLogger(prefix?)` | Create a media understanding debug logger |
 
 ## Development
 
