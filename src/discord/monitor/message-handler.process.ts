@@ -40,6 +40,7 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 import {
   buildDiscordMediaPayload,
   resolveDiscordMessageText,
+  resolveEmbedMediaList,
   resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
@@ -101,6 +102,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const mediaList = await resolveMediaList(message, mediaMaxBytes);
   const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes);
   mediaList.push(...forwardedMediaList);
+  // Intercept images embedded in Discord embeds (inline pastes, link previews).
+  // Without this, large images bypass mediaMaxMb and can brick sessions (#20906).
+  const embedMediaList = await resolveEmbedMediaList(message, mediaMaxBytes);
+  mediaList.push(...embedMediaList);
   const text = messageText;
   if (!text) {
     logVerbose(`discord: drop message ${message.id} (empty content)`);

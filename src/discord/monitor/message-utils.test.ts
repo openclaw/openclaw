@@ -22,6 +22,7 @@ const {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
+  resolveEmbedMediaList,
   resolveForwardedMediaList,
   resolveMediaList,
 } = await import("./message-utils.js");
@@ -294,5 +295,119 @@ describe("resolveDiscordChannelInfo", () => {
     expect(first).toBeNull();
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveEmbedMediaList", () => {
+  const MAX_BYTES = 5 * 1024 * 1024;
+
+  beforeEach(() => {
+    fetchRemoteMedia.mockReset();
+    saveMediaBuffer.mockReset();
+  });
+
+  it("returns empty array when message has no embeds", async () => {
+    const result = await resolveEmbedMediaList(asMessage({ embeds: [] }), MAX_BYTES);
+    expect(result).toEqual([]);
+  });
+
+  it("downloads and saves embed image (Carbon string format)", async () => {
+    const buf = Buffer.from("fake-image");
+    fetchRemoteMedia.mockResolvedValue({ buffer: buf, contentType: "image/png" });
+    saveMediaBuffer.mockResolvedValue({
+      path: "/media/test.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveEmbedMediaList(
+      asMessage({
+        attachments: [],
+        embeds: [{ image: "https://cdn.discord.com/img.png" }],
+      }),
+      MAX_BYTES,
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      path: "/media/test.png",
+      contentType: "image/png",
+      placeholder: "<media:image>",
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(buf, "image/png", "inbound", MAX_BYTES);
+  });
+
+  it("handles raw API embed object format with proxy_url", async () => {
+    const buf = Buffer.from("fake");
+    fetchRemoteMedia.mockResolvedValue({ buffer: buf, contentType: "image/jpeg" });
+    saveMediaBuffer.mockResolvedValue({ path: "/media/p.jpg", contentType: "image/jpeg" });
+
+    await resolveEmbedMediaList(
+      asMessage({
+        attachments: [],
+        embeds: [
+          {
+            image: {
+              url: "https://original.com/img.png",
+              proxy_url: "https://proxy.discord.com/img.png",
+            },
+          },
+        ],
+      }),
+      MAX_BYTES,
+    );
+
+    // proxy_url is pushed first, so it's fetched; original url is deduped or also fetched
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://proxy.discord.com/img.png" }),
+    );
+  });
+
+  it("skips embed images that duplicate attachment URLs", async () => {
+    const result = await resolveEmbedMediaList(
+      asMessage({
+        attachments: [{ url: "https://cdn.discord.com/dup.png" }],
+        embeds: [{ image: "https://cdn.discord.com/dup.png" }],
+      }),
+      MAX_BYTES,
+    );
+
+    expect(result).toEqual([]);
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("handles both image and thumbnail in same embed", async () => {
+    const buf = Buffer.from("img");
+    fetchRemoteMedia.mockResolvedValue({ buffer: buf, contentType: "image/png" });
+    saveMediaBuffer.mockResolvedValue({ path: "/media/x.png", contentType: "image/png" });
+
+    const result = await resolveEmbedMediaList(
+      asMessage({
+        attachments: [],
+        embeds: [
+          {
+            image: "https://a.com/img.png",
+            thumbnail: "https://b.com/thumb.png",
+          },
+        ],
+      }),
+      MAX_BYTES,
+    );
+
+    expect(result).toHaveLength(2);
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs and skips on download failure", async () => {
+    fetchRemoteMedia.mockRejectedValue(new Error("Media exceeds 5MB limit"));
+
+    const result = await resolveEmbedMediaList(
+      asMessage({
+        attachments: [],
+        embeds: [{ image: "https://big.com/huge.png" }],
+      }),
+      MAX_BYTES,
+    );
+
+    expect(result).toEqual([]);
   });
 });

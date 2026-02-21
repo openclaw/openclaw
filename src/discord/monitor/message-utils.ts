@@ -177,6 +177,80 @@ export async function resolveMediaList(
   return out;
 }
 
+/**
+ * Extracts images from Discord embed objects (image/thumbnail fields).
+ *
+ * When a user pastes a screenshot directly into Discord, it may arrive as an
+ * embed with an `image` or `thumbnail` field rather than as a file attachment.
+ * Without this handler the image data bypasses `mediaMaxMb` and enters the LLM
+ * context unchecked, which can brick the session (see #20906).
+ */
+export async function resolveEmbedMediaList(
+  message: Message,
+  maxBytes: number,
+): Promise<DiscordMediaInfo[]> {
+  const embeds = message.embeds ?? [];
+  if (embeds.length === 0) {
+    return [];
+  }
+  const out: DiscordMediaInfo[] = [];
+  // Track URLs we already fetched via attachments to avoid duplicates.
+  // Discord sometimes duplicates attachment URLs in embed fields.
+  const seen = new Set<string>();
+  for (const attachment of message.attachments ?? []) {
+    if (attachment.url) {
+      seen.add(attachment.url);
+    }
+  }
+  for (const embed of embeds) {
+    // Carbon's Embed class flattens image/thumbnail to plain URL strings.
+    // The raw API type uses { url, proxy_url } objects. Handle both shapes.
+    const urls: string[] = [];
+    for (const field of ["image", "thumbnail"] as const) {
+      const value = embed[field];
+      if (!value) {
+        continue;
+      }
+      if (typeof value === "string") {
+        urls.push(value);
+      } else if (typeof value === "object" && "url" in value) {
+        const obj = value as { url?: string; proxy_url?: string };
+        if (obj.proxy_url) {
+          urls.push(obj.proxy_url);
+        } else if (obj.url) {
+          urls.push(obj.url);
+        }
+      }
+    }
+    for (const url of urls) {
+      if (seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      try {
+        const fetched = await fetchRemoteMedia({
+          url,
+          filePathHint: url,
+        });
+        const saved = await saveMediaBuffer(
+          fetched.buffer,
+          fetched.contentType,
+          "inbound",
+          maxBytes,
+        );
+        out.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: "<media:image>",
+        });
+      } catch (err) {
+        logVerbose(`discord: failed to download embed image ${url}: ${String(err)}`);
+      }
+    }
+  }
+  return out;
+}
+
 export async function resolveForwardedMediaList(
   message: Message,
   maxBytes: number,
