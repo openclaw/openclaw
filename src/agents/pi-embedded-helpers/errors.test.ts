@@ -26,7 +26,11 @@ describe("classifyFailoverReason", () => {
 
   it("still classifies explicit policy failures", () => {
     expect(classifyFailoverReason("content policy violation")).toBe("policy");
-    expect(classifyFailoverReason("safety system triggered")).toBe("policy");
     expect(classifyFailoverReason("HTTP 451 unavailable for legal reasons")).toBe("policy");
+  });
+
+  it("does not classify ambiguous safety-system wording as policy", () => {
+    expect(classifyFailoverReason("safety system temporarily unavailable")).toBe("server");
+    expect(classifyFailoverReason("safety system check failed")).toBeNull();
   });
 });

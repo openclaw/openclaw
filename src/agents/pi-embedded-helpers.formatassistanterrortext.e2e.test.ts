@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
@@ -103,5 +103,18 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+
+  it("does not call console.warn for long unclassified errors", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const msg = makeAssistantError("x".repeat(700));
+      const result = formatAssistantErrorText(msg);
+      expect(result).toHaveLength(601);
+      expect(result.endsWith("…")).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

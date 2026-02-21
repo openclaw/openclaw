@@ -65,6 +65,44 @@ function truncateMessage(message: string, max = 160): string {
   return `${clean.slice(0, max - 1)}…`;
 }
 
+function getRawStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate =
+    (err as { status?: unknown; statusCode?: unknown }).status ??
+    (err as { statusCode?: unknown }).statusCode;
+  if (typeof candidate === "number") {
+    return candidate;
+  }
+  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
+    return Number(candidate);
+  }
+  return undefined;
+}
+
+const EXPLICIT_POLICY_HINT_RE =
+  /\b(?:content policy|policy violation|unavailable for legal reasons|legal restriction|http\s*451|status\s*[:=]\s*451|\b451\b)\b/i;
+
+function resolveFallbackPolicyReason(params: {
+  reason: FailoverReason;
+  rawStatus?: number;
+  message: string;
+}): FailoverReason {
+  if (params.reason !== "policy") {
+    return params.reason;
+  }
+  // Keep policy as fail-fast only when we have explicit policy evidence.
+  if (params.rawStatus === 451) {
+    return "policy";
+  }
+  if (EXPLICIT_POLICY_HINT_RE.test(params.message)) {
+    return "policy";
+  }
+  // Ambiguous policy-like text should not block graceful fallback.
+  return "unknown";
+}
+
 export function formatAttemptTrace(attempts: readonly FallbackAttempt[]): string {
   if (attempts.length === 0) {
     return "no_attempts";
@@ -333,6 +371,7 @@ export async function runWithModelFallback<T>(params: {
       if (shouldRethrowAbort(err)) {
         throw err;
       }
+      const rawStatus = getRawStatusCode(err);
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
@@ -353,8 +392,20 @@ export async function runWithModelFallback<T>(params: {
         code: described.code,
       };
       attempts.push(attempt);
+      const rawReason = attempt.reason ?? "unknown";
+      const reason = resolveFallbackPolicyReason({
+        reason: rawReason,
+        rawStatus,
+        message: attempt.error,
+      });
+      if (reason !== rawReason) {
+        attempt.reason = reason;
+        await logInfo(
+          `[model_reason_adjusted] model=${candidate.provider}/${candidate.model} from=${rawReason} to=${reason}`,
+        );
+      }
       await logInfo(
-        `[model_attempt_failed] model=${candidate.provider}/${candidate.model} reason=${attempt.reason ?? "unknown"} status=${attempt.status ?? "n/a"} code=${attempt.code ?? "n/a"} message="${truncateMessage(attempt.error)}"`,
+        `[model_attempt_failed] model=${candidate.provider}/${candidate.model} reason=${reason} status=${attempt.status ?? "n/a"} code=${attempt.code ?? "n/a"} message="${truncateMessage(attempt.error)}"`,
       );
       await params.onError?.({
         provider: candidate.provider,
@@ -363,8 +414,6 @@ export async function runWithModelFallback<T>(params: {
         attempt: i + 1,
         total: candidates.length,
       });
-
-      const reason = attempt.reason ?? "unknown";
       if (FAIL_FAST_REASONS.has(reason)) {
         await logInfo(
           `[model_fail_fast] model=${candidate.provider}/${candidate.model} reason=${reason} trace="${formatAttemptTrace(attempts)}"`,

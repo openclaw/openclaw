@@ -20,7 +20,7 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
-    ).toBe("rate_limit");
+    ).toBe("server");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
@@ -31,6 +31,8 @@ describe("classifyFailoverReason", () => {
     ).toBe("server");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBe("bad_request");
+    expect(classifyFailoverReason("content policy violation")).toBe("policy");
+    expect(classifyFailoverReason("safety system check failed")).toBeNull();
     expect(
       classifyFailoverReason(
         "messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels",

@@ -1,7 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { FailoverReason } from "./types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
+
+const log = createSubsystemLogger("agent/pi-embedded-errors");
 
 export function formatBillingErrorMessage(provider?: string): string {
   const providerName = provider?.trim();
@@ -475,7 +478,9 @@ export function formatAssistantErrorText(
 
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
-    console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
+    log.debug("Long assistant error truncated for safe user output", {
+      preview: raw.slice(0, 200),
+    });
   }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
@@ -600,7 +605,7 @@ const ERROR_PATTERNS = {
     "overloaded",
   ],
   badRequest: ["bad request", "invalid request", "malformed", "unprocessable", "invalid input"],
-  policy: ["content policy", "policy violation", "safety system", "legal restriction", /\b451\b/],
+  policy: ["content policy", "policy violation", "legal restriction", /\b451\b/],
   cancelled: ["cancelled", "canceled", "request aborted by client"],
   format: [
     "string should match pattern",

@@ -154,6 +154,19 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
+function resolveReasonFromMessage(message: string): FailoverReason | null {
+  const reason = classifyFailoverReason(message);
+  if (!reason) {
+    return null;
+  }
+  // Keep broad "bad request"/"not found" buckets tied to explicit HTTP statuses
+  // to avoid misclassifying generic local errors as provider failover reasons.
+  if (reason === "bad_request" || reason === "not_found") {
+    return null;
+  }
+  return reason;
+}
+
 export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
   if (isFailoverError(err)) {
     return err.reason;
@@ -214,7 +227,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (!message) {
     return null;
   }
-  return classifyFailoverReason(message);
+  return resolveReasonFromMessage(message);
 }
 
 export function describeFailoverError(err: unknown): {

@@ -39,6 +39,14 @@ describe("failover-error", () => {
     ).toBe("format");
   });
 
+  it("avoids broad statusless bad-request and not-found buckets", () => {
+    expect(resolveFailoverReasonFromError({ message: "bad request from local parser" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({ message: "resource not found in local cache" }),
+    ).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "model not found" })).toBe("unknown_model");
+  });
+
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("transport");
