@@ -6,6 +6,7 @@ import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -93,6 +94,8 @@ export function renderChatControls(state: AppViewState) {
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const isMainSession =
+    state.sessionKey === "main" || (mainSessionKey != null && state.sessionKey === mainSessionKey);
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -125,6 +128,22 @@ export function renderChatControls(state: AppViewState) {
       <path d="M4 17v3h3"></path>
       <path d="M20 17v3h-3"></path>
       <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `;
+  const trashIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M3 6h18"></path>
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
     </svg>
   `;
   return html`
@@ -190,6 +209,47 @@ export function renderChatControls(state: AppViewState) {
         title=${t("chat.refreshTitle")}
       >
         ${refreshIcon}
+      </button>
+      <button
+        class="btn btn--sm btn--icon btn--danger-icon"
+        ?disabled=${!state.connected || isMainSession || state.chatLoading}
+        @click=${async () => {
+          if (!state.client) return;
+          const key = state.sessionKey;
+          const confirmed = window.confirm(
+            `Delete session "${key}"?\n\nThis will delete the session and archive its transcript.`,
+          );
+          if (!confirmed) return;
+          try {
+            await state.client.request("sessions.delete", { key, deleteTranscript: true });
+            const fallback = mainSessionKey || "main";
+            state.sessionKey = fallback;
+            state.chatMessage = "";
+            state.chatStream = null;
+            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+            state.chatRunId = null;
+            (state as unknown as OpenClawApp).resetToolStream();
+            (state as unknown as OpenClawApp).resetChatScroll();
+            state.applySettings({
+              ...state.settings,
+              sessionKey: fallback,
+              lastActiveSessionKey: fallback,
+            });
+            void state.loadAssistantIdentity();
+            syncUrlWithSessionKey(
+              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+              fallback,
+              true,
+            );
+            void loadChatHistory(state as unknown as ChatState);
+            void loadSessions(state as unknown as SessionsState);
+          } catch (err) {
+            state.lastError = `Failed to delete session: ${String(err)}`;
+          }
+        }}
+        title=${isMainSession ? "Cannot delete the main session" : "Delete current session"}
+      >
+        ${trashIcon}
       </button>
       <span class="chat-controls__separator">|</span>
       <button
