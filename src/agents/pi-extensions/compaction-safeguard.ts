@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -17,6 +18,8 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+
+const log = createSubsystemLogger("compaction-safeguard");
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
@@ -252,7 +255,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            console.warn(
+            log.warn(
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
@@ -284,7 +287,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
-                console.warn(
+                log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
                   }`,
@@ -356,7 +359,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      console.warn(
+      log.warn(
         `Compaction summarization failed; truncating history: ${
           error instanceof Error ? error.message : String(error)
         }`,
