@@ -90,10 +90,11 @@ export async function resolveSandboxedMediaSource(params: {
       throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
     }
   }
-  // Allow files under os.tmpdir() — consistent with buildMediaLocalRoots() defaults.
-  const resolved = path.resolve(params.sandboxRoot, candidate);
-  const tmpDir = os.tmpdir();
-  if (resolved === tmpDir || resolved.startsWith(tmpDir + path.sep)) {
+  const resolved = path.resolve(resolveSandboxInputPath(candidate, params.sandboxRoot));
+  const tmpDir = path.resolve(os.tmpdir());
+  const candidateIsAbsolute = path.isAbsolute(expandPath(candidate));
+  if (candidateIsAbsolute && isPathInside(tmpDir, resolved)) {
+    await assertNoSymlinkEscape(path.relative(tmpDir, resolved), tmpDir);
     return resolved;
   }
   const sandboxResult = await assertSandboxPath({
