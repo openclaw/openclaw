@@ -415,6 +415,7 @@ describe("parseLineDirectives", () => {
           expectedAltText: "🎵 Bohemian Rhapsody - Queen",
           expectedText: "Now playing:",
           expectFooter: true,
+          expectBodyContents: false,
         },
         {
           name: "minimal",
@@ -422,6 +423,7 @@ describe("parseLineDirectives", () => {
           expectedAltText: "🎵 Unknown Track",
           expectedText: undefined,
           expectFooter: false,
+          expectBodyContents: false,
         },
         {
           name: "paused status",
