@@ -4,17 +4,13 @@ import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
-const graphUploadMockState = vi.hoisted(() => ({
-  uploadAndShareOneDrive: vi.fn(),
-}));
+import { uploadAndShareOneDrive } from "./graph-upload.js";
 
-vi.mock("./graph-upload.js", async () => {
-  const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
-  return {
-    ...actual,
-    uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
-  };
-});
+vi.mock("./graph-upload.js", () => ({
+  uploadAndShareOneDrive: vi.fn(),
+  uploadAndShareSharePoint: vi.fn(),
+  getDriveItemProperties: vi.fn(),
+}));
 
 import {
   type MSTeamsAdapter,
@@ -51,8 +47,8 @@ const runtimeStub = {
 describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
-    graphUploadMockState.uploadAndShareOneDrive.mockReset();
-    graphUploadMockState.uploadAndShareOneDrive.mockResolvedValue({
+    vi.mocked(uploadAndShareOneDrive).mockReset();
+    vi.mocked(uploadAndShareOneDrive).mockResolvedValue({
       itemId: "item123",
       webUrl: "https://onedrive.example.com/item123",
       shareUrl: "https://onedrive.example.com/share/item123",
@@ -215,7 +211,7 @@ describe("msteams messenger", () => {
         });
 
         expect(ids).toEqual(["id:one"]);
-        expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
+        expect(vi.mocked(uploadAndShareOneDrive)).toHaveBeenCalledOnce();
         expect(sent).toHaveLength(1);
         expect(sent[0]?.text).toContain("Hello <at>John</at>");
         expect(sent[0]?.text).toContain(
