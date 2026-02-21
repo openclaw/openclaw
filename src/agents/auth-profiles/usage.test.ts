@@ -27,6 +27,16 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
   };
 }
 
+function expectProfileErrorStateCleared(
+  stats: NonNullable<AuthProfileStore["usageStats"]>[string] | undefined,
+) {
+  expect(stats?.cooldownUntil).toBeUndefined();
+  expect(stats?.disabledUntil).toBeUndefined();
+  expect(stats?.disabledReason).toBeUndefined();
+  expect(stats?.errorCount).toBe(0);
+  expect(stats?.failureCounts).toBeUndefined();
+}
+
 describe("resolveProfileUnusableUntil", () => {
   it("returns null when both values are missing or invalid", () => {
     expect(resolveProfileUnusableUntil({})).toBeNull();
@@ -201,11 +211,7 @@ describe("clearExpiredCooldowns", () => {
     expect(clearExpiredCooldowns(store)).toBe(true);
 
     const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.cooldownUntil).toBeUndefined();
-    expect(stats?.disabledUntil).toBeUndefined();
-    expect(stats?.disabledReason).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
+    expectProfileErrorStateCleared(stats);
   });
 
   it("processes multiple profiles independently", () => {
@@ -313,11 +319,7 @@ describe("clearAuthProfileCooldown", () => {
     await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
 
     const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.cooldownUntil).toBeUndefined();
-    expect(stats?.disabledUntil).toBeUndefined();
-    expect(stats?.disabledReason).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
+    expectProfileErrorStateCleared(stats);
   });
 
   it("preserves lastUsed and lastFailureAt timestamps", async () => {
