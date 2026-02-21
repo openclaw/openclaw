@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+const gatewayMocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  randomIdempotencyKey: vi.fn(() => "idem-sync"),
+}));
+vi.mock("../../../src/gateway/call.js", () => ({
+  callGateway: gatewayMocks.callGateway,
+  randomIdempotencyKey: gatewayMocks.randomIdempotencyKey,
+}));
 import { __test, createCanvasLmsTool } from "./canvas-lms-tool.js";
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
@@ -31,6 +39,8 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
 describe("canvas-lms-tool", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    gatewayMocks.callGateway.mockReset();
+    gatewayMocks.randomIdempotencyKey.mockReturnValue("idem-sync");
   });
 
   it("normalizes base URL", () => {
@@ -412,5 +422,98 @@ describe("canvas-lms-tool", () => {
     await expect(tool.execute("call-11", { action: "list_course_files" })).rejects.toThrow(
       /courseId is required/,
     );
+  });
+
+  it("builds digest and publishes to session when requested", async () => {
+    const now = Date.now();
+    const dueSoon = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    const dueSoon2 = new Date(now + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const coursesResponse = new Response(
+      JSON.stringify([{ id: 101, name: "Arquitectura de Software" }]),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const assignmentsResponse = new Response(
+      JSON.stringify([
+        {
+          id: 1,
+          name: "Entrega 1",
+          due_at: dueSoon,
+          html_url: "https://canvas.example.edu/courses/101/assignments/1",
+        },
+        {
+          id: 2,
+          name: "Entrega 2",
+          due_at: dueSoon2,
+          html_url: "https://canvas.example.edu/courses/101/assignments/2",
+        },
+      ]),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(coursesResponse)
+      .mockResolvedValueOnce(assignmentsResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    gatewayMocks.callGateway.mockResolvedValue({ ok: true });
+
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        config: {},
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          token: "tkn",
+        },
+      }),
+    );
+
+    const result = await tool.execute("call-12", {
+      action: "sync_academic_digest",
+      digestWindow: "week",
+      publish: true,
+      publishSessionKey: "msteams:group:engineering",
+      timeZone: "UTC",
+    });
+
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(text).toContain("Academic sync (next 7 days)");
+    expect(text).toContain("Entrega 1");
+    expect(text).toContain("Entrega 2");
+
+    expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(1);
+    const publishCall = gatewayMocks.callGateway.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { sessionKey?: string; message?: string; idempotencyKey?: string };
+    };
+    expect(publishCall.method).toBe("chat.send");
+    expect(publishCall.params?.sessionKey).toBe("msteams:group:engineering");
+    expect(publishCall.params?.idempotencyKey).toBe("idem-sync");
+    expect(publishCall.params?.message).toContain("Academic sync");
+  });
+
+  it("requires publishSessionKey when publish is true for sync action", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          token: "tkn",
+        },
+      }),
+    );
+
+    await expect(
+      tool.execute("call-13", {
+        action: "sync_academic_digest",
+        publish: true,
+      }),
+    ).rejects.toThrow(/publishSessionKey is required/);
   });
 });
