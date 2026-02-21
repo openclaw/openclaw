@@ -86,3 +86,5 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+artifacts/
