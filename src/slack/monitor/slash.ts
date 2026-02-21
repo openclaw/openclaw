@@ -298,7 +298,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
   const supportsInteractiveArgMenus =
     typeof (ctx.app as { action?: unknown }).action === "function";
-  const supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
+  let supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
 
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
@@ -743,41 +743,46 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
     ).options;
     if (typeof optionsHandler !== "function") {
+      supportsExternalArgMenus = false;
       return;
     }
-    optionsHandler(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
-      const typedBody = body as {
-        value?: string;
-        user?: { id?: string };
-        actions?: Array<{ block_id?: string }>;
-        block_id?: string;
-      };
-      pruneSlackExternalArgMenuStore();
-      const blockId = typedBody.actions?.[0]?.block_id ?? typedBody.block_id;
-      const token = readSlackExternalArgMenuToken(blockId);
-      if (!token) {
-        await ack({ options: [] });
-        return;
-      }
-      const entry = slackExternalArgMenuStore.get(token);
-      if (!entry) {
-        await ack({ options: [] });
-        return;
-      }
-      if (typedBody.user?.id && typedBody.user.id !== entry.userId) {
-        await ack({ options: [] });
-        return;
-      }
-      const query = typedBody.value?.trim().toLowerCase() ?? "";
-      const options = entry.choices
-        .filter((choice) => !query || choice.label.toLowerCase().includes(query))
-        .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX)
-        .map((choice) => ({
-          text: { type: "plain_text", text: choice.label.slice(0, 75) },
-          value: choice.value,
-        }));
-      await ack({ options });
-    });
+    try {
+      optionsHandler(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
+        const typedBody = body as {
+          value?: string;
+          user?: { id?: string };
+          actions?: Array<{ block_id?: string }>;
+          block_id?: string;
+        };
+        pruneSlackExternalArgMenuStore();
+        const blockId = typedBody.actions?.[0]?.block_id ?? typedBody.block_id;
+        const token = readSlackExternalArgMenuToken(blockId);
+        if (!token) {
+          await ack({ options: [] });
+          return;
+        }
+        const entry = slackExternalArgMenuStore.get(token);
+        if (!entry) {
+          await ack({ options: [] });
+          return;
+        }
+        if (typedBody.user?.id && typedBody.user.id !== entry.userId) {
+          await ack({ options: [] });
+          return;
+        }
+        const query = typedBody.value?.trim().toLowerCase() ?? "";
+        const options = entry.choices
+          .filter((choice) => !query || choice.label.toLowerCase().includes(query))
+          .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX)
+          .map((choice) => ({
+            text: { type: "plain_text", text: choice.label.slice(0, 75) },
+            value: choice.value,
+          }));
+        await ack({ options });
+      });
+    } catch {
+      supportsExternalArgMenus = false;
+    }
   };
   registerArgOptions();
 

@@ -210,7 +210,7 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
     | undefined;
 }
 
-function createArgMenusHarness() {
+function createArgMenusHarness(overrides?: { throwOnOptionsRegister?: boolean }) {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
@@ -225,6 +225,9 @@ function createArgMenusHarness() {
       actions.set(id, handler);
     },
     options: (id: string, handler: (args: unknown) => Promise<void>) => {
+      if (overrides?.throwOnOptionsRegister) {
+        throw new Error("listeners unavailable");
+      }
       options.set(id, handler);
     },
   };
@@ -557,6 +560,29 @@ describe("Slack native command argument menus", () => {
         text: "Sorry, that button is no longer valid.",
       }),
     );
+  });
+});
+
+describe("Slack native command argument menu registration fallback", () => {
+  it("falls back to static select when options registration throws", async () => {
+    const harness = createArgMenusHarness({ throwOnOptionsRegister: true });
+
+    await registerCommands(harness.ctx, harness.account);
+    const reportExternalHandler = requireHandler(
+      harness.commands,
+      "/reportexternal",
+      "/reportexternal",
+    );
+    const { respond } = await runCommandHandler(reportExternalHandler);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("static_select");
+    expect(harness.options.size).toBe(0);
   });
 });
 
