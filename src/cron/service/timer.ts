@@ -29,7 +29,7 @@ const MIN_REFIRE_GAP_MS = 2_000;
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
  * from wedging the entire cron lane.
  */
-const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
@@ -617,12 +617,26 @@ export async function executeJob(
   job.state.lastError = undefined;
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
+  const jobTimeoutMs =
+    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      ? job.payload.timeoutSeconds * 1_000
+      : DEFAULT_JOB_TIMEOUT_MS;
+
   let coreResult: {
     status: CronRunStatus;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
-    coreResult = await executeJobCore(state, job);
+    let timeoutId: NodeJS.Timeout;
+    coreResult = await Promise.race([
+      executeJobCore(state, job),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("cron: job execution timed out")),
+          jobTimeoutMs,
+        );
+      }),
+    ]).finally(() => clearTimeout(timeoutId!));
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
