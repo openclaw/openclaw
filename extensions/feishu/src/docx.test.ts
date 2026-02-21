@@ -24,6 +24,8 @@ describe("feishu_doc image fetch hardening", () => {
   const blockListMock = vi.hoisted(() => vi.fn());
   const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
   const driveUploadAllMock = vi.hoisted(() => vi.fn());
+  const documentCreateMock = vi.hoisted(() => vi.fn());
+  const permissionPublicPatchMock = vi.hoisted(() => vi.fn());
   const blockPatchMock = vi.hoisted(() => vi.fn());
   const scopeListMock = vi.hoisted(() => vi.fn());
 
@@ -34,6 +36,7 @@ describe("feishu_doc image fetch hardening", () => {
       docx: {
         document: {
           convert: convertMock,
+          create: documentCreateMock,
         },
         documentBlock: {
           list: blockListMock,
@@ -44,6 +47,9 @@ describe("feishu_doc image fetch hardening", () => {
         },
       },
       drive: {
+        permissionPublic: {
+          patch: permissionPublicPatchMock,
+        },
         media: {
           uploadAll: driveUploadAllMock,
         },
@@ -78,6 +84,24 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     driveUploadAllMock.mockResolvedValue({ file_token: "token_1" });
+    documentCreateMock.mockResolvedValue({
+      code: 0,
+      data: {
+        document: {
+          document_id: "doc_created_1",
+          title: "New Doc",
+        },
+      },
+    });
+    permissionPublicPatchMock.mockResolvedValue({
+      code: 0,
+      data: {
+        permission_public: {
+          external_access: true,
+          link_share_entity: "anyone_editable",
+        },
+      },
+    });
     blockPatchMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
@@ -119,5 +143,47 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.images_processed).toBe(0);
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("applies public_access when creating a document", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "New Doc",
+      public_access: "edit",
+    });
+
+    expect(documentCreateMock).toHaveBeenCalledTimes(1);
+    expect(permissionPublicPatchMock).toHaveBeenCalledTimes(1);
+    expect(permissionPublicPatchMock.mock.calls[0]?.[0]).toMatchObject({
+      path: { token: "doc_created_1" },
+      params: { type: "docx" },
+      data: {
+        external_access: true,
+        share_entity: "anyone",
+        security_entity: "anyone_can_edit",
+        link_share_entity: "anyone_editable",
+      },
+    });
+    expect(result.details.document_id).toBe("doc_created_1");
+    expect(result.details.public_permission.access).toBe("edit");
   });
 });
