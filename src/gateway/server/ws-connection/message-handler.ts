@@ -624,7 +624,8 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const skipPairing = allowControlUiBypass && sharedAuthOk;
+        // Skip device pairing when client authenticated with gateway token/password (shared secret).
+        const skipPairing = sharedAuthOk;
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
