@@ -9,7 +9,24 @@ import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "channel";
+
+export type ChannelConnectedHookContext = {
+  channel: string;
+  accountId: string;
+};
+
+export type ChannelConnectedHookEvent = InternalHookEvent & {
+  type: "channel";
+  action: "connected";
+  context: ChannelConnectedHookContext;
+};
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -281,4 +298,17 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
   );
+}
+
+export function isChannelConnectedEvent(
+  event: InternalHookEvent,
+): event is ChannelConnectedHookEvent {
+  if (event.type !== "channel" || event.action !== "connected") {
+    return false;
+  }
+  const context = event.context as Partial<ChannelConnectedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.channel === "string" && typeof context.accountId === "string";
 }

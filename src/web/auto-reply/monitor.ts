@@ -6,6 +6,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { waitForever } from "../../cli/wait.js";
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
@@ -224,6 +225,14 @@ export async function monitorWebChannel(
     enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
       sessionKey: connectRoute.sessionKey,
     });
+
+    // Fire channel:connected hook for custom automation (e.g., boot notifications).
+    void triggerInternalHook(
+      createInternalHookEvent("channel", "connected", connectRoute.sessionKey, {
+        channel: "whatsapp",
+        accountId: account.accountId,
+      }),
+    );
 
     setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
