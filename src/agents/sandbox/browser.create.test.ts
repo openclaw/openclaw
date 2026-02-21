@@ -64,6 +64,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       enabled: true,
       image: "openclaw-sandbox-browser:bookworm-slim",
       containerPrefix: "openclaw-sbx-browser-",
+      network: "openclaw-sandbox-browser",
       cdpPort: 9222,
       vncPort: 5900,
       noVncPort: 6080,
