@@ -270,7 +270,7 @@ Common failures:
 
 For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
-## Configuration reference (Matrix)
+## Configuration
 
 Full configuration: [Configuration](/gateway/configuration)
 

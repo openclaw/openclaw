@@ -422,7 +422,7 @@ Behavior notes:
   </Accordion>
 </AccordionGroup>
 
-## Configuration reference pointers
+## Configuration
 
 Primary reference:
 
