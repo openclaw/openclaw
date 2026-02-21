@@ -106,6 +106,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
         renderMode: { type: "string", enum: ["auto", "raw", "card"] },
+        cardActionHandler: {
+          type: "string",
+          description:
+            "Path to a Node.js script that handles card action callbacks. " +
+            "Receives base64-encoded event JSON as argv[1], must print JSON response to stdout. " +
+            "Response format: { toast?: { type, content }, card?: { type: 'raw', data: { schema: '2.0', ... } } }",
+        },
         accounts: {
           type: "object",
           additionalProperties: {
