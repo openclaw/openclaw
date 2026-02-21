@@ -1,5 +1,5 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
-import type { APIAttachment } from "discord-api-types/v10";
+import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { logVerbose } from "../../globals.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -18,6 +18,11 @@ export type DiscordChannelInfo = {
   ownerId?: string;
 };
 
+type DiscordMessageWithChannelId = Message & {
+  channel_id?: unknown;
+  rawData?: { channel_id?: unknown };
+};
+
 type DiscordSnapshotAuthor = {
   id?: string | null;
   username?: string | null;
@@ -30,6 +35,8 @@ type DiscordSnapshotMessage = {
   content?: string | null;
   embeds?: Array<{ description?: string | null; title?: string | null }> | null;
   attachments?: APIAttachment[] | null;
+  stickers?: APIStickerItem[] | null;
+  sticker_items?: APIStickerItem[] | null;
   author?: DiscordSnapshotAuthor | null;
 };
 
@@ -43,9 +50,33 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
   string,
   { value: DiscordChannelInfo | null; expiresAt: number }
 >();
+const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
 export function __resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
+}
+
+function normalizeDiscordChannelId(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value).trim();
+  }
+  return "";
+}
+
+export function resolveDiscordMessageChannelId(params: {
+  message: Message;
+  eventChannelId?: string | number | null;
+}): string {
+  const message = params.message as DiscordMessageWithChannelId;
+  return (
+    normalizeDiscordChannelId(message.channelId) ||
+    normalizeDiscordChannelId(message.channel_id) ||
+    normalizeDiscordChannelId(message.rawData?.channel_id) ||
+    normalizeDiscordChannelId(params.eventChannelId)
+  );
 }
 
 export async function resolveDiscordChannelInfo(
@@ -94,15 +125,94 @@ export async function resolveDiscordChannelInfo(
   }
 }
 
+function normalizeStickerItems(value: unknown): APIStickerItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is APIStickerItem =>
+      Boolean(entry) &&
+      typeof entry === "object" &&
+      typeof (entry as { id?: unknown }).id === "string" &&
+      typeof (entry as { name?: unknown }).name === "string",
+  );
+}
+
+export function resolveDiscordMessageStickers(message: Message): APIStickerItem[] {
+  const stickers = (message as { stickers?: unknown }).stickers;
+  const normalized = normalizeStickerItems(stickers);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  const rawData = (message as { rawData?: { sticker_items?: unknown; stickers?: unknown } })
+    .rawData;
+  return normalizeStickerItems(rawData?.sticker_items ?? rawData?.stickers);
+}
+
+function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APIStickerItem[] {
+  return normalizeStickerItems(snapshot.stickers ?? snapshot.sticker_items);
+}
+
+export function hasDiscordMessageStickers(message: Message): boolean {
+  return resolveDiscordMessageStickers(message).length > 0;
+}
+
 export async function resolveMediaList(
   message: Message,
   maxBytes: number,
 ): Promise<DiscordMediaInfo[]> {
-  const attachments = message.attachments ?? [];
-  if (attachments.length === 0) {
+  const out: DiscordMediaInfo[] = [];
+  await appendResolvedMediaFromAttachments({
+    attachments: message.attachments ?? [],
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download attachment",
+  });
+  await appendResolvedMediaFromStickers({
+    stickers: resolveDiscordMessageStickers(message),
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download sticker",
+  });
+  return out;
+}
+
+export async function resolveForwardedMediaList(
+  message: Message,
+  maxBytes: number,
+): Promise<DiscordMediaInfo[]> {
+  const snapshots = resolveDiscordMessageSnapshots(message);
+  if (snapshots.length === 0) {
     return [];
   }
   const out: DiscordMediaInfo[] = [];
+  for (const snapshot of snapshots) {
+    await appendResolvedMediaFromAttachments({
+      attachments: snapshot.message?.attachments,
+      maxBytes,
+      out,
+      errorPrefix: "discord: failed to download forwarded attachment",
+    });
+    await appendResolvedMediaFromStickers({
+      stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
+      maxBytes,
+      out,
+      errorPrefix: "discord: failed to download forwarded sticker",
+    });
+  }
+  return out;
+}
+
+async function appendResolvedMediaFromAttachments(params: {
+  attachments?: APIAttachment[] | null;
+  maxBytes: number;
+  out: DiscordMediaInfo[];
+  errorPrefix: string;
+}) {
+  const attachments = params.attachments;
+  if (!attachments || attachments.length === 0) {
+    return;
+  }
   for (const attachment of attachments) {
     try {
       const fetched = await fetchRemoteMedia({
@@ -113,19 +223,112 @@ export async function resolveMediaList(
         fetched.buffer,
         fetched.contentType ?? attachment.content_type,
         "inbound",
-        maxBytes,
+        params.maxBytes,
       );
-      out.push({
+      params.out.push({
         path: saved.path,
         contentType: saved.contentType,
         placeholder: inferPlaceholder(attachment),
       });
     } catch (err) {
       const id = attachment.id ?? attachment.url;
-      logVerbose(`discord: failed to download attachment ${id}: ${String(err)}`);
+      logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
     }
   }
-  return out;
+}
+
+type DiscordStickerAssetCandidate = {
+  url: string;
+  fileName: string;
+};
+
+function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerAssetCandidate[] {
+  const baseName = sticker.name?.trim() || `sticker-${sticker.id}`;
+  switch (sticker.format_type) {
+    case StickerFormatType.GIF:
+      return [
+        {
+          url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.gif`,
+          fileName: `${baseName}.gif`,
+        },
+      ];
+    case StickerFormatType.Lottie:
+      return [
+        {
+          url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.png?size=160`,
+          fileName: `${baseName}.png`,
+        },
+        {
+          url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.json`,
+          fileName: `${baseName}.json`,
+        },
+      ];
+    case StickerFormatType.APNG:
+    case StickerFormatType.PNG:
+    default:
+      return [
+        {
+          url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.png`,
+          fileName: `${baseName}.png`,
+        },
+      ];
+  }
+}
+
+function formatStickerError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  try {
+    return JSON.stringify(err) ?? "unknown error";
+  } catch {
+    return "unknown error";
+  }
+}
+
+async function appendResolvedMediaFromStickers(params: {
+  stickers?: APIStickerItem[] | null;
+  maxBytes: number;
+  out: DiscordMediaInfo[];
+  errorPrefix: string;
+}) {
+  const stickers = params.stickers;
+  if (!stickers || stickers.length === 0) {
+    return;
+  }
+  for (const sticker of stickers) {
+    const candidates = resolveStickerAssetCandidates(sticker);
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        const fetched = await fetchRemoteMedia({
+          url: candidate.url,
+          filePathHint: candidate.fileName,
+        });
+        const saved = await saveMediaBuffer(
+          fetched.buffer,
+          fetched.contentType,
+          "inbound",
+          params.maxBytes,
+        );
+        params.out.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: "<media:sticker>",
+        });
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (lastError) {
+      logVerbose(`${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`);
+    }
+  }
 }
 
 function inferPlaceholder(attachment: APIAttachment): string {
@@ -166,13 +369,37 @@ function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): strin
   return `${tag} (${count} ${suffix})`;
 }
 
+function buildDiscordStickerPlaceholder(stickers?: APIStickerItem[]): string {
+  if (!stickers || stickers.length === 0) {
+    return "";
+  }
+  const count = stickers.length;
+  const label = count === 1 ? "sticker" : "stickers";
+  return `<media:sticker> (${count} ${label})`;
+}
+
+function buildDiscordMediaPlaceholder(params: {
+  attachments?: APIAttachment[];
+  stickers?: APIStickerItem[];
+}): string {
+  const attachmentText = buildDiscordAttachmentPlaceholder(params.attachments);
+  const stickerText = buildDiscordStickerPlaceholder(params.stickers);
+  if (attachmentText && stickerText) {
+    return `${attachmentText}\n${stickerText}`;
+  }
+  return attachmentText || stickerText || "";
+}
+
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
   const baseText =
     message.content?.trim() ||
-    buildDiscordAttachmentPlaceholder(message.attachments) ||
+    buildDiscordMediaPlaceholder({
+      attachments: message.attachments ?? undefined,
+      stickers: resolveDiscordMessageStickers(message),
+    }) ||
     message.embeds?.[0]?.description ||
     options?.fallbackText?.trim() ||
     "";
@@ -233,7 +460,10 @@ function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapsho
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
   const content = snapshot.content?.trim() ?? "";
-  const attachmentText = buildDiscordAttachmentPlaceholder(snapshot.attachments ?? undefined);
+  const attachmentText = buildDiscordMediaPlaceholder({
+    attachments: snapshot.attachments ?? undefined,
+    stickers: resolveDiscordSnapshotStickers(snapshot),
+  });
   const embed = snapshot.embeds?.[0];
   const embedText = embed?.description?.trim() || embed?.title?.trim() || "";
   return content || attachmentText || embedText || "";

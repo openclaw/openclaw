@@ -22,13 +22,6 @@ describe("messageAction", () => {
 
     expect((action as { text: string }).text).toBe("Click");
   });
-
-  it("truncates label to 20 characters", () => {
-    const action = messageAction("This is a very long label text");
-
-    expect(action.label.length).toBe(20);
-    expect(action.label).toBe("This is a very long ");
-  });
 });
 
 describe("uriAction", () => {
@@ -39,11 +32,22 @@ describe("uriAction", () => {
     expect(action.label).toBe("Open");
     expect((action as { uri: string }).uri).toBe("https://example.com");
   });
+});
 
-  it("truncates label to 20 characters", () => {
-    const action = uriAction("Click here to visit our website", "https://example.com");
-
-    expect(action.label.length).toBe(20);
+describe("action label truncation", () => {
+  it.each([
+    {
+      createAction: () => messageAction("This is a very long label text"),
+      expectedLabel: "This is a very long ",
+    },
+    {
+      createAction: () => uriAction("Click here to visit our website", "https://example.com"),
+      expectedLabel: "Click here to visit ",
+    },
+  ])("truncates labels to 20 characters", ({ createAction, expectedLabel }) => {
+    const action = createAction();
+    expect(action.label).toBe(expectedLabel);
+    expect((action.label ?? "").length).toBe(20);
   });
 });
 
@@ -114,8 +118,8 @@ describe("datetimePickerAction", () => {
 });
 
 describe("createGridLayout", () => {
-  it("creates a 2x3 grid layout for tall menu", () => {
-    const actions = [
+  function createSixSimpleActions() {
+    return [
       messageAction("A1"),
       messageAction("A2"),
       messageAction("A3"),
@@ -130,6 +134,10 @@ describe("createGridLayout", () => {
       ReturnType<typeof messageAction>,
       ReturnType<typeof messageAction>,
     ];
+  }
+
+  it("creates a 2x3 grid layout for tall menu", () => {
+    const actions = createSixSimpleActions();
 
     const areas = createGridLayout(1686, actions);
 
@@ -150,21 +158,7 @@ describe("createGridLayout", () => {
   });
 
   it("creates a 2x3 grid layout for short menu", () => {
-    const actions = [
-      messageAction("A1"),
-      messageAction("A2"),
-      messageAction("A3"),
-      messageAction("A4"),
-      messageAction("A5"),
-      messageAction("A6"),
-    ] as [
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-    ];
+    const actions = createSixSimpleActions();
 
     const areas = createGridLayout(843, actions);
 

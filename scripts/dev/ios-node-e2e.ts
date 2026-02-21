@@ -1,10 +1,4 @@
-import { randomUUID } from "node:crypto";
-import WebSocket from "ws";
-
-type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
-type GatewayResFrame = { type: "res"; id: string; ok: boolean; payload?: unknown; error?: unknown };
-type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
-type GatewayFrame = GatewayReqFrame | GatewayResFrame | GatewayEventFrame | { type: string };
+import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
 
 type NodeListPayload = {
   ts?: number;
@@ -21,16 +15,7 @@ type NodeListPayload = {
 
 type NodeListNode = NonNullable<NodeListPayload["nodes"]>[number];
 
-const args = process.argv.slice(2);
-const getArg = (flag: string) => {
-  const idx = args.indexOf(flag);
-  if (idx !== -1 && idx + 1 < args.length) {
-    return args[idx + 1];
-  }
-  return undefined;
-};
-
-const hasFlag = (flag: string) => args.includes(flag);
+const { get: getArg, has: hasFlag } = createArgReader();
 
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -47,12 +32,7 @@ if (!urlRaw || !token) {
   process.exit(1);
 }
 
-const url = new URL(urlRaw.includes("://") ? urlRaw : `wss://${urlRaw}`);
-if (!url.port) {
-  url.port = url.protocol === "wss:" ? "443" : "80";
-}
-
-const randomId = () => randomUUID();
+const url = resolveGatewayUrl(urlRaw);
 
 const isoNow = () => new Date().toISOString();
 const isoMinusMs = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -102,81 +82,7 @@ function pickIosNode(list: NodeListPayload, hint?: string): NodeListNode | null 
 }
 
 async function main() {
-  const ws = new WebSocket(url.toString(), { handshakeTimeout: 8000 });
-  const pending = new Map<
-    string,
-    {
-      resolve: (res: GatewayResFrame) => void;
-      reject: (err: Error) => void;
-      timeout: ReturnType<typeof setTimeout>;
-    }
-  >();
-
-  const request = (method: string, params?: unknown, timeoutMs = 12_000) =>
-    new Promise<GatewayResFrame>((resolve, reject) => {
-      const id = randomId();
-      const frame: GatewayReqFrame = { type: "req", id, method, params };
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`timeout waiting for ${method}`));
-      }, timeoutMs);
-      pending.set(id, { resolve, reject, timeout });
-      ws.send(JSON.stringify(frame));
-    });
-
-  const waitOpen = () =>
-    new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("ws open timeout")), 8000);
-      ws.once("open", () => {
-        clearTimeout(t);
-        resolve();
-      });
-      ws.once("error", (err) => {
-        clearTimeout(t);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-    });
-
-  const toText = (data: WebSocket.RawData) => {
-    if (typeof data === "string") {
-      return data;
-    }
-    if (data instanceof ArrayBuffer) {
-      return Buffer.from(data).toString("utf8");
-    }
-    if (Array.isArray(data)) {
-      return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
-    }
-    return Buffer.from(data as Buffer).toString("utf8");
-  };
-
-  ws.on("message", (data) => {
-    const text = toText(data);
-    let frame: GatewayFrame | null = null;
-    try {
-      frame = JSON.parse(text) as GatewayFrame;
-    } catch {
-      return;
-    }
-    if (!frame || typeof frame !== "object" || !("type" in frame)) {
-      return;
-    }
-    if (frame.type === "res") {
-      const res = frame as GatewayResFrame;
-      const waiter = pending.get(res.id);
-      if (waiter) {
-        pending.delete(res.id);
-        clearTimeout(waiter.timeout);
-        waiter.resolve(res);
-      }
-      return;
-    }
-    if (frame.type === "event") {
-      // Ignore; caller can extend to watch node.pair.* etc.
-      return;
-    }
-  });
-
+  const { request, waitOpen, close } = createGatewayWsClient({ url: url.toString() });
   await waitOpen();
 
   const connectRes = await request("connect", {
@@ -201,6 +107,7 @@ async function main() {
   if (!connectRes.ok) {
     // eslint-disable-next-line no-console
     console.error("connect failed:", connectRes.error);
+    close();
     process.exit(2);
   }
 
@@ -208,6 +115,7 @@ async function main() {
   if (!healthRes.ok) {
     // eslint-disable-next-line no-console
     console.error("health failed:", healthRes.error);
+    close();
     process.exit(3);
   }
 
@@ -215,6 +123,7 @@ async function main() {
   if (!nodesRes.ok) {
     // eslint-disable-next-line no-console
     console.error("node.list failed:", nodesRes.error);
+    close();
     process.exit(4);
   }
 
@@ -235,6 +144,7 @@ async function main() {
   if (!node) {
     // eslint-disable-next-line no-console
     console.error("No connected iOS nodes found. (Is the iOS app connected to the gateway?)");
+    close();
     process.exit(5);
   }
 
@@ -363,7 +273,7 @@ async function main() {
   }
 
   const failed = results.filter((r) => !r.ok);
-  ws.close();
+  close();
 
   if (failed.length > 0) {
     process.exit(10);

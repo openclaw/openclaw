@@ -32,26 +32,13 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 2. `build-artifacts` (blocked on above)
 3. `checks`, `checks-windows`, `macos`, `android` (blocked on build)
 
-## Code Analysis
-
-The `code-analysis` job runs `scripts/analyze_code_files.py` on PRs to enforce code quality:
-
-- **LOC threshold**: Files that grow past 1000 lines fail the build
-- **Delta-only**: Only checks files changed in the PR, not the entire codebase
-- **Push to main**: Skipped (job passes as no-op) so merges aren't blocked
-
-When `--strict` is set, violations block all downstream jobs. This catches bloated files early before expensive tests run.
-
-Excluded directories: `node_modules`, `dist`, `vendor`, `.git`, `coverage`, `Swabble`, `skills`, `.pi`
-
 ## Runners
 
-| Runner                          | Jobs                          |
-| ------------------------------- | ----------------------------- |
-| `blacksmith-4vcpu-ubuntu-2404`  | Most Linux jobs               |
-| `blacksmith-4vcpu-windows-2025` | `checks-windows`              |
-| `macos-latest`                  | `macos`, `ios`                |
-| `ubuntu-latest`                 | Scope detection (lightweight) |
+| Runner                           | Jobs                                       |
+| -------------------------------- | ------------------------------------------ |
+| `blacksmith-16vcpu-ubuntu-2404`  | Most Linux jobs, including scope detection |
+| `blacksmith-16vcpu-windows-2025` | `checks-windows`                           |
+| `macos-latest`                   | `macos`, `ios`                             |
 
 ## Local Equivalents
 

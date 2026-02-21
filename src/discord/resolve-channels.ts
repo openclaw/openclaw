@@ -1,12 +1,7 @@
 import { fetchDiscord } from "./api.js";
+import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
-
-type DiscordGuildSummary = {
-  id: string;
-  name: string;
-  slug: string;
-};
 
 type DiscordChannelSummary = {
   id: string;
@@ -71,19 +66,6 @@ function parseDiscordChannelInput(raw: string): {
     return { guild, channel };
   }
   return { guild: trimmed, guildOnly: true };
-}
-
-async function listGuilds(token: string, fetcher: typeof fetch): Promise<DiscordGuildSummary[]> {
-  const raw = await fetchDiscord<Array<{ id: string; name: string }>>(
-    "/users/@me/guilds",
-    token,
-    fetcher,
-  );
-  return raw.map((guild) => ({
-    id: guild.id,
-    name: guild.name,
-    slug: normalizeDiscordSlug(guild.name),
-  }));
 }
 
 async function listGuildChannels(

@@ -1,10 +1,35 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
+import { stableStringify } from "../stable-stringify.js";
+import type { FailoverReason } from "./types.js";
 
-export const BILLING_ERROR_USER_MESSAGE =
-  "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+export function formatBillingErrorMessage(provider?: string, model?: string): string {
+  const providerName = provider?.trim();
+  const modelName = model?.trim();
+  const providerLabel =
+    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+  if (providerLabel) {
+    return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
+  }
+  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+}
+
+export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+
+const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const OVERLOADED_ERROR_USER_MESSAGE =
+  "The AI service is temporarily overloaded. Please try again in a moment.";
+
+function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+  if (isRateLimitErrorMessage(raw)) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
+  }
+  if (isOverloadedErrorMessage(raw)) {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  return undefined;
+}
 
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -31,7 +56,9 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
 const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
 const CONTEXT_OVERFLOW_HINT_RE =
-  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+const RATE_LIMIT_HINT_RE =
+  /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -40,8 +67,17 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
+  // Rate limit errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
+  // (e.g., "request reached organization TPD rate limit" matches request.*limit).
+  // Exclude them before checking context overflow heuristics.
+  if (isRateLimitErrorMessage(errorMessage)) {
+    return false;
+  }
   if (isContextOverflowError(errorMessage)) {
     return true;
+  }
+  if (RATE_LIMIT_HINT_RE.test(errorMessage)) {
+    return false;
   }
   return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
 }
@@ -59,9 +95,13 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   if (!hasCompactionTerm) {
     return false;
   }
-  // For compaction failures, also accept "context overflow" without colon
-  // since the error message itself describes a compaction/summarization failure
-  return isContextOverflowError(errorMessage) || lower.includes("context overflow");
+  // Treat any likely overflow shape as a compaction failure when compaction terms are present.
+  // Providers often vary wording (e.g. "context window exceeded") across APIs.
+  if (isLikelyContextOverflowError(errorMessage)) {
+    return true;
+  }
+  // Keep explicit fallback for bare "context overflow" strings.
+  return lower.includes("context overflow");
 }
 
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -71,7 +111,13 @@ const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const BILLING_ERROR_HEAD_RE =
+  /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
+const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
+const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 521, 522, 523, 524, 529]);
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -89,6 +135,50 @@ const HTTP_ERROR_HINTS = [
   "too many requests",
   "permission",
 ];
+
+function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
+  const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
+  if (!match) {
+    return null;
+  }
+  const code = Number(match[1]);
+  if (!Number.isFinite(code)) {
+    return null;
+  }
+  return { code, rest: (match[2] ?? "").trim() };
+}
+
+export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const status = extractLeadingHttpStatus(trimmed);
+  if (!status || status.code < 500) {
+    return false;
+  }
+
+  if (CLOUDFLARE_HTML_ERROR_CODES.has(status.code)) {
+    return true;
+  }
+
+  return (
+    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && /<\/html>/i.test(status.rest)
+  );
+}
+
+export function isTransientHttpError(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const status = extractLeadingHttpStatus(trimmed);
+  if (!status) {
+    return false;
+  }
+  return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
+}
 
 function stripFinalTagsFromText(text: string): string {
   if (!text) {
@@ -127,6 +217,9 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
 }
 
 function isLikelyHttpErrorText(raw: string): boolean {
+  if (isCloudflareOrHtmlErrorPage(raw)) {
+    return true;
+  }
   const match = raw.match(HTTP_STATUS_PREFIX_RE);
   if (!match) {
     return false;
@@ -148,6 +241,18 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
     isLikelyHttpErrorText(raw) ||
     ERROR_PREFIX_RE.test(raw) ||
     CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
+  );
+}
+
+function shouldRewriteBillingText(raw: string): boolean {
+  if (!isBillingErrorMessage(raw)) {
+    return false;
+  }
+  return (
+    isRawApiErrorPayload(raw) ||
+    isLikelyHttpErrorText(raw) ||
+    ERROR_PREFIX_RE.test(raw) ||
+    BILLING_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -206,19 +311,6 @@ function parseApiErrorPayload(raw: string): ErrorPayload | null {
     }
   }
   return null;
-}
-
-function stableStringify(value: unknown): string {
-  if (!value || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
-  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
-  return `{${entries.join(",")}}`;
 }
 
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
@@ -305,6 +397,11 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return "LLM request failed with an unknown error.";
   }
 
+  const leadingStatus = extractLeadingHttpStatus(trimmed);
+  if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
+    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
+  }
+
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
   if (httpMatch) {
     const rest = httpMatch[2].trim();
@@ -326,7 +423,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string },
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -383,12 +480,17 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  if (isOverloadedErrorMessage(raw)) {
-    return "The AI service is temporarily overloaded. Please try again in a moment.";
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  if (transientCopy) {
+    return transientCopy;
+  }
+
+  if (isTimeoutErrorMessage(raw)) {
+    return "LLM request timed out.";
   }
 
   if (isBillingErrorMessage(raw)) {
-    return BILLING_ERROR_USER_MESSAGE;
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -410,7 +512,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   const stripped = stripFinalTagsFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
-    return stripped;
+    return "";
   }
 
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
@@ -439,8 +541,9 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (ERROR_PREFIX_RE.test(trimmed)) {
-      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
+      if (prefixedCopy) {
+        return prefixedCopy;
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";
@@ -449,7 +552,17 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped);
+  // Preserve legacy behavior for explicit billing-head text outside known
+  // error contexts (e.g., "billing: please upgrade your plan"), while
+  // keeping conversational billing mentions untouched.
+  if (shouldRewriteBillingText(trimmed)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+
+  // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
+  // the first content line (e.g. markdown/code blocks).
+  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
@@ -470,10 +583,24 @@ const ERROR_PATTERNS = {
     "resource_exhausted",
     "usage limit",
   ],
-  overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
-  timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
+  overloaded: [
+    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
+    "overloaded",
+    "service unavailable",
+    "high demand",
+  ],
+  timeout: [
+    "timeout",
+    "timed out",
+    "deadline exceeded",
+    "context deadline exceeded",
+    /without sending (?:any )?chunks?/i,
+    /\bstop reason:\s*abort\b/i,
+    /\breason:\s*abort\b/i,
+    /\bunhandled stop reason:\s*abort\b/i,
+  ],
   billing: [
-    /\b402\b/,
+    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
     "credit balance",
@@ -539,8 +666,18 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-
-  return matchesErrorPatterns(value, ERROR_PATTERNS.billing);
+  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
+    return true;
+  }
+  if (!BILLING_ERROR_HEAD_RE.test(raw)) {
+    return false;
+  }
+  return (
+    value.includes("upgrade") ||
+    value.includes("credits") ||
+    value.includes("payment") ||
+    value.includes("plan")
+  );
 }
 
 export function isMissingToolCallInputError(raw: string): boolean {
@@ -628,12 +765,50 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+export function isModelNotFoundErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+
+  // Direct pattern matches from OpenClaw internals and common providers.
+  if (
+    lower.includes("unknown model") ||
+    lower.includes("model not found") ||
+    lower.includes("model_not_found") ||
+    lower.includes("not_found_error") ||
+    (lower.includes("does not exist") && lower.includes("model")) ||
+    (lower.includes("invalid model") && !lower.includes("invalid model reference"))
+  ) {
+    return true;
+  }
+
+  // Google Gemini: "models/X is not found for api version"
+  if (/models\/[^\s]+ is not found/i.test(raw)) {
+    return true;
+  }
+
+  // JSON error payloads: {"status": "NOT_FOUND"} or {"code": 404} combined with not-found text.
+  if (/\b404\b/.test(raw) && /not[-_ ]?found/i.test(raw)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "model_not_found";
+  }
+  if (isTransientHttpError(raw)) {
+    // Treat transient 5xx provider failures as retryable transport issues.
+    return "timeout";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";

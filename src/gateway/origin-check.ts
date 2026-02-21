@@ -1,25 +1,6 @@
-import { isLoopbackHost } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult = { ok: true } | { ok: false; reason: string };
-
-function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
-}
-
-function resolveHostName(hostHeader?: string): string {
-  const host = normalizeHostHeader(hostHeader);
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
 
 function parseOrigin(
   originRaw?: string,

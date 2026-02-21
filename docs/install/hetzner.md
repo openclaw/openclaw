@@ -177,10 +177,6 @@ services:
       # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
-
-      # Optional: only if you run iOS/Android nodes against this VPS and need Canvas host.
-      # If you expose this publicly, read /gateway/security and firewall accordingly.
-      # - "18793:18793"
     command:
       [
         "node",
@@ -343,6 +339,7 @@ For teams preferring infrastructure-as-code workflows, a community-maintained Te
 - SSH tunnel configuration for gateway access
 
 **Repositories:**
+
 - Infrastructure: [openclaw-terraform-hetzner](https://github.com/andreesg/openclaw-terraform-hetzner)
 - Docker config: [openclaw-docker-config](https://github.com/andreesg/openclaw-docker-config)
 
