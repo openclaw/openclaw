@@ -290,6 +290,57 @@ function resolveAnnounceOrigin(
   return mergeDeliveryContext(normalizedRequester, normalizedEntry);
 }
 
+/** Default timeout for announce delivery calls. */
+const DEFAULT_ANNOUNCE_TIMEOUT_MS = 30_000;
+
+/** Maximum number of retry attempts for announce delivery. */
+const ANNOUNCE_MAX_RETRIES = 3;
+
+/** Base delay (ms) for exponential backoff between retries. */
+const ANNOUNCE_RETRY_BASE_MS = 2_000;
+
+function resolveAnnounceTimeoutMs(): number {
+  try {
+    const cfg = loadConfig();
+    const value = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.min(Math.max(Math.floor(value), 5_000), 300_000);
+    }
+  } catch {
+    // Fallback to default on config load error.
+  }
+  return DEFAULT_ANNOUNCE_TIMEOUT_MS;
+}
+
+async function callGatewayWithRetry(opts: Parameters<typeof callGateway>[0]): Promise<void> {
+  const maxRetries = ANNOUNCE_MAX_RETRIES;
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await callGateway(opts);
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      const msg = lastError.message;
+      const isRetryable =
+        /timeout|timed out|etimedout/i.test(msg) ||
+        /gateway closed(?! \(1000)|abnormal closure|econnreset|socket hang up/i.test(msg);
+      if (!isRetryable) {
+        // Non-retryable error — surface immediately.
+        throw lastError;
+      }
+      if (attempt < maxRetries) {
+        const delayMs = ANNOUNCE_RETRY_BASE_MS * 2 ** attempt;
+        defaultRuntime.error?.(
+          `Announce delivery attempt ${attempt + 1}/${maxRetries + 1} failed (retryable), retrying in ${delayMs}ms...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError ?? new Error("announce delivery failed after retries");
+}
+
 async function sendAnnounce(item: AnnounceQueueItem) {
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
@@ -305,7 +356,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       enqueuedAt: item.enqueuedAt,
     }),
   );
-  await callGateway({
+  await callGatewayWithRetry({
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
@@ -317,7 +368,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       deliver: !requesterIsSubagent,
       idempotencyKey,
     },
-    timeoutMs: 15_000,
+    timeoutMs: resolveAnnounceTimeoutMs(),
   });
 }
 
@@ -468,7 +519,7 @@ async function sendSubagentAnnounceDirectly(params: {
         completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
           ? String(completionDirectOrigin.threadId)
           : undefined;
-      await callGateway({
+      await callGatewayWithRetry({
         method: "send",
         params: {
           channel: completionChannel,
@@ -479,7 +530,7 @@ async function sendSubagentAnnounceDirectly(params: {
           message: params.completionMessage,
           idempotencyKey: params.directIdempotencyKey,
         },
-        timeoutMs: 15_000,
+        timeoutMs: resolveAnnounceTimeoutMs(),
       });
 
       return {
@@ -493,7 +544,7 @@ async function sendSubagentAnnounceDirectly(params: {
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
-    await callGateway({
+    await callGatewayWithRetry({
       method: "agent",
       params: {
         sessionKey: canonicalRequesterSessionKey,
@@ -506,7 +557,7 @@ async function sendSubagentAnnounceDirectly(params: {
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,
-      timeoutMs: 15_000,
+      timeoutMs: resolveAnnounceTimeoutMs(),
     });
 
     return {
@@ -935,9 +986,8 @@ export async function runSubagentAnnounceFlow(params: {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
-    // Use a deterministic idempotency key so the gateway dedup cache
-    // catches duplicates if this announce is also queued by the gateway-
-    // level message queue while the main session is busy (#17122).
+    // Use deterministic idempotency so retries and queue overlap dedupe
+    // this announce event without collapsing distinct child runs.
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,

@@ -161,6 +161,15 @@ export const AgentDefaultsSchema = z
           .describe(
             "Maximum number of active children a single agent session can spawn (default: 5).",
           ),
+        announceTimeoutMs: z
+          .number()
+          .int()
+          .min(5000)
+          .max(300000)
+          .optional()
+          .describe(
+            "Timeout in milliseconds for sub-agent announcement delivery to the parent session (default: 30000). Announcements retry up to 3 times with exponential backoff on timeout/close errors.",
+          ),
         archiveAfterMinutes: z.number().int().positive().optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),

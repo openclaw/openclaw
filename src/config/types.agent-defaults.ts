@@ -245,6 +245,8 @@ export type AgentDefaultsConfig = {
     maxSpawnDepth?: number;
     /** Maximum active children a single requester session may spawn. Default behavior: 5. */
     maxChildrenPerAgent?: number;
+    /** Timeout in ms for sub-agent announcement delivery (default: 30000). Retries up to 3 times with backoff on timeout/close errors. */
+    announceTimeoutMs?: number;
     /** Auto-archive sub-agent sessions after N minutes (default: 60). */
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
