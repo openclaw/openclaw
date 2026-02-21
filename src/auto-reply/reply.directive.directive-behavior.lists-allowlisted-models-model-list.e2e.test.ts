@@ -195,4 +195,58 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+
+  it("resets model override on /model default", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      await getReplyFromConfig(
+        { Body: "/model openai/gpt-4.1-mini", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "openai/gpt-4.1-mini": {},
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      assertModelSelection(storePath, {
+        model: "gpt-4.1-mini",
+        provider: "openai",
+      });
+
+      await getReplyFromConfig(
+        { Body: "/model default", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "openai/gpt-4.1-mini": {},
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      assertModelSelection(storePath, {
+        model: undefined,
+        provider: undefined,
+      });
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
 });
