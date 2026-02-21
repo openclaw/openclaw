@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { sanitizeEnv, validateWorkingDirectory } from "./invoke.js";
@@ -46,8 +47,7 @@ describe("validateWorkingDirectory", () => {
   });
 
   it("returns a clear error when cwd points to a file", () => {
-    const fileUrl = new URL(import.meta.url);
-    const filePath = process.platform === "win32" ? fileUrl.pathname.slice(1) : fileUrl.pathname;
+    const filePath = fileURLToPath(import.meta.url);
     expect(validateWorkingDirectory(filePath)).toBe(
       `working directory is not a directory: ${filePath}`,
     );
