@@ -1,8 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
-import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
+import { resolveAuthorizedWhatsAppOutboundTarget } from "./whatsapp-target-auth.js";
 
 export async function handleWhatsAppAction(
   params: Record<string, unknown>,
@@ -25,28 +25,20 @@ export async function handleWhatsAppAction(
     const fromMeRaw = params.fromMe;
     const fromMe = typeof fromMeRaw === "boolean" ? fromMeRaw : undefined;
 
-    // Validate chatJid against the configured allowFrom list before sending.
-    // Per-account allowFrom takes precedence over the channel-level allowFrom.
-    const whatsappCfg = cfg.channels?.whatsapp;
-    const accountCfg = accountId ? whatsappCfg?.accounts?.[accountId] : undefined;
-    const allowFrom = accountCfg?.allowFrom ?? whatsappCfg?.allowFrom;
-    const resolution = resolveWhatsAppOutboundTarget({
-      to: chatJid,
-      allowFrom: allowFrom ?? [],
-      mode: "implicit",
+    // Resolve account + allowFrom via shared account logic so auth and routing stay aligned.
+    const resolved = resolveAuthorizedWhatsAppOutboundTarget({
+      cfg,
+      chatJid,
+      accountId,
+      actionLabel: "reaction",
     });
-    if (!resolution.ok) {
-      throw new Error(
-        `WhatsApp reaction blocked: chatJid "${chatJid}" is not in the configured allowFrom list.`,
-      );
-    }
 
     const resolvedEmoji = remove ? "" : emoji;
-    await sendReactionWhatsApp(resolution.to, messageId, resolvedEmoji, {
+    await sendReactionWhatsApp(resolved.to, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,
       participant: participant ?? undefined,
-      accountId: accountId ?? undefined,
+      accountId: resolved.accountId,
     });
     if (!remove && !isEmpty) {
       return jsonResult({ ok: true, added: emoji });
