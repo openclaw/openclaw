@@ -8,6 +8,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { isThreadSessionKey } from "../config/sessions/reset.js";
 import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -483,7 +484,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
+      threadId: requesterIsSubagent
+        ? undefined
+        : isThreadSessionKey(item.sessionKey)
+          ? threadId
+          : undefined,
       deliver: !requesterIsSubagent,
       idempotencyKey,
     },
@@ -669,7 +674,9 @@ async function sendSubagentAnnounceDirectly(params: {
             channel: completionChannel,
             to: completionTo,
             accountId: completionDirectOrigin?.accountId,
-            threadId: completionThreadId,
+            threadId: isThreadSessionKey(canonicalRequesterSessionKey)
+              ? completionThreadId
+              : undefined,
             sessionKey: canonicalRequesterSessionKey,
             message: params.completionMessage,
             idempotencyKey: params.directIdempotencyKey,
@@ -698,7 +705,11 @@ async function sendSubagentAnnounceDirectly(params: {
         channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
         accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
         to: params.requesterIsSubagent ? undefined : directOrigin?.to,
-        threadId: params.requesterIsSubagent ? undefined : threadId,
+        threadId: params.requesterIsSubagent
+          ? undefined
+          : isThreadSessionKey(canonicalRequesterSessionKey)
+            ? threadId
+            : undefined,
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,

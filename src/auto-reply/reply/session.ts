@@ -267,10 +267,10 @@ export async function initSessionState(params: {
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
-  // Only fall back to persisted threadId for thread sessions.  Non-thread
-  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
-  // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  // Only persist threadId for thread/topic sessions.  Non-thread sessions
+  // (e.g. DMs, channels) must never store a threadId — stale values leak into
+  // delivery plans and cause replies to land in wrong threads.
+  const lastThreadIdRaw = isThread ? ctx.MessageThreadId || baseEntry?.lastThreadId : undefined;
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
@@ -282,7 +282,9 @@ export async function initSessionState(params: {
   const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
-  const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  // Force threadId to undefined for non-thread sessions, even if
+  // normalizeSessionDeliveryFields merged one from the existing entry.
+  const lastThreadId = isThread ? (deliveryFields.lastThreadId ?? lastThreadIdRaw) : undefined;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -309,7 +311,11 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
-    deliveryContext: deliveryFields.deliveryContext,
+    deliveryContext: isThread
+      ? deliveryFields.deliveryContext
+      : deliveryFields.deliveryContext
+        ? { ...deliveryFields.deliveryContext, threadId: undefined }
+        : undefined,
     // Track originating channel for subagent announce routing.
     lastChannel,
     lastTo,
