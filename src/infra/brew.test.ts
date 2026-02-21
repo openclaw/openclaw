@@ -63,18 +63,25 @@ describe("brew helpers", () => {
     });
   });
 
-  it("falls back to prefix when HOMEBREW_BREW_FILE is not executable", async () => {
+  it("falls back to prefix when HOMEBREW_BREW_FILE is missing or not executable", async () => {
     await withBrewRoot(async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
       const prefixBrew = path.join(prefix, "bin", "brew");
-      await fs.mkdir(path.dirname(explicit), { recursive: true });
-      await fs.writeFile(explicit, "#!/bin/sh\necho no\n", "utf-8");
-      await fs.chmod(explicit, 0o644);
+      let brewFile = explicit;
+      if (process.platform === "win32") {
+        // Windows doesn't enforce POSIX executable bits, so use a missing path
+        // to verify fallback behavior deterministically.
+        brewFile = path.join(tmp, "custom", "missing-brew");
+      } else {
+        await fs.mkdir(path.dirname(explicit), { recursive: true });
+        await fs.writeFile(explicit, "#!/bin/sh\necho no\n", "utf-8");
+        await fs.chmod(explicit, 0o644);
+      }
       await writeExecutable(prefixBrew);
 
       const env: NodeJS.ProcessEnv = {
-        HOMEBREW_BREW_FILE: explicit,
+        HOMEBREW_BREW_FILE: brewFile,
         HOMEBREW_PREFIX: prefix,
       };
       expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(prefixBrew);
