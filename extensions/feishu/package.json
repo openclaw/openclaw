@@ -8,8 +8,8 @@
     "@sinclair/typebox": "0.34.48",
     "zod": "^4.3.6"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
   },
   "openclaw": {
     "extensions": [
