@@ -26,6 +26,52 @@ const createLocationMessage = (location: {
 });
 
 describe("deliverLineAutoReply", () => {
+  it("push-only: never uses reply token when replyToken is undefined", async () => {
+    const replyMessageLine = vi.fn(async () => ({}));
+    const pushMessageLine = vi.fn(async () => ({}));
+    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
+    const createTextMessageWithQuickReplies = vi.fn((text: string) => ({
+      type: "text" as const,
+      text,
+    }));
+    const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
+    const pushMessagesLine = vi.fn(async () => ({ messageId: "push", chatId: "u1" }));
+
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
+
+    const result = await deliverLineAutoReply({
+      payload: { text: "hello", channelData: { line: lineData } },
+      lineData,
+      to: "line:user:1",
+      replyToken: undefined,
+      replyTokenUsed: false,
+      accountId: "acc",
+      textLimit: 5000,
+      deps: {
+        buildTemplateMessageFromPayload: () => null,
+        processLineMessage: (text) => ({ text, flexMessages: [] }),
+        chunkMarkdownText: (text) => [text],
+        sendLineReplyChunks,
+        replyMessageLine,
+        pushMessageLine,
+        pushTextMessageWithQuickReplies,
+        createTextMessageWithQuickReplies,
+        createQuickReplyItems,
+        pushMessagesLine,
+        createFlexMessage,
+        createImageMessage,
+        createLocationMessage,
+      },
+    });
+
+    expect(result.replyTokenUsed).toBe(false);
+    expect(replyMessageLine).not.toHaveBeenCalled();
+    // text + flex => 1 text + 1 flex via push
+    expect(pushMessagesLine).toHaveBeenCalled();
+  });
+
   it("uses reply token for text before sending rich messages", async () => {
     const replyMessageLine = vi.fn(async () => ({}));
     const pushMessageLine = vi.fn(async () => ({}));
