@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCameraSnapPayload, parseCameraClipPayload } from "./nodes-camera.js";
+import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
 import { callGateway, installBaseProgramMocks, runTui, runtime } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
@@ -48,21 +49,11 @@ function expectParserRejectsMissingMedia(
   expect(() => parse(payload)).toThrow(expectedMessage);
 }
 
-const IOS_NODE = {
-  nodeId: "ios-node",
-  displayName: "iOS Node",
-  remoteIp: "192.168.0.88",
-  connected: true,
-} as const;
-
 function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
   callGateway.mockImplementation(async (...args: unknown[]) => {
     const opts = (args[0] ?? {}) as { method?: string };
     if (opts.method === "node.list") {
-      return {
-        ts: Date.now(),
-        nodes: [IOS_NODE],
-      };
+      return createIosNodeListResponse();
     }
     if (opts.method === "node.invoke" && command) {
       return {
