@@ -114,6 +114,35 @@ export const MessagesSchema = z
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
+    statusReactions: z
+      .object({
+        enabled: z.boolean().optional(),
+        emojis: z
+          .object({
+            thinking: z.string().optional(),
+            tool: z.string().optional(),
+            coding: z.string().optional(),
+            web: z.string().optional(),
+            done: z.string().optional(),
+            error: z.string().optional(),
+            stallSoft: z.string().optional(),
+            stallHard: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        timing: z
+          .object({
+            debounceMs: z.number().int().min(0).optional(),
+            stallSoftMs: z.number().int().min(0).optional(),
+            stallHardMs: z.number().int().min(0).optional(),
+            doneHoldMs: z.number().int().min(0).optional(),
+            errorHoldMs: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })
@@ -129,11 +158,11 @@ export const CommandsSchema = z
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
     config: z.boolean().optional(),
     debug: z.boolean().optional(),
-    restart: z.boolean().optional(),
+    restart: z.boolean().optional().default(true),
     useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()
   .optional()
-  .default({ native: "auto", nativeSkills: "auto" });
+  .default({ native: "auto", nativeSkills: "auto", restart: true });

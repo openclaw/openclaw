@@ -20,3 +20,4 @@ Purpose: attach OpenClaw to an existing Chrome tab so the Gateway can automate i
 ## Options
 
 - `Relay port`: defaults to `18792`.
+- `Gateway token`: required. Set this to `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).

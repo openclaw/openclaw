@@ -39,8 +39,8 @@ Use `trusted-proxy` auth mode when:
 ```json5
 {
   gateway: {
-    // Must bind to network interface (not loopback)
-    bind: "lan",
+    // Use loopback for same-host proxy setups; use lan/custom for remote proxy hosts
+    bind: "loopback",
 
     // CRITICAL: Only add your proxy's IP(s) here
     trustedProxies: ["10.0.0.1", "172.17.0.1"],
@@ -61,6 +61,9 @@ Use `trusted-proxy` auth mode when:
   },
 }
 ```
+
+If `gateway.bind` is `loopback`, include a loopback proxy address in
+`gateway.trustedProxies` (`127.0.0.1`, `::1`, or an equivalent loopback CIDR).
 
 ### Configuration Reference
 

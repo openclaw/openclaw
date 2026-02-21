@@ -24,3 +24,27 @@ export function pruneExpiredPending<T extends { ts: number }>(
     }
   }
 }
+
+export type PendingPairingRequestResult<TPending> = {
+  status: "pending";
+  request: TPending;
+  created: boolean;
+};
+
+export async function upsertPendingPairingRequest<TPending extends { requestId: string }>(params: {
+  pendingById: Record<string, TPending>;
+  isExisting: (pending: TPending) => boolean;
+  createRequest: (isRepair: boolean) => TPending;
+  isRepair: boolean;
+  persist: () => Promise<void>;
+}): Promise<PendingPairingRequestResult<TPending>> {
+  const existing = Object.values(params.pendingById).find(params.isExisting);
+  if (existing) {
+    return { status: "pending", request: existing, created: false };
+  }
+
+  const request = params.createRequest(params.isRepair);
+  params.pendingById[request.requestId] = request;
+  await params.persist();
+  return { status: "pending", request, created: true };
+}

@@ -1,4 +1,8 @@
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import {
+  stripEnvelope,
+  stripInboundMetadataBlocks,
+  stripMessageIdHints,
+} from "../shared/chat-envelope.js";
 
 export { stripEnvelope };
 
@@ -12,7 +16,7 @@ function stripEnvelopeFromContent(content: unknown[]): { content: unknown[]; cha
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadataBlocks(entry.text)));
     if (stripped === entry.text) {
       return item;
     }
@@ -39,7 +43,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   const next: Record<string, unknown> = { ...entry };
 
   if (typeof entry.content === "string") {
-    const stripped = stripMessageIdHints(stripEnvelope(entry.content));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadataBlocks(entry.content)));
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -51,7 +55,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadataBlocks(entry.text)));
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;
