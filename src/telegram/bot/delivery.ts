@@ -306,6 +306,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  localBotApiUrl?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -313,8 +314,11 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
+  const fileApiBase = localBotApiUrl
+    ? localBotApiUrl.replace(/\/+$/, "")
+    : "https://api.telegram.org";
   const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const url = `${fileApiBase}/file/bot${token}/${filePath}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
@@ -322,6 +326,24 @@ export async function resolveMedia(
     });
     const originalName = fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
+  };
+
+  // When localBotApiUrl is configured, call getFile via the local server
+  // so large files (>20 MB) are not rejected by the standard Bot API.
+  const getFilePath = async (fileId: string, fetchImpl: typeof fetch): Promise<string | null> => {
+    if (!localBotApiUrl) {
+      const file = await ctx.getFile();
+      return file.file_path ?? null;
+    }
+    const res = await fetchImpl(
+      `${fileApiBase}/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`,
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Local Bot API getFile failed (${res.status}): ${body}`);
+    }
+    const json = (await res.json()) as { ok?: boolean; result?: { file_path?: string } };
+    return json?.result?.file_path ?? null;
   };
 
   // Handle stickers separately - only static stickers (WEBP) are supported
@@ -337,17 +359,17 @@ export async function resolveMedia(
     }
 
     try {
-      const file = await ctx.getFile();
-      if (!file.file_path) {
-        logVerbose("telegram: getFile returned no file_path for sticker");
-        return null;
-      }
       const fetchImpl = proxyFetch ?? globalThis.fetch;
       if (!fetchImpl) {
         logVerbose("telegram: fetch not available for sticker download");
         return null;
       }
-      const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+      const filePath = await getFilePath(sticker.file_id, fetchImpl);
+      if (!filePath) {
+        logVerbose("telegram: getFile returned no file_path for sticker");
+        return null;
+      }
+      const saved = await downloadAndSaveTelegramFile(filePath, fetchImpl);
 
       // Check sticker cache for existing description
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
@@ -408,9 +430,14 @@ export async function resolveMedia(
     return null;
   }
 
-  let file: { file_path?: string };
+  const fetchImpl = proxyFetch ?? globalThis.fetch;
+  if (!fetchImpl) {
+    throw new Error("fetch is not available; set channels.telegram.proxy in config");
+  }
+
+  let filePath: string | null;
   try {
-    file = await retryAsync(() => ctx.getFile(), {
+    filePath = await retryAsync(() => getFilePath(m.file_id, fetchImpl), {
       attempts: 3,
       minDelayMs: 1000,
       maxDelayMs: 4000,
@@ -435,14 +462,10 @@ export async function resolveMedia(
     logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
     return null;
   }
-  if (!file.file_path) {
+  if (!filePath) {
     throw new Error("Telegram getFile returned no file_path");
   }
-  const fetchImpl = proxyFetch ?? globalThis.fetch;
-  if (!fetchImpl) {
-    throw new Error("fetch is not available; set channels.telegram.proxy in config");
-  }
-  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+  const saved = await downloadAndSaveTelegramFile(filePath, fetchImpl);
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
