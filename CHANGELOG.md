@@ -32,7 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Security/Exec: block `sort --compress-program` in `tools.exec.safeBins` policy so allowlist-mode safe-bin checks cannot be used to bypass approval and spawn external programs. Thanks @tdjackey for reporting.
+- Security/Exec: in non-default setups that manually add `sort` to `tools.exec.safeBins`, block `sort --compress-program` so allowlist-mode safe-bin checks cannot bypass approval. Thanks @tdjackey for reporting.
 - Doctor/State integrity: only require/create the OAuth credentials directory when WhatsApp or pairing-backed channels are configured, and downgrade fresh-install missing-dir noise to an informational warning.
 - Agents/Sanitization: stop rewriting billing-shaped assistant text outside explicit error context so normal replies about billing/credits/payment are preserved across messaging channels. (#17834, fixes #11359)
 - Security/Agents: cap embedded Pi runner outer retry loop with a higher profile-aware dynamic limit (32-160 attempts) and return an explicit `retry_limit` error payload when retries never converge, preventing unbounded internal retry cycles (`GHSA-76m6-pj3w-v7mf`).
