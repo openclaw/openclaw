@@ -19,6 +19,10 @@ OpenClaw 는 폭발 반경을 줄이기 위해 **도구를 Docker 컨테이너 �
 - 선택적 샌드박스 격리 브라우저 (`agents.defaults.sandbox.browser`).
   - 기본적으로 샌드박스 격리 브라우저는 브라우저 도구가 필요할 때 CDP 에 접근할 수 있도록 자동 시작됩니다.
     설정은 `agents.defaults.sandbox.browser.autoStart` 및 `agents.defaults.sandbox.browser.autoStartTimeoutMs` 를 통해 가능합니다.
+  - 기본적으로 샌드박스 브라우저 컨테이너는 글로벌 `bridge` 네트워크 대신 전용 Docker 네트워크 (`openclaw-sandbox-browser`)를 사용합니다.
+    `agents.defaults.sandbox.browser.network`로 설정하세요.
+  - 선택적 `agents.defaults.sandbox.browser.cdpSourceRange`는 CIDR 허용 목록으로 컨테이너 엣지 CDP 수신을 제한합니다 (예: `172.21.0.1/32`).
+  - noVNC 관찰자 접근은 기본적으로 비밀번호로 보호됩니다; OpenClaw는 관찰자 세션으로 연결되는 단기 토큰 URL을 생성합니다.
   - `agents.defaults.sandbox.browser.allowHostControl` 은 샌드박스 격리 세션이 호스트 브라우저를 명시적으로 지정할 수 있도록 합니다.
   - 선택적 허용 목록(allowlist)이 `target: "custom"` 을 제한합니다: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 

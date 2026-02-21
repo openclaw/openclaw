@@ -462,6 +462,9 @@ scripts/sandbox-browser-setup.sh
 - Headful (Xvfb)은 headless 대비 봇 차단을 줄입니다.
 - Headless도 `agents.defaults.sandbox.browser.headless=true`로 설정하여 여전히 사용할 수 있습니다.
 - 전체 데스크탑 환경 (GNOME)은 필요하지 않으며; Xvfb가 디스플레이를 제공합니다.
+- 브라우저 컨테이너는 글로벌 `bridge` 대신 기본적으로 전용 Docker 네트워크 (`openclaw-sandbox-browser`)를 사용합니다.
+- 선택적 `agents.defaults.sandbox.browser.cdpSourceRange`는 CIDR로 컨테이너 엣지 CDP 수신을 제한합니다 (예: `172.21.0.1/32`).
+- noVNC 관찰자 접근은 기본적으로 비밀번호로 보호됩니다; OpenClaw는 URL에 원시 비밀번호를 공유하는 대신 단기 관찰자 토큰 URL을 제공합니다.
 
 구성 사용:
 

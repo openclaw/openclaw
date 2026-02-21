@@ -19,7 +19,7 @@ title: "원격 액세스"
 
 ## 일반적인 VPN/tailnet 설정 (에이전트가 위치하는 곳)
 
-**게이트웨이 호스트**를 "에이전트가 위치하는 곳"으로 생각하세요. 이 호스트는 세션, 인증 프로파일, 채널 및 상태를 소유합니다. 
+**게이트웨이 호스트**를 "에이전트가 위치하는 곳"으로 생각하세요. 이 호스트는 세션, 인증 프로파일, 채널 및 상태를 소유합니다.
 노트북/데스크톱(및 노드)이 해당 호스트에 연결됩니다.
 
 ### 1) tailnet의 항상 켜져 있는 게이트웨이 (VPS 또는 집 서버)
@@ -79,7 +79,7 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 - `openclaw health`와 `openclaw status --deep`이 이제 `ws://127.0.0.1:18789`를 통해 원격 게이트웨이에 도달합니다.
 - `openclaw gateway {status,health,send,agent,call}`도 필요 시 `--url`을 통해 전달된 URL로 타깃할 수 있습니다.
 
-참고: `18789`를 설정된 `gateway.port`(또는 `--port`/`OPENCLAW_GATEWAY_PORT`)로 대체하십시오. 
+참고: `18789`를 설정된 `gateway.port`(또는 `--port`/`OPENCLAW_GATEWAY_PORT`)로 대체하십시오.
 참고: `--url`을 전달할 때, CLI는 구성이나 환경 자격 증명으로 되돌아가지 않습니다. `--token` 또는 `--password`를 명시적으로 포함하십시오. 명시적인 자격 증명 누락은 오류입니다.
 
 ## CLI 원격 기본값
@@ -121,8 +121,7 @@ macOS 메뉴 바 앱은 동일한 설정을 처음부터 끝까지 수행할 수
 - **비루프백 바인드**(`lan`/`tailnet`/`custom`, 또는 루프백이 사용 불가능할 때 `auto`)는 인증 토큰/비밀번호를 반드시 사용해야 합니다.
 - `gateway.remote.token`은 **원격 CLI 호출에만** 사용됩니다. 로컬 인증을 활성화하지 **않습니다**.
 - `gateway.remote.tlsFingerprint`는 `wss://`를 사용할 때 원격 TLS 인증서를 고정합니다.
-- **Tailscale Serve**는 `gateway.auth.allowTailscale: true`일 경우 신원 헤더를 통해 인증할 수 있습니다.
-  토큰/비밀번호를 원하면 이를 'false'로 설정하세요.
+- **Tailscale Serve**는 `gateway.auth.allowTailscale: true`일 때 신원 헤더를 통해 Control UI/WebSocket 트래픽을 인증할 수 있습니다; HTTP API 엔드포인트는 여전히 토큰/비밀번호 인증이 필요합니다. 이 토큰 없는 흐름은 게이트웨이 호스트가 신뢰할 수 있다고 가정합니다. 어디서나 토큰/비밀번호를 원하면 이를 `false`로 설정하세요.
 - 브라우저 제어는 운영자 접근처럼 다루십시오: tailnet 전용 + 의도적인 노드 페어링.
 
 자세히 알아보기: [보안](/ko-KR/gateway/security).

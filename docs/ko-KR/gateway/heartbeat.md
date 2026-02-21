@@ -151,6 +151,16 @@ Heartbeat 외부에서는, 메시지의 시작/끝에 있는 불필요한 `HEART
 
 이 창 밖(오전 9시 이전 또는 오후 10시 이후 동부 시간)에서는 Heartbeat가 건너뛰어집니다. 창 안의 다음 예약된 틱은 정상적으로 실행됩니다.
 
+### 24시간 설정
+
+Heartbeat를 하루 종일 실행하고 싶다면 다음 패턴 중 하나를 사용하세요:
+
+- `activeHours`를 완전히 생략합니다 (시간 창 제한 없음; 이것이 기본 동작입니다).
+- 전체 하루 창을 설정합니다: `activeHours: { start: "00:00", end: "24:00" }`.
+
+`start`와 `end`를 같은 시간으로 설정하지 마세요 (예: `08:00`부터 `08:00`).
+이는 폭이 0인 창으로 처리되어 Heartbeat가 항상 건너뛰어집니다.
+
 ### 멀티 계정의 예시
 
 `accountId`를 사용하여 Telegram과 같은 멀티-계정 채널의 특정 계정을 대상으로 합니다:
@@ -198,10 +208,11 @@ Heartbeat 외부에서는, 메시지의 시작/끝에 있는 불필요한 `HEART
 - `prompt`: 기본 프롬프트 본문을 재정의합니다 (병합되지 않음).
 - `ackMaxChars`: 전달 전 `HEARTBEAT_OK` 후 허용되는 최대 문자 수.
 - `suppressToolErrorWarnings`: true일 경우, Heartbeat 실행 중 도구 에러 경고 페이로드를 억제합니다.
-- `activeHours`: Heartbeat 실행을 시간 창으로 제한. `start` (HH:MM, 포함), `end` (HH:MM 제외; `24:00`은 하루의 끝까지 허용), 그리고 선택적 `timezone`을 가진 객체.
+- `activeHours`: Heartbeat 실행을 시간 창으로 제한. `start` (HH:MM, 포함; 하루 시작은 `00:00` 사용), `end` (HH:MM 제외; `24:00`은 하루의 끝까지 허용), 그리고 선택적 `timezone`을 가진 객체.
   - 생략되었거나 `"user"`: 설정된 경우 `agents.defaults.userTimezone`를 사용합니다; 그렇지 않을 경우 호스트 시스템 시간대를 기본으로 사용합니다.
   - `"local"`: 항상 호스트 시스템 시간대를 사용합니다.
   - 모든 IANA 식별자 (예: `America/New_York`): 직접 사용됨; 유효하지 않은 경우 위의 `"user"` 동작으로 대체됩니다.
+  - `start`와 `end`는 활성 창이 되려면 같아서는 안 됩니다; 같은 값은 폭이 0인 창(항상 창 밖)으로 처리됩니다.
   - 활동 창 밖에서는, Heartbeat가 다음 창 안쪽의 틱까지 건너뜁니다.
 
 ## 전달 동작

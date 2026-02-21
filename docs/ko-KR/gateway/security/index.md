@@ -30,6 +30,14 @@ OpenClaw는 제품이자 실험입니다: 실시간 메시징 표면과 실제 �
 
 작동에 필요한 최소한의 액세스로 시작하고, 확신이 생길 때 확장하세요.
 
+## 배포 가정 (중요)
+
+OpenClaw는 호스트와 설정 경계가 신뢰할 수 있다고 가정합니다:
+
+- 누군가가 게이트웨이 호스트 상태/설정 (`~/.openclaw`, `openclaw.json` 포함)을 수정할 수 있다면 신뢰할 수 있는 운영자로 취급하세요.
+- 상호 신뢰하지 않는/적대적인 여러 운영자를 위해 하나의 게이트웨이를 실행하는 것은 **권장되지 않는 설정**입니다.
+- 혼합 신뢰 팀의 경우, 별도의 게이트웨이 (또는 최소한 별도의 OS 사용자/호스트)로 신뢰 경계를 분리하세요.
+
 ## 60초 안에 강화된 기본 설정
 
 이 기본 설정을 먼저 사용한 다음, 신뢰할 수 있는 에이전트별로 도구를 선택적으로 다시 활성화하세요:
@@ -66,6 +74,7 @@ OpenClaw는 제품이자 실험입니다: 실시간 메시징 표면과 실제 �
 - `session.dmScope: "per-channel-peer"` 설정 (또는 다중 계정 채널의 경우 `"per-account-channel-peer"`).
 - `dmPolicy: "pairing"` 또는 엄격한 허용 목록 유지.
 - 공유 DM을 광범위한 도구 접근과 절대 결합하지 마세요.
+- 이는 협력적/공유 받은 편지함을 강화하지만, 사용자가 동일한 호스트/설정 쓰기 접근을 공유하는 경우 적대적 동거 격리를 위한 것이 아닙니다.
 
 ### 감사가 검사하는 항목 (고수준)
 
@@ -84,25 +93,26 @@ OpenClaw는 제품이자 실험입니다: 실시간 메시징 표면과 실제 �
 
 실제 배포에서 가장 자주 볼 수 있는 높은 신호 `checkId` 값 (전체 목록은 아님):
 
-| `checkId`                                    | 심각도      | 중요한 이유                                           | 주요 수정 키/경로                             | 자동 수정 |
-| -------------------------------------------- | ------------- | -------------------------------------------------------- | ------------------------------------------------ | -------- |
-| `fs.state_dir.perms_world_writable`          | critical      | 다른 사용자/프로세스가 전체 OpenClaw 상태를 수정 가능     | `~/.openclaw`의 파일시스템 권한                | yes      |
-| `fs.config.perms_writable`                   | critical      | 다른 사용자가 인증/도구 정책/구성 변경 가능                | `~/.openclaw/openclaw.json`의 파일시스템 권한  | yes      |
-| `fs.config.perms_world_readable`             | critical      | 구성이 토큰/설정 노출 가능                        | 구성 파일의 파일시스템 권한                  | yes      |
-| `gateway.bind_no_auth`                       | critical      | 공유 비밀 없는 원격 바인드                        | `gateway.bind`, `gateway.auth.*`                 | no       |
-| `gateway.loopback_no_auth`                   | critical      | 역방향 프록시 루프백이 인증되지 않을 수 있음      | `gateway.auth.*`, 프록시 설정                    | no       |
-| `gateway.tools_invoke_http.dangerous_allow`  | warn/critical | HTTP API를 통해 위험한 도구 재활성화                 | `gateway.tools.allow`                            | no       |
-| `gateway.tailscale_funnel`                   | critical      | 공용 인터넷 노출                                 | `gateway.tailscale.mode`                         | no       |
-| `gateway.control_ui.insecure_auth`           | critical      | HTTP를 통한 토큰 전용, 장치 ID 없음                 | `gateway.controlUi.allowInsecureAuth`            | no       |
-| `gateway.control_ui.device_auth_disabled`    | critical      | 장치 ID 검사 비활성화                           | `gateway.controlUi.dangerouslyDisableDeviceAuth` | no       |
-| `hooks.token_too_short`                      | warn          | 훅 진입에 대한 무차별 대입 공격이 쉬워짐                       | `hooks.token`                                    | no       |
-| `hooks.request_session_key_enabled`          | warn/critical | 외부 호출자가 sessionKey 선택 가능                    | `hooks.allowRequestSessionKey`                   | no       |
-| `hooks.request_session_key_prefixes_missing` | warn/critical | 외부 세션 키 형태에 대한 제한 없음                  | `hooks.allowedSessionKeyPrefixes`                | no       |
-| `logging.redact_off`                         | warn          | 민감한 값이 로그/상태로 누출                     | `logging.redactSensitive`                        | yes      |
-| `sandbox.docker_config_mode_off`             | warn          | 샌드박스 Docker 구성 존재하나 비활성 상태               | `agents.*.sandbox.mode`                          | no       |
-| `tools.profile_minimal_overridden`           | warn          | 에이전트 오버라이드가 전역 최소 프로필 우회            | `agents.list[].tools.profile`                    | no       |
-| `plugins.tools_reachable_permissive_policy`  | warn          | 허용적 컨텍스트에서 확장 도구 접근 가능         | `tools.profile` + tool allow/deny                | no       |
-| `models.small_params`                        | critical/info | 소형 모델 + 안전하지 않은 도구 표면이 주입 위험 증가 | 모델 선택 + 샌드박스/도구 정책               | no       |
+| `checkId`                                    | 심각도        | 중요한 이유                                           | 주요 수정 키/경로                                | 자동 수정 |
+| -------------------------------------------- | ------------- | ----------------------------------------------------- | ------------------------------------------------ | --------- |
+| `fs.state_dir.perms_world_writable`          | critical      | 다른 사용자/프로세스가 전체 OpenClaw 상태를 수정 가능 | `~/.openclaw`의 파일시스템 권한                  | yes       |
+| `fs.config.perms_writable`                   | critical      | 다른 사용자가 인증/도구 정책/구성 변경 가능           | `~/.openclaw/openclaw.json`의 파일시스템 권한    | yes       |
+| `fs.config.perms_world_readable`             | critical      | 구성이 토큰/설정 노출 가능                            | 구성 파일의 파일시스템 권한                      | yes       |
+| `gateway.bind_no_auth`                       | critical      | 공유 비밀 없는 원격 바인드                            | `gateway.bind`, `gateway.auth.*`                 | no        |
+| `gateway.loopback_no_auth`                   | critical      | 역방향 프록시 루프백이 인증되지 않을 수 있음          | `gateway.auth.*`, 프록시 설정                    | no        |
+| `gateway.tools_invoke_http.dangerous_allow`  | warn/critical | HTTP API를 통해 위험한 도구 재활성화                  | `gateway.tools.allow`                            | no        |
+| `gateway.tailscale_funnel`                   | critical      | 공용 인터넷 노출                                      | `gateway.tailscale.mode`                         | no        |
+| `gateway.control_ui.insecure_auth`           | warn          | 안전하지 않은 인증 호환성 토글 활성화                 | `gateway.controlUi.allowInsecureAuth`            | no        |
+| `gateway.control_ui.device_auth_disabled`    | critical      | 장치 ID 검사 비활성화                                 | `gateway.controlUi.dangerouslyDisableDeviceAuth` | no        |
+| `config.insecure_or_dangerous_flags`         | warn          | 안전하지 않은/위험한 디버그 플래그 활성화             | 여러 키 (발견 세부 정보 참고)                    | no        |
+| `hooks.token_too_short`                      | warn          | 훅 진입에 대한 무차별 대입 공격이 쉬워짐              | `hooks.token`                                    | no        |
+| `hooks.request_session_key_enabled`          | warn/critical | 외부 호출자가 sessionKey 선택 가능                    | `hooks.allowRequestSessionKey`                   | no        |
+| `hooks.request_session_key_prefixes_missing` | warn/critical | 외부 세션 키 형태에 대한 제한 없음                    | `hooks.allowedSessionKeyPrefixes`                | no        |
+| `logging.redact_off`                         | warn          | 민감한 값이 로그/상태로 누출                          | `logging.redactSensitive`                        | yes       |
+| `sandbox.docker_config_mode_off`             | warn          | 샌드박스 Docker 구성 존재하나 비활성 상태             | `agents.*.sandbox.mode`                          | no        |
+| `tools.profile_minimal_overridden`           | warn          | 에이전트 오버라이드가 전역 최소 프로필 우회           | `agents.list[].tools.profile`                    | no        |
+| `plugins.tools_reachable_permissive_policy`  | warn          | 허용적 컨텍스트에서 확장 도구 접근 가능               | `tools.profile` + tool allow/deny                | no        |
+| `models.small_params`                        | critical/info | 소형 모델 + 안전하지 않은 도구 표면이 주입 위험 증가  | 모델 선택 + 샌드박스/도구 정책                   | no        |
 
 ## 자격 증명 저장소 맵
 
@@ -129,28 +139,48 @@ OpenClaw는 제품이자 실험입니다: 실시간 메시징 표면과 실제 �
 
 ## HTTP를 통한 제어 UI
 
-제어 UI는 장치 정체성을 생성하기 위해 **보안 컨텍스트** (HTTPS 또는 로컬호스트)가 필요합니다. `gateway.controlUi.allowInsecureAuth`를 활성화하면, UI는 **토큰 기반 인증**으로 전환되며 장치 정체성이 생략될 때 장치 페어링을 건너뜁니다. 이는 보안 강등입니다—HTTPS (Tailscale Serve)를 선호하거나 `127.0.0.1`에서 UI를 엽니다.
+제어 UI는 장치 정체성을 생성하기 위해 **보안 컨텍스트** (HTTPS 또는 로컬호스트)가 필요합니다. `gateway.controlUi.allowInsecureAuth`는 보안 컨텍스트, 장치 정체성, 또는 장치 페어링 검사를 우회하지 **않습니다**. HTTPS (Tailscale Serve)를 선호하거나 `127.0.0.1`에서 UI를 여세요.
 
 비상시에만, `gateway.controlUi.dangerouslyDisableDeviceAuth`는 장치 정체성 검사를 완전히 비활성화합니다. 이는 심각한 보안 강등입니다; 활성 디버깅 중이고 빨리 되돌릴 수 있는 경우에만 비활성화하세요.
 
 `openclaw security audit`는 이 설정이 활성화되어 있을 때 경고합니다.
 
+## 안전하지 않은 또는 위험한 플래그 요약
+
+`openclaw security audit`는 안전하지 않은/위험한 디버그 스위치가 활성화된 경우 `config.insecure_or_dangerous_flags`를 포함합니다. 이 경고는 한 곳에서 검토할 수 있도록 정확한 키를 집계합니다 (예: `gateway.controlUi.allowInsecureAuth=true`, `gateway.controlUi.dangerouslyDisableDeviceAuth=true`, `hooks.gmail.allowUnsafeExternalContent=true`, 또는 `tools.exec.applyPatch.workspaceOnly=false`).
+
 ## 리버스 프록시 구성
 
 게이트웨이를 리버스 프록시(nginx, Caddy, Traefik 등) 뒤에서 실행하는 경우, 올바른 클라이언트 IP 감지를 위해 `gateway.trustedProxies`를 구성해야 합니다.
 
-게이트웨이가 **신뢰할 수 있는 프록시**에 포함되지 않은 주소에서 프록시 헤더 (`X-Forwarded-For` 또는 `X-Real-IP`)를 감지하면, 해당 연결을 로컬 클라이언트로 취급하지 않습니다. 게이트웨이 인증이 비활성화된 경우, 이러한 연결은 거부됩니다. 이는 프록시 연결이 로컬호스트에서 온 것처럼 보이는 인증 우회가 발생하지 않도록 방지합니다.
+게이트웨이가 **신뢰할 수 있는 프록시**에 포함되지 않은 주소에서 프록시 헤더를 감지하면, 해당 연결을 로컬 클라이언트로 취급하지 않습니다. 게이트웨이 인증이 비활성화된 경우, 이러한 연결은 거부됩니다. 이는 프록시 연결이 로컬호스트에서 온 것처럼 보이는 인증 우회가 발생하지 않도록 방지합니다.
 
 ```yaml
 gateway:
   trustedProxies:
     - "127.0.0.1" # 프록시가 localhost에서 실행되는 경우
+  # 선택 사항. 기본값 false.
+  # 프록시가 X-Forwarded-For를 제공할 수 없는 경우에만 활성화하세요.
+  allowRealIpFallback: false
   auth:
     mode: password
     password: ${OPENCLAW_GATEWAY_PASSWORD}
 ```
 
-`trustedProxies`가 구성된 경우, 게이트웨이는 `X-Forwarded-For` 헤더를 사용하여 로컬 클라이언트 감지를 위한 실제 클라이언트 IP를 결정합니다. 프록시가 스푸핑을 방지하기 위해 수신 `X-Forwarded-For` 헤더를 덮어쓰도록 해야 합니다.
+`trustedProxies`가 구성된 경우, 게이트웨이는 `X-Forwarded-For`를 사용하여 클라이언트 IP를 결정합니다. `X-Real-IP`는 `gateway.allowRealIpFallback: true`가 명시적으로 설정되지 않는 한 기본적으로 무시됩니다.
+
+올바른 리버스 프록시 동작 (수신 포워딩 헤더 덮어쓰기):
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Real-IP $remote_addr;
+```
+
+잘못된 리버스 프록시 동작 (신뢰할 수 없는 포워딩 헤더 추가/보존):
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
 
 ## 로컬 세션 로그는 디스크에 보관됩니다
 
@@ -273,6 +303,8 @@ openclaw pairing approve <channel> <code>
 ```
 
 이는 사용자 간의 컨텍스트 누출을 방지하고 그룹 채팅을 격리한 상태로 유지합니다.
+
+이는 메시징-컨텍스트 경계이지 호스트-관리자 경계가 아닙니다. 사용자가 상호 적대적이고 동일한 게이트웨이 호스트/설정을 공유하는 경우, 신뢰 경계별로 별도의 게이트웨이를 실행하세요.
 
 ### 보안 DM 모드 (권장됨)
 
@@ -554,10 +586,14 @@ Doctor로 하나 생성할 수 있습니다: `openclaw doctor --generate-gateway
 ### 0.6) Tailscale Serve 정체성 헤더
 
 `gateway.auth.allowTailscale`이 `true`인 경우 (Serve의 기본값), OpenClaw
-는 Tailscale Serve 정체성 헤더 (`tailscale-user-login`)를
-인증 수단으로 수락합니다. OpenClaw는 로컬 Tailscale 데몬(`tailscale whois`)을 통해
+는 Control UI/WebSocket 인증을 위해 Tailscale Serve 정체성 헤더 (`tailscale-user-login`)를
+수락합니다. OpenClaw는 로컬 Tailscale 데몬(`tailscale whois`)을 통해
 `x-forwarded-for` 주소를 확인하고 이를 헤더와 일치시켜 정체성을 확인합니다. 이는 루프백을 타격하고
 Tailscale이 주입한 `x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host`를 포함하는 요청에만 발생합니다.
+HTTP API 엔드포인트 (예: `/v1/*`, `/tools/invoke`, `/api/channels/*`)는 여전히 토큰/비밀번호 인증이 필요합니다.
+
+**신뢰 가정:** 토큰 없는 Serve 인증은 게이트웨이 호스트가 신뢰할 수 있다고 가정합니다.
+신뢰할 수 없는 로컬 코드가 게이트웨이 호스트에서 실행될 수 있다면, `gateway.auth.allowTailscale`을 비활성화하고 토큰/비밀번호 인증을 요구하세요.
 
 **보안 규칙:** 이러한 헤더를 자체 리버스 프록시에서 전달하지 마세요. 게이트웨이 앞에서 TLS를 종료하거나
 프록시를 사용하는 경우, `gateway.auth.allowTailscale`을 비활성화하고 대신 토큰/암호 인증(또는 [Trusted Proxy Auth](/ko-KR/gateway/trusted-proxy-auth))을 사용하세요.
@@ -566,9 +602,9 @@ Tailscale이 주입한 `x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host
 
 - 게이트웨이 앞에서 TLS를 종료하는 경우, `gateway.trustedProxies`를 프록시 IP로 설정하세요.
 - OpenClaw는 `x-forwarded-for` (또는 `x-real-ip`)을 해당 IP로부터 신뢰하여 로컬 페어링 검사를 위한 클라이언트
-IP를 확인하고 HTTP 인증/로컬 검사를 수행합니다.
+  IP를 확인하고 HTTP 인증/로컬 검사를 수행합니다.
 - 프록시가 `x-forwarded-for`를 **덮어쓰고** 게이트웨이 포트에 대한 직접 액세스를 차단하도록
-확인하세요.
+  확인하세요.
 
 [Tailscale](/ko-KR/gateway/tailscale) 및 [웹 개요](/ko-KR/web)를 참조하세요.
 
@@ -896,7 +932,6 @@ CI는 `secrets` 작업에서 `detect-secrets scan --baseline .secrets.baseline`�
    ```
 
 2. 도구를 이해:
-
    - `detect-secrets scan`은 기준선과 후보를 찾고 비교합니다.
    - `detect-secrets audit`는 기본 항목을 실제인지 거짓양성인지 표시하기 위한
      대화형 검토를 엽니다.
@@ -934,6 +969,7 @@ OpenClaw에서 취약점을 발견했나요? 책임감 있게 보고해 주세�
 1. 이메일: [security@openclaw.ai](mailto:security@openclaw.ai)
 2. 수정될 때까지 공개적으로 게시하지 마세요
 3. 원하신다면 귀하의 공로를 인정합니다 (익명을 선호하신다면 제외)
+
 ---
 
 _"보안은 제품이 아니라 과정입니다. 또한, 셸 액세스를 가진 바닷가재를 신뢰하지 마세요."_ — 분명히 현명한 누군가

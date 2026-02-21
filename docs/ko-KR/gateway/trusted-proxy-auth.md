@@ -39,8 +39,8 @@ read_when:
 ```json5
 {
   gateway: {
-    // 네트워크 인터페이스에 바인드해야 함 (로컬 루프백 아님)
-    bind: "lan",
+    // 동일 호스트 프록시 설정에는 loopback 사용; 원격 프록시 호스트에는 lan/custom 사용
+    bind: "loopback",
 
     // 중요: 여기에는 프록시의 IP만 추가
     trustedProxies: ["10.0.0.1", "172.17.0.1"],
@@ -62,15 +62,17 @@ read_when:
 }
 ```
 
+`gateway.bind`가 `loopback`인 경우, `gateway.trustedProxies`에 루프백 프록시 주소를 포함하세요 (`127.0.0.1`, `::1`, 또는 동등한 루프백 CIDR).
+
 ### 설정 참조
 
-| 필드                                       | 필수   | 설명                                                                 |
-| ------------------------------------------- | ------- | --------------------------------------------------------------------------- |
-| `gateway.trustedProxies`                    | 예      | 신뢰할 수 있는 프록시 IP 주소 배열. 다른 IP로부터의 요청은 거부됩니다. |
-| `gateway.auth.mode`                         | 예      | 반드시 `"trusted-proxy"` 여야 합니다.                                  |
-| `gateway.auth.trustedProxy.userHeader`      | 예      | 인증된 사용자 ID가 포함된 헤더 이름                                     |
-| `gateway.auth.trustedProxy.requiredHeaders` | 아니요 | 요청이 신뢰될 수 있도록 반드시 있어야 하는 추가 헤더들                      |
-| `gateway.auth.trustedProxy.allowUsers`      | 아니요 | 사용자 ID 화이트리스트. 빈 값은 모든 인증된 사용자를 허용함.              |
+| 필드                                        | 필수   | 설명                                                                   |
+| ------------------------------------------- | ------ | ---------------------------------------------------------------------- |
+| `gateway.trustedProxies`                    | 예     | 신뢰할 수 있는 프록시 IP 주소 배열. 다른 IP로부터의 요청은 거부됩니다. |
+| `gateway.auth.mode`                         | 예     | 반드시 `"trusted-proxy"` 여야 합니다.                                  |
+| `gateway.auth.trustedProxy.userHeader`      | 예     | 인증된 사용자 ID가 포함된 헤더 이름                                    |
+| `gateway.auth.trustedProxy.requiredHeaders` | 아니요 | 요청이 신뢰될 수 있도록 반드시 있어야 하는 추가 헤더들                 |
+| `gateway.auth.trustedProxy.allowUsers`      | 아니요 | 사용자 ID 화이트리스트. 빈 값은 모든 인증된 사용자를 허용함.           |
 
 ## 프록시 설정 예시
 

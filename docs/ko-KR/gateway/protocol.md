@@ -199,8 +199,8 @@ title: "게이트웨이 프로토콜"
 - **로컬** 연결에는 루프백과 게이트웨이 호스트 자체의 tailnet 주소가 포함됩니다
   (동일 호스트 tailnet 바인드도 자동 승인 가능).
 - 모든 WebSocket 클라이언트는 `connect` 시 `device` ID를 포함해야 합니다 (operator + node).
-  Control UI는 `gateway.controlUi.allowInsecureAuth`가 활성화된 경우에만 생략할 수 있습니다
-  (긴급 사용 시 `gateway.controlUi.dangerouslyDisableDeviceAuth`).
+  Control UI는 긴급 사용 시 `gateway.controlUi.dangerouslyDisableDeviceAuth`가
+  활성화된 경우에만 생략할 수 있습니다.
 - 비로컬 연결은 서버가 제공한 `connect.challenge` nonce에 서명해야 합니다.
 
 ## TLS + 핀 고정

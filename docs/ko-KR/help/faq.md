@@ -339,7 +339,7 @@ openclaw onboard
 
 **로컬호스트가 아닌 경우:**
 
-- **Tailscale Serve** (권장): 루프백을 유지하고, `openclaw gateway --tailscale serve`를 실행하여 `https://<magicdns>/`를 엽니다. `gateway.auth.allowTailscale`이 `true`이면, 인증 헤더가 인증을 만족시킵니다 (토큰 불필요).
+- **Tailscale Serve** (권장): 루프백을 유지하고, `openclaw gateway --tailscale serve`를 실행하여 `https://<magicdns>/`를 엽니다. `gateway.auth.allowTailscale`이 `true`이면, 인증 헤더가 Control UI/WebSocket 인증을 만족시킵니다 (토큰 불필요, 신뢰할 수 있는 게이트웨이 호스트 가정); HTTP API는 여전히 토큰/비밀번호가 필요합니다.
 - **Tailnet 바인드**: `openclaw gateway --bind tailnet --token "<token>"`을 실행하고, `http://<tailscale-ip>:18789/`을 열어 대시보드 설정에 토큰을 붙여넣으세요.
 - **SSH 터널**: `ssh -N -L 18789:127.0.0.1:18789 user@host`를 실행한 후, `http://127.0.0.1:18789/`을 열고 Control UI 설정에 토큰을 붙여넣으세요.
 
@@ -970,6 +970,26 @@ OpenClaw는 **개인 어시스턴트**이며, 조정 레이어로 IDE 대체물�
 토큰 팁: 긴 작업과 하위 에이전트 모두 토큰을 사용합니다. 비용이 걱정된다면 `agents.defaults.subagents.model`을 통해 하위 에이전트에 저렴한 모델을 설정하세요.
 
 문서: [하위 에이전트](/tools/subagents).
+
+### Discord에서 스레드 바인딩 서브에이전트 세션은 어떻게 작동하나요
+
+스레드 바인딩을 사용하세요. Discord 스레드를 서브에이전트나 세션 대상에 바인딩하면 해당 스레드의 후속 메시지가 바인딩된 세션에 머물도록 할 수 있습니다.
+
+기본 흐름:
+
+- `sessions_spawn`에서 `thread: true`를 사용하여 생성합니다 (지속적인 후속 작업을 위해 선택적으로 `mode: "session"`).
+- 또는 `/focus <target>`으로 수동으로 바인딩합니다.
+- `/agents`로 바인딩 상태를 확인합니다.
+- `/session ttl <duration|off>`로 자동 해제를 제어합니다.
+- `/unfocus`로 스레드를 분리합니다.
+
+필요한 설정:
+
+- 글로벌 기본값: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`.
+- Discord 오버라이드: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`.
+- 생성 시 자동 바인딩: `channels.discord.threadBindings.spawnSubagentSessions: true` 설정.
+
+문서: [하위 에이전트](/ko-KR/tools/subagents), [Discord](/ko-KR/channels/discord), [설정 레퍼런스](/ko-KR/gateway/configuration-reference), [슬래시 명령](/ko-KR/tools/slash-commands).
 
 ### 크론이나 리마인더가 실행되지 않습니다. 무엇을 확인해야 하나요
 
@@ -1712,7 +1732,7 @@ openclaw onboard --install-daemon
 
 문서: [압축](/concepts/compaction), [세션 트리밍](/concepts/session-pruning), [세션 관리](/concepts/session).
 
-### LLM 요청 거부 메시지NcontentXtooluseinput 필수 필드가 필요한 이유는 무엇인가요
+### "LLM 요청 거부됨: messages.content.tool_use.input 필드 필요"가 표시되는 이유는 무엇인가요
 
 이것은 모델이 필수 `input` 없이 `tool_use` 블록을 출력한 경우 발생하는 프로바이더 유효성 검사 오류입니다. 일반적으로 세션 기록이 오래되었거나 손상되었음을 의미합니다 (종종 긴 스레드나 도구/스키마 변경 이후).
 

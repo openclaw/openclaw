@@ -182,6 +182,10 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
     {
       session: {
         dmScope: "per-channel-peer",  // recommended for multi-user
+        threadBindings: {
+          enabled: true,
+          ttlHours: 24,
+        },
         reset: {
           mode: "daily",
           atHour: 4,
@@ -192,6 +196,7 @@ OpenClaw 는 스키마와 완전히 일치하는 구성만 허용합니다. 알 
     ```
 
     - `dmScope`: `main` (공유) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
+    - `threadBindings`: 스레드 바인딩 세션 라우팅의 글로벌 기본값 (Discord는 `/focus`, `/unfocus`, `/agents`, `/session ttl` 지원).
     - 범위 지정, ID 링크 및 전송 정책은 [Session Management](/ko-KR/concepts/session)를 참조하세요.
     - 모든 필드는 [전체 레퍼런스](/ko-KR/gateway/configuration-reference#session)를 참조하세요.
 

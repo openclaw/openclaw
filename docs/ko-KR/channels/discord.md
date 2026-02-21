@@ -258,6 +258,29 @@ Discord 서버에 채널을 만들고 채팅을 시작하세요. 에이전트는
 - 그룹 다이렉트 메시지는 기본적으로 무시됩니다 (`channels.discord.dm.groupEnabled=false`).
 - 네이티브 슬래시 명령어는 격리된 명령어 세션 (`agent:<agentId>:discord:slash:<userId>`)에서 실행되며, `CommandTargetSessionKey`를 경로화된 대화 세션에 유지합니다.
 
+## 포럼 채널
+
+Discord 포럼 및 미디어 채널은 스레드 게시물만 허용합니다. OpenClaw는 두 가지 방법으로 이를 생성합니다:
+
+- 포럼 상위 채널(`channel:<forumId>`)로 메시지를 보내면 자동으로 스레드가 생성됩니다. 스레드 제목은 메시지의 첫 번째 비어있지 않은 줄을 사용합니다.
+- `openclaw message thread create`를 사용하여 직접 스레드를 생성합니다. 포럼 채널에는 `--message-id`를 전달하지 마세요.
+
+예시: 포럼 상위 채널에 보내서 스레드 생성
+
+```bash
+openclaw message send --channel discord --target channel:<forumId> \
+  --message "토픽 제목\n게시물 본문"
+```
+
+예시: 포럼 스레드 명시적 생성
+
+```bash
+openclaw message thread create --channel discord --target channel:<forumId> \
+  --thread-name "토픽 제목" --message "게시물 본문"
+```
+
+포럼 상위 채널은 Discord 컴포넌트를 허용하지 않습니다. 컴포넌트가 필요하다면 스레드 자체(`channel:<threadId>`)로 보내세요.
+
 ## Interactive components
 
 OpenClaw는 에이전트 메시지에 대해 Discord components v2 컨테이너를 지원합니다. 메시지 도구를 `components` 페이로드로 사용하세요. 상호작용 결과는 기존 Discord `replyToMode` 설정을 따라 정상적인 인바운드 메시지로 에이전트에게 라우팅됩니다.
@@ -271,6 +294,8 @@ OpenClaw는 에이전트 메시지에 대해 Discord components v2 컨테이너�
 기본적으로 컴포넌트는 단일 사용입니다. `components.reusable=true`로 버튼, 선택, 및 양식을 만료될 때까지 여러 번 사용할 수 있도록 설정하세요.
 
 누가 버튼을 클릭할 수 있는지를 제한하려면 해당 버튼에 `allowedUsers`를 설정하세요 (Discord 사용자 ID, 태그 또는 `*`). 구성된 경우 매치되지 않는 사용자는 에페멀로 거부를 받습니다.
+
+`/model` 및 `/models` 슬래시 명령어는 프로바이더와 모델 드롭다운 및 제출 단계가 있는 인터랙티브 모델 선택기를 엽니다. 선택기 응답은 에페멀이며 호출한 사용자만 사용할 수 있습니다.
 
 파일 첨부:
 
@@ -373,6 +398,7 @@ OpenClaw는 에이전트 메시지에 대해 Discord components v2 컨테이너�
 
     - 길드는 `channels.discord.guilds`와 일치해야 합니다 (`id` 권장, 슬러그 허용)
     - 선택적 발신자 허용 목록: `users` (ID 또는 이름) 및 `roles` (역할 ID만); 둘 중 하나가 구성된 경우, 발신자는 `users` 또는 `roles`와 일치할 때 허용됩니다.
+    - `users`에는 이름/태그가 지원되지만 ID가 더 안전합니다; `openclaw security audit`는 이름/태그 항목이 사용될 때 경고합니다
     - 길드에 `channels`가 구성된 경우, 나열되지 않은 채널은 거부됩니다.
     - 길드에 `channels` 블록이 없는 경우, 허용 목록에 있는 길드의 모든 채널이 허용됩니다.
 
@@ -509,6 +535,10 @@ Discord 길드 멤버를 역할 ID에 따라 다른 에이전트로 라우팅하
 
 명령어 카탈로그 및 동작을 보려면 [Slash commands](/ko-KR/tools/slash-commands)를 참고하세요.
 
+기본 슬래시 명령어 설정:
+
+- `ephemeral: true`
+
 ## Feature details
 
 <AccordionGroup>
@@ -527,6 +557,50 @@ Discord 길드 멤버를 역할 ID에 따라 다른 에이전트로 라우팅하
     참고: `off`는 암시적 응답 스레딩을 비활성화합니다. 명시적 `[[reply_to_*]]` 태그는 여전히 존중됩니다.
 
     메시지 ID는 에이전트가 특정 메시지를 타겟팅할 수 있도록 컨텍스트/히스토리에 표시됩니다.
+
+  </Accordion>
+
+  <Accordion title="Live stream preview">
+    OpenClaw는 임시 메시지를 전송하고 텍스트가 도착하면 수정하여 초안 답글을 스트리밍할 수 있습니다.
+
+    - `channels.discord.streaming`은 미리보기 스트리밍을 제어합니다 (`off` | `partial` | `block` | `progress`, 기본값: `off`).
+    - `progress`는 교차 채널 일관성을 위해 허용되며 Discord에서 `partial`로 매핑됩니다.
+    - `channels.discord.streamMode`는 레거시 별칭이며 자동으로 마이그레이션됩니다.
+    - `partial`은 토큰이 도착함에 따라 단일 미리보기 메시지를 편집합니다.
+    - `block`은 초안 크기 청크를 내보냅니다 (`draftChunk`로 크기와 구분점 조정).
+
+    예시:
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "partial",
+    },
+  },
+}
+```
+
+    `block` 모드 청킹 기본값 (`channels.discord.textChunkLimit`으로 제한됨):
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "block",
+      draftChunk: {
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph",
+      },
+    },
+  },
+}
+```
+
+    미리보기 스트리밍은 텍스트 전용입니다; 미디어 답글은 일반 전달로 폴백됩니다.
+
+    참고: 미리보기 스트리밍은 블록 스트리밍과 별도입니다. Discord에 블록 스트리밍이 명시적으로 활성화된 경우, OpenClaw는 이중 스트리밍을 방지하기 위해 미리보기 스트림을 건너뜁니다.
 
   </Accordion>
 
@@ -549,6 +623,49 @@ Discord 길드 멤버를 역할 ID에 따라 다른 에이전트로 라우팅하
     - 스레드 설정은 스레드별 항목이 없으면 부모 채널 설정을 상속받습니다
 
     채널 주제는 **신뢰할 수 없는** 컨텍스트로 주입됩니다 (시스템 프롬프트로 아님).
+
+  </Accordion>
+
+  <Accordion title="Thread-bound sessions for subagents">
+    Discord는 스레드를 세션 대상에 바인딩하여 해당 스레드의 후속 메시지가 동일한 세션(서브에이전트 세션 포함)으로 계속 라우팅되도록 할 수 있습니다.
+
+    명령어:
+
+    - `/focus <target>` 현재/새 스레드를 서브에이전트/세션 대상에 바인딩
+    - `/unfocus` 현재 스레드 바인딩 제거
+    - `/agents` 활성 실행 및 바인딩 상태 표시
+    - `/session ttl <duration|off>` 집중 바인딩의 자동 해제 TTL 확인/업데이트
+
+    설정:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      ttlHours: 24,
+    },
+  },
+  channels: {
+    discord: {
+      threadBindings: {
+        enabled: true,
+        ttlHours: 24,
+        spawnSubagentSessions: false, // 명시적 활성화 필요
+      },
+    },
+  },
+}
+```
+
+    참고:
+
+    - `session.threadBindings.*`는 글로벌 기본값을 설정합니다.
+    - `channels.discord.threadBindings.*`는 Discord 동작을 오버라이드합니다.
+    - `spawnSubagentSessions`는 `sessions_spawn({ thread: true })`로 스레드를 자동 생성/바인딩하려면 true여야 합니다.
+    - 계정에 스레드 바인딩이 비활성화된 경우, `/focus` 및 관련 스레드 바인딩 작업을 사용할 수 없습니다.
+
+    [Sub-agents](/ko-KR/tools/subagents) 및 [Configuration Reference](/ko-KR/gateway/configuration-reference)를 참고하세요.
 
   </Accordion>
 
@@ -774,6 +891,47 @@ OpenClaw는 승인 및 교차 컨텍스트 마커를 위한 Discord components v
 }
 ```
 
+## 음성 채널
+
+OpenClaw는 실시간 연속 대화를 위해 Discord 음성 채널에 참여할 수 있습니다. 이는 음성 메시지 첨부 파일과 별개입니다.
+
+요구 사항:
+
+- 네이티브 명령어 활성화 (`commands.native` 또는 `channels.discord.commands.native`).
+- `channels.discord.voice` 설정.
+- 봇은 대상 음성 채널에서 연결 + 발언 권한이 필요합니다.
+
+Discord 전용 네이티브 명령어 `/vc join|leave|status`를 사용하여 세션을 제어하세요. 명령어는 계정 기본 에이전트를 사용하며 다른 Discord 명령어와 동일한 허용 목록 및 그룹 정책 규칙을 따릅니다.
+
+자동 참여 예시:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        autoJoin: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+        tts: {
+          provider: "openai",
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
+
+참고:
+
+- `voice.tts`는 음성 재생에만 `messages.tts`를 오버라이드합니다.
+- 음성은 기본적으로 활성화됩니다; `channels.discord.voice.enabled=false`로 비활성화하세요.
+
 ## Voice messages
 
 Discord 음성 메시지는 파형 미리 보기를 표시하고 OGG/Opus 형식의 오디오와 메타데이터가 필요합니다. OpenClaw는 파형을 자동으로 생성하지만, 오디오 파일을 검사하고 변환하려면 `ffmpeg` 및 `ffprobe`가 게이트웨이 호스트에 필요합니다.
@@ -860,9 +1018,10 @@ High-signal Discord fields:
 
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
-- command: `commands.native`, `commands.useAccessGroups`, `configWrites`
+- command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
+- streaming: `streaming` (레거시 별칭: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`

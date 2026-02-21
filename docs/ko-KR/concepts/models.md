@@ -94,6 +94,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 주의사항:
 
 - `/model` (및 `/model list`)은 간결하고, 번호가 매겨진 선택기입니다 (모델 패밀리 + 사용 가능한 프로바이더).
+- Discord에서는 `/model` 및 `/models`가 프로바이더 및 모델 드롭다운과 제출 단계가 있는 인터랙티브 선택기를 엽니다.
 - `/model <#>`는 그 선택기에서 선택합니다.
 - `/model status`는 상세보기입니다 (인증 후보 및 설정시 프로바이더 엔드포인트 `baseUrl` + `api` 모드).
 - 모델 참조는 **첫 번째** `/`로 분할하여 해석됩니다. `/model <ref>`를 입력할 때 `provider/model`을 사용하세요.

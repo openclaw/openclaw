@@ -134,7 +134,7 @@ openclaw gateway restart
 
 비고:
 
-- Serve 는 게이트웨이를 로컬 루프백 전용으로 유지하고 Tailscale ID 헤더를 통해 인증합니다.
+- Serve는 게이트웨이를 로컬 루프백 전용으로 유지하고 Tailscale ID 헤더를 통해 Control UI/WebSocket 트래픽을 인증합니다 (토큰 없는 인증은 신뢰할 수 있는 게이트웨이 호스트를 가정; HTTP API는 여전히 토큰/비밀번호 필요).
 - 토큰/비밀번호를 요구하려면 `gateway.auth.allowTailscale: false` 를 설정하거나 `gateway.auth.mode: "password"` 를 사용하세요.
 
 **옵션 C: Tailnet 바인드 (Serve 없음)**

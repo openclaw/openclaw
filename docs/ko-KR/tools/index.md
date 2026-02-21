@@ -451,7 +451,7 @@ Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams에서 메�
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = 없음)
 - `sessions_history`: `sessionKey` (또는 `sessionId`), `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey` (또는 `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
+- `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `thinking?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`
 - `session_status`: `sessionKey?` (기본값 현재; `sessionId` 수용), `model?` (`default`는 오버라이드를 해제)
 
 주요 내용:
@@ -462,6 +462,10 @@ Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams에서 메�
 - `sessions_send`는 `timeoutSeconds > 0`일 때 최종 완료를 대기합니다.
 - 전달/공지 사항은 완료 후 발생하고 최선의 결과로만 이루어지며, `status: "ok"`는 에이전트 실행이 완료되었음을 확인하며 공지 사항이 전달되었음을 나타내지 않습니다.
 - `sessions_spawn`는 하위 에이전트 실행을 시작하며 요청자 채팅에 공지 답장을 게시합니다.
+  - 일회성 모드 (`mode: "run"`)와 지속적인 스레드 바인딩 모드 (`mode: "session"`, `thread: true` 포함)를 지원합니다.
+  - `thread: true`이고 `mode`가 생략된 경우 기본값은 `session`입니다.
+  - `mode: "session"`은 `thread: true`가 필요합니다.
+  - Discord 스레드 바인딩 흐름은 `session.threadBindings.*` 및 `channels.discord.threadBindings.*`에 의존합니다.
   - 답장 형식에는 `Status`, `Result`, 그리고 간단한 통계가 포함됩니다.
   - `Result`는 어시스턴트 완료 텍스트이며, 누락된 경우 최근 `toolResult`가 대체로 사용됩니다.
 - 수동 완료 모드 생성은 먼저 직접 전송하며, 일시적 실패에 대한 대기열 대체 및 재시도가 있습니다 (`status: "ok"`는 실행이 완료되었음을 의미하며, 공지가 전달되었음을 의미하지 않음).

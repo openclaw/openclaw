@@ -277,7 +277,7 @@ Slack 조작은 `channels.slack.actions.*`로 제어됩니다.
 
 현재 Slack 도구의 사용 가능한 조작 그룹:
 
-| 그룹       | 기본값   |
+| 그룹       | 기본값  |
 | ---------- | ------- |
 | messages   | enabled |
 | reactions  | enabled |
@@ -465,13 +465,28 @@ openclaw pairing list slack
 
 OpenClaw는 Agents and AI Apps API를 통해 Slack 네이티브 텍스트 스트리밍을 지원합니다.
 
-기본적으로 스트리밍이 활성화되어 있습니다. 계정별로 비활성화하려면:
+`channels.slack.streaming`은 실시간 미리보기 동작을 제어합니다:
+
+- `off`: 실시간 미리보기 스트리밍 비활성화.
+- `partial` (기본값): 미리보기 텍스트를 최신 부분 출력으로 교체.
+- `block`: 청크된 미리보기 업데이트를 추가.
+- `progress`: 생성 중에 진행 상태 텍스트를 표시하고 최종 텍스트를 전송.
+
+`channels.slack.nativeStreaming`은 `streaming`이 `partial`일 때 Slack의 네이티브 스트리밍 API (`chat.startStream` / `chat.appendStream` / `chat.stopStream`)를 제어합니다 (기본값: `true`).
+
+네이티브 Slack 스트리밍 비활성화 (초안 미리보기 동작 유지):
 
 ```yaml
 channels:
   slack:
-    streaming: false
+    streaming: partial
+    nativeStreaming: false
 ```
+
+레거시 키:
+
+- `channels.slack.streamMode` (`replace | status_final | append`)는 `channels.slack.streaming`으로 자동 마이그레이션됩니다.
+- boolean `channels.slack.streaming`은 `channels.slack.nativeStreaming`으로 자동 마이그레이션됩니다.
 
 ### Requirements
 
@@ -498,7 +513,7 @@ channels:
   - DM 접근: `dm.enabled`, `dmPolicy`, `allowFrom` (기존: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
   - 채널 접근: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - 쓰레딩/히스토리: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - 전달: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
+  - 전달: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
   - 운영/기능: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## 관련 항목

@@ -37,12 +37,12 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 
 ## 값
 
-값은 가능할 경우 JSON5로 파싱되며, 그렇지 않으면 문자열로 처리됩니다. JSON5 파싱을 요구하려면 `--json`을 사용하세요.
+값은 가능할 경우 JSON5로 파싱되며, 그렇지 않으면 문자열로 처리됩니다. JSON5 파싱을 요구하려면 `--strict-json`을 사용하세요. `--json`은 레거시 별칭으로 계속 지원됩니다.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
-openclaw config set gateway.port 19001 --json
-openclaw config set channels.whatsapp.groups '["*"]' --json
+openclaw config set gateway.port 19001 --strict-json
+openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
 
 수정 후 게이트웨이를 재시작하세요.

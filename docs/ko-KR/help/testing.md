@@ -320,6 +320,12 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - 테스트: `src/media-understanding/providers/deepgram/audio.live.test.ts`
 - 활성화: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
 
+## BytePlus 코딩 플랜 라이브
+
+- 테스트: `src/agents/byteplus.live.test.ts`
+- 활성화: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
+- 선택적 모델 오버라이드: `BYTEPLUS_CODING_MODEL=ark-code-latest`
+
 ## Docker 런너 (선택적 "Linux에서 작동" 검사)
 
 이들은 리포지토리 Docker 이미지 내에서 `pnpm test:live`를 실행합니다. 로컬 구성 디렉토리 및 워크스페이스 마운트 (그리고 `~/.profile`이 마운트된 경우 소스됨):

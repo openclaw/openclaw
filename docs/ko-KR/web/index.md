@@ -100,8 +100,9 @@ openclaw gateway
 - 마법사는 기본적으로 Gateway 토큰을 생성합니다 (루프백에서도 마찬가지).
 - UI는 `connect.params.auth.token` 또는 `connect.params.auth.password`를 전송합니다.
 - Control UI는 클릭재킹 방지 헤더를 전송하며, `gateway.controlUi.allowedOrigins`를 설정하지 않는 한 동일 출처의 브라우저 WebSocket 연결만 허용합니다.
-- Serve 방식에서 `gateway.auth.allowTailscale`이 `true`이면 Tailscale 신원 헤더로 인증을 통과할 수 있습니다 (토큰/비밀번호 불필요). 명시적 자격증명을 요구하려면 `gateway.auth.allowTailscale: false`로 설정하세요.
-  [Tailscale](/ko-KR/gateway/tailscale) 및 [보안](/ko-KR/gateway/security)을 참고하세요.
+- Serve 방식에서 `gateway.auth.allowTailscale`이 `true`이면 Tailscale 신원 헤더로 Control UI/WebSocket 인증을 통과할 수 있습니다 (토큰/비밀번호 불필요).
+  HTTP API 엔드포인트는 여전히 토큰/비밀번호가 필요합니다. 명시적 자격증명을 요구하려면 `gateway.auth.allowTailscale: false`로 설정하세요.
+  [Tailscale](/ko-KR/gateway/tailscale) 및 [보안](/ko-KR/gateway/security)을 참고하세요. 이 토큰 없는 흐름은 게이트웨이 호스트가 신뢰할 수 있다고 가정합니다.
 - `gateway.tailscale.mode: "funnel"`은 `gateway.auth.mode: "password"` (공유 비밀번호)를 필요로 합니다.
 
 ## UI 빌드

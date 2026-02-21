@@ -34,17 +34,17 @@ Notes:
 # 리포지토리 루트에서; 릴리스 ID를 설정하여 Sparkle 피드를 활성화합니다.
 # APP_BUILD는 Sparkle 비교를 위해 숫자 + 단조롭게 설정해야 합니다.
 BUNDLE_ID=bot.molt.mac \
-APP_VERSION=2026.2.20 \
+APP_VERSION=2026.2.21 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-app.sh
 
 # 배포를 위한 zip (Sparkle 델타 지원을 위한 리소스 포크 포함)
-ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.2.20.zip
+ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.2.21.zip
 
 # 선택 사항: 사용자용으로 스타일된 DMG를 추가로 빌드하세요 (/Applications로 드래그)
-scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.2.20.dmg
+scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.2.21.dmg
 
 # 권장: 빌드 + 공증/스테이플 zip + DMG
 # 먼저, 한 번의 키체인 프로필 생성:
@@ -52,14 +52,14 @@ scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.2.20.dmg
 #     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
 NOTARIZE=1 NOTARYTOOL_PROFILE=openclaw-notary \
 BUNDLE_ID=bot.molt.mac \
-APP_VERSION=2026.2.20 \
+APP_VERSION=2026.2.21 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
 
 # 선택 사항: 릴리스에 dSYM을 함께 제공
-ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenClaw-2026.2.20.dSYM.zip
+ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenClaw-2026.2.21.dSYM.zip
 ```
 
 ## Appcast entry
@@ -67,14 +67,14 @@ ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenCl
 Sparkle가 서식 있는 HTML 노트를 렌더링할 수 있도록 릴리스 노트 생성기를 사용하세요:
 
 ```bash
-SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.2.20.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
+SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.2.21.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 ```
 
 `CHANGELOG.md`에서 HTML 릴리스 노트를 생성 (이를 통해 [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh))하고 이를 appcast 항목에 포함합니다. 릴리스 자산 (zip + dSYM)과 함께 업데이트된 `appcast.xml`을 커밋하세요.
 
 ## Publish & verify
 
-- `OpenClaw-2026.2.20.zip` (및 `OpenClaw-2026.2.20.dSYM.zip`)을 태그 `v2026.2.20`에 대한 GitHub 릴리스에 업로드합니다.
+- `OpenClaw-2026.2.21.zip` (및 `OpenClaw-2026.2.21.dSYM.zip`)을 태그 `v2026.2.21`에 대한 GitHub 릴리스에 업로드합니다.
 - 원시 appcast URL이 굽힌 피드와 일치하는지 확인합니다: `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
 - 무결성 검사:
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`은 200을 반환해야 합니다.

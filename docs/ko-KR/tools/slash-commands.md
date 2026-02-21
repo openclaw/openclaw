@@ -73,7 +73,11 @@ title: "슬래시 명령어"
 - `/context [list|detail|json]` ("컨텍스트" 설명; `detail`은 파일별, 도구별, 스킬별, 시스템 프롬프트 크기 표시)
 - `/export-session [path]` (별칭: `/export`) (현재 세션을 시스템 프롬프트 전체와 함께 HTML로 내보내기)
 - `/whoami` (발신자 id 표시; 별칭: `/id`)
+- `/session ttl <duration|off>` (TTL 같은 세션 수준 설정 관리)
 - `/subagents list|kill|log|info|send|steer|spawn` (현재 세션의 서브-에이전트 실행을 검사, 제어 또는 생성)
+- `/agents` (이 세션의 스레드 바인딩된 에이전트 목록)
+- `/focus <target>` (Discord: 이 스레드 또는 새 스레드를 세션/서브에이전트 대상에 바인딩)
+- `/unfocus` (Discord: 현재 스레드 바인딩 제거)
 - `/kill <id|#|all>` (이 세션의 실행 중인 서브-에이전트 하나 또는 전체를 즉시 중단; 확인 메시지 없음)
 - `/steer <id|#> <message>` (실행 중인 서브-에이전트를 즉시 방향 제어: 가능한 경우 실행 중, 그렇지 않으면 현재 작업을 중단하고 방향 메시지로 다시 시작)
 - `/tell <id|#> <message>` (`/steer`의 별칭)
@@ -114,6 +118,8 @@ title: "슬래시 명령어"
 - `/allowlist add|remove`는 `commands.config=true`가 필요하며 채널 `configWrites`를 존중합니다.
 - `/usage`는 응답별 사용 요약을 제어하며, `/usage cost`는 OpenClaw 세션 로그에서 현지 비용 요약을 출력합니다.
 - `/restart`는 기본적으로 활성화되어 있습니다; 비활성화하려면 `commands.restart: false`를 설정하세요.
+- Discord 전용 네이티브 명령어: `/vc join|leave|status`는 음성 채널을 제어합니다 (`channels.discord.voice`와 네이티브 명령어 필요; 텍스트로는 사용 불가).
+- Discord 스레드 바인딩 명령어 (`/focus`, `/unfocus`, `/agents`, `/session ttl`)는 유효한 스레드 바인딩이 활성화되어 있어야 합니다 (`session.threadBindings.enabled` 및/또는 `channels.discord.threadBindings.enabled`).
 - `/verbose`는 디버깅 및 추가 가시성을 목적으로 하며, 일반 사용 시는 **비활성화** 상태로 유지하세요.
 - `/reasoning`(및 `/verbose`)는 그룹 설정에서는 위험할 수 있습니다: 내부 추론이나 의도하지 않은 도구 출력이 드러날 수 있습니다. 특히 그룹 채팅에서는 비활성화를 권장합니다.
 - **빠른 경로:** 허용된 발신자로부터의 명령 전용 메시지는 즉시 처리됩니다 (대기열 및 모델을 우회).
@@ -153,6 +159,7 @@ title: "슬래시 명령어"
 참고:
 
 - `/model` 및 `/model list`는 간단하고 번호가 매겨진 선택자를 표시합니다 (모델 계열 + 사용 가능한 프로바이더).
+- Discord에서 `/model` 및 `/models`는 프로바이더 및 모델 드롭다운과 제출 단계가 있는 인터랙티브 선택기를 엽니다.
 - `/model <#>`는 그 선택자에서 선택하여, 가능한 경우 현재 프로바이더를 선호합니다.
 - `/model status`는 구성된 프로바이더 엔드포인트 (`baseUrl`)와 API 모드 (`api`)를 포함한 자세한 뷰를 표시합니다.
 

@@ -23,7 +23,10 @@ OpenClaw는 게이트웨이 대시보드와 WebSocket 포트를 위해 Tailscale
 - `token` (`OPENCLAW_GATEWAY_TOKEN`이 설정된 경우 기본값)
 - `password` (`OPENCLAW_GATEWAY_PASSWORD` 또는 설정을 통한 공유 비밀)
 
-`tailscale.mode = "serve"`이고 `gateway.auth.allowTailscale`이 `true`일 때, 유효한 Serve 프록시 요청은 토큰/비밀번호를 제공하지 않고도 Tailscale 신원 헤더(`tailscale-user-login`)를 통해 인증할 수 있습니다. OpenClaw는 로컬 Tailscale 데몬(`tailscale whois`)을 통해 `x-forwarded-for` 주소를 조회하고 이를 헤더와 대조하여 신원을 검증한 후 요청을 수락합니다. OpenClaw는 요청이 루프백에서 Tailscale의 `x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host` 헤더와 함께 도착할 때만 이를 Serve로 처리합니다. 명시적 자격 증명이 필요하면 `gateway.auth.allowTailscale: false`로 설정하거나 `gateway.auth.mode: "password"`를 강제하세요.
+`tailscale.mode = "serve"`이고 `gateway.auth.allowTailscale`이 `true`일 때, Control UI/WebSocket 인증은 토큰/비밀번호를 제공하지 않고도 Tailscale 신원 헤더(`tailscale-user-login`)를 사용할 수 있습니다. OpenClaw는 로컬 Tailscale 데몬(`tailscale whois`)을 통해 `x-forwarded-for` 주소를 조회하고 이를 헤더와 대조하여 신원을 검증한 후 요청을 수락합니다. OpenClaw는 요청이 루프백에서 Tailscale의 `x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host` 헤더와 함께 도착할 때만 이를 Serve로 처리합니다.
+HTTP API 엔드포인트 (예: `/v1/*`, `/tools/invoke`, `/api/channels/*`)는 여전히 토큰/비밀번호 인증이 필요합니다.
+이 토큰 없는 흐름은 게이트웨이 호스트가 신뢰할 수 있다고 가정합니다. 신뢰할 수 없는 로컬 코드가 동일한 호스트에서 실행될 수 있다면, `gateway.auth.allowTailscale`을 비활성화하고 대신 토큰/비밀번호 인증을 요구하세요.
+명시적 자격 증명이 필요하면 `gateway.auth.allowTailscale: false`로 설정하거나 `gateway.auth.mode: "password"`를 강제하세요.
 
 ## 설정 예시
 

@@ -110,7 +110,8 @@ openclaw gateway --tailscale serve
 
 - `https://<magicdns>/` (또는 설정된 `gateway.controlUi.basePath`)
 
-기본적으로 Serve 요청은 `gateway.auth.allowTailscale`이 `true`일 때 Tailscale ID 헤더 (`tailscale-user-login`)를 통해 인증할 수 있습니다. OpenClaw는 `x-forwarded-for` 주소를 `tailscale whois`로 확인하고 헤더와 일치시키며, 요청이 Tailscale의 `x-forwarded-*` 헤더와 함께 루프백으로 도달할 경우에만 이를 수락합니다. Serve 트래픽에 대해서도 토큰/비밀번호가 필요하도록 하려면 `gateway.auth.allowTailscale: false`(또는 `gateway.auth.mode: "password"` 강제 설정)를 적용하세요.
+기본적으로 Control UI/WebSocket Serve 요청은 `gateway.auth.allowTailscale`이 `true`일 때 Tailscale ID 헤더 (`tailscale-user-login`)를 통해 인증할 수 있습니다. OpenClaw는 `x-forwarded-for` 주소를 `tailscale whois`로 확인하고 헤더와 일치시키며, 요청이 Tailscale의 `x-forwarded-*` 헤더와 함께 루프백으로 도달할 경우에만 이를 수락합니다. Serve 트래픽에 대해서도 토큰/비밀번호가 필요하도록 하려면 `gateway.auth.allowTailscale: false`(또는 `gateway.auth.mode: "password"` 강제 설정)를 적용하세요.
+토큰 없는 Serve 인증은 게이트웨이 호스트가 신뢰할 수 있다고 가정합니다. 신뢰할 수 없는 로컬 코드가 해당 호스트에서 실행될 수 있다면 토큰/비밀번호 인증을 요구하세요.
 
 ### Tailnet + 토큰 바인딩
 
@@ -133,7 +134,7 @@ UI 설정에 토큰을 붙여넣으십시오 (전송된 값: `connect.params.aut
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (게이트웨이 호스트에서)
 
-**다운그레이드 예제 (HTTP를 통한 토큰만):**
+**안전하지 않은 인증 토글 동작:**
 
 ```json5
 {
@@ -145,7 +146,21 @@ UI 설정에 토큰을 붙여넣으십시오 (전송된 값: `connect.params.aut
 }
 ```
 
-이는 Control UI의 장치 ID + 페어링을 비활성화합니다 (HTTPS에서도). 네트워크를 신뢰할 때만 사용하십시오.
+`allowInsecureAuth`는 Control UI 장치 ID 또는 페어링 검사를 우회하지 않습니다.
+
+**긴급시만 사용:**
+
+```json5
+{
+  gateway: {
+    controlUi: { dangerouslyDisableDeviceAuth: true },
+    bind: "tailnet",
+    auth: { mode: "token", token: "replace-me" },
+  },
+}
+```
+
+`dangerouslyDisableDeviceAuth`는 Control UI 장치 ID 검사를 비활성화하며 심각한 보안 강등입니다. 긴급 사용 후 빠르게 되돌리세요.
 
 HTTPS 설정 안내는 [Tailscale](/ko-KR/gateway/tailscale) 문서를 참조하세요.
 

@@ -37,7 +37,7 @@ localhost, Tailscale Serve, 또는 SSH 터널 사용을 권장합니다.
 
 - **Localhost**: `http://127.0.0.1:18789/`를 엽니다.
 - **토큰 출처**: `gateway.auth.token` (또는 `OPENCLAW_GATEWAY_TOKEN`); 연결한 후 UI는 복사본을 localStorage에 저장합니다.
-- **Not localhost**: Tailscale Serve 사용 (`gateway.auth.allowTailscale: true`일 경우 토큰 없음), 토큰 포함 tailnet 바인드 또는 SSH 터널. [Web surfaces](/ko-KR/web) 참조.
+- **Not localhost**: Tailscale Serve 사용 (Control UI/WebSocket에 대해 `gateway.auth.allowTailscale: true`이면 토큰 없음, 신뢰할 수 있는 게이트웨이 호스트 가정; HTTP API는 여전히 토큰/비밀번호 필요), 토큰 포함 tailnet 바인드 또는 SSH 터널. [Web surfaces](/ko-KR/web) 참조.
 
 ## "unauthorized" / 1008 표시될 경우
 
