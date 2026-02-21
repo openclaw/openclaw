@@ -119,9 +119,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             }
         } else {
             let fallbackResult = await self.fallbackToDirectConnection(draft: draft)
-            if fallbackResult.deliveredImmediately {
-                return fallbackResult
-            }
+            return fallbackResult
         }
 
         _ = session.transferUserInfo(payload)

@@ -110,33 +110,29 @@ struct WatchInboxView: View {
                 if !store.isReplySending && !store.actions.isEmpty {
                     HStack {
                         Spacer()
-                        TextField("Voice Reply...", text: Binding(
-                            get: { "" },
-                            set: { newValue in
-                                if !newValue.isEmpty, let defaultAction = store.actions.first {
-                                    var actionWithNote = defaultAction
-                                    // Send the default action but with the dictated text as context/note
-                                    // WatchInboxStore needs a way to pass this note. 
-                                    // We will store it temporarily or send it directly.
-                                    self.onAction?(actionWithNote, newValue) 
-                                }
-                            }
-                        ))
-                        .opacity(0)
-                        .frame(width: 44, height: 44)
-                        .overlay(
+                        ZStack {
                             Circle()
                                 .fill(
                                     RadialGradient(gradient: Gradient(colors: [.blue.opacity(0.8), .purple.opacity(0.6)]), center: .center, startRadius: 0, endRadius: 22)
                                 )
                                 .shadow(color: .purple.opacity(0.5), radius: 8, x: 0, y: 0)
-                                .overlay(
-                                    Image(systemName: "waveform")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundStyle(.white)
-                                )
-                                .allowsHitTesting(false) // Let the invisible TextField handle the tap for dictation
-                        )
+
+                            Image(systemName: "waveform")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(.white)
+
+                            TextField("Voice Reply...", text: Binding(
+                                get: { "" },
+                                set: { newValue in
+                                    if !newValue.isEmpty, let defaultAction = store.actions.first {
+                                        self.onAction?(defaultAction, newValue)
+                                    }
+                                }
+                            ))
+                            .opacity(0.02)
+                            .buttonStyle(.plain)
+                        }
+                        .frame(width: 44, height: 44)
                         Spacer()
                     }
                     .padding(.top, 8)
