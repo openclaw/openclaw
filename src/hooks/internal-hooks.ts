@@ -121,10 +121,11 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  *
  * Refs: #22790, #7067, #8807
  */
-const GLOBAL_KEY = "__openclaw_internal_hooks__";
+export const GLOBAL_KEY = "__openclaw_internal_hooks__";
+const globalRecord = globalThis as Record<string, unknown>;
 const handlers: Map<string, InternalHookHandler[]> =
-  ((globalThis as Record<string, unknown>)[GLOBAL_KEY] as Map<string, InternalHookHandler[]>) ??
-  ((globalThis as Record<string, unknown>)[GLOBAL_KEY] = new Map<string, InternalHookHandler[]>());
+  (globalRecord[GLOBAL_KEY] as Map<string, InternalHookHandler[]>) ??
+  (globalRecord[GLOBAL_KEY] = new Map<string, InternalHookHandler[]>());
 const log = createSubsystemLogger("internal-hooks");
 
 /**

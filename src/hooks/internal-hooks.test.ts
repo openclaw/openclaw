@@ -3,6 +3,7 @@ import {
   clearInternalHooks,
   createInternalHookEvent,
   getRegisteredEventKeys,
+  GLOBAL_KEY,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
   isMessageReceivedEvent,
@@ -459,7 +460,6 @@ describe("hooks", () => {
 
 describe("globalThis singleton", () => {
   it("handlers Map is stored on globalThis for cross-chunk sharing", () => {
-    const GLOBAL_KEY = "__openclaw_internal_hooks__";
     const globalMap = (globalThis as Record<string, unknown>)[GLOBAL_KEY];
     expect(globalMap).toBeInstanceOf(Map);
 
