@@ -1105,7 +1105,7 @@ describe("processDiscordMessage ack reactions", () => {
     expect(reactMessageDiscord.mock.calls).toHaveLength(reactedBeforeLateStart);
   });
 
-  it("shows stall emojis for long no-progress runs", async () => {
+  it("keeps waiting hourglass without warning for long no-progress queued runs", async () => {
     vi.useFakeTimers();
     let releaseDispatch!: () => void;
     const dispatchGate = new Promise<void>((resolve) => {
@@ -1129,7 +1129,7 @@ describe("processDiscordMessage ack reactions", () => {
       sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
     expect(emojis).toContain("⏳");
-    expect(emojis).toContain("⚠️");
+    expect(emojis).not.toContain("⚠️");
     expect(emojis).toContain("✅");
   });
 });

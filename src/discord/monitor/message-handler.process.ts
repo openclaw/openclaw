@@ -428,6 +428,9 @@ function createDiscordStatusReactionController(params: {
       if (finished) {
         return;
       }
+      if (!hasReachedActivePhase()) {
+        return;
+      }
       void requestEmoji(DISCORD_STATUS_STALL_HARD_EMOJI, { immediate: true });
     }, DISCORD_STATUS_STALL_HARD_MS);
   };
