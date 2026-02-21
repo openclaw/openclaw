@@ -146,6 +146,84 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("token/password auth modes", () => {
+    it("should reject control UI bypass flags without explicit break-glass env", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+          controlUi: {
+            dangerouslyDisableDeviceAuth: true,
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow("refusing to start gateway with insecure Control UI bypass flags");
+    });
+
+    it("should allow allowInsecureAuth without break-glass env", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+          controlUi: {
+            allowInsecureAuth: true,
+          },
+        },
+      };
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg,
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("token");
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("should allow control UI bypass flags with explicit break-glass env", async () => {
+      const previous = process.env.OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS;
+      process.env.OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS = "1";
+      try {
+        const cfg = {
+          gateway: {
+            bind: "loopback" as const,
+            auth: {
+              mode: "token" as const,
+              token: "test-token-123",
+            },
+            controlUi: {
+              dangerouslyDisableDeviceAuth: true,
+            },
+          },
+        };
+
+        const result = await resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        });
+
+        expect(result.authMode).toBe("token");
+        expect(result.bindHost).toBe("127.0.0.1");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS;
+        } else {
+          process.env.OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS = previous;
+        }
+      }
+    });
+
     it("should reject token mode without token configured", async () => {
       const cfg = {
         gateway: {
