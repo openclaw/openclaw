@@ -36,6 +36,69 @@ const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 
+const BRAVE_UI_LANGS = new Set([
+  "es-AR",
+  "en-AU",
+  "de-AT",
+  "nl-BE",
+  "fr-BE",
+  "pt-BR",
+  "en-CA",
+  "fr-CA",
+  "es-CL",
+  "da-DK",
+  "fi-FI",
+  "fr-FR",
+  "de-DE",
+  "el-GR",
+  "zh-HK",
+  "en-IN",
+  "en-ID",
+  "it-IT",
+  "ja-JP",
+  "ko-KR",
+  "en-MY",
+  "es-MX",
+  "nl-NL",
+  "en-NZ",
+  "no-NO",
+  "zh-CN",
+  "pl-PL",
+  "en-PH",
+  "ru-RU",
+  "en-ZA",
+  "es-ES",
+  "sv-SE",
+  "fr-CH",
+  "de-CH",
+  "zh-TW",
+  "tr-TR",
+  "en-GB",
+  "en-US",
+  "es-US",
+]);
+
+const BRAVE_LANG_TO_DEFAULT_LOCALE: Record<string, string> = {
+  en: "en-US",
+  es: "es-ES",
+  fr: "fr-FR",
+  de: "de-DE",
+  pt: "pt-BR",
+  nl: "nl-NL",
+  da: "da-DK",
+  fi: "fi-FI",
+  el: "el-GR",
+  it: "it-IT",
+  ja: "ja-JP",
+  ko: "ko-KR",
+  no: "no-NO",
+  pl: "pl-PL",
+  ru: "ru-RU",
+  sv: "sv-SE",
+  tr: "tr-TR",
+  zh: "zh-CN",
+};
+
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
   count: Type.Optional(
@@ -58,7 +121,8 @@ const WebSearchSchema = Type.Object({
   ),
   ui_lang: Type.Optional(
     Type.String({
-      description: "ISO language code for UI elements.",
+      description:
+        "Locale code for UI elements (e.g., 'en-US', 'de-DE', 'fr-FR'). Must be a language-country pair, not a bare language code.",
     }),
   ),
   freshness: Type.Optional(
@@ -426,6 +490,28 @@ function normalizeFreshness(value: string | undefined): string | undefined {
 }
 
 /**
+ * Normalize a ui_lang value for the Brave Search API.
+ * Accepts full locale codes (e.g. "en-US") or bare language codes (e.g. "en")
+ * and maps them to a valid Brave locale. Returns undefined for unrecognized values.
+ */
+function normalizeBraveUiLang(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (BRAVE_UI_LANGS.has(trimmed)) {
+    return trimmed;
+  }
+
+  const lower = trimmed.toLowerCase();
+  return BRAVE_LANG_TO_DEFAULT_LOCALE[lower];
+}
+
+/**
  * Map normalized freshness values (pd/pw/pm/py) to Perplexity's
  * search_recency_filter values (day/week/month/year).
  */
@@ -591,7 +677,7 @@ async function runWebSearch(params: {
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
+      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${normalizeBraveUiLang(params.ui_lang) || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
         : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
@@ -673,7 +759,10 @@ async function runWebSearch(params: {
     url.searchParams.set("search_lang", params.search_lang);
   }
   if (params.ui_lang) {
-    url.searchParams.set("ui_lang", params.ui_lang);
+    const normalized = normalizeBraveUiLang(params.ui_lang);
+    if (normalized) {
+      url.searchParams.set("ui_lang", normalized);
+    }
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
@@ -820,6 +909,7 @@ export const __testing = {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   normalizeFreshness,
+  normalizeBraveUiLang,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
