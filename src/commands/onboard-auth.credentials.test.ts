@@ -1,0 +1,85 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { setCloudflareAiGatewayConfig, setMoonshotApiKey } from "./onboard-auth.js";
+import {
+  createAuthTestLifecycle,
+  readAuthProfilesForAgent,
+  setupAuthTestEnv,
+} from "./test-wizard-helpers.js";
+
+describe("onboard auth credentials secret refs", () => {
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "MOONSHOT_API_KEY",
+    "CLOUDFLARE_AI_GATEWAY_API_KEY",
+  ]);
+
+  afterEach(async () => {
+    await lifecycle.cleanup();
+  });
+
+  it("stores env-backed moonshot key as keyRef", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.MOONSHOT_API_KEY = "sk-moonshot-env";
+
+    await setMoonshotApiKey("sk-moonshot-env");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["moonshot:default"]).toMatchObject({
+      keyRef: { source: "env", id: "MOONSHOT_API_KEY" },
+    });
+    expect(parsed.profiles?.["moonshot:default"]?.key).toBeUndefined();
+  });
+
+  it("stores ${ENV} moonshot input as keyRef even when env value is unset", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-inline-ref-");
+    lifecycle.setStateDir(env.stateDir);
+
+    await setMoonshotApiKey("${MOONSHOT_API_KEY}");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["moonshot:default"]).toMatchObject({
+      keyRef: { source: "env", id: "MOONSHOT_API_KEY" },
+    });
+    expect(parsed.profiles?.["moonshot:default"]?.key).toBeUndefined();
+  });
+
+  it("keeps plaintext moonshot key when no env ref applies", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-plaintext-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.MOONSHOT_API_KEY = "sk-moonshot-other";
+
+    await setMoonshotApiKey("sk-moonshot-plaintext");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["moonshot:default"]).toMatchObject({
+      key: "sk-moonshot-plaintext",
+    });
+    expect(parsed.profiles?.["moonshot:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("preserves cloudflare metadata when storing keyRef", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-cloudflare-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret";
+
+    await setCloudflareAiGatewayConfig("account-1", "gateway-1", "cf-secret");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown; metadata?: unknown }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["cloudflare-ai-gateway:default"]).toMatchObject({
+      keyRef: { source: "env", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
+      metadata: { accountId: "account-1", gatewayId: "gateway-1" },
+    });
+    expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBeUndefined();
+  });
+});
