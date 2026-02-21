@@ -491,7 +491,16 @@ describe("installPluginFromNpmSpec", () => {
         await packToArchive({ pkgDir, outDir: packTmpDir, outName: packedName });
         return {
           code: 0,
-          stdout: `${packedName}\n`,
+          stdout: JSON.stringify([
+            {
+              id: "@openclaw/voice-call@0.0.1",
+              name: "@openclaw/voice-call",
+              version: "0.0.1",
+              filename: packedName,
+              integrity: "sha512-plugin-test",
+              shasum: "pluginshasum",
+            },
+          ]),
           stderr: "",
           signal: null,
           killed: false,
@@ -508,6 +517,11 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.1");
+    expect(result.npmResolution?.integrity).toBe("sha512-plugin-test");
 
     expectSingleNpmPackIgnoreScriptsCall({
       calls: run.mock.calls,
@@ -526,5 +540,47 @@ describe("installPluginFromNpmSpec", () => {
       return;
     }
     expect(result.error).toContain("unsupported npm spec");
+  });
+
+  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          id: "@openclaw/voice-call@0.0.1",
+          name: "@openclaw/voice-call",
+          version: "0.0.1",
+          filename: "voice-call-0.0.1.tgz",
+          integrity: "sha512-new",
+          shasum: "newshasum",
+        },
+      ]),
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const onIntegrityDrift = vi.fn(async () => false);
+    const { installPluginFromNpmSpec } = await import("./install.js");
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+    });
+
+    expect(onIntegrityDrift).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("integrity drift");
   });
 });

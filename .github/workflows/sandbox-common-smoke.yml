@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   sandbox-common-smoke:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4

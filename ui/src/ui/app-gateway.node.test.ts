@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { connectGateway } from "./app-gateway.ts";
 
 type GatewayClientMock = {
@@ -79,6 +80,7 @@ function createHost() {
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
+    updateAvailable: null,
   } as unknown as Parameters<typeof connectGateway>[0];
 }
 
@@ -124,6 +126,38 @@ describe("connectGateway", () => {
     secondClient.emitEvent({ event: "presence", payload: { presence: [{ host: "active" }] } });
     expect(host.eventLogBuffer).toHaveLength(1);
     expect(host.eventLogBuffer[0]?.event).toBe("presence");
+  });
+
+  it("applies update.available only from active client", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = gatewayClientInstances[0];
+    expect(firstClient).toBeDefined();
+
+    connectGateway(host);
+    const secondClient = gatewayClientInstances[1];
+    expect(secondClient).toBeDefined();
+
+    firstClient.emitEvent({
+      event: GATEWAY_EVENT_UPDATE_AVAILABLE,
+      payload: {
+        updateAvailable: { currentVersion: "1.0.0", latestVersion: "9.9.9", channel: "latest" },
+      },
+    });
+    expect(host.updateAvailable).toBeNull();
+
+    secondClient.emitEvent({
+      event: GATEWAY_EVENT_UPDATE_AVAILABLE,
+      payload: {
+        updateAvailable: { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "latest" },
+      },
+    });
+    expect(host.updateAvailable).toEqual({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "latest",
+    });
   });
 
   it("ignores stale client onClose callbacks after reconnect", () => {

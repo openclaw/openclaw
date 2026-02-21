@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -185,6 +186,30 @@ describe("handleCommands gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("/debug is disabled");
   });
+
+  it("does not enable gated commands from inherited command flags", async () => {
+    const inheritedCommands = Object.create({
+      bash: true,
+      config: true,
+      debug: true,
+    }) as Record<string, unknown>;
+    const cfg = {
+      commands: inheritedCommands as never,
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const bashResult = await handleCommands(buildParams("/bash echo hi", cfg));
+    expect(bashResult.shouldContinue).toBe(false);
+    expect(bashResult.reply?.text).toContain("bash is disabled");
+
+    const configResult = await handleCommands(buildParams("/config show", cfg));
+    expect(configResult.shouldContinue).toBe(false);
+    expect(configResult.reply?.text).toContain("/config is disabled");
+
+    const debugResult = await handleCommands(buildParams("/debug show", cfg));
+    expect(debugResult.shouldContinue).toBe(false);
+    expect(debugResult.reply?.text).toContain("/debug is disabled");
+  });
 });
 
 describe("/approve command", () => {
@@ -294,7 +319,6 @@ describe("/compact command", () => {
   });
 
   it("returns null when command is not /compact", async () => {
-    const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -313,7 +337,6 @@ describe("/compact command", () => {
   });
 
   it("rejects unauthorized /compact commands", async () => {
-    const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -337,7 +360,6 @@ describe("/compact command", () => {
   });
 
   it("routes manual compaction with explicit trigger and context metadata", async () => {
-    const { compactEmbeddedPiSession } = await import("../../agents/pi-embedded.js");
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -719,7 +741,7 @@ describe("/models command", () => {
     const params = buildPolicyParams("/models anthropic", cfg, { Surface: "discord" });
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("Models (anthropic");
     expect(result.reply?.text).toContain("page 1/");
     expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
     expect(result.reply?.text).toContain("Switch: /model <provider/model>");
@@ -731,7 +753,7 @@ describe("/models command", () => {
     const params = buildPolicyParams("/models anthropic 3 all", cfg, { Surface: "discord" });
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Models (anthropic)");
+    expect(result.reply?.text).toContain("Models (anthropic");
     expect(result.reply?.text).toContain("page 1/1");
     expect(result.reply?.text).toContain("anthropic/claude-opus-4-5");
     expect(result.reply?.text).not.toContain("Page out of range");
@@ -779,7 +801,7 @@ describe("/models command", () => {
       buildPolicyParams("/models localai", customCfg, { Surface: "discord" }),
     );
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Models (localai)");
+    expect(result.reply?.text).toContain("Models (localai");
     expect(result.reply?.text).toContain("localai/ultra-chat");
     expect(result.reply?.text).not.toContain("Unknown provider");
   });

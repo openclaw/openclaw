@@ -33,7 +33,7 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
-## Quick setup
+## Onboarding
 
 1. Install the Mattermost plugin.
 2. Create a Mattermost bot account and copy the **bot token**.
