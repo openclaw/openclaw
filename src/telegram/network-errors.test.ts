@@ -82,5 +82,69 @@ describe("isRecoverableTelegramNetworkError", () => {
 
       expect(isRecoverableTelegramNetworkError(httpError)).toBe(false);
     });
+
+    it("recovers HttpError-wrapped network failure in send context (#22376)", () => {
+      const fetchError = new TypeError("fetch failed");
+      const httpError = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
+
+      // During gateway restart, sendMessage fails with a network error.
+      // The retry runner should classify this as recoverable even for sends.
+      expect(isRecoverableTelegramNetworkError(httpError, { context: "send" })).toBe(true);
+    });
+
+    it("recovers HttpError with deeply nested cause in send context", () => {
+      const root = new TypeError("fetch failed");
+      const mid = Object.assign(new Error("request failed"), { cause: root });
+      const httpError = new MockHttpError("Network request for 'sendMessage' failed!", mid);
+
+      expect(isRecoverableTelegramNetworkError(httpError, { context: "send" })).toBe(true);
+    });
+
+    it("still uses error code path for HttpError inner errors in send context", () => {
+      // Inner error has a recoverable code — the main loop already handles this,
+      // but verify send context doesn't block it.
+      const inner = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+      const httpError = new MockHttpError("Network request for 'sendMessage' failed!", inner);
+
+      expect(isRecoverableTelegramNetworkError(httpError, { context: "send" })).toBe(true);
+    });
+
+    it("still rejects non-network HttpError in send context", () => {
+      const apiError = new Error("Bad Request: message is too long");
+      const httpError = new MockHttpError("Call to 'sendMessage' failed!", apiError);
+
+      expect(isRecoverableTelegramNetworkError(httpError, { context: "send" })).toBe(false);
+    });
+
+    it("handles HttpError with null inner error in send context", () => {
+      const httpError = new MockHttpError("Network request for 'sendMessage' failed!", null);
+
+      expect(isRecoverableTelegramNetworkError(httpError, { context: "send" })).toBe(false);
+    });
+
+    it("does not apply HttpError fallback to plain errors in send context", () => {
+      // A plain TypeError (not wrapped in HttpError) should still be rejected
+      // in send context — the fallback only applies to HttpError wrappers.
+      const err = new TypeError("fetch failed");
+      expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(false);
+    });
+
+    it("respects explicit allowMessageMatch override for send context", () => {
+      const fetchError = new TypeError("fetch failed");
+      const httpError = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
+
+      // allowMessageMatch=true overrides context="send" restriction entirely
+      expect(
+        isRecoverableTelegramNetworkError(httpError, { context: "send", allowMessageMatch: true }),
+      ).toBe(true);
+
+      // Plain error also recoverable when allowMessageMatch is forced on
+      expect(
+        isRecoverableTelegramNetworkError(new TypeError("fetch failed"), {
+          context: "send",
+          allowMessageMatch: true,
+        }),
+      ).toBe(true);
+    });
   });
 });
