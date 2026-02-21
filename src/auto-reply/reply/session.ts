@@ -350,16 +350,18 @@ export async function initSessionState(params: {
     if (forked) {
       sessionId = forked.sessionId;
       sessionEntry.sessionId = forked.sessionId;
-      sessionEntry.sessionFile = forked.sessionFile;
+      // Persist relative transcript filenames in session store.
+      // Absolute paths are rejected by resolveSessionFilePath() strict checks.
+      sessionEntry.sessionFile = path.basename(forked.sessionFile);
       console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
     }
   }
   if (!sessionEntry.sessionFile) {
-    sessionEntry.sessionFile = resolveSessionTranscriptPath(
+    sessionEntry.sessionFile = path.basename(resolveSessionTranscriptPath(
       sessionEntry.sessionId,
       agentId,
       ctx.MessageThreadId,
-    );
+    ));
   }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
