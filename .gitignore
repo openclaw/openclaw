@@ -101,6 +101,5 @@ package-lock.json
 apps/ios/LocalSigning.xcconfig
 
 # local builds
-clawos/
 clawos-os/
 
