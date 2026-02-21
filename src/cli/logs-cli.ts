@@ -1,7 +1,8 @@
-import type { Command } from "commander";
 import { setTimeout as delay } from "node:timers/promises";
+import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { formatLocalIsoWithOffset } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -72,11 +73,10 @@ export function formatLogTimestamp(
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
+
   let timeString: string;
   if (localTime) {
-    const tzoffset = parsed.getTimezoneOffset() * 60000; // offset in milliseconds
-    const localISOTime = new Date(parsed.getTime() - tzoffset).toISOString().slice(0, -1);
-    timeString = localISOTime;
+    timeString = formatLocalIsoWithOffset(parsed);
   } else {
     timeString = parsed.toISOString();
   }

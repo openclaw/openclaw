@@ -1,10 +1,6 @@
 import type { IncomingMessage } from "node:http";
-import type { WebSocket } from "ws";
 import os from "node:os";
-import type { createSubsystemLogger } from "../../../logging/subsystem.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
-import type { GatewayWsClient } from "../ws-types.js";
+import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -24,10 +20,29 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
+import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
-import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
+import { resolveRuntimeServiceVersion } from "../../../version.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  type AuthRateLimiter,
+} from "../../auth-rate-limit.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  authorizeWsControlUiGatewayConnect,
+  isLocalDirectRequest,
+} from "../../auth.js";
+import {
+  buildCanvasScopedHostUrl,
+  CANVAS_CAPABILITY_TTL_MS,
+  mintCanvasCapabilityToken,
+} from "../../canvas-capability.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
-import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
+import { isLoopbackAddress, isTrustedProxyAddress, resolveClientIp } from "../../net.js";
+import { resolveHostName } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
@@ -43,6 +58,7 @@ import {
 } from "../../protocol/index.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -53,81 +69,45 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
+import type { GatewayWsClient } from "../ws-types.js";
+import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
 
-function resolveHostName(hostHeader?: string): string {
-  const host = (hostHeader ?? "").trim().toLowerCase();
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
+type ControlUiAuthPolicy = {
+  allowInsecureAuthConfigured: boolean;
+  dangerouslyDisableDeviceAuth: boolean;
+  allowBypass: boolean;
+  device: ConnectParams["device"] | null | undefined;
+};
+
+function resolveControlUiAuthPolicy(params: {
+  isControlUi: boolean;
+  controlUiConfig:
+    | {
+        allowInsecureAuth?: boolean;
+        dangerouslyDisableDeviceAuth?: boolean;
+      }
+    | undefined;
+  deviceRaw: ConnectParams["device"] | null | undefined;
+}): ControlUiAuthPolicy {
+  const allowInsecureAuthConfigured =
+    params.isControlUi && params.controlUiConfig?.allowInsecureAuth === true;
+  const dangerouslyDisableDeviceAuth =
+    params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
+  return {
+    allowInsecureAuthConfigured,
+    dangerouslyDisableDeviceAuth,
+    // `allowInsecureAuth` must not bypass secure-context/device-auth requirements.
+    allowBypass: dangerouslyDisableDeviceAuth,
+    device: dangerouslyDisableDeviceAuth ? null : params.deviceRaw,
+  };
 }
 
-type AuthProvidedKind = "token" | "password" | "none";
-
-function formatGatewayAuthFailureMessage(params: {
-  authMode: ResolvedGatewayAuth["mode"];
-  authProvided: AuthProvidedKind;
-  reason?: string;
-  client?: { id?: string | null; mode?: string | null };
-}): string {
-  const { authMode, authProvided, reason, client } = params;
-  const isCli = isGatewayCliClient(client);
-  const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
-  const isWebchat = isWebchatClient(client);
-  const uiHint = "open the dashboard URL and paste the token in Control UI settings";
-  const tokenHint = isCli
-    ? "set gateway.remote.token to match gateway.auth.token"
-    : isControlUi || isWebchat
-      ? uiHint
-      : "provide gateway auth token";
-  const passwordHint = isCli
-    ? "set gateway.remote.password to match gateway.auth.password"
-    : isControlUi || isWebchat
-      ? "enter the password in Control UI settings"
-      : "provide gateway auth password";
-  switch (reason) {
-    case "token_missing":
-      return `unauthorized: gateway token missing (${tokenHint})`;
-    case "token_mismatch":
-      return `unauthorized: gateway token mismatch (${tokenHint})`;
-    case "token_missing_config":
-      return "unauthorized: gateway token not configured on gateway (set gateway.auth.token)";
-    case "password_missing":
-      return `unauthorized: gateway password missing (${passwordHint})`;
-    case "password_mismatch":
-      return `unauthorized: gateway password mismatch (${passwordHint})`;
-    case "password_missing_config":
-      return "unauthorized: gateway password not configured on gateway (set gateway.auth.password)";
-    case "tailscale_user_missing":
-      return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
-    case "tailscale_proxy_missing":
-      return "unauthorized: tailscale proxy headers missing (use Tailscale Serve or gateway token/password)";
-    case "tailscale_whois_failed":
-      return "unauthorized: tailscale identity check failed (use Tailscale Serve auth or gateway token/password)";
-    case "tailscale_user_mismatch":
-      return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
-    default:
-      break;
-  }
-
-  if (authMode === "token" && authProvided === "none") {
-    return `unauthorized: gateway token missing (${tokenHint})`;
-  }
-  if (authMode === "password" && authProvided === "none") {
-    return `unauthorized: gateway password missing (${passwordHint})`;
-  }
-  return "unauthorized";
+function shouldSkipControlUiPairing(policy: ControlUiAuthPolicy, sharedAuthOk: boolean): boolean {
+  return policy.allowBypass && sharedAuthOk;
 }
 
 export function attachGatewayWsMessageHandler(params: {
@@ -143,6 +123,8 @@ export function attachGatewayWsMessageHandler(params: {
   canvasHostUrl?: string;
   connectNonce: string;
   resolvedAuth: ResolvedGatewayAuth;
+  /** Optional rate limiter for auth brute-force protection. */
+  rateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -173,6 +155,7 @@ export function attachGatewayWsMessageHandler(params: {
     canvasHostUrl,
     connectNonce,
     resolvedAuth,
+    rateLimiter,
     gatewayMethods,
     events,
     extraHandlers,
@@ -193,7 +176,14 @@ export function attachGatewayWsMessageHandler(params: {
 
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-  const clientIp = resolveGatewayClientIp({ remoteAddr, forwardedFor, realIp, trustedProxies });
+  const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const clientIp = resolveClientIp({
+    remoteAddr,
+    forwardedFor,
+    realIp,
+    trustedProxies,
+    allowRealIpFallback,
+  });
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
@@ -206,7 +196,7 @@ export function attachGatewayWsMessageHandler(params: {
   const hostIsLocal = hostName === "localhost" || hostName === "127.0.0.1" || hostName === "::1";
   const hostIsTailscaleServe = hostName.endsWith(".ts.net");
   const hostIsLocalish = hostIsLocal || hostIsTailscaleServe;
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies);
+  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -307,30 +297,42 @@ export function attachGatewayWsMessageHandler(params: {
         const frame = parsed;
         const connectParams = frame.params as ConnectParams;
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
-
-        // protocol negotiation
-        const { minProtocol, maxProtocol } = connectParams;
-        if (maxProtocol < PROTOCOL_VERSION || minProtocol > PROTOCOL_VERSION) {
+        const clientMeta = {
+          client: connectParams.client.id,
+          clientDisplayName: connectParams.client.displayName,
+          mode: connectParams.client.mode,
+          version: connectParams.client.version,
+        };
+        const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
           setHandshakeState("failed");
-          logWsControl.warn(
-            `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
-          );
-          setCloseCause("protocol-mismatch", {
-            minProtocol,
-            maxProtocol,
-            expectedProtocol: PROTOCOL_VERSION,
-            client: connectParams.client.id,
-            clientDisplayName: connectParams.client.displayName,
-            mode: connectParams.client.mode,
-            version: connectParams.client.version,
-          });
+          setCloseCause(cause, { ...meta, ...clientMeta });
+        };
+        const sendHandshakeErrorResponse = (
+          code: Parameters<typeof errorShape>[0],
+          message: string,
+          options?: Parameters<typeof errorShape>[2],
+        ) => {
           send({
             type: "res",
             id: frame.id,
             ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
-              details: { expectedProtocol: PROTOCOL_VERSION },
-            }),
+            error: errorShape(code, message, options),
+          });
+        };
+
+        // protocol negotiation
+        const { minProtocol, maxProtocol } = connectParams;
+        if (maxProtocol < PROTOCOL_VERSION || minProtocol > PROTOCOL_VERSION) {
+          markHandshakeFailure("protocol-mismatch", {
+            minProtocol,
+            maxProtocol,
+            expectedProtocol: PROTOCOL_VERSION,
+          });
+          logWsControl.warn(
+            `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+          );
+          sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
+            details: { expectedProtocol: PROTOCOL_VERSION },
           });
           close(1002, "protocol mismatch");
           return;
@@ -339,25 +341,17 @@ export function attachGatewayWsMessageHandler(params: {
         const roleRaw = connectParams.role ?? "operator";
         const role = roleRaw === "operator" || roleRaw === "node" ? roleRaw : null;
         if (!role) {
-          setHandshakeState("failed");
-          setCloseCause("invalid-role", {
+          markHandshakeFailure("invalid-role", {
             role: roleRaw,
-            client: connectParams.client.id,
-            clientDisplayName: connectParams.client.displayName,
-            mode: connectParams.client.mode,
-            version: connectParams.client.version,
           });
-          send({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid role"),
-          });
+          sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "invalid role");
           close(1008, "invalid role");
           return;
         }
         // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
-        const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+        // Note: If the client does not present a device identity, we can't bind scopes to a paired
+        // device/token, so we will clear scopes after auth to avoid self-declared permissions.
+        let scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
         connectParams.role = role;
         connectParams.scopes = scopes;
 
@@ -372,22 +366,12 @@ export function attachGatewayWsMessageHandler(params: {
           if (!originCheck.ok) {
             const errorMessage =
               "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
-            setHandshakeState("failed");
-            setCloseCause("origin-mismatch", {
+            markHandshakeFailure("origin-mismatch", {
               origin: requestOrigin ?? "n/a",
               host: requestHost ?? "n/a",
               reason: originCheck.reason,
-              client: connectParams.client.id,
-              clientDisplayName: connectParams.client.displayName,
-              mode: connectParams.client.mode,
-              version: connectParams.client.version,
             });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, errorMessage),
-            });
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
@@ -398,37 +382,88 @@ export function attachGatewayWsMessageHandler(params: {
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
-        const allowInsecureControlUi =
-          isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
-        const disableControlUiDeviceAuth =
-          isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
-        const allowControlUiBypass = allowInsecureControlUi || disableControlUiDeviceAuth;
-        const device = disableControlUiDeviceAuth ? null : deviceRaw;
-
-        const authResult = await authorizeGatewayConnect({
-          auth: resolvedAuth,
-          connectAuth: connectParams.auth,
-          req: upgradeReq,
-          trustedProxies,
+        const controlUiAuthPolicy = resolveControlUiAuthPolicy({
+          isControlUi,
+          controlUiConfig: configSnapshot.gateway?.controlUi,
+          deviceRaw,
         });
-        let authOk = authResult.ok;
-        let authMethod =
-          authResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
-        const sharedAuthResult = hasSharedAuth
-          ? await authorizeGatewayConnect({
-              auth: { ...resolvedAuth, allowTailscale: false },
-              connectAuth: connectParams.auth,
-              req: upgradeReq,
-              trustedProxies,
-            })
-          : null;
-        const sharedAuthOk =
-          sharedAuthResult?.ok === true &&
-          (sharedAuthResult.method === "token" || sharedAuthResult.method === "password");
-        const rejectUnauthorized = () => {
-          setHandshakeState("failed");
+        const device = controlUiAuthPolicy.device;
+
+        const resolveAuthState = async () => {
+          const hasDeviceTokenCandidate = Boolean(connectParams.auth?.token && device);
+          let nextAuthResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
+            auth: resolvedAuth,
+            connectAuth: connectParams.auth,
+            req: upgradeReq,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
+            clientIp,
+            rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          });
+
+          if (
+            hasDeviceTokenCandidate &&
+            nextAuthResult.ok &&
+            rateLimiter &&
+            (nextAuthResult.method === "token" || nextAuthResult.method === "password")
+          ) {
+            const sharedRateCheck = rateLimiter.check(
+              clientIp,
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
+            if (!sharedRateCheck.allowed) {
+              nextAuthResult = {
+                ok: false,
+                reason: "rate_limited",
+                rateLimited: true,
+                retryAfterMs: sharedRateCheck.retryAfterMs,
+              };
+            } else {
+              rateLimiter.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+            }
+          }
+
+          const nextAuthMethod =
+            nextAuthResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
+          const sharedAuthResult = hasSharedAuth
+            ? await authorizeHttpGatewayConnect({
+                auth: { ...resolvedAuth, allowTailscale: false },
+                connectAuth: connectParams.auth,
+                req: upgradeReq,
+                trustedProxies,
+                allowRealIpFallback,
+                // Shared-auth probe only; rate-limit side effects are handled in
+                // the primary auth flow (or deferred for device-token candidates).
+                rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+              })
+            : null;
+          const nextSharedAuthOk =
+            sharedAuthResult?.ok === true &&
+            (sharedAuthResult.method === "token" || sharedAuthResult.method === "password");
+
+          return {
+            authResult: nextAuthResult,
+            authOk: nextAuthResult.ok,
+            authMethod: nextAuthMethod,
+            sharedAuthOk: nextSharedAuthOk,
+          };
+        };
+
+        let { authResult, authOk, authMethod, sharedAuthOk } = await resolveAuthState();
+        const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
+          markHandshakeFailure("unauthorized", {
+            authMode: resolvedAuth.mode,
+            authProvided: connectParams.auth?.token
+              ? "token"
+              : connectParams.auth?.password
+                ? "password"
+                : "none",
+            authReason: failedAuth.reason,
+            allowTailscale: resolvedAuth.allowTailscale,
+          });
           logWsControl.warn(
-            `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} reason=${authResult.reason ?? "unknown"}`,
+            `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} reason=${failedAuth.reason ?? "unknown"}`,
           );
           const authProvided: AuthProvidedKind = connectParams.auth?.token
             ? "token"
@@ -438,71 +473,52 @@ export function attachGatewayWsMessageHandler(params: {
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
             authProvided,
-            reason: authResult.reason,
+            reason: failedAuth.reason,
             client: connectParams.client,
           });
-          setCloseCause("unauthorized", {
-            authMode: resolvedAuth.mode,
-            authProvided,
-            authReason: authResult.reason,
-            allowTailscale: resolvedAuth.allowTailscale,
-            client: connectParams.client.id,
-            clientDisplayName: connectParams.client.displayName,
-            mode: connectParams.client.mode,
-            version: connectParams.client.version,
-          });
-          send({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, authMessage),
-          });
+          sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage);
           close(1008, truncateCloseReason(authMessage));
         };
-        if (!device) {
+        const clearUnboundScopes = () => {
+          if (scopes.length > 0 && !controlUiAuthPolicy.allowBypass) {
+            scopes = [];
+            connectParams.scopes = scopes;
+          }
+        };
+        const handleMissingDeviceIdentity = (): boolean => {
+          if (device) {
+            return true;
+          }
+          clearUnboundScopes();
           const canSkipDevice = sharedAuthOk;
 
-          if (isControlUi && !allowControlUiBypass) {
-            const errorMessage = "control ui requires HTTPS or localhost (secure context)";
-            setHandshakeState("failed");
-            setCloseCause("control-ui-insecure-auth", {
-              client: connectParams.client.id,
-              clientDisplayName: connectParams.client.displayName,
-              mode: connectParams.client.mode,
-              version: connectParams.client.version,
+          if (isControlUi && !controlUiAuthPolicy.allowBypass) {
+            const errorMessage =
+              "control ui requires device identity (use HTTPS or localhost secure context)";
+            markHandshakeFailure("control-ui-insecure-auth", {
+              insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, errorMessage),
-            });
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
             close(1008, errorMessage);
-            return;
+            return false;
           }
 
-          // Allow shared-secret authenticated connections (e.g., control-ui) to skip device identity
+          // Allow shared-secret authenticated connections (e.g., control-ui) to skip device identity.
           if (!canSkipDevice) {
             if (!authOk && hasSharedAuth) {
-              rejectUnauthorized();
-              return;
+              rejectUnauthorized(authResult);
+              return false;
             }
-            setHandshakeState("failed");
-            setCloseCause("device-required", {
-              client: connectParams.client.id,
-              clientDisplayName: connectParams.client.displayName,
-              mode: connectParams.client.mode,
-              version: connectParams.client.version,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.NOT_PAIRED, "device identity required"),
-            });
+            markHandshakeFailure("device-required");
+            sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, "device identity required");
             close(1008, "device identity required");
-            return;
+            return false;
           }
+
+          return true;
+        };
+        if (!handleMissingDeviceIdentity()) {
+          return;
         }
         if (device) {
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
@@ -587,6 +603,21 @@ export function attachGatewayWsMessageHandler(params: {
             nonce: providedNonce || undefined,
             version: providedNonce ? "v2" : "v1",
           });
+          const rejectDeviceSignatureInvalid = () => {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
+            });
+            close(1008, "device signature invalid");
+          };
           const signatureOk = verifyDeviceSignature(device.publicKey, payload, device.signature);
           const allowLegacy = !nonceRequired && !providedNonce;
           if (!signatureOk && allowLegacy) {
@@ -603,35 +634,11 @@ export function attachGatewayWsMessageHandler(params: {
             if (verifyDeviceSignature(device.publicKey, legacyPayload, device.signature)) {
               // accepted legacy loopback signature
             } else {
-              setHandshakeState("failed");
-              setCloseCause("device-auth-invalid", {
-                reason: "device-signature",
-                client: connectParams.client.id,
-                deviceId: device.id,
-              });
-              send({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-              });
-              close(1008, "device signature invalid");
+              rejectDeviceSignatureInvalid();
               return;
             }
           } else if (!signatureOk) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-signature",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-            });
-            close(1008, "device signature invalid");
+            rejectDeviceSignatureInvalid();
             return;
           }
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
@@ -654,25 +661,69 @@ export function attachGatewayWsMessageHandler(params: {
         }
 
         if (!authOk && connectParams.auth?.token && device) {
-          const tokenCheck = await verifyDeviceToken({
-            deviceId: device.id,
-            token: connectParams.auth.token,
-            role,
-            scopes,
-          });
-          if (tokenCheck.ok) {
-            authOk = true;
-            authMethod = "device-token";
+          if (rateLimiter) {
+            const deviceRateCheck = rateLimiter.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+            if (!deviceRateCheck.allowed) {
+              authResult = {
+                ok: false,
+                reason: "rate_limited",
+                rateLimited: true,
+                retryAfterMs: deviceRateCheck.retryAfterMs,
+              };
+            }
+          }
+          if (!authResult.rateLimited) {
+            const tokenCheck = await verifyDeviceToken({
+              deviceId: device.id,
+              token: connectParams.auth.token,
+              role,
+              scopes,
+            });
+            if (tokenCheck.ok) {
+              authOk = true;
+              authMethod = "device-token";
+              rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+            } else {
+              authResult = { ok: false, reason: "device_token_mismatch" };
+              rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+            }
           }
         }
         if (!authOk) {
-          rejectUnauthorized();
+          rejectUnauthorized(authResult);
           return;
         }
 
-        const skipPairing = allowControlUiBypass && sharedAuthOk;
+        const skipPairing = shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk);
         if (device && devicePublicKey && !skipPairing) {
-          const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
+          const formatAuditList = (items: string[] | undefined): string => {
+            if (!items || items.length === 0) {
+              return "<none>";
+            }
+            const out = new Set<string>();
+            for (const item of items) {
+              const trimmed = item.trim();
+              if (trimmed) {
+                out.add(trimmed);
+              }
+            }
+            if (out.size === 0) {
+              return "<none>";
+            }
+            return [...out].toSorted().join(",");
+          };
+          const logUpgradeAudit = (
+            reason: "role-upgrade" | "scope-upgrade",
+            currentRoles: string[] | undefined,
+            currentScopes: string[] | undefined,
+          ) => {
+            logGateway.warn(
+              `security audit: device access upgrade requested reason=${reason} device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} roleFrom=${formatAuditList(currentRoles)} roleTo=${role} scopesFrom=${formatAuditList(currentScopes)} scopesTo=${formatAuditList(scopes)} client=${connectParams.client.id} conn=${connId}`,
+            );
+          };
+          const requirePairing = async (
+            reason: "not-paired" | "role-upgrade" | "scope-upgrade",
+          ) => {
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -683,7 +734,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient,
+              silent: isLocalClient && reason === "not-paired",
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -735,35 +786,49 @@ export function attachGatewayWsMessageHandler(params: {
               return;
             }
           } else {
-            const allowedRoles = new Set(
-              Array.isArray(paired.roles) ? paired.roles : paired.role ? [paired.role] : [],
-            );
-            if (allowedRoles.size === 0) {
-              const ok = await requirePairing("role-upgrade", paired);
-              if (!ok) {
-                return;
-              }
-            } else if (!allowedRoles.has(role)) {
-              const ok = await requirePairing("role-upgrade", paired);
-              if (!ok) {
-                return;
-              }
-            }
-
-            const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
-            if (scopes.length > 0) {
-              if (pairedScopes.length === 0) {
-                const ok = await requirePairing("scope-upgrade", paired);
+            const hasLegacyPairedMetadata =
+              paired.roles === undefined && paired.scopes === undefined;
+            const pairedRoles = Array.isArray(paired.roles)
+              ? paired.roles
+              : paired.role
+                ? [paired.role]
+                : [];
+            if (!hasLegacyPairedMetadata) {
+              const allowedRoles = new Set(pairedRoles);
+              if (allowedRoles.size === 0) {
+                logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+                const ok = await requirePairing("role-upgrade");
                 if (!ok) {
                   return;
                 }
-              } else {
-                const allowedScopes = new Set(pairedScopes);
-                const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
-                if (missingScope) {
-                  const ok = await requirePairing("scope-upgrade", paired);
+              } else if (!allowedRoles.has(role)) {
+                logUpgradeAudit("role-upgrade", pairedRoles, paired.scopes);
+                const ok = await requirePairing("role-upgrade");
+                if (!ok) {
+                  return;
+                }
+              }
+
+              const pairedScopes = Array.isArray(paired.scopes) ? paired.scopes : [];
+              if (scopes.length > 0) {
+                if (pairedScopes.length === 0) {
+                  logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                  const ok = await requirePairing("scope-upgrade");
                   if (!ok) {
                     return;
+                  }
+                } else {
+                  const scopesAllowed = roleScopesAllow({
+                    role,
+                    requestedScopes: scopes,
+                    allowedScopes: pairedScopes,
+                  });
+                  if (!scopesAllowed) {
+                    logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
+                    const ok = await requirePairing("scope-upgrade");
+                    if (!ok) {
+                      return;
+                    }
                   }
                 }
               }
@@ -844,18 +909,27 @@ export function attachGatewayWsMessageHandler(params: {
           snapshot.health = cachedHealth;
           snapshot.stateVersion.health = getHealthVersion();
         }
+        const canvasCapability =
+          role === "node" && canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
+        const canvasCapabilityExpiresAtMs = canvasCapability
+          ? Date.now() + CANVAS_CAPABILITY_TTL_MS
+          : undefined;
+        const scopedCanvasHostUrl =
+          canvasHostUrl && canvasCapability
+            ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
+            : canvasHostUrl;
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
           server: {
-            version: process.env.OPENCLAW_VERSION ?? process.env.npm_package_version ?? "dev",
+            version: resolveRuntimeServiceVersion(process.env, "dev"),
             commit: process.env.GIT_COMMIT,
             host: os.hostname(),
             connId,
           },
           features: { methods: gatewayMethods, events },
           snapshot,
-          canvasHostUrl,
+          canvasHostUrl: scopedCanvasHostUrl,
           auth: deviceToken
             ? {
                 deviceToken: deviceToken.token,
@@ -878,6 +952,8 @@ export function attachGatewayWsMessageHandler(params: {
           connId,
           presenceKey,
           clientIp: reportedClientIp,
+          canvasCapability,
+          canvasCapabilityExpiresAtMs,
         };
         setClient(nextClient);
         setHandshakeState("connected");
