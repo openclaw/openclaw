@@ -8,6 +8,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
   computeBackoffMs,
@@ -447,7 +448,11 @@ describe("buildOutboundResultEnvelope", () => {
       mediaUrl: null,
       channelId: "C1",
     };
-    const cases = [
+    const cases = typedCases<{
+      name: string;
+      input: Parameters<typeof buildOutboundResultEnvelope>[0];
+      expected: unknown;
+    }>([
       {
         name: "flatten delivery by default",
         input: { delivery: whatsappDelivery },
@@ -478,7 +483,7 @@ describe("buildOutboundResultEnvelope", () => {
         input: { delivery: discordDelivery, flattenDelivery: false },
         expected: { delivery: discordDelivery },
       },
-    ];
+    ]);
     for (const testCase of cases) {
       const input: Parameters<typeof buildOutboundResultEnvelope>[0] =
         "payloads" in testCase.input
@@ -814,7 +819,10 @@ describe("resolveOutboundSessionRoute", () => {
 
 describe("normalizeOutboundPayloadsForJson", () => {
   it("normalizes payloads for JSON output", () => {
-    const cases = [
+    const cases = typedCases<{
+      input: Parameters<typeof normalizeOutboundPayloadsForJson>[0];
+      expected: ReturnType<typeof normalizeOutboundPayloadsForJson>;
+    }>([
       {
         input: [
           { text: "hi" },
@@ -852,7 +860,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
           },
         ],
       },
-    ];
+    ]);
 
     for (const testCase of cases) {
       const input: ReplyPayload[] = testCase.input.map((payload) =>
@@ -878,7 +886,11 @@ describe("normalizeOutboundPayloads", () => {
 
 describe("formatOutboundPayloadLog", () => {
   it("formats text+media and media-only logs", () => {
-    const cases = [
+    const cases = typedCases<{
+      name: string;
+      input: Parameters<typeof formatOutboundPayloadLog>[0];
+      expected: string;
+    }>([
       {
         name: "text with media lines",
         input: {
@@ -895,7 +907,7 @@ describe("formatOutboundPayloadLog", () => {
         },
         expected: "MEDIA:https://x.test/a.png",
       },
-    ];
+    ]);
 
     for (const testCase of cases) {
       expect(

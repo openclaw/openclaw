@@ -15,9 +15,10 @@ import {
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { typedCases } from "../test-utils/typed-cases.js";
 import {
-  isHeartbeatEnabledForAgent,
   type HeartbeatDeps,
+  isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
@@ -680,7 +681,15 @@ describe("runHeartbeatOnce", () => {
   it("resolves configured and forced session key overrides", async () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cases = [
+      const cases = typedCases<{
+        name: string;
+        caseDir: string;
+        peerKind: "group" | "direct";
+        peerId: string;
+        message: string;
+        applyOverride: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
+        runOptions: (params: { sessionKey: string }) => { sessionKey?: string };
+      }>([
         {
           name: "heartbeat.session",
           caseDir: "hb-explicit-session",
@@ -705,7 +714,7 @@ describe("runHeartbeatOnce", () => {
           applyOverride: () => {},
           runOptions: ({ sessionKey }: { sessionKey: string }) => ({ sessionKey }),
         },
-      ] as const;
+      ]);
 
       for (const testCase of cases) {
         const tmpDir = await createCaseDir(testCase.caseDir);
@@ -835,12 +844,12 @@ describe("runHeartbeatOnce", () => {
   it("handles reasoning payload delivery variants", async () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cases: Array<{
+      const cases = typedCases<{
         name: string;
         caseDir: string;
         replies: Array<{ text: string }>;
         expectedTexts: string[];
-      }> = [
+      }>([
         {
           name: "reasoning + final payload",
           caseDir: "hb-reasoning",
@@ -853,7 +862,7 @@ describe("runHeartbeatOnce", () => {
           replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
           expectedTexts: ["Reasoning:\n_Because it helps_"],
         },
-      ];
+      ]);
 
       for (const testCase of cases) {
         const tmpDir = await createCaseDir(testCase.caseDir);
