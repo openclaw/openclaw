@@ -137,6 +137,18 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Pre-index entire sticker sets when a sticker is received. Default: true. */
+  stickerSetIndexing?: boolean;
+  /** Max stickers to describe per set (vision API calls). Default: 20. */
+  stickerSetIndexLimit?: number;
+  /** Sticker cache TTL in days. Entries older than this are evicted. Default: 90. */
+  stickerCacheTtlDays?: number;
+  /** Max sticker cache entries. Oldest entries are evicted when exceeded. Default: 5000. */
+  stickerCacheMaxEntries?: number;
+  /** Enable vision description for custom emoji in messages. Default: false (token-expensive). */
+  customEmojiVision?: boolean;
+  /** Explicit vision model for sticker/emoji description (provider/model, e.g. "google/gemini-2.0-flash"). Defaults to the agent's primary model. */
+  stickerVisionModel?: string;
   /**
    * Per-channel outbound response prefix override.
    *

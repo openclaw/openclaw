@@ -145,6 +145,7 @@ export const TelegramAccountSchemaBase = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
       })
       .strict()
@@ -153,6 +154,12 @@ export const TelegramAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
+    stickerSetIndexing: z.boolean().optional(),
+    stickerSetIndexLimit: z.number().int().positive().optional(),
+    stickerCacheTtlDays: z.number().int().positive().optional(),
+    stickerCacheMaxEntries: z.number().int().positive().optional(),
+    customEmojiVision: z.boolean().optional(),
+    stickerVisionModel: z.string().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
   })

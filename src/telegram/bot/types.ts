@@ -26,4 +26,8 @@ export interface StickerMetadata {
   fileUniqueId?: string;
   /** Cached description from previous vision processing (skip re-processing if present). */
   cachedDescription?: string;
+  /** True when the sticker is a video sticker (WEBM). */
+  isVideo?: boolean;
+  /** True when the sticker is an animated sticker (TGS). */
+  isAnimated?: boolean;
 }

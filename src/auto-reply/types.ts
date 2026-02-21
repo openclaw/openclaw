@@ -66,6 +66,8 @@ export type ReplyPayload = {
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;
+  /** Telegram sticker file_id for auto-delivery as part of the reply. */
+  stickerId?: string;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
