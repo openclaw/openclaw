@@ -16,6 +16,11 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
+import {
+  buildMeganovaModelDefinition,
+  MEGANOVA_BASE_URL,
+  MEGANOVA_MODEL_CATALOG,
+} from "./meganova-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
@@ -573,6 +578,14 @@ async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig
   };
 }
 
+function buildMeganovaProvider(): ProviderConfig {
+  return {
+    baseUrl: MEGANOVA_BASE_URL,
+    api: "openai-completions",
+    models: MEGANOVA_MODEL_CATALOG.map(buildMeganovaModelDefinition),
+  };
+}
+
 function buildTogetherProvider(): ProviderConfig {
   return {
     baseUrl: TOGETHER_BASE_URL,
@@ -770,6 +783,13 @@ export async function resolveImplicitProviders(params: {
         apiKey: vllmKey,
       };
     }
+  }
+
+  const meganovaKey =
+    resolveEnvApiKeyVarName("meganova") ??
+    resolveApiKeyFromProfiles({ provider: "meganova", store: authStore });
+  if (meganovaKey) {
+    providers.meganova = { ...buildMeganovaProvider(), apiKey: meganovaKey };
   }
 
   const togetherKey =

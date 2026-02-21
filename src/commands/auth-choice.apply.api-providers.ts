@@ -32,6 +32,8 @@ import {
   applyOpencodeZenProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyMeganovaConfig,
+  applyMeganovaProviderConfig,
   applyTogetherConfig,
   applyTogetherProviderConfig,
   applyVeniceConfig,
@@ -48,6 +50,7 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
+  MEGANOVA_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -60,6 +63,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setSyntheticApiKey,
+  setMeganovaApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
@@ -111,6 +115,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "venice-api-key";
     } else if (params.opts.tokenProvider === "together") {
       authChoice = "together-api-key";
+    } else if (params.opts.tokenProvider === "meganova") {
+      authChoice = "meganova-api-key";
     } else if (params.opts.tokenProvider === "huggingface") {
       authChoice = "huggingface-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
@@ -884,6 +890,65 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyTogetherConfig,
         applyProviderConfig: applyTogetherProviderConfig,
         noteDefault: TOGETHER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "meganova-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "meganova") {
+      await setMeganovaApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "MegaNova AI provides access to 15+ open-source and reasoning models through an OpenAI-compatible API,",
+          "including GLM-5, DeepSeek, Kimi, Llama, Qwen, and more.",
+          "Get your API key at: https://meganova.ai",
+        ].join("\n"),
+        "MegaNova AI",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("meganova");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MEGANOVA_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMeganovaApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter MegaNova API key",
+        validate: validateApiKeyInput,
+      });
+      await setMeganovaApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "meganova:default",
+      provider: "meganova",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MEGANOVA_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyMeganovaConfig,
+        applyProviderConfig: applyMeganovaProviderConfig,
+        noteDefault: MEGANOVA_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

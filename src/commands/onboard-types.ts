@@ -45,6 +45,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "xai-api-key"
+  | "meganova-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
   | "skip";
@@ -68,6 +69,7 @@ export type AuthChoiceGroupId =
   | "venice"
   | "qwen"
   | "together"
+  | "meganova"
   | "huggingface"
   | "qianfan"
   | "xai"
@@ -116,6 +118,7 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   togetherApiKey?: string;
+  meganovaApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
