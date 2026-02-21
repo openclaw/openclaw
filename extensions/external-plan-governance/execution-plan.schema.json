@@ -1,0 +1,451 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecutionPlan",
+  "description": "A machine-enforceable execution plan for agent tool calls",
+  "type": "object",
+  "required": [
+    "description_for_user",
+    "five_w_one_h",
+    "procedure",
+    "surface_effects",
+    "constraints",
+    "execution_mode"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Schema version for forward compatibility"
+    },
+    "description_for_user": {
+      "type": "string",
+      "description": "Short, human-readable description of what will be executed. Written for user confirmation, not implementation."
+    },
+    "five_w_one_h": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["who", "what", "where", "when", "why", "how"],
+      "properties": {
+        "who": {
+          "type": "string",
+          "description": "Who or what executes the plan (e.g. user, tool, system)."
+        },
+        "what": {
+          "type": "string",
+          "description": "Concrete operation being performed (not a goal)."
+        },
+        "where": {
+          "type": "string",
+          "description": "Execution surface: filesystem path, service, account, environment."
+        },
+        "when": {
+          "type": "string",
+          "description": "When execution happens (e.g. immediate, scheduled, conditional)."
+        },
+        "why": {
+          "type": "string",
+          "description": "User-facing reason for this execution."
+        },
+        "how": {
+          "type": "string",
+          "description": "High-level method description without commands or flags."
+        }
+      }
+    },
+    "procedure": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "action"],
+        "properties": {
+          "step": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Sequential step number. Order matters."
+          },
+          "action": {
+            "type": "string",
+            "description": "Atomic, declarative action with no branching or conditionals."
+          }
+        }
+      },
+      "description": "Ordered list of execution steps. No branching, retries, or conditionals."
+    },
+    "surface_effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["touches", "modifies", "creates", "deletes"],
+      "properties": {
+        "touches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Resources or surfaces that will be accessed."
+        },
+        "modifies": {
+          "type": "boolean",
+          "description": "Whether existing resources are modified."
+        },
+        "creates": {
+          "type": "boolean",
+          "description": "Whether new resources are created."
+        },
+        "deletes": {
+          "type": "boolean",
+          "description": "Whether resources are deleted."
+        }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Hard negative constraint that must not be violated."
+      },
+      "description": "Hard execution limits. No soft preferences or guidance."
+    },
+    "execution_mode": {
+      "type": "string",
+      "enum": ["preview", "execute"],
+      "description": "Whether this plan is only previewed or actually executed."
+    },
+    "planId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for plan binding and audit"
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "Bound session (from Yi's enforcement layer)"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Plan TTL — rejected after expiry"
+    },
+    "intent": {
+      "$ref": "#/$defs/Intent"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Operation"
+      },
+      "minItems": 1
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    }
+  },
+  "$defs": {
+    "Intent": {
+      "type": "object",
+      "required": ["summary", "category", "riskLevel"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "One-line description of what this plan accomplishes"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["read", "write", "execute", "search", "mixed"],
+          "description": "Primary operation type"
+        },
+        "riskLevel": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"],
+          "description": "Assessed risk for approval routing"
+        },
+        "userMessage": {
+          "type": "string",
+          "description": "Original user request (for audit)"
+        },
+        "enriched": {
+          "$ref": "#/$defs/EnrichedIntent"
+        }
+      }
+    },
+    "EnrichedIntent": {
+      "type": "object",
+      "description": "5W1H structured intent (from sdd-mcp pattern)",
+      "properties": {
+        "what": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        },
+        "who": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        },
+        "when": {
+          "type": "string"
+        },
+        "how": {
+          "type": "string"
+        }
+      }
+    },
+    "Operation": {
+      "type": "object",
+      "required": ["id", "tool", "description", "allow"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^op-[0-9]{3}$",
+          "description": "Unique operation ID (op-001, op-002)"
+        },
+        "tool": {
+          "type": "string",
+          "description": "Tool name (exec, read, write, browser, etc.)"
+        },
+        "description": "Human-readable description of this operation",
+        "allow": {
+          "$ref": "#/$defs/AllowRules",
+          "description": "What this operation permits"
+        },
+        "deny": {
+          "$ref": "#/$defs/DenyRules",
+          "description": "Explicit denials (overrides allow)"
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Operation IDs that must complete first"
+        },
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Can run concurrently with other parallel ops"
+        },
+        "maxInvocations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "How many times this operation can be called"
+        },
+        "requiresConfirmation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pause for user confirmation before execution"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Operation-specific timeout (ms)"
+        }
+      }
+    },
+    "AllowRules": {
+      "type": "object",
+      "description": "Whitelist rules — at least one must match",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommandPattern"
+          },
+          "description": "Allowed command patterns (for exec)"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "description": "Allowed file paths (for read/write)"
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UrlPattern"
+          },
+          "description": "Allowed URLs (for browser/fetch)"
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "$ref": "#/$defs/ArgPattern"
+              }
+            ]
+          },
+          "description": "Allowed argument values by name"
+        }
+      }
+    },
+    "DenyRules": {
+      "type": "object",
+      "description": "Blacklist rules — any match blocks (overrides allow)",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommandPattern"
+          }
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPattern"
+          }
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UrlPattern"
+          }
+        }
+      }
+    },
+    "CommandPattern": {
+      "type": "object",
+      "required": ["pattern"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob or regex pattern for command"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["exact", "glob", "regex"],
+          "default": "glob"
+        }
+      }
+    },
+    "PathPattern": {
+      "type": "object",
+      "required": ["pattern"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern for file path"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["exact", "glob", "regex"],
+          "default": "glob"
+        }
+      }
+    },
+    "UrlPattern": {
+      "type": "object",
+      "required": ["pattern"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "URL pattern (supports * wildcard)"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["exact", "glob", "regex"],
+          "default": "glob"
+        }
+      }
+    },
+    "ArgPattern": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["exact", "glob", "regex", "range"],
+          "default": "exact"
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      }
+    },
+    "GlobalConstraints": {
+      "type": "object",
+      "properties": {
+        "maxTotalOperations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50,
+          "description": "Max tool calls across all operations"
+        },
+        "maxDurationMs": {
+          "type": "integer",
+          "default": 300000,
+          "description": "Plan execution timeout (5 min default)"
+        },
+        "forbiddenPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Global path blacklist"
+        },
+        "forbiddenCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Global command blacklist"
+        },
+        "requireSequential": {
+          "type": "boolean",
+          "default": false,
+          "description": "Force all operations to run in order"
+        },
+        "allowUnplanned": {
+          "type": "boolean",
+          "default": false,
+          "description": "Permit tool calls not in operations list"
+        }
+      }
+    },
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "generatedBy": {
+          "type": "string",
+          "description": "Model that generated this plan"
+        },
+        "qualityScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Plan quality assessment (from sdd-mcp pattern)"
+        },
+        "projectContext": {
+          "type": "string",
+          "description": "Reference to constitution/context file"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
