@@ -22,7 +22,11 @@ class A2UIHandler(
     return "${base}/__openclaw__/a2ui/?platform=android"
   }
 
-  suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
+  suspend fun ensureA2uiReady(
+    a2uiUrl: String,
+    numberOfTries: Int = 50,
+    delayToWaitMs: Long = 120L
+  ): Boolean {
     try {
       val already = canvas.eval(a2uiReadyCheckJS)
       if (already == "true") return true
@@ -31,14 +35,14 @@ class A2UIHandler(
     }
 
     canvas.navigate(a2uiUrl)
-    repeat(50) {
+    repeat(numberOfTries) {
       try {
         val ready = canvas.eval(a2uiReadyCheckJS)
         if (ready == "true") return true
       } catch (_: Throwable) {
         // ignore
       }
-      delay(120)
+      delay(delayToWaitMs)
     }
     return false
   }
