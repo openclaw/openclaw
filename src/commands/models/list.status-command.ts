@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentDir,
@@ -34,6 +33,7 @@ import {
   type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -107,7 +107,7 @@ export async function modelsStatusCommand(
   const imageFallbacks = typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
   const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<Record<string, string>>(
     (acc, [key, entry]) => {
-      const alias = entry?.alias?.trim();
+      const alias = typeof entry?.alias === "string" ? entry.alias.trim() : undefined;
       if (alias) {
         acc[alias] = key;
       }
@@ -127,7 +127,7 @@ export async function modelsStatusCommand(
   );
   const providersFromConfig = new Set(
     Object.keys(cfg.models?.providers ?? {})
-      .map((p) => p.trim())
+      .map((p) => (typeof p === "string" ? p.trim() : ""))
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
@@ -176,7 +176,7 @@ export async function modelsStatusCommand(
       ...providersFromEnv,
     ]),
   )
-    .map((p) => p.trim())
+    .map((p) => (typeof p === "string" ? p.trim() : ""))
     .filter(Boolean)
     .toSorted((a, b) => a.localeCompare(b));
 

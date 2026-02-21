@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveTimezone,
   formatUtcTimestamp,
@@ -50,6 +50,17 @@ type ResolvedEnvelopeTimezone =
   | { mode: "utc" }
   | { mode: "local" }
   | { mode: "iana"; timeZone: string };
+
+function sanitizeEnvelopeHeaderPart(value: string): string {
+  // Header parts are metadata and must not be able to break the bracketed prefix.
+  // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replaceAll("[", "(")
+    .replaceAll("]", ")")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
@@ -139,7 +150,7 @@ function formatTimestamp(
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const channel = params.channel?.trim() || "Channel";
+  const channel = sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel");
   const parts: string[] = [channel];
   const resolved = normalizeEnvelopeOptions(params.envelope);
   let elapsed: string | undefined;
@@ -157,16 +168,16 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
         : undefined;
   }
   if (params.from?.trim()) {
-    const from = params.from.trim();
+    const from = sanitizeEnvelopeHeaderPart(params.from.trim());
     parts.push(elapsed ? `${from} +${elapsed}` : from);
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
   if (params.host?.trim()) {
-    parts.push(params.host.trim());
+    parts.push(sanitizeEnvelopeHeaderPart(params.host.trim()));
   }
   if (params.ip?.trim()) {
-    parts.push(params.ip.trim());
+    parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
   }
   const ts = formatTimestamp(params.timestamp, resolved);
   if (ts) {
@@ -189,7 +200,8 @@ export function formatInboundEnvelope(params: {
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
-  const resolvedSender = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
   const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
