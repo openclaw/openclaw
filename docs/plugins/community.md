@@ -34,6 +34,13 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Plugins
+
+- **IC Sovereign Persistent Memory** — Sovereign, persistent AI memory stored in personal Internet Computer canisters that only you control.
+  npm: `openclaw-ic-sovereign-persistent-memory`
+  repo: `https://github.com/TheAmSpeed/openclaw-ic-sovereign-persistent-memory`
+  install: `openclaw plugins install openclaw-ic-sovereign-persistent-memory`
+
 ## Candidate format
 
 Use this format when adding entries:
