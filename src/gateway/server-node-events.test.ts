@@ -52,6 +52,7 @@ vi.mock("./session-utils.js", () => ({
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
+import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -62,6 +63,7 @@ import { loadSessionEntry } from "./session-utils.js";
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
 const agentCommandMock = vi.mocked(agentCommand);
+const loadConfigMock = vi.mocked(loadConfig);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
 
@@ -92,6 +94,8 @@ describe("node exec events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockReset();
     requestHeartbeatNowMock.mockReset();
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue({ session: { mainKey: "agent:main:main" } } as OpenClawConfig);
   });
 
   it("enqueues exec.started events", async () => {
@@ -185,6 +189,29 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
+
+  it.each(["exec.finished", "exec.started", "exec.denied"] as const)(
+    "suppresses %s events when tools.nodes.notifyOnExit is false",
+    async (event) => {
+      loadConfigMock.mockReturnValue({
+        tools: { nodes: { notifyOnExit: false } },
+      } as OpenClawConfig);
+      const ctx = buildCtx();
+      await handleNodeEvent(ctx, "node-1", {
+        event,
+        payloadJSON: JSON.stringify({
+          sessionKey: "test",
+          runId: "r1",
+          exitCode: 0,
+          output: "hello",
+          command: "ls",
+          reason: "not allowed",
+        }),
+      });
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("voice transcript events", () => {

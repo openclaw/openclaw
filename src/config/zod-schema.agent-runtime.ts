@@ -445,6 +445,12 @@ export const AgentToolsSchema = z
       .strict()
       .optional(),
     exec: AgentToolExecSchema,
+    nodes: z
+      .object({
+        notifyOnExit: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     sandbox: z
@@ -688,6 +694,12 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     exec: ToolExecSchema,
+    nodes: z
+      .object({
+        notifyOnExit: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     fs: ToolFsSchema,
     subagents: z
       .object({

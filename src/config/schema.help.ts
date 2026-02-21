@@ -89,6 +89,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
+  "tools.nodes.notifyOnExit":
+    "When true (default), node exec events (started/finished/denied) enqueue system events and trigger heartbeats. Set to false to suppress duplicate notifications when results are already received inline from nodes.run.",
   "tools.exec.notifyOnExitEmptySuccess":
     "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",

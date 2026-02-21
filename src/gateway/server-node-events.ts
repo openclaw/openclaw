@@ -458,6 +458,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
+      const cfg = loadConfig();
+      if (cfg?.tools?.nodes?.notifyOnExit === false) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
