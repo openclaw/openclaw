@@ -814,7 +814,8 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "rate_limit";
   }
   if (isOverloadedErrorMessage(raw)) {
-    return "rate_limit";
+    // Treat high-demand or service-unavailable provider responses as transient, not quota.
+    return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
