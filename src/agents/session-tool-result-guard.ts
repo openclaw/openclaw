@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -9,6 +10,8 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+
+const log = createSubsystemLogger("agent/tool-guard");
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
@@ -106,11 +109,25 @@ export function installSessionToolResultGuard(
     ) => PluginHookBeforeMessageWriteResult | undefined;
   },
 ): {
-  flushPendingToolResults: () => void;
+  /**
+   * Flush any pending tool results.
+   *
+   * Default mode (OPENCLAW_TOOL_GUARD_ABORT_MODE=discard): discards the
+   * incomplete pair buffer without writing to JSONL.
+   * Legacy mode (OPENCLAW_TOOL_GUARD_ABORT_MODE=synthetic): synthesizes
+   * error tool_results for any pending tool_use IDs.
+   *
+   * Idempotent: no-op when nothing is buffered.
+   *
+   * @param reason - Optional label used in log output (e.g. "abort", "failover", "rate_limit").
+   */
+  flushPendingToolResults: (reason?: string) => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pending = new Map<string, string | undefined>();
+  const toolPairBuffer: AgentMessage[] = [];
+
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
@@ -145,26 +162,112 @@ export function installSessionToolResultGuard(
     return msg;
   };
 
-  const flushPendingToolResults = () => {
-    if (pending.size === 0) {
+  // Read env var to determine abort behavior
+  const resolveAbortMode = (): "discard" | "synthetic" => {
+    return process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE === "synthetic" ? "synthetic" : "discard";
+  };
+
+  // Validate that all tool_use in buffer have matching tool_results
+  const validatePairIntegrity = (): boolean => {
+    const usedIds = new Set<string>();
+    const resultIds = new Set<string>();
+    for (const msg of toolPairBuffer) {
+      const role = (msg as { role?: unknown }).role;
+      if (role === "assistant") {
+        const calls = extractToolCallsFromAssistant(
+          msg as Extract<AgentMessage, { role: "assistant" }>,
+        );
+        for (const c of calls) {
+          usedIds.add(c.id);
+        }
+      } else if (role === "toolResult") {
+        const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+        if (id) {
+          resultIds.add(id);
+        }
+      }
+    }
+    for (const id of usedIds) {
+      if (!resultIds.has(id)) {
+        return false;
+      }
+    }
+    for (const id of resultIds) {
+      if (!usedIds.has(id)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Commit: write buffered messages atomically to JSONL
+  const commitToolPairBuffer = () => {
+    if (toolPairBuffer.length === 0) {
       return;
     }
-    if (allowSyntheticToolResults) {
+    if (!validatePairIntegrity()) {
+      log.warn("tool-pair integrity check failed at commit time, discarding buffer");
+      toolPairBuffer.length = 0;
+      pending.clear();
+      return;
+    }
+    for (const msg of toolPairBuffer) {
+      originalAppend(msg as never);
+      if ((msg as { role?: unknown }).role === "assistant") {
+        const sessionFile = (
+          sessionManager as { getSessionFile?: () => string | null }
+        ).getSessionFile?.();
+        if (sessionFile) {
+          emitSessionTranscriptUpdate(sessionFile);
+        }
+      }
+    }
+    toolPairBuffer.length = 0;
+  };
+
+  // Discard: drop buffer and log
+  const discardToolPairBuffer = (reason: string) => {
+    const discarded_tool_use_count = pending.size;
+    const discarded_tool_result_count = toolPairBuffer.filter(
+      (m) => (m as { role?: unknown }).role === "toolResult",
+    ).length;
+    if (discarded_tool_use_count === 0 && discarded_tool_result_count === 0) {
+      return;
+    }
+    log.warn("discarding incomplete tool pair buffer", {
+      discard_reason: reason,
+      discarded_tool_use_count,
+      discarded_tool_result_count,
+    });
+    toolPairBuffer.length = 0;
+    pending.clear();
+  };
+
+  const flushPendingToolResults = (reason = "flush") => {
+    if (pending.size === 0 && toolPairBuffer.length === 0) {
+      return;
+    } // idempotent
+
+    if (resolveAbortMode() === "synthetic" && allowSyntheticToolResults) {
+      // Legacy: synthesize error results for pending tool calls
       for (const [id, name] of pending.entries()) {
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
-        const flushed = applyBeforeWriteHook(
+        const prepared = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
             toolCallId: id,
             toolName: name,
             isSynthetic: true,
           }),
         );
-        if (flushed) {
-          originalAppend(flushed as never);
+        if (prepared) {
+          toolPairBuffer.push(prepared);
         }
       }
+      pending.clear(); // clear pending before commit so validatePairIntegrity passes with synthetics
+      commitToolPairBuffer();
+    } else {
+      discardToolPairBuffer(reason);
     }
-    pending.clear();
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -173,8 +276,10 @@ export function installSessionToolResultGuard(
     if (role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message]);
       if (sanitized.length === 0) {
-        if (allowSyntheticToolResults && pending.size > 0) {
-          flushPendingToolResults();
+        // Assistant message was dropped (e.g., only had invalid tool calls)
+        // Discard any incomplete buffer
+        if (toolPairBuffer.length > 0 || pending.size > 0) {
+          discardToolPairBuffer("assistant_message_dropped");
         }
         return undefined;
       }
@@ -199,8 +304,25 @@ export function installSessionToolResultGuard(
         }),
       );
       if (!persisted) {
+        // Hook suppressed this result. A suppressed result cannot satisfy its
+        // tool_use counterpart, so the pair is now incomplete. Discard the
+        // buffer to prevent an orphaned tool_use block from reaching JSONL.
+        if (pending.size === 0 && toolPairBuffer.length > 0) {
+          discardToolPairBuffer("hook_suppressed_tool_result");
+        }
         return undefined;
       }
+
+      if (toolPairBuffer.length > 0) {
+        // Pair-atomic: add to buffer, commit when pair is complete
+        toolPairBuffer.push(persisted);
+        if (pending.size === 0) {
+          commitToolPairBuffer();
+        }
+        return undefined;
+      }
+
+      // Fallback: no buffer in progress, write directly (edge case)
       return originalAppend(persisted as never);
     }
 
@@ -209,36 +331,33 @@ export function installSessionToolResultGuard(
         ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
-    if (allowSyntheticToolResults) {
-      // If previous tool calls are still pending, flush before non-tool results.
-      if (pending.size > 0 && (toolCalls.length === 0 || nextRole !== "assistant")) {
-        flushPendingToolResults();
-      }
-      // If new tool calls arrive while older ones are pending, flush the old ones first.
-      if (pending.size > 0 && toolCalls.length > 0) {
-        flushPendingToolResults();
-      }
+    // Safety: discard any incomplete pair buffer before a new turn
+    if (toolPairBuffer.length > 0 || pending.size > 0) {
+      discardToolPairBuffer("new_turn_before_pair_completed");
     }
 
     const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
     if (!finalMessage) {
       return undefined;
     }
-    const result = originalAppend(finalMessage as never);
 
+    if (toolCalls.length > 0) {
+      // Pair-atomic: buffer assistant message with tool_use, don't write yet
+      toolPairBuffer.push(finalMessage);
+      for (const call of toolCalls) {
+        pending.set(call.id, call.name);
+      }
+      return undefined;
+    }
+
+    // No tool calls: write directly
+    const result = originalAppend(finalMessage as never);
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
     if (sessionFile) {
       emitSessionTranscriptUpdate(sessionFile);
     }
-
-    if (toolCalls.length > 0) {
-      for (const call of toolCalls) {
-        pending.set(call.id, call.name);
-      }
-    }
-
     return result;
   };
 

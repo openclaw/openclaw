@@ -307,3 +307,158 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     moved: changedOrMoved,
   };
 }
+
+export type DropOrphanedToolPairsReport = {
+  messages: AgentMessage[];
+  droppedOrphanCount: number;
+};
+
+/**
+ * Drop orphaned tool_use and tool_result blocks from session history.
+ *
+ * Unlike repairToolUseResultPairing() which synthesizes error results,
+ * this function strictly removes any tool_use without a matching tool_result
+ * and any tool_result without a matching tool_use.
+ *
+ * Use this for session load repair when you want clean removal instead of
+ * synthesis. Does NOT reorder messages.
+ */
+export function dropOrphanedToolPairs(messages: AgentMessage[]): DropOrphanedToolPairsReport {
+  // Pass 1: collect all tool_use IDs from assistant messages
+  const useIds = new Set<string>();
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    // Skip aborted/errored messages (same policy as repairToolUseResultPairing)
+    if (stopReason === "error" || stopReason === "aborted") {
+      continue;
+    }
+    const calls = extractToolCallsFromAssistant(assistant);
+    for (const call of calls) {
+      useIds.add(call.id);
+    }
+  }
+
+  // Pass 2: collect all tool_result IDs
+  const resultIds = new Set<string>();
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "toolResult") {
+      continue;
+    }
+    const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+    if (id) {
+      resultIds.add(id);
+    }
+  }
+
+  // Pass 3: filter messages, removing orphans
+  let droppedOrphanCount = 0;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+
+    if (role === "toolResult") {
+      const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+      if (id && !useIds.has(id)) {
+        // Orphaned tool_result: no matching tool_use
+        droppedOrphanCount += 1;
+        continue;
+      }
+      out.push(msg);
+      continue;
+    }
+
+    if (role === "assistant") {
+      const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+      const stopReason = (assistant as { stopReason?: string }).stopReason;
+      if (stopReason === "error" || stopReason === "aborted") {
+        out.push(msg);
+        continue;
+      }
+      const calls = extractToolCallsFromAssistant(assistant);
+      if (calls.length === 0) {
+        out.push(msg);
+        continue;
+      }
+      // Remove tool_use blocks that have no matching result
+      const matched = calls.filter((c) => resultIds.has(c.id));
+      const orphaned = calls.filter((c) => !resultIds.has(c.id));
+      if (orphaned.length === 0) {
+        out.push(msg);
+        continue;
+      }
+      droppedOrphanCount += orphaned.length;
+      if (matched.length === 0 && !Array.isArray(assistant.content)) {
+        // Entire assistant message is orphaned tool calls: drop it
+        continue;
+      }
+      if (matched.length === 0 && Array.isArray(assistant.content)) {
+        // All tool_use blocks in content are orphaned
+        // Keep non-tool-use content blocks, drop message if empty
+        const filteredContent = (assistant.content as unknown[]).filter((block) => {
+          if (!block || typeof block !== "object") {
+            return true;
+          }
+          const type = (block as { type?: unknown }).type;
+          if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") {
+            return true;
+          }
+          const id = (block as { id?: unknown }).id;
+          return typeof id === "string" && resultIds.has(id);
+        });
+        if (filteredContent.length === 0) {
+          continue; // drop the whole message
+        }
+        out.push({ ...assistant, content: filteredContent } as AgentMessage);
+        continue;
+      }
+      // Some tool_use blocks are orphaned: filter content
+      if (Array.isArray(assistant.content)) {
+        const filteredContent = (assistant.content as unknown[]).filter((block) => {
+          if (!block || typeof block !== "object") {
+            return true;
+          }
+          const type = (block as { type?: unknown }).type;
+          if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") {
+            return true;
+          }
+          const id = (block as { id?: unknown }).id;
+          return typeof id === "string" && resultIds.has(id);
+        });
+        out.push({ ...assistant, content: filteredContent } as AgentMessage);
+      } else {
+        out.push(msg);
+      }
+      continue;
+    }
+
+    out.push(msg);
+  }
+
+  if (droppedOrphanCount > 0) {
+    console.warn(
+      `[session-repair] dropping orphaned tool pairs: droppedOrphanCount=${droppedOrphanCount}`,
+    );
+  }
+
+  return {
+    messages: droppedOrphanCount > 0 ? out : messages,
+    droppedOrphanCount,
+  };
+}

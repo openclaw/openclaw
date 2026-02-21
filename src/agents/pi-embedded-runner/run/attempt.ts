@@ -1289,6 +1289,12 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
+      //
+      // FAILOVER COVERAGE: This finally block is the single flush point for ALL exit
+      // paths from a single attempt — including abort, rate-limit, and provider failover.
+      // run.ts calls advanceAuthProfile() only after runEmbeddedAttempt() returns, so
+      // any incomplete tool_use/tool_result pair is always discarded here before the
+      // next provider attempt begins. No orphaned tool_use blocks can reach JSONL.
       removeToolResultContextGuard?.();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
