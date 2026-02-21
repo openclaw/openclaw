@@ -28,7 +28,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/ui/dialog"; // used in Save as Mission modal below
 import {
   Select,
   SelectContent,
@@ -209,7 +209,7 @@ const TEMPLATES: Array<{
 
 function formatElapsed(ms: number): string {
   const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) {return `${seconds}s`;}
+  if (seconds < 60) { return `${seconds}s`; }
   const minutes = Math.floor(seconds / 60);
   const remaining = seconds % 60;
   return `${minutes}m ${remaining}s`;
@@ -248,7 +248,9 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const freshTasks: TaskDef[] = parsed.map((t: any) => ({
+          const freshTasks: TaskDef[] = (
+            parsed as { title?: string; description?: string; priority?: string; agentId?: string }[]
+          ).map((t) => ({
             id: `local-${nextLocalId++}`,
             title: t.title || "Untitled",
             description: t.description || "",
@@ -268,7 +270,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
   useEffect(() => {
     fetch("/api/agents")
       .then((r) => {
-        if (!r.ok) {throw new Error(`HTTP ${r.status}`);}
+        if (!r.ok) { throw new Error(`HTTP ${r.status}`); }
         return r.json();
       })
       .then((d) => setAgents(d.agents || []))
@@ -289,7 +291,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
   }, []);
 
   const scheduleRefresh = useCallback(() => {
-    if (refreshTimerRef.current) {return;}
+    if (refreshTimerRef.current) { return; }
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
       fetchStatus().catch(() => {
@@ -304,7 +306,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
 
   const handleGatewayEvent = useCallback(
     (event: GatewayEvent) => {
-      if (event.type !== "gateway_event") {return;}
+      if (event.type !== "gateway_event") { return; }
       const eventName = (event.event || "").toLowerCase();
       if (
         eventName.includes("orchestrator") ||
@@ -394,7 +396,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
   // Launch all tasks
   const launchAll = async () => {
     const valid = taskDefs.filter((t) => t.title.trim() && t.agentId);
-    if (valid.length === 0) {return;}
+    if (valid.length === 0) { return; }
 
     setLaunching(true);
     setLastBatch(null);
@@ -433,7 +435,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
   };
 
   const saveQueueAsMission = async () => {
-    if (!newMissionName.trim() || taskDefs.length === 0) {return;}
+    if (!newMissionName.trim() || taskDefs.length === 0) { return; }
     setSavingMission(true);
     try {
       const valid = taskDefs.filter((t) => t.title.trim() && t.agentId);
@@ -452,7 +454,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
           })),
         }),
       });
-      if (!res.ok) {throw new Error("Failed to save mission");}
+      if (!res.ok) { throw new Error("Failed to save mission"); }
       setShowSaveMissionModal(false);
       setNewMissionName("");
       setNewMissionDesc("");
@@ -709,7 +711,7 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
                       size="sm"
                       variant="ghost"
                       onClick={() => {
-                        if (taskDefs.length > 0 && !confirm("Clear all tasks from the orchestrator?")) {return;}
+                        if (taskDefs.length > 0 && !confirm("Clear all tasks from the orchestrator?")) { return; }
                         setTaskDefs([]);
                       }}
                       className="text-muted-foreground hover:text-destructive gap-1.5"
@@ -764,8 +766,8 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
                   <div
                     key={r.taskId}
                     className={`flex items-center gap-2 p-2 rounded text-xs font-mono ${r.status === "dispatched"
-                        ? "bg-green-500/5 text-green-400"
-                        : "bg-destructive/5 text-destructive"
+                      ? "bg-green-500/5 text-green-400"
+                      : "bg-destructive/5 text-destructive"
                       }`}
                   >
                     {r.status === "dispatched" ? (
@@ -956,6 +958,55 @@ export function Orchestrator({ workspaceId }: OrchestratorProps) {
             )}
         </div>
       </ScrollArea>
+
+      {/* Save as Mission Modal */}
+      <Dialog open={showSaveMissionModal} onOpenChange={setShowSaveMissionModal}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Save as Mission</DialogTitle>
+            <DialogDescription>
+              Save this orchestrated queue as a repeatable mission blueprint.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4 mt-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Mission Name</label>
+              <input
+                className="w-full px-3 py-2 rounded-md border border-input bg-background/50 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                value={newMissionName}
+                onChange={(e) => setNewMissionName(e.target.value)}
+                placeholder="e.g. Lead Gen Pipeline"
+                maxLength={200}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Description</label>
+              <textarea
+                className="w-full px-3 py-2 rounded-md border border-input bg-background/50 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[60px] resize-y"
+                value={newMissionDesc}
+                onChange={(e) => setNewMissionDesc(e.target.value)}
+                placeholder="What does this blueprint do?"
+                maxLength={2000}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowSaveMissionModal(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={saveQueueAsMission}
+              disabled={!newMissionName.trim() || savingMission}
+            >
+              {savingMission ? "Saving..." : "Save Mission"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

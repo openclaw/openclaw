@@ -42,7 +42,6 @@ export const POST = withApiGuard(async (request: NextRequest) => {
             metadata: { taskCount: payload.tasks.length },
         });
 
-        let sortOrder = 1;
         for (const def of payload.tasks) {
             createTask({
                 id: uuidv4(),
@@ -53,8 +52,6 @@ export const POST = withApiGuard(async (request: NextRequest) => {
                 mission_id: missionId,
                 workspace_id: payload.workspace_id,
             });
-            // The db createTask function automatically adds sort_order sequentially for 'inbox' status tasks,
-            // so they remain in the order they were defined.
         }
 
         return NextResponse.json({ ok: true, missionId }, { status: 201 });

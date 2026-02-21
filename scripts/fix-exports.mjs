@@ -15,8 +15,11 @@ function walkDir(dir) {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     const stat = statSync(full);
-    if (stat.isDirectory()) {files.push(...walkDir(full));}
-    else if (full.endsWith(".js") && !full.endsWith(".map")) {files.push(full);}
+    if (stat.isDirectory()) {
+      files.push(...walkDir(full));
+    } else if (full.endsWith(".js") && !full.endsWith(".map")) {
+      files.push(full);
+    }
   }
   return files;
 }
@@ -27,35 +30,53 @@ for (const distFile of walkDir(distDir)) {
   const srcFile = join(srcDir, rel.replace(/\.js$/, ".ts"));
 
   let srcContent;
-  try { srcContent = readFileSync(srcFile, "utf8"); } catch { continue; }
+  try {
+    srcContent = readFileSync(srcFile, "utf8");
+  } catch {
+    continue;
+  }
 
   const distContent = readFileSync(distFile, "utf8");
 
   // Find all named exports in source
   const srcExports = new Set();
-  for (const m of srcContent.matchAll(/export\s+(?:function|const|let|var|class|async\s+function)\s+(\w+)/g)) {
+  for (const m of srcContent.matchAll(
+    /export\s+(?:function|const|let|var|class|async\s+function)\s+(\w+)/g,
+  )) {
     srcExports.add(m[1]);
   }
   for (const m of srcContent.matchAll(/export\s*\{([^}]+)\}/g)) {
     for (const part of m[1].split(",")) {
-      const name = part.trim().split(/\s+as\s+/).pop().trim();
-      if (name) {srcExports.add(name);}
+      const name = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        .trim();
+      if (name) {
+        srcExports.add(name);
+      }
     }
   }
 
   // Find current dist export statement
   const exportMatch = distContent.match(/^export \{ (.+) \};$/m);
-  if (!exportMatch) {continue;}
+  if (!exportMatch) {
+    continue;
+  }
 
-  const distExportEntries = exportMatch[1].split(",").map(s => s.trim());
-  const distExports = new Set(distExportEntries.map(s => {
-    const parts = s.trim().split(/\s+as\s+/);
-    return parts[parts.length - 1].trim();
-  }));
+  const distExportEntries = exportMatch[1].split(",").map((s) => s.trim());
+  const distExports = new Set(
+    distExportEntries.map((s) => {
+      const parts = s.trim().split(/\s+as\s+/);
+      return parts[parts.length - 1].trim();
+    }),
+  );
 
   // Find functions/classes/consts defined in dist
   const distDefined = new Set();
-  for (const m of distContent.matchAll(/^(?:function|const|let|var|class|async function)\s+(\w+)/gm)) {
+  for (const m of distContent.matchAll(
+    /^(?:function|const|let|var|class|async function)\s+(\w+)/gm,
+  )) {
     distDefined.add(m[1]);
   }
 
