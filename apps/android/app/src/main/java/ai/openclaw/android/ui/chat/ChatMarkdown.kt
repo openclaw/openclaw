@@ -48,9 +48,40 @@ fun ChatMarkdown(text: String, textColor: Color) {
             color = textColor,
           )
         }
+        is ChatMarkdownBlock.Thinking -> {
+          val preview = b.text.lineSequence().firstOrNull()?.take(80)
+          CollapsibleBlock(
+            label = "💭 Thinking",
+            preview = preview,
+            startExpanded = false,
+          ) {
+            SelectionContainer(modifier = Modifier.fillMaxWidth()) {
+              Text(
+                text = b.text.trimEnd(),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
         is ChatMarkdownBlock.Code -> {
-          SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-            ChatCodeBlock(code = b.code, language = b.language)
+          val lineCount = b.code.count { it == '\n' } + 1
+          val langLabel = b.language?.let { "📄 $it" } ?: "📄 Code"
+          if (lineCount > COLLAPSIBLE_CODE_LINE_THRESHOLD) {
+            CollapsibleBlock(
+              label = "$langLabel ($lineCount lines)",
+              preview = b.code.lineSequence().firstOrNull()?.take(60),
+              startExpanded = false,
+            ) {
+              SelectionContainer(modifier = Modifier.fillMaxWidth()) {
+                ChatCodeBlock(code = b.code, language = b.language)
+              }
+            }
+          } else {
+            SelectionContainer(modifier = Modifier.fillMaxWidth()) {
+              ChatCodeBlock(code = b.code, language = b.language)
+            }
           }
         }
         is ChatMarkdownBlock.InlineImage -> {
@@ -61,13 +92,57 @@ fun ChatMarkdown(text: String, textColor: Color) {
   }
 }
 
+/** Code blocks with more lines than this threshold are collapsed by default. */
+private const val COLLAPSIBLE_CODE_LINE_THRESHOLD = 10
+
 private sealed interface ChatMarkdownBlock {
   data class Text(val text: String) : ChatMarkdownBlock
   data class Code(val code: String, val language: String?) : ChatMarkdownBlock
+  data class Thinking(val text: String) : ChatMarkdownBlock
   data class InlineImage(val mimeType: String?, val base64: String) : ChatMarkdownBlock
 }
 
 private fun splitMarkdown(raw: String): List<ChatMarkdownBlock> {
+  if (raw.isEmpty()) return emptyList()
+
+  // First extract thinking blocks, then parse code fences within remaining text.
+  val withThinking = splitThinkingBlocks(raw)
+  val out = ArrayList<ChatMarkdownBlock>()
+  for (block in withThinking) {
+    when (block) {
+      is ChatMarkdownBlock.Thinking -> out.add(block)
+      is ChatMarkdownBlock.Text -> out.addAll(splitCodeBlocks(block.text))
+      else -> out.add(block)
+    }
+  }
+  return out
+}
+
+private val thinkingPattern = Regex(
+  "<(?:antml:)?thinking>(.*?)</(?:antml:)?thinking>",
+  setOf(RegexOption.DOT_MATCHES_ALL),
+)
+
+private fun splitThinkingBlocks(raw: String): List<ChatMarkdownBlock> {
+  val out = ArrayList<ChatMarkdownBlock>()
+  var idx = 0
+  for (match in thinkingPattern.findAll(raw)) {
+    if (match.range.first > idx) {
+      val before = raw.substring(idx, match.range.first).trim()
+      if (before.isNotEmpty()) out.add(ChatMarkdownBlock.Text(before))
+    }
+    val content = match.groupValues[1].trim()
+    if (content.isNotEmpty()) out.add(ChatMarkdownBlock.Thinking(content))
+    idx = match.range.last + 1
+  }
+  if (idx < raw.length) {
+    val rest = raw.substring(idx).trim()
+    if (rest.isNotEmpty()) out.add(ChatMarkdownBlock.Text(rest))
+  }
+  return out
+}
+
+private fun splitCodeBlocks(raw: String): List<ChatMarkdownBlock> {
   if (raw.isEmpty()) return emptyList()
 
   val out = ArrayList<ChatMarkdownBlock>()
