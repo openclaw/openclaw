@@ -294,6 +294,7 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
     const stream = createAssistantMessageEventStream();
 
     const run = async () => {
+      let body: OllamaChatRequest | undefined;
       try {
         const ollamaMessages = convertToOllamaMessages(
           context.messages ?? [],
@@ -312,7 +313,7 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           ollamaOptions.num_predict = options.maxTokens;
         }
 
-        const body: OllamaChatRequest = {
+        body = {
           model: model.id,
           messages: ollamaMessages,
           stream: true,
@@ -337,7 +338,10 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+          const errorMsg = `Ollama API error ${response.status}: ${errorText}`;
+          console.error(`[ollama-stream] ${errorMsg}`);
+          console.error(`[ollama-stream] Request URL: ${chatUrl}`);
+          throw new Error(errorMsg);
         }
 
         if (!response.body) {
@@ -394,6 +398,11 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error(`[ollama-stream] Stream error for model ${model.id}:`, errorMessage);
+        console.error(
+          `[ollama-stream] Model context: provider=${model.provider}, api=${model.api}`,
+        );
+        console.error(`[ollama-stream] Request body:`, JSON.stringify(body ?? {}, null, 2));
         stream.push({
           type: "error",
           reason: "error",

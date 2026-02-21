@@ -182,6 +182,17 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   );
 }
 
+/**
+ * Check if a provider is a local/self-hosted provider that doesn't have rate limits.
+ * Local providers should have different cooldown behavior since they don't impose
+ * API rate limits like cloud providers.
+ */
+function isLocalProvider(providerId: string): boolean {
+  const normalized = normalizeProviderId(providerId);
+  const localProviders = ["ollama", "vllm", "local-ai", "text-generation-webui", "koboldcpp"];
+  return localProviders.includes(normalized);
+}
+
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
@@ -261,6 +272,7 @@ function computeNextProfileUsageStats(params: {
   now: number;
   reason: AuthProfileFailureReason;
   cfgResolved: ResolvedAuthCooldownConfig;
+  providerId: string;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
   const windowExpired =
@@ -290,8 +302,19 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
-    updatedStats.cooldownUntil = params.now + backoffMs;
+    // For local providers, use much shorter cooldowns since they don't have rate limits
+    // The main issue is usually temporary (cold start, model loading, etc.)
+    if (isLocalProvider(params.providerId)) {
+      // Local providers: shorter exponential backoff, max 5 minutes
+      const localBackoffMs = Math.min(
+        5 * 60 * 1000, // 5 minutes max
+        30 * 1000 * Math.pow(2, Math.min(nextErrorCount - 1, 4)), // 30s, 1m, 2m, 4m, 5m
+      );
+      updatedStats.cooldownUntil = params.now + localBackoffMs;
+    } else {
+      const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+      updatedStats.cooldownUntil = params.now + backoffMs;
+    }
   }
 
   return updatedStats;
@@ -331,6 +354,7 @@ export async function markAuthProfileFailure(params: {
         now,
         reason,
         cfgResolved,
+        providerId: providerKey,
       });
       return true;
     },
@@ -357,6 +381,7 @@ export async function markAuthProfileFailure(params: {
     now,
     reason,
     cfgResolved,
+    providerId: providerKey,
   });
   saveAuthProfileStore(store, agentDir);
 }
