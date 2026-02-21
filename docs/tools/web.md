@@ -150,13 +150,16 @@ SearXNG is a free, self-hosted metasearch engine that aggregates results from mu
 
 1. Set up your SearXNG instance (see [SearXNG documentation](https://docs.searxng.org/))
 2. Enable JSON format in your SearXNG `settings.yml`:
+
    ```yaml
    search:
      formats:
        - html
        - json
    ```
+
 3. Configure OpenClaw to use SearXNG:
+
    ```json5
    {
      tools: {
