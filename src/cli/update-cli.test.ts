@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
@@ -16,6 +17,10 @@ const serviceLoaded = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
+const serviceReadRuntime = vi.fn();
+const inspectPortUsage = vi.fn();
+const classifyPortListener = vi.fn();
+const formatPortDiagnostics = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -35,6 +40,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
+  resolveGatewayPort: vi.fn(() => 18789),
   writeConfigFile: vi.fn(),
 }));
 
@@ -80,7 +86,14 @@ vi.mock("./update-cli/shared.js", async (importOriginal) => {
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+    readRuntime: (...args: unknown[]) => serviceReadRuntime(...args),
   })),
+}));
+
+vi.mock("../infra/ports.js", () => ({
+  inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
+  classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
+  formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
 }));
 
 vi.mock("./update-cli/restart-helper.js", () => ({
@@ -230,8 +243,12 @@ describe("update-cli", () => {
     readPackageVersion.mockReset();
     resolveGlobalManager.mockReset();
     serviceLoaded.mockReset();
+    serviceReadRuntime.mockReset();
     prepareRestartScript.mockReset();
     runRestartScript.mockReset();
+    inspectPortUsage.mockReset();
+    classifyPortListener.mockReset();
+    formatPortDiagnostics.mockReset();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -279,8 +296,21 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
     serviceLoaded.mockResolvedValue(false);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+      hints: [],
+    });
+    classifyPortListener.mockReturnValue("gateway");
+    formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     setTty(false);
     setStdoutTty(false);
@@ -484,6 +514,36 @@ describe("update-cli", () => {
     });
     expect(runRestartScript).toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("updateCommand refreshes service env from updated install root when available", async () => {
+    const root = createCaseDir("openclaw-updated-root");
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "dist", "entry.js"), "console.log('ok');\n", "utf8");
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      root,
+      steps: [],
+      durationMs: 100,
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        expect.stringMatching(/node/),
+        path.join(root, "dist", "entry.js"),
+        "gateway",
+        "install",
+        "--force",
+      ],
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).toHaveBeenCalled();
   });
 
   it("updateCommand falls back to restart when env refresh install fails", async () => {
