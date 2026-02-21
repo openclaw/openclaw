@@ -50,6 +50,39 @@ describe("msteams policy", () => {
       expect(res.allowed).toBe(false);
     });
 
+    it("matches when teamName/channelName are null (Agents SDK) and config uses resolved IDs (#9873)", () => {
+      // After monitor resolution, teams config is keyed by resolved IDs.
+      // The Agents SDK sends conversation thread IDs (not Graph group IDs)
+      // as activity.channelData.team.id. The monitor aliases team config
+      // under channel conversation IDs so the matcher can find them.
+      const conversationThreadId = "19:abc123@thread.tacv2";
+      const cfg: MSTeamsConfig = {
+        teams: {
+          // Simulates post-resolution config where the channel conversation ID
+          // is used as a team key alias (the fix for #9873)
+          [conversationThreadId]: {
+            requireMention: true,
+            channels: {
+              [conversationThreadId]: { requireMention: true },
+            },
+          },
+        },
+      };
+
+      const res = resolveMSTeamsRouteConfig({
+        cfg,
+        teamId: conversationThreadId,
+        teamName: undefined,
+        channelName: undefined,
+        conversationId: conversationThreadId,
+      });
+
+      expect(res.teamConfig?.requireMention).toBe(true);
+      expect(res.channelConfig?.requireMention).toBe(true);
+      expect(res.allowlistConfigured).toBe(true);
+      expect(res.allowed).toBe(true);
+    });
+
     it("matches team and channel by name", () => {
       const cfg: MSTeamsConfig = {
         teams: {
