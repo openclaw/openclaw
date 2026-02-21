@@ -351,6 +351,50 @@ describe("applySkillEnvOverrides", () => {
     }
   });
 
+  it("blocks dangerous host env overrides even when declared", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "dangerous-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "dangerous-env-skill",
+      description: "Needs env",
+      metadata: '{"openclaw":{"requires":{"env":["BASH_ENV"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+
+    const originalBashEnv = process.env.BASH_ENV;
+    delete process.env.BASH_ENV;
+
+    const restore = applySkillEnvOverrides({
+      skills: entries,
+      config: {
+        skills: {
+          entries: {
+            "dangerous-env-skill": {
+              env: {
+                BASH_ENV: "/tmp/pwn.sh",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect(process.env.BASH_ENV).toBeUndefined();
+    } finally {
+      restore();
+      if (originalBashEnv === undefined) {
+        expect(process.env.BASH_ENV).toBeUndefined();
+      } else {
+        expect(process.env.BASH_ENV).toBe(originalBashEnv);
+      }
+    }
+  });
+
   it("allows required env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "snapshot-env-skill");

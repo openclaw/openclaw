@@ -32,6 +32,7 @@ import {
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
 import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 
@@ -42,17 +43,6 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
-
-const blockedEnvKeys = new Set([
-  "NODE_OPTIONS",
-  "PYTHONHOME",
-  "PYTHONPATH",
-  "PERL5LIB",
-  "PERL5OPT",
-  "RUBYOPT",
-]);
-
-const blockedEnvPrefixes = ["DYLD_", "LD_"];
 
 type SystemRunParams = {
   command: string[];
@@ -136,33 +126,8 @@ function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
 }
 
-export function sanitizeEnv(
-  overrides?: Record<string, string> | null,
-): Record<string, string> | undefined {
-  if (!overrides) {
-    return undefined;
-  }
-  const merged = { ...process.env } as Record<string, string>;
-  for (const [rawKey, value] of Object.entries(overrides)) {
-    const key = rawKey.trim();
-    if (!key) {
-      continue;
-    }
-    const upper = key.toUpperCase();
-    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
-    // request-scoped PATH overrides from agents/gateways.
-    if (upper === "PATH") {
-      continue;
-    }
-    if (blockedEnvKeys.has(upper)) {
-      continue;
-    }
-    if (blockedEnvPrefixes.some((prefix) => upper.startsWith(prefix))) {
-      continue;
-    }
-    merged[key] = value;
-  }
-  return merged;
+export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
+  return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
 
 function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
