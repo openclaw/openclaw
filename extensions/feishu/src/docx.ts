@@ -116,14 +116,19 @@ async function insertBlocks(
     return { children: [], skipped };
   }
 
-  const res = await client.docx.documentBlockChildren.create({
-    path: { document_id: docToken, block_id: blockId },
-    data: { children: cleaned },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
+  // Insert one block at a time to preserve the exact order from markdown conversion.
+  const inserted: any[] = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    const res = await client.docx.documentBlockChildren.create({
+      path: { document_id: docToken, block_id: blockId },
+      data: { children: [cleaned[i]] },
+    });
+    if (res.code !== 0) {
+      throw new Error(`Failed to insert block ${i}: ${res.msg}`);
+    }
+    inserted.push(...(res.data?.children ?? []));
   }
-  return { children: res.data?.children ?? [], skipped };
+  return { children: inserted, skipped };
 }
 
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
