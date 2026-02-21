@@ -11,6 +11,13 @@ export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 export const CANVAS_WS_PATH = "/__openclaw__/ws";
 
+const A2UI_MIME_BY_EXT: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+};
+
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
 let cachedA2uiResolvedAtMs = 0;
@@ -181,19 +188,24 @@ export async function handleA2uiHttpRequest(
 
   try {
     const lower = result.realPath.toLowerCase();
-    const mime =
+    const ext = path.extname(lower);
+    const mimeByExtension =
       lower.endsWith(".html") || lower.endsWith(".htm")
-        ? "text/html"
-        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+        ? "text/html; charset=utf-8"
+        : A2UI_MIME_BY_EXT[ext];
+    const mime =
+      mimeByExtension ??
+      (await detectMime({ filePath: result.realPath })) ??
+      "application/octet-stream";
     res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "HEAD") {
-      res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+      res.setHeader("Content-Type", mime);
       res.end();
       return true;
     }
 
-    if (mime === "text/html") {
+    if (mime.startsWith("text/html")) {
       const buf = await result.handle.readFile({ encoding: "utf8" });
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(injectCanvasLiveReload(buf));

@@ -366,7 +366,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
            !lastAuto.isEmpty,
            trimmed == lastAuto
         {
-            return true
+            return false
         }
         return false
     }

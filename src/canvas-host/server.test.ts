@@ -306,4 +306,57 @@ describe("canvas host", () => {
       }
     }
   });
+
+  it("serves A2UI assets with explicit MIME types for common web extensions", async () => {
+    const dir = await createCaseDir();
+    const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
+    const fixtureFiles = [
+      {
+        name: "a2ui-fixture-mime-test.js",
+        content: "console.log('a2ui-test');",
+        type: "application/javascript; charset=utf-8",
+      },
+      {
+        name: "a2ui-fixture-mime-test.css",
+        content: "body {background: black;}",
+        type: "text/css; charset=utf-8",
+      },
+      {
+        name: "a2ui-fixture-mime-test.json",
+        content: '{"ok":true}',
+        type: "application/json; charset=utf-8",
+      },
+      {
+        name: "a2ui-fixture-mime-test.map",
+        content: '{"version":3}',
+        type: "application/json; charset=utf-8",
+      },
+    ];
+    const created = fixtureFiles.map((f) => path.join(a2uiRoot, f.name));
+
+    for (const file of fixtureFiles) {
+      await fs.writeFile(path.join(a2uiRoot, file.name), file.content, "utf8");
+    }
+
+    const server = await startCanvasHost({
+      runtime: quietRuntime,
+      rootDir: dir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+    });
+
+    try {
+      for (const file of fixtureFiles) {
+        const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/${file.name}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe(file.type);
+      }
+    } finally {
+      await server.close();
+      for (const filePath of created) {
+        await fs.rm(filePath, { force: true });
+      }
+    }
+  });
 });
