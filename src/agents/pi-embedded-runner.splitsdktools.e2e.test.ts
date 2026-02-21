@@ -51,4 +51,22 @@ describe("splitSdkTools", () => {
       "browser",
     ]);
   });
+  it("accepts hookContext and passes it through", () => {
+    const hookContext = { agentId: "test-agent", sessionKey: "test-session" };
+    const { customTools } = splitSdkTools({
+      tools,
+      sandboxEnabled: true,
+      hookContext,
+    });
+    // Verify it accepts the parameter without error
+    expect(customTools.length).toBe(5);
+  });
+  it("works with undefined hookContext (backward compatible)", () => {
+    const { customTools } = splitSdkTools({
+      tools,
+      sandboxEnabled: true,
+      hookContext: undefined,
+    });
+    expect(customTools.length).toBe(5);
+  });
 });

@@ -14,6 +14,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
+import { runBeforeToolResultHook } from "./pi-tools.before-tool-result.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -86,7 +87,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  hookContext?: { agentId?: string; sessionKey?: string },
+): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -98,6 +102,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const startMs = Date.now();
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
@@ -112,9 +117,29 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             executeParams = hookOutcome.params;
           }
           const result = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const durationMs = Date.now() - startMs;
           const afterParams = beforeHookWrapped
             ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
             : executeParams;
+
+          // Run before_tool_result hook to allow plugins to modify or block the result
+          const outcome = await runBeforeToolResultHook({
+            toolName: name,
+            params: afterParams,
+            toolCallId,
+            result,
+            isError: false,
+            durationMs,
+            ctx: hookContext,
+          });
+
+          if (outcome.blocked) {
+            return jsonResult({
+              status: "blocked",
+              tool: normalizedName,
+              error: outcome.reason,
+            });
+          }
 
           // Call after_tool_call hook
           const hookRunner = getGlobalHookRunner();
@@ -124,7 +149,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
                 {
                   toolName: name,
                   params: isPlainObject(afterParams) ? afterParams : {},
-                  result,
+                  result: outcome.result,
                 },
                 { toolName: name },
               );
@@ -135,8 +160,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
           }
 
-          return result;
+          return outcome.result;
         } catch (err) {
+          const durationMs = Date.now() - startMs;
           if (signal?.aborted) {
             throw err;
           }
@@ -181,7 +207,31 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
           }
 
-          return errorResult;
+          // Run before_tool_result hook for error results too
+          try {
+            const outcome = await runBeforeToolResultHook({
+              toolName: name,
+              params,
+              toolCallId,
+              result: errorResult,
+              isError: true,
+              durationMs,
+              ctx: hookContext,
+            });
+
+            if (outcome.blocked) {
+              return jsonResult({
+                status: "blocked",
+                tool: normalizedName,
+                error: outcome.reason,
+              });
+            }
+
+            return outcome.result;
+          } catch {
+            // If hook fails, fall back to original error result
+            return errorResult;
+          }
         }
       },
     } satisfies ToolDefinition;

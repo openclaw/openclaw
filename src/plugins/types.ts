@@ -309,6 +309,7 @@ export type PluginHookName =
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
+  | "before_tool_result"
   | "after_tool_call"
   | "tool_result_persist"
   | "before_message_write"
@@ -494,6 +495,25 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+// before_tool_result hook
+export type PluginHookBeforeToolResultEvent = {
+  toolName: string;
+  toolCallId: string;
+  params: Record<string, unknown>;
+  content: unknown;
+  isError: boolean;
+  durationMs?: number;
+};
+
+export type PluginHookBeforeToolResultResult = {
+  /** Modified tool result content. If provided, replaces the original content. */
+  content?: unknown;
+  /** If true, replace content with an error message (tool output blocked). */
+  block?: boolean;
+  /** Reason for blocking (shown in error message and logs). */
+  blockReason?: string;
 };
 
 // tool_result_persist hook
@@ -704,6 +724,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<PluginHookBeforeToolCallResult | void> | PluginHookBeforeToolCallResult | void;
+  before_tool_result: (
+    event: PluginHookBeforeToolResultEvent,
+    ctx: PluginHookToolContext,
+  ) => Promise<PluginHookBeforeToolResultResult | void> | PluginHookBeforeToolResultResult | void;
   after_tool_call: (
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
