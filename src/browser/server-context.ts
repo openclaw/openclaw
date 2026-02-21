@@ -332,7 +332,7 @@ function createProfileContext(
     }
 
     // HTTP responds but WebSocket fails - port in use by something else
-    if (!profileState.running) {
+    if (!profileState.running && !remoteCdp) {
       throw new Error(
         `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
           `Run action=reset-profile profile=${profile.name} to kill the process.`,
@@ -347,6 +347,7 @@ function createProfileContext(
           return;
         }
       }
+      if (remoteCdp) { return; } // browserless v2: WS endpoint is not persistent
       throw new Error(
         remoteCdp
           ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`
