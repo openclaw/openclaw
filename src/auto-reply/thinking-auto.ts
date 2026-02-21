@@ -1,63 +1,82 @@
 import type { ThinkLevel } from "./thinking.js";
 
-type SelectAdaptiveThinkingLevelParams = {
-  text: string;
-  supportsXHigh: boolean;
+export const AUTO_THINK_CONFIDENCE_THRESHOLD = 0.62;
+
+type AutoThinkDecision = {
+  think: ThinkLevel;
+  confidence: number;
 };
 
-const XHIGH_PATTERNS = [
-  /\b(system\s+design|architect(?:ure|ural)|design\s+an?\s+architecture|rfc|technical\s+spec|specification)\b/i,
-  /\b(migration\s+plan|rollout\s+plan|implementation\s+plan|multi[- ]step\s+plan|roadmap)\b/i,
-  /\b(trade[ -]?offs?|pros?\s+and\s+cons|failure\s+modes?|threat\s+model)\b/i,
-];
+const THINK_LEVEL_SET = new Set<ThinkLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
-const HIGH_PATTERNS = [
-  /\b(strategy|strategic|blueprint|framework)\b/i,
-  /\b(plan|approach)\s+(for|to)\b/i,
-  /\b(compare|comparison|evaluate|analysis|analyze|assess)\b/i,
-  /\b(debug|investigate|root\s+cause|postmortem)\b/i,
-];
-
-const MEDIUM_PATTERNS = [
-  /\b(explain|summari[sz]e|rewrite|draft|refactor|improve|brainstorm)\b/i,
-  /\b(step[- ]by[- ]step|walk\s+me\s+through|help\s+me\s+understand)\b/i,
-  /\b(budget|estimate|timeline|checklist|itinerary)\b/i,
-];
-
-const LOW_HINT_PATTERNS = [
-  /\b(quick\s+answer|tldr|one\s+line|briefly|just\s+tell\s+me)\b/i,
-  /^\s*(?:thanks?|thank\s+you|thx|ok|okay|cool|nice)\s*[!.?]*\s*$/i,
-  /^\s*(?:hi|hello|hey|yo|sup)\s*[!.?]*\s*$/i,
-];
-
-function matchesAnyPattern(text: string, patterns: readonly RegExp[]): boolean {
-  return patterns.some((pattern) => pattern.test(text));
+function extractJsonCandidate(raw: string): string | undefined {
+  const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+  const objectMatch = raw.match(/\{[\s\S]*\}/);
+  return objectMatch?.[0]?.trim();
 }
 
-export function selectAdaptiveThinkingLevel(
-  params: SelectAdaptiveThinkingLevelParams,
-): ThinkLevel | undefined {
-  const text = params.text.trim();
-  if (!text) {
+export function parseAutoThinkDecision(raw: string): AutoThinkDecision | undefined {
+  const candidate = extractJsonCandidate(raw);
+  if (!candidate) {
     return undefined;
   }
 
-  if (matchesAnyPattern(text, XHIGH_PATTERNS)) {
-    return params.supportsXHigh ? "xhigh" : "high";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    return undefined;
   }
 
-  if (matchesAnyPattern(text, HIGH_PATTERNS)) {
-    return "high";
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
   }
 
-  if (matchesAnyPattern(text, LOW_HINT_PATTERNS)) {
-    return "low";
+  const thinkRaw =
+    typeof (parsed as Record<string, unknown>).think === "string"
+      ? (parsed as Record<string, unknown>).think
+      : undefined;
+  const confidenceRaw = (parsed as Record<string, unknown>).confidence;
+
+  if (!thinkRaw) {
+    return undefined;
   }
 
-  if (matchesAnyPattern(text, MEDIUM_PATTERNS)) {
-    return "medium";
+  const think = thinkRaw.trim().toLowerCase() as ThinkLevel;
+  if (!THINK_LEVEL_SET.has(think)) {
+    return undefined;
   }
 
-  // Low-confidence intent: defer to normal model/session defaults.
-  return undefined;
+  const confidence =
+    typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw) ? confidenceRaw : 0;
+  if (confidence < 0 || confidence > 1) {
+    return undefined;
+  }
+
+  return { think, confidence };
+}
+
+export function buildAutoThinkClassifierPrompt(userText: string): string {
+  return [
+    "Classify the required thinking level for the user's request.",
+    'Return STRICT JSON only with shape: {"think":"off|minimal|low|medium|high|xhigh","confidence":0..1}',
+    "",
+    "Rubric:",
+    "- off: pure acknowledgements/greetings with no task.",
+    "- low: quick/simple requests and short factual asks.",
+    "- medium: normal multi-step but routine tasks.",
+    "- high: complex analysis/debugging/planning with important tradeoffs.",
+    "- xhigh: architecture/spec-level design or deep strategic reasoning.",
+    "",
+    "Guidance:",
+    "- Prefer lower levels when uncertain.",
+    "- Use xhigh sparingly.",
+    "- confidence should reflect certainty (0..1).",
+    "",
+    "User request:",
+    userText,
+  ].join("\n");
 }

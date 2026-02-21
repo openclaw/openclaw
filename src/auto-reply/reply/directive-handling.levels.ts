@@ -1,4 +1,10 @@
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 
 export async function resolveCurrentDirectiveLevels(params: {
   sessionEntry?: {
@@ -20,7 +26,11 @@ export async function resolveCurrentDirectiveLevels(params: {
   currentElevatedLevel: ElevatedLevel | undefined;
 }> {
   const resolvedDefaultThinkLevel =
-    (params.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    normalizeThinkLevel(
+      typeof params.sessionEntry?.thinkingLevel === "string"
+        ? params.sessionEntry.thinkingLevel
+        : undefined,
+    ) ??
     (params.agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
     (await params.resolveDefaultThinkingLevel());
   const currentThinkLevel = resolvedDefaultThinkLevel;

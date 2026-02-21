@@ -81,9 +81,14 @@ export async function persistInlineDirectives(params: {
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
 
-    if (directives.hasThinkDirective && directives.thinkLevel) {
-      sessionEntry.thinkingLevel = directives.thinkLevel;
-      updated = true;
+    if (directives.hasThinkDirective) {
+      if (directives.thinkAuto === true) {
+        sessionEntry.thinkingLevel = "auto";
+        updated = true;
+      } else if (directives.thinkLevel) {
+        sessionEntry.thinkingLevel = directives.thinkLevel;
+        updated = true;
+      }
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);

@@ -22,7 +22,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { selectAdaptiveThinkingLevel } from "../thinking-auto.js";
+import { resolveAutoThinkingLevelWithModel } from "../thinking-auto-model.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -139,6 +139,7 @@ type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+  resolvedThinkAuto?: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -223,6 +224,7 @@ export async function runPreparedReply(
   let {
     sessionEntry,
     resolvedThinkLevel,
+    resolvedThinkAuto,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -375,9 +377,29 @@ export async function runPreparedReply(
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
-  if (!resolvedThinkLevel) {
-    resolvedThinkLevel = selectAdaptiveThinkingLevel({
+  const authProfileId = await resolveSessionAuthProfileOverride({
+    cfg,
+    provider,
+    agentDir,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    isNewSession,
+  });
+  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+
+  if (!resolvedThinkLevel && resolvedThinkAuto) {
+    resolvedThinkLevel = await resolveAutoThinkingLevelWithModel({
+      cfg,
+      agentDir,
+      workspaceDir,
+      skillsSnapshot,
+      provider,
+      model,
+      authProfileId,
       text: rawBodyTrimmed || baseBodyTrimmedRaw,
+      timeoutMs,
       supportsXHigh: supportsXHighThinking(provider, model),
     });
   }
@@ -450,17 +472,7 @@ export async function runPreparedReply(
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
-  const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg,
-    provider,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    isNewSession,
-  });
-  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,

@@ -22,6 +22,7 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     cleaned,
     hasThinkDirective: false,
     thinkLevel: undefined,
+    thinkAuto: false,
     rawThinkLevel: undefined,
     hasVerboseDirective: false,
     verboseLevel: undefined,

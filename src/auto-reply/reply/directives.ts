@@ -91,6 +91,7 @@ const extractSimpleDirective = (
 export function extractThinkDirective(body?: string): {
   cleaned: string;
   thinkLevel?: ThinkLevel;
+  thinkAuto?: boolean;
   rawLevel?: string;
   hasDirective: boolean;
 } {
@@ -98,9 +99,12 @@ export function extractThinkDirective(body?: string): {
     return { cleaned: "", hasDirective: false };
   }
   const extracted = extractLevelDirective(body, ["thinking", "think", "t"], normalizeThinkLevel);
+  const rawLevel = extracted.rawLevel?.trim();
+  const thinkAuto = rawLevel?.toLowerCase() === "auto";
   return {
     cleaned: extracted.cleaned,
-    thinkLevel: extracted.level,
+    thinkLevel: thinkAuto ? undefined : extracted.level,
+    thinkAuto,
     rawLevel: extracted.rawLevel,
     hasDirective: extracted.hasDirective,
   };

@@ -1,52 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { selectAdaptiveThinkingLevel } from "./thinking-auto.js";
+import { buildAutoThinkClassifierPrompt, parseAutoThinkDecision } from "./thinking-auto.js";
 
-describe("selectAdaptiveThinkingLevel", () => {
-  it("selects xhigh for architecture/planning prompts when supported", () => {
-    const level = selectAdaptiveThinkingLevel({
-      text: "Can you create a system design and migration plan for this architecture?",
-      supportsXHigh: true,
-    });
-    expect(level).toBe("xhigh");
+describe("parseAutoThinkDecision", () => {
+  it("parses valid JSON decision", () => {
+    const decision = parseAutoThinkDecision('{"think":"high","confidence":0.82}');
+    expect(decision).toEqual({ think: "high", confidence: 0.82 });
   });
 
-  it("falls back to high when xhigh is not supported", () => {
-    const level = selectAdaptiveThinkingLevel({
-      text: "Need an architectural RFC with trade-offs",
-      supportsXHigh: false,
-    });
-    expect(level).toBe("high");
+  it("parses fenced JSON decision", () => {
+    const decision = parseAutoThinkDecision('```json\n{"think":"xhigh","confidence":0.9}\n```');
+    expect(decision).toEqual({ think: "xhigh", confidence: 0.9 });
   });
 
-  it("returns medium for common task-style prompts", () => {
-    const level = selectAdaptiveThinkingLevel({
-      text: "What would a 3 day trip budget look like for 4 people?",
-      supportsXHigh: true,
-    });
-    expect(level).toBe("medium");
+  it("rejects unknown think levels", () => {
+    const decision = parseAutoThinkDecision('{"think":"auto","confidence":0.8}');
+    expect(decision).toBeUndefined();
   });
 
-  it("uses low for lightweight conversational asks", () => {
-    const level = selectAdaptiveThinkingLevel({
-      text: "quick answer please",
-      supportsXHigh: true,
-    });
-    expect(level).toBe("low");
+  it("rejects out-of-range confidence", () => {
+    const decision = parseAutoThinkDecision('{"think":"low","confidence":1.5}');
+    expect(decision).toBeUndefined();
   });
+});
 
-  it("does not downgrade substantive prompts just because they start with a greeting", () => {
-    const level = selectAdaptiveThinkingLevel({
-      text: "hey can you summarize this document in 5 bullets",
-      supportsXHigh: true,
-    });
-    expect(level).toBe("medium");
-  });
-
-  it("returns undefined for low-confidence prompts and lets defaults handle them", () => {
-    const level = selectAdaptiveThinkingLevel({
-      text: "Can you take a look at this?",
-      supportsXHigh: true,
-    });
-    expect(level).toBeUndefined();
+describe("buildAutoThinkClassifierPrompt", () => {
+  it("includes user request and strict JSON contract", () => {
+    const prompt = buildAutoThinkClassifierPrompt("Please design a migration strategy");
+    expect(prompt).toContain("Return STRICT JSON only");
+    expect(prompt).toContain("Please design a migration strategy");
+    expect(prompt).toContain('"think":"off|minimal|low|medium|high|xhigh"');
   });
 });
