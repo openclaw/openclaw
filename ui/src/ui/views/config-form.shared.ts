@@ -53,7 +53,7 @@ export function defaultValue(schema?: JsonSchema): unknown {
 }
 
 export function pathKey(path: Array<string | number>): string {
-  return path.filter((segment) => typeof segment === "string").join(".");
+  return path.map((segment) => (typeof segment === "number" ? "*" : segment)).join(".");
 }
 
 export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {

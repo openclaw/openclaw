@@ -16,6 +16,35 @@ function isAnySchema(schema: JsonSchema): boolean {
   return keys.length === 0;
 }
 
+// Matches a concrete path key against the unsupported set, supporting wildcard
+// segments. E.g. "accounts.mybot.field" matches pattern "accounts.*.field".
+function isUnsupportedPath(key: string, unsupported: Set<string>): boolean {
+  if (unsupported.has(key)) {
+    return true;
+  }
+  const segments = key.split(".");
+  for (const pattern of unsupported) {
+    if (!pattern.includes("*")) {
+      continue;
+    }
+    const patternSegments = pattern.split(".");
+    if (patternSegments.length !== segments.length) {
+      continue;
+    }
+    let match = true;
+    for (let i = 0; i < segments.length; i++) {
+      if (patternSegments[i] !== "*" && patternSegments[i] !== segments[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function jsonValue(value: unknown): string {
   if (value === undefined) {
     return "";
@@ -112,7 +141,7 @@ export function renderNode(params: {
   const help = hint?.help ?? schema.description;
   const key = pathKey(path);
 
-  if (unsupported.has(key)) {
+  if (isUnsupportedPath(key, unsupported)) {
     return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
       <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
