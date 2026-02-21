@@ -656,6 +656,47 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(sessionEntry.fallbackNoticeReason).toBe("rate limit");
   });
 
+  it("reconciles onModelSelected with runtime model metadata", async () => {
+    const onModelSelected = vi.fn();
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+        },
+      },
+    });
+
+    const modelFallback = await import("../../agents/model-fallback.js");
+    const fallbackSpy = vi
+      .spyOn(modelFallback, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        opts: { onModelSelected },
+      });
+      await run();
+
+      expect(onModelSelected).toHaveBeenCalled();
+      expect(onModelSelected).toHaveBeenLastCalledWith({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        thinkLevel: "low",
+      });
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("does not announce model fallback when verbose is off", async () => {
     const { onAgentEvent } = await import("../../infra/agent-events.js");
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });

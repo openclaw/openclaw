@@ -430,6 +430,16 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const modelPrefixValue = modelUsed.startsWith(`${providerUsed}/`)
+      ? modelUsed.slice(providerUsed.length + 1)
+      : modelUsed;
+    // Ensure responsePrefix template interpolation reflects the runtime model
+    // (agentMeta) even when fallback candidate selection differed.
+    opts?.onModelSelected?.({
+      provider: providerUsed,
+      model: modelPrefixValue,
+      thinkLevel: followupRun.run.thinkLevel,
+    });
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const selectedProvider = followupRun.run.provider;
     const selectedModel = followupRun.run.model;
