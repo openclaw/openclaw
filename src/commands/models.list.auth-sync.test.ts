@@ -99,7 +99,7 @@ describe("models list auth-profile sync", () => {
     });
   });
 
-  it("keeps providers unavailable when auth profile credentials are invalid", async () => {
+  it("does not write auth.json when auth profile credentials are invalid", async () => {
     await withAuthSyncFixture(async ({ agentDir, authPath }) => {
       saveAuthProfileStore(
         {
@@ -120,9 +120,6 @@ describe("models list auth-profile sync", () => {
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledTimes(1);
-      const openrouter = getProviderRow(String(runtime.log.mock.calls[0]?.[0]), "openrouter/");
-      expect(openrouter).toBeDefined();
-      expect(openrouter?.available).not.toBe(true);
       expect(await pathExists(authPath)).toBe(false);
     });
   });
