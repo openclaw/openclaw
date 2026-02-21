@@ -21,7 +21,7 @@ Status: ready for DMs and guild channels via the official Discord gateway.
   </Card>
 </CardGroup>
 
-## Quick setup
+## Onboarding
 
 You will need to create a new application with a bot, add the bot to your server, and pair it to OpenClaw. We recommend adding your bot to your own private server. If you don't have one yet, [create one first](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server) (choose **Create My Own > For me and my friends**).
 
@@ -963,7 +963,7 @@ openclaw logs --follow
   </Accordion>
 </AccordionGroup>
 
-## Configuration reference pointers
+## Configuration
 
 Primary reference:
 

@@ -17,7 +17,7 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-R
 - A phone number that can receive one verification SMS (for SMS registration path).
 - Browser access for Signal captcha (`signalcaptchas.org`) during registration.
 
-## Quick setup (beginner)
+## Onboarding
 
 1. Use a **separate Signal number** for the bot (recommended).
 2. Install `signal-cli` (Java required if you use the JVM build).
@@ -76,7 +76,7 @@ Disable with:
 - If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).
 - For "I text the bot and it replies," use a **separate bot number**.
 
-## Setup path A: link existing Signal account (QR)
+## Onboarding (option A): link existing Signal account (QR)
 
 1. Install `signal-cli` (JVM or native build).
 2. Link a bot account:
@@ -101,7 +101,7 @@ Example:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-## Setup path B: register dedicated bot number (SMS, Linux)
+## Onboarding (option B): register dedicated bot number (SMS, Linux)
 
 Use this when you want a dedicated bot number instead of linking an existing Signal app account.
 
@@ -290,7 +290,7 @@ For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 - Keep `channels.signal.dmPolicy: "pairing"` unless you explicitly want broader DM access.
 - SMS verification is only needed for registration or recovery flows, but losing control of the number/account can complicate re-registration.
 
-## Configuration reference (Signal)
+## Configuration
 
 Full configuration: [Configuration](/gateway/configuration)
 
