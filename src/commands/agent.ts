@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -40,9 +41,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
+  parseSessionThreadInfo,
   resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
+  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
@@ -511,6 +514,14 @@ export async function agentCommand(
       agentId: sessionAgentId,
     });
     if (sessionStore && sessionKey) {
+      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
+      const fallbackSessionFile = !sessionEntry?.sessionFile
+        ? resolveSessionTranscriptPath(
+            sessionId,
+            sessionAgentId,
+            opts.threadId ?? threadIdFromSessionKey,
+          )
+        : undefined;
       const resolvedSessionFile = await resolveAndPersistSessionFile({
         sessionId,
         sessionKey,
@@ -518,6 +529,8 @@ export async function agentCommand(
         storePath,
         sessionEntry,
         agentId: sessionAgentId,
+        sessionsDir: path.dirname(storePath),
+        fallbackSessionFile,
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;

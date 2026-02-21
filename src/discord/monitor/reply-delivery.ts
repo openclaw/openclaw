@@ -33,9 +33,9 @@ function resolveBoundThreadBinding(params: {
   }
   const targetChannelId = resolveTargetChannelId(params.target);
   if (!targetChannelId) {
-    return bindings[0];
+    return undefined;
   }
-  return bindings.find((entry) => entry.threadId === targetChannelId) ?? bindings[0];
+  return bindings.find((entry) => entry.threadId === targetChannelId);
 }
 
 function resolveBindingPersona(binding: ThreadBindingRecord | undefined): {
@@ -82,6 +82,7 @@ async function sendDiscordChunkWithFallback(params: {
         webhookId: binding.webhookId,
         webhookToken: binding.webhookToken,
         threadId: binding.threadId,
+        replyTo: params.replyTo,
         username: params.username,
         avatarUrl: params.avatarUrl,
       });
@@ -158,6 +159,9 @@ export async function deliverDiscordReply(params: {
         chunks.push(text);
       }
       for (const chunk of chunks) {
+        if (!chunk.trim()) {
+          continue;
+        }
         const replyTo = resolveReplyTo();
         await sendDiscordChunkWithFallback({
           target: params.target,

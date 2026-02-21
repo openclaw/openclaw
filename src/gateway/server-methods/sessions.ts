@@ -12,9 +12,14 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import {
   ErrorCodes,
   errorShape,
@@ -137,6 +142,14 @@ async function emitSessionUnboundLifecycleEvent(params: {
   targetSessionKey: string;
   reason: "session-reset" | "session-delete";
 }) {
+  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
+  unbindThreadBindingsBySessionKey({
+    targetSessionKey: params.targetSessionKey,
+    targetKind,
+    reason: params.reason,
+    sendFarewell: true,
+  });
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("subagent_ended")) {
     return;
@@ -144,7 +157,7 @@ async function emitSessionUnboundLifecycleEvent(params: {
   await hookRunner.runSubagentEnded(
     {
       targetSessionKey: params.targetSessionKey,
-      targetKind: "acp",
+      targetKind,
       reason: params.reason,
       sendFarewell: true,
       outcome: params.reason === "session-reset" ? "reset" : "deleted",
@@ -329,6 +342,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const { entry } = loadSessionEntry(key);
+    const hadExistingEntry = Boolean(entry);
     const commandReason = p.reason === "new" ? "new" : "reset";
     const hookEvent = createInternalHookEvent(
       "command",
@@ -390,10 +404,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: target.agentId,
       reason: "reset",
     });
-    await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? key,
-      reason: "session-reset",
-    });
+    if (hadExistingEntry) {
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? key,
+        reason: "session-reset",
+      });
+    }
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
@@ -424,34 +440,38 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
-    const existed = Boolean(entry);
     const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
     if (cleanupError) {
       respond(false, undefined, cleanupError);
       return;
     }
-    await updateSessionStore(storePath, (store) => {
+    const deleted = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      if (store[primaryKey]) {
+      const hadEntry = Boolean(store[primaryKey]);
+      if (hadEntry) {
         delete store[primaryKey];
       }
+      return hadEntry;
     });
 
-    const archived = deleteTranscript
-      ? archiveSessionTranscriptsForSession({
-          sessionId,
-          storePath,
-          sessionFile: entry?.sessionFile,
-          agentId: target.agentId,
-          reason: "deleted",
-        })
-      : [];
-    await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? key,
-      reason: "session-delete",
-    });
+    const archived =
+      deleted && deleteTranscript
+        ? archiveSessionTranscriptsForSession({
+            sessionId,
+            storePath,
+            sessionFile: entry?.sessionFile,
+            agentId: target.agentId,
+            reason: "deleted",
+          })
+        : [];
+    if (deleted) {
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? key,
+        reason: "session-delete",
+      });
+    }
 
-    respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
+    respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

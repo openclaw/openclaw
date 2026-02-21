@@ -156,15 +156,18 @@ async function completeSubagentRun(params: {
     persistSubagentRuns();
   }
 
-  const shouldEmitEndedHook = shouldEmitEndedHookForRun({
-    entry,
-    reason: params.reason,
-  });
+  const suppressedForSteerRestart = suppressAnnounceForSteerRestart(entry);
+  const shouldEmitEndedHook =
+    !suppressedForSteerRestart &&
+    shouldEmitEndedHookForRun({
+      entry,
+      reason: params.reason,
+    });
   const shouldDeferEndedHook =
     shouldEmitEndedHook &&
     params.triggerCleanup &&
     entry.expectsCompletionMessage === true &&
-    !suppressAnnounceForSteerRestart(entry);
+    !suppressedForSteerRestart;
   if (!shouldDeferEndedHook && shouldEmitEndedHook) {
     await emitSubagentEndedHookForRun({
       entry,
@@ -177,7 +180,7 @@ async function completeSubagentRun(params: {
   if (!params.triggerCleanup) {
     return;
   }
-  if (suppressAnnounceForSteerRestart(entry)) {
+  if (suppressedForSteerRestart) {
     return;
   }
   startSubagentAnnounceCleanupFlow(params.runId, entry);
@@ -195,7 +198,6 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     requesterOrigin,
     requesterDisplayKey: entry.requesterDisplayKey,
     task: entry.task,
-    expectsCompletionMessage: entry.expectsCompletionMessage,
     timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
     cleanup: entry.cleanup,
     waitForCompletion: false,
@@ -204,6 +206,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     label: entry.label,
     outcome: entry.outcome,
     spawnMode: entry.spawnMode,
+    expectsCompletionMessage: entry.expectsCompletionMessage,
   }).then((didAnnounce) => {
     void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
   });
@@ -415,12 +418,47 @@ async function finalizeSubagentCleanup(
   }
   if (!didAnnounce) {
     const now = Date.now();
+    const endedAgo = typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
+    // Normal defer: the run ended, but descendant runs are still active.
+    // Don't consume retry budget in this state or we can give up before
+    // descendants finish and before the parent synthesizes the final reply.
+    const activeDescendantRuns = Math.max(0, countActiveDescendantRuns(entry.childSessionKey));
+    if (entry.expectsCompletionMessage === true && activeDescendantRuns > 0) {
+      if (endedAgo > ANNOUNCE_EXPIRY_MS) {
+        const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+        if (
+          shouldEmitEndedHookForRun({
+            entry,
+            reason: completionReason,
+          })
+        ) {
+          await emitSubagentEndedHookForRun({
+            entry,
+            reason: completionReason,
+            sendFarewell: true,
+          });
+        }
+        logAnnounceGiveUp(entry, "expiry");
+        entry.cleanupCompletedAt = now;
+        persistSubagentRuns();
+        retryDeferredCompletedAnnounces(runId);
+        return;
+      }
+      entry.lastAnnounceRetryAt = now;
+      entry.cleanupHandled = false;
+      resumedRuns.delete(runId);
+      persistSubagentRuns();
+      setTimeout(() => {
+        resumeSubagentRun(runId);
+      }, MIN_ANNOUNCE_RETRY_DELAY_MS).unref?.();
+      return;
+    }
+
     const retryCount = (entry.announceRetryCount ?? 0) + 1;
     entry.announceRetryCount = retryCount;
     entry.lastAnnounceRetryAt = now;
 
     // Check if the announce has exceeded retry limits or expired (#18264).
-    const endedAgo = typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
     if (retryCount >= MAX_ANNOUNCE_RETRY_COUNT || endedAgo > ANNOUNCE_EXPIRY_MS) {
       const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
       if (
@@ -594,7 +632,9 @@ export function replaceSubagentRunAfterSteer(params: {
   const now = Date.now();
   const cfg = loadConfig();
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
-  const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
+  const spawnMode = source.spawnMode === "session" ? "session" : "run";
+  const archiveAtMs =
+    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
 
@@ -603,12 +643,15 @@ export function replaceSubagentRunAfterSteer(params: {
     runId: nextRunId,
     startedAt: now,
     endedAt: undefined,
+    endedReason: undefined,
+    endedHookEmittedAt: undefined,
     outcome: undefined,
     cleanupCompletedAt: undefined,
     cleanupHandled: false,
     suppressAnnounceReason: undefined,
     announceRetryCount: undefined,
     lastAnnounceRetryAt: undefined,
+    spawnMode,
     archiveAtMs,
     runTimeoutSeconds,
   };
@@ -640,7 +683,9 @@ export function registerSubagentRun(params: {
   const now = Date.now();
   const cfg = loadConfig();
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
-  const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
+  const spawnMode = params.spawnMode === "session" ? "session" : "run";
+  const archiveAtMs =
+    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -653,7 +698,7 @@ export function registerSubagentRun(params: {
     task: params.task,
     cleanup: params.cleanup,
     expectsCompletionMessage: params.expectsCompletionMessage,
-    spawnMode: params.spawnMode === "session" ? "session" : "run",
+    spawnMode,
     label: params.label,
     model: params.model,
     runTimeoutSeconds,
@@ -664,7 +709,7 @@ export function registerSubagentRun(params: {
   });
   ensureListener();
   persistSubagentRuns();
-  if (archiveAfterMs) {
+  if (archiveAtMs) {
     startSweeper();
   }
   // Wait for subagent completion via gateway RPC (cross-process).

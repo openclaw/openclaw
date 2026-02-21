@@ -30,9 +30,10 @@ type FakeBinding = {
   threadId: string;
   targetSessionKey: string;
   expiresAt?: number;
+  boundBy?: string;
 };
 
-function createDiscordCommandParams(commandBody: string) {
+function createDiscordCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
   return buildCommandTestParams(commandBody, baseCfg, {
     Provider: "discord",
     Surface: "discord",
@@ -40,6 +41,7 @@ function createDiscordCommandParams(commandBody: string) {
     OriginatingTo: "channel:thread-1",
     AccountId: "default",
     MessageThreadId: "thread-1",
+    ...overrides,
   });
 }
 
@@ -122,5 +124,24 @@ describe("/session ttl", () => {
     const params = buildCommandTestParams("/session ttl 2h", baseCfg);
     const result = await handleSessionCommand(params, true);
     expect(result?.reply?.text).toContain("currently available for Discord thread-bound sessions");
+  });
+
+  it("requires binding owner for ttl updates", async () => {
+    const binding: FakeBinding = {
+      threadId: "thread-1",
+      targetSessionKey: "agent:main:subagent:child",
+      boundBy: "owner-1",
+    };
+    hoisted.getThreadBindingManagerMock.mockReturnValue(createFakeThreadBindingManager(binding));
+
+    const result = await handleSessionCommand(
+      createDiscordCommandParams("/session ttl 2h", {
+        SenderId: "other-user",
+      }),
+      true,
+    );
+
+    expect(hoisted.setThreadBindingTtlBySessionKeyMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("Only owner-1 can update session TTL");
   });
 });

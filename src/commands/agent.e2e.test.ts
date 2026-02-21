@@ -320,6 +320,38 @@ describe("agentCommand", () => {
     });
   });
 
+  it("preserves topic transcript suffix when persisting missing sessionFile", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:telegram:group:123:topic:456": {
+          sessionId: "sess-topic",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:telegram:group:123:topic:456",
+        },
+        runtime,
+      );
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { sessionId?: string; sessionFile?: string }
+      >;
+      const entry = saved["agent:main:telegram:group:123:topic:456"];
+      expect(entry?.sessionId).toBe("sess-topic");
+      expect(entry?.sessionFile).toContain("sess-topic-topic-456.jsonl");
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionFile).toBe(entry?.sessionFile);
+    });
+  });
+
   it("derives session key from --agent when no routing target is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

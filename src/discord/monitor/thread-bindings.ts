@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveStateDir } from "../../config/paths.js";
@@ -77,11 +78,14 @@ const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 120_000;
 const DEFAULT_THREAD_BINDING_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_FAREWELL_TEXT = "Session ended. Messages here will no longer be routed.";
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10_003;
+const RECENT_UNBOUND_WEBHOOK_ECHO_TTL_MS = 30_000;
 
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
   bindingsByThreadId: Map<string, ThreadBindingRecord>;
   bindingsBySessionKey: Map<string, Set<string>>;
+  recentUnboundWebhookEchoesByBindingKey: Map<string, { webhookId: string; expiresAt: number }>;
+  reusableWebhooksByAccountChannel: Map<string, { webhookId: string; webhookToken: string }>;
   persistByAccountId: Map<string, boolean>;
   loadedBindings: boolean;
 };
@@ -95,6 +99,14 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     managersByAccountId: new Map<string, ThreadBindingManager>(),
     bindingsByThreadId: new Map<string, ThreadBindingRecord>(),
     bindingsBySessionKey: new Map<string, Set<string>>(),
+    recentUnboundWebhookEchoesByBindingKey: new Map<
+      string,
+      { webhookId: string; expiresAt: number }
+    >(),
+    reusableWebhooksByAccountChannel: new Map<
+      string,
+      { webhookId: string; webhookToken: string }
+    >(),
     persistByAccountId: new Map<string, boolean>(),
     loadedBindings: false,
   };
@@ -114,6 +126,9 @@ const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
 const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
 const BINDINGS_BY_SESSION_KEY = THREAD_BINDINGS_STATE.bindingsBySessionKey;
+const RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY =
+  THREAD_BINDINGS_STATE.recentUnboundWebhookEchoesByBindingKey;
+const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL = THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
 const PERSIST_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.persistByAccountId;
 
 function shouldDefaultPersist(): boolean {
@@ -140,6 +155,24 @@ function normalizeThreadId(raw: unknown): string | undefined {
   }
   const trimmed = raw.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
+  return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
+}
+
+function resolveBindingRecordKey(params: {
+  accountId?: string;
+  threadId: string;
+}): string | undefined {
+  const threadId = normalizeThreadId(params.threadId);
+  if (!threadId) {
+    return undefined;
+  }
+  return toBindingRecordKey({
+    accountId: normalizeAccountId(params.accountId),
+    threadId,
+  });
 }
 
 function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
@@ -173,8 +206,8 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
       ? Math.floor(value.boundAt)
       : Date.now();
   const expiresAt =
-    typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt) && value.expiresAt > 0
-      ? Math.floor(value.expiresAt)
+    typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt)
+      ? Math.max(0, Math.floor(value.expiresAt))
       : undefined;
   return {
     accountId,
@@ -221,12 +254,13 @@ function resolveThreadBindingExpiresAt(params: {
   record: Pick<ThreadBindingRecord, "boundAt" | "expiresAt">;
   sessionTtlMs: number;
 }): number | undefined {
-  if (
-    typeof params.record.expiresAt === "number" &&
-    Number.isFinite(params.record.expiresAt) &&
-    params.record.expiresAt > 0
-  ) {
-    return Math.floor(params.record.expiresAt);
+  if (typeof params.record.expiresAt === "number" && Number.isFinite(params.record.expiresAt)) {
+    const explicitExpiresAt = Math.floor(params.record.expiresAt);
+    if (explicitExpiresAt <= 0) {
+      // 0 is an explicit per-binding TTL disable sentinel.
+      return undefined;
+    }
+    return explicitExpiresAt;
   }
   if (params.sessionTtlMs <= 0) {
     return undefined;
@@ -238,17 +272,17 @@ function resolveThreadBindingExpiresAt(params: {
   return boundAt + params.sessionTtlMs;
 }
 
-function linkSessionBinding(targetSessionKey: string, threadId: string) {
+function linkSessionBinding(targetSessionKey: string, bindingKey: string) {
   const key = targetSessionKey.trim();
   if (!key) {
     return;
   }
   const threads = BINDINGS_BY_SESSION_KEY.get(key) ?? new Set<string>();
-  threads.add(threadId);
+  threads.add(bindingKey);
   BINDINGS_BY_SESSION_KEY.set(key, threads);
 }
 
-function unlinkSessionBinding(targetSessionKey: string, threadId: string) {
+function unlinkSessionBinding(targetSessionKey: string, bindingKey: string) {
   const key = targetSessionKey.trim();
   if (!key) {
     return;
@@ -257,23 +291,69 @@ function unlinkSessionBinding(targetSessionKey: string, threadId: string) {
   if (!threads) {
     return;
   }
-  threads.delete(threadId);
+  threads.delete(bindingKey);
   if (threads.size === 0) {
     BINDINGS_BY_SESSION_KEY.delete(key);
   }
 }
 
-function setBindingRecord(record: ThreadBindingRecord) {
-  const existing = BINDINGS_BY_THREAD_ID.get(record.threadId);
-  if (existing) {
-    unlinkSessionBinding(existing.targetSessionKey, existing.threadId);
-  }
-  BINDINGS_BY_THREAD_ID.set(record.threadId, record);
-  linkSessionBinding(record.targetSessionKey, record.threadId);
+function toReusableWebhookKey(params: { accountId: string; channelId: string }): string {
+  return `${params.accountId.trim().toLowerCase()}:${params.channelId.trim()}`;
 }
 
-function removeBindingRecord(threadId: string): ThreadBindingRecord | null {
-  const key = threadId.trim();
+function rememberReusableWebhook(record: ThreadBindingRecord) {
+  const webhookId = record.webhookId?.trim();
+  const webhookToken = record.webhookToken?.trim();
+  if (!webhookId || !webhookToken) {
+    return;
+  }
+  const key = toReusableWebhookKey({ accountId: record.accountId, channelId: record.channelId });
+  REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.set(key, { webhookId, webhookToken });
+}
+
+function rememberRecentUnboundWebhookEcho(record: ThreadBindingRecord) {
+  const webhookId = record.webhookId?.trim();
+  if (!webhookId) {
+    return;
+  }
+  const bindingKey = resolveBindingRecordKey({
+    accountId: record.accountId,
+    threadId: record.threadId,
+  });
+  if (!bindingKey) {
+    return;
+  }
+  RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.set(bindingKey, {
+    webhookId,
+    expiresAt: Date.now() + RECENT_UNBOUND_WEBHOOK_ECHO_TTL_MS,
+  });
+}
+
+function clearRecentUnboundWebhookEcho(bindingKeyRaw: string) {
+  const key = bindingKeyRaw.trim();
+  if (!key) {
+    return;
+  }
+  RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.delete(key);
+}
+
+function setBindingRecord(record: ThreadBindingRecord) {
+  const bindingKey = toBindingRecordKey({
+    accountId: record.accountId,
+    threadId: record.threadId,
+  });
+  const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
+  if (existing) {
+    unlinkSessionBinding(existing.targetSessionKey, bindingKey);
+  }
+  BINDINGS_BY_THREAD_ID.set(bindingKey, record);
+  linkSessionBinding(record.targetSessionKey, bindingKey);
+  clearRecentUnboundWebhookEcho(bindingKey);
+  rememberReusableWebhook(record);
+}
+
+function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord | null {
+  const key = bindingKeyRaw.trim();
   if (!key) {
     return null;
   }
@@ -282,8 +362,35 @@ function removeBindingRecord(threadId: string): ThreadBindingRecord | null {
     return null;
   }
   BINDINGS_BY_THREAD_ID.delete(key);
-  unlinkSessionBinding(existing.targetSessionKey, existing.threadId);
+  unlinkSessionBinding(existing.targetSessionKey, key);
   return existing;
+}
+
+export function isRecentlyUnboundThreadWebhookMessage(params: {
+  accountId?: string;
+  threadId: string;
+  webhookId?: string | null;
+}): boolean {
+  const webhookId = params.webhookId?.trim() || "";
+  if (!webhookId) {
+    return false;
+  }
+  const bindingKey = resolveBindingRecordKey({
+    accountId: params.accountId,
+    threadId: params.threadId,
+  });
+  if (!bindingKey) {
+    return false;
+  }
+  const suppressed = RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.get(bindingKey);
+  if (!suppressed) {
+    return false;
+  }
+  if (suppressed.expiresAt <= Date.now()) {
+    RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.delete(bindingKey);
+    return false;
+  }
+  return suppressed.webhookId === webhookId;
 }
 
 function shouldPersistAnyBindingState(): boolean {
@@ -295,13 +402,20 @@ function shouldPersistAnyBindingState(): boolean {
   return false;
 }
 
-function saveBindingsToDisk() {
-  if (!shouldPersistAnyBindingState()) {
+function shouldPersistBindingMutations(): boolean {
+  if (shouldPersistAnyBindingState()) {
+    return true;
+  }
+  return fs.existsSync(resolveThreadBindingsPath());
+}
+
+function saveBindingsToDisk(params: { force?: boolean } = {}) {
+  if (!params.force && !shouldPersistAnyBindingState()) {
     return;
   }
   const bindings: Record<string, PersistedThreadBindingRecord> = {};
-  for (const [threadId, record] of BINDINGS_BY_THREAD_ID.entries()) {
-    bindings[threadId] = { ...record };
+  for (const [bindingKey, record] of BINDINGS_BY_THREAD_ID.entries()) {
+    bindings[bindingKey] = { ...record };
   }
   const payload: PersistedThreadBindingsPayload = {
     version: THREAD_BINDINGS_VERSION,
@@ -317,6 +431,7 @@ function ensureBindingsLoaded() {
   THREAD_BINDINGS_STATE.loadedBindings = true;
   BINDINGS_BY_THREAD_ID.clear();
   BINDINGS_BY_SESSION_KEY.clear();
+  REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
 
   const raw = loadJsonFile(resolveThreadBindingsPath());
   if (!raw || typeof raw !== "object") {
@@ -396,8 +511,8 @@ function resolveBindingIdsForSession(params: {
     return [];
   }
   const out: string[] = [];
-  for (const threadId of ids.values()) {
-    const record = BINDINGS_BY_THREAD_ID.get(threadId);
+  for (const bindingKey of ids.values()) {
+    const record = BINDINGS_BY_THREAD_ID.get(bindingKey);
     if (!record) {
       continue;
     }
@@ -407,7 +522,7 @@ function resolveBindingIdsForSession(params: {
     if (params.targetKind && record.targetKind !== params.targetKind) {
       continue;
     }
-    out.push(threadId);
+    out.push(bindingKey);
   }
   return out;
 }
@@ -518,13 +633,17 @@ function isDiscordThreadGoneError(err: unknown): boolean {
   return status === 404 || status === 403;
 }
 
-async function maybeSendBindingMessage(params: { record: ThreadBindingRecord; text: string }) {
+async function maybeSendBindingMessage(params: {
+  record: ThreadBindingRecord;
+  text: string;
+  preferWebhook?: boolean;
+}) {
   const text = params.text.trim();
   if (!text) {
     return;
   }
   const record = params.record;
-  if (record.webhookId && record.webhookToken) {
+  if (params.preferWebhook !== false && record.webhookId && record.webhookToken) {
     try {
       await sendWebhookMessageDiscord(text, {
         webhookId: record.webhookId,
@@ -579,6 +698,17 @@ function findReusableWebhook(params: { accountId: string; channelId: string }): 
   webhookId?: string;
   webhookToken?: string;
 } {
+  const reusableKey = toReusableWebhookKey({
+    accountId: params.accountId,
+    channelId: params.channelId,
+  });
+  const cached = REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(reusableKey);
+  if (cached) {
+    return {
+      webhookId: cached.webhookId,
+      webhookToken: cached.webhookToken,
+    };
+  }
   for (const record of BINDINGS_BY_THREAD_ID.values()) {
     if (record.accountId !== params.accountId) {
       continue;
@@ -589,6 +719,7 @@ function findReusableWebhook(params: { accountId: string; channelId: string }): 
     if (!record.webhookId || !record.webhookToken) {
       continue;
     }
+    rememberReusableWebhook(record);
     return {
       webhookId: record.webhookId,
       webhookToken: record.webhookToken,
@@ -722,7 +853,10 @@ export function createThreadBindingManager(
     accountId,
     getSessionTtlMs: () => sessionTtlMs,
     getByThreadId: (threadId) => {
-      const key = threadId.trim();
+      const key = resolveBindingRecordKey({
+        accountId,
+        threadId,
+      });
       if (!key) {
         return undefined;
       }
@@ -742,7 +876,7 @@ export function createThreadBindingManager(
         accountId,
       });
       return ids
-        .map((threadId) => BINDINGS_BY_THREAD_ID.get(threadId))
+        .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
         .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
     },
     listBindings: () =>
@@ -836,18 +970,22 @@ export function createThreadBindingManager(
       return record;
     },
     unbindThread: (unbindParams) => {
-      const threadId = unbindParams.threadId.trim();
-      if (!threadId) {
+      const bindingKey = resolveBindingRecordKey({
+        accountId,
+        threadId: unbindParams.threadId,
+      });
+      if (!bindingKey) {
         return null;
       }
-      const existing = BINDINGS_BY_THREAD_ID.get(threadId);
+      const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
       if (!existing || existing.accountId !== accountId) {
         return null;
       }
-      const removed = removeBindingRecord(threadId);
+      const removed = removeBindingRecord(bindingKey);
       if (!removed) {
         return null;
       }
+      rememberRecentUnboundWebhookEcho(removed);
       if (persist) {
         saveBindingsToDisk();
       }
@@ -857,7 +995,9 @@ export function createThreadBindingManager(
           farewellText: unbindParams.farewellText,
           sessionTtlMs,
         });
-        void maybeSendBindingMessage({ record: removed, text: farewell });
+        // Use bot send path for farewell messages so unbound threads don't process
+        // webhook echoes as fresh inbound turns when allowBots is enabled.
+        void maybeSendBindingMessage({ record: removed, text: farewell, preferWebhook: false });
       }
       return removed;
     },
@@ -871,9 +1011,13 @@ export function createThreadBindingManager(
         return [];
       }
       const removed: ThreadBindingRecord[] = [];
-      for (const threadId of ids) {
+      for (const bindingKey of ids) {
+        const binding = BINDINGS_BY_THREAD_ID.get(bindingKey);
+        if (!binding) {
+          continue;
+        }
         const entry = manager.unbindThread({
-          threadId,
+          threadId: binding.threadId,
           reason: unbindParams.reason,
           sendFarewell: unbindParams.sendFarewell,
           farewellText: unbindParams.farewellText,
@@ -982,6 +1126,27 @@ export function listThreadBindingsForAccount(accountId?: string): ThreadBindingR
   return manager.listBindings();
 }
 
+export function listThreadBindingsBySessionKey(params: {
+  targetSessionKey: string;
+  accountId?: string;
+  targetKind?: ThreadBindingTargetKind;
+}): ThreadBindingRecord[] {
+  ensureBindingsLoaded();
+  const targetSessionKey = params.targetSessionKey.trim();
+  if (!targetSessionKey) {
+    return [];
+  }
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  const ids = resolveBindingIdsForSession({
+    targetSessionKey,
+    accountId,
+    targetKind: params.targetKind,
+  });
+  return ids
+    .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
+    .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
+}
+
 export async function autoBindSpawnedDiscordSubagent(params: {
   accountId?: string;
   channel?: string;
@@ -1001,9 +1166,21 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     return null;
   }
 
-  const existingThreadId = normalizeThreadId(params.threadId);
-  let channelId: string | undefined;
-  if (!existingThreadId) {
+  const requesterThreadId = normalizeThreadId(params.threadId);
+  let channelId = "";
+  if (requesterThreadId) {
+    const existing = manager.getByThreadId(requesterThreadId);
+    if (existing?.channelId?.trim()) {
+      channelId = existing.channelId.trim();
+    } else {
+      channelId =
+        (await resolveChannelIdForBinding({
+          accountId: manager.accountId,
+          threadId: requesterThreadId,
+        })) ?? "";
+    }
+  }
+  if (!channelId) {
     const to = params.to?.trim() || "";
     if (!to) {
       return null;
@@ -1013,16 +1190,20 @@ export async function autoBindSpawnedDiscordSubagent(params: {
       if (!target || target.kind !== "channel") {
         return null;
       }
-      channelId = target.id;
+      channelId =
+        (await resolveChannelIdForBinding({
+          accountId: manager.accountId,
+          threadId: target.id,
+        })) ?? "";
     } catch {
       return null;
     }
   }
 
   return await manager.bindTarget({
-    threadId: existingThreadId,
+    threadId: undefined,
     channelId,
-    createThread: !existingThreadId,
+    createThread: true,
     threadName: resolveThreadBindingThreadName({
       agentId: params.agentId,
       label: params.label,
@@ -1064,15 +1245,15 @@ export function unbindThreadBindingsBySessionKey(params: {
   }
 
   const removed: ThreadBindingRecord[] = [];
-  for (const threadId of ids) {
-    const record = BINDINGS_BY_THREAD_ID.get(threadId);
+  for (const bindingKey of ids) {
+    const record = BINDINGS_BY_THREAD_ID.get(bindingKey);
     if (!record) {
       continue;
     }
     const manager = MANAGERS_BY_ACCOUNT_ID.get(record.accountId);
     if (manager) {
       const unbound = manager.unbindThread({
-        threadId,
+        threadId: record.threadId,
         reason: params.reason,
         sendFarewell: params.sendFarewell,
         farewellText: params.farewellText,
@@ -1082,14 +1263,15 @@ export function unbindThreadBindingsBySessionKey(params: {
       }
       continue;
     }
-    const unbound = removeBindingRecord(threadId);
+    const unbound = removeBindingRecord(bindingKey);
     if (unbound) {
+      rememberRecentUnboundWebhookEcho(unbound);
       removed.push(unbound);
     }
   }
 
-  if (removed.length > 0 && shouldPersistAnyBindingState()) {
-    saveBindingsToDisk();
+  if (removed.length > 0 && shouldPersistBindingMutations()) {
+    saveBindingsToDisk({ force: true });
   }
   return removed;
 }
@@ -1114,10 +1296,10 @@ export function setThreadBindingTtlBySessionKey(params: {
   }
   const ttlMs = normalizeThreadBindingTtlMs(params.ttlMs);
   const now = Date.now();
-  const expiresAt = ttlMs > 0 ? now + ttlMs : undefined;
+  const expiresAt = ttlMs > 0 ? now + ttlMs : 0;
   const updated: ThreadBindingRecord[] = [];
-  for (const threadId of ids) {
-    const existing = BINDINGS_BY_THREAD_ID.get(threadId);
+  for (const bindingKey of ids) {
+    const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
     if (!existing) {
       continue;
     }
@@ -1129,8 +1311,8 @@ export function setThreadBindingTtlBySessionKey(params: {
     setBindingRecord(nextRecord);
     updated.push(nextRecord);
   }
-  if (updated.length > 0 && shouldPersistAnyBindingState()) {
-    saveBindingsToDisk();
+  if (updated.length > 0 && shouldPersistBindingMutations()) {
+    saveBindingsToDisk({ force: true });
   }
   return updated;
 }
@@ -1145,6 +1327,8 @@ export const __testing = {
     MANAGERS_BY_ACCOUNT_ID.clear();
     BINDINGS_BY_THREAD_ID.clear();
     BINDINGS_BY_SESSION_KEY.clear();
+    RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY.clear();
+    REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
     PERSIST_BY_ACCOUNT_ID.clear();
     THREAD_BINDINGS_STATE.loadedBindings = false;
   },

@@ -372,6 +372,14 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
+  const senderId = params.command.senderId?.trim() || "";
+  if (binding.boundBy && binding.boundBy !== "system" && senderId && senderId !== binding.boundBy) {
+    return {
+      shouldContinue: false,
+      reply: { text: `⚠️ Only ${binding.boundBy} can update session TTL for this thread.` },
+    };
+  }
+
   let ttlMs: number;
   try {
     ttlMs = parseSessionTtlMs(ttlArgRaw);

@@ -41,6 +41,7 @@ async function maybeSendDiscordWebhookText(params: {
   threadId?: string | number | null;
   accountId?: string | null;
   identity?: OutboundIdentity;
+  replyToId?: string | null;
 }): Promise<{ messageId: string; channelId: string } | null> {
   if (params.threadId == null) {
     return null;
@@ -65,6 +66,7 @@ async function maybeSendDiscordWebhookText(params: {
     webhookId: binding.webhookId,
     webhookToken: binding.webhookToken,
     threadId: binding.threadId,
+    replyTo: params.replyToId ?? undefined,
     username: persona.username,
     avatarUrl: persona.avatarUrl,
   });
@@ -78,14 +80,17 @@ export const discordOutbound: ChannelOutboundAdapter = {
   pollMaxOptions: 10,
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
-    const webhookResult = await maybeSendDiscordWebhookText({
-      text,
-      threadId,
-      accountId,
-      identity,
-    }).catch(() => null);
-    if (webhookResult) {
-      return { channel: "discord", ...webhookResult };
+    if (!silent) {
+      const webhookResult = await maybeSendDiscordWebhookText({
+        text,
+        threadId,
+        accountId,
+        identity,
+        replyToId,
+      }).catch(() => null);
+      if (webhookResult) {
+        return { channel: "discord", ...webhookResult };
+      }
     }
     const send = deps?.sendDiscord ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to, threadId });
@@ -120,9 +125,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "discord", ...result };
   },
-  sendPoll: async ({ to, poll, accountId, silent }) =>
-    await sendPollDiscord(to, poll, {
+  sendPoll: async ({ to, poll, accountId, threadId, silent }) => {
+    const target = resolveDiscordOutboundTarget({ to, threadId });
+    return await sendPollDiscord(target, poll, {
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
-    }),
+    });
+  },
 };

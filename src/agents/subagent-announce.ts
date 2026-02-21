@@ -1,5 +1,6 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -50,13 +51,25 @@ function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
   spawnMode?: SpawnSubagentMode;
+  outcome?: SubagentRunOutcome;
 }): string {
   const findingsText = params.findings.trim();
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
-  const header =
-    params.spawnMode === "session"
+  const header = (() => {
+    if (params.outcome?.status === "error") {
+      return params.spawnMode === "session"
+        ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
+        : `❌ Subagent ${params.subagentName} failed`;
+    }
+    if (params.outcome?.status === "timeout") {
+      return params.spawnMode === "session"
+        ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
+        : `⏱️ Subagent ${params.subagentName} timed out`;
+    }
+    return params.spawnMode === "session"
       ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
       : `✅ Subagent ${params.subagentName} finished`;
+  })();
   if (!hasFindings) {
     return header;
   }
@@ -158,11 +171,13 @@ function extractSubagentOutputText(message: unknown): string {
   if (role === "toolResult" || role === "tool") {
     return extractToolResultText((message as ToolResultMessage).content);
   }
-  if (typeof content === "string") {
-    return sanitizeTextContent(content);
-  }
-  if (Array.isArray(content)) {
-    return extractInlineTextContent(content);
+  if (role == null) {
+    if (typeof content === "string") {
+      return sanitizeTextContent(content);
+    }
+    if (Array.isArray(content)) {
+      return extractInlineTextContent(content);
+    }
   }
   return "";
 }
@@ -198,6 +213,31 @@ async function readLatestSubagentOutputWithRetry(params: {
     await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
   }
   return result;
+}
+
+async function waitForSubagentOutputChange(params: {
+  sessionKey: string;
+  baselineReply: string;
+  maxWaitMs: number;
+}): Promise<string> {
+  const baseline = params.baselineReply.trim();
+  if (!baseline) {
+    return params.baselineReply;
+  }
+  const RETRY_INTERVAL_MS = 100;
+  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 5_000));
+  let latest = params.baselineReply;
+  while (Date.now() < deadline) {
+    const next = await readLatestSubagentOutput(params.sessionKey);
+    if (next?.trim()) {
+      latest = next;
+      if (next.trim() !== baseline) {
+        return next;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+  }
+  return latest;
 }
 
 function formatDurationShort(valueMs?: number) {
@@ -304,12 +344,45 @@ async function resolveDiscordThreadCompletionOrigin(params: {
   if (channel !== "discord") {
     return requesterOrigin;
   }
+  const requesterAccountId = requesterOrigin?.accountId?.trim();
+  const requesterThreadId =
+    requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
+      ? String(requesterOrigin.threadId).trim()
+      : "";
   try {
-    const { getThreadBindingManager } = await import("../discord/monitor/thread-bindings.js");
-    const bindings = getThreadBindingManager(requesterOrigin?.accountId)?.listBySessionKey(
-      params.childSessionKey,
-    );
-    const binding = bindings?.[0];
+    const { getThreadBindingManager, listThreadBindingsBySessionKey } =
+      await import("../discord/monitor/thread-bindings.js");
+    const managerBindings =
+      getThreadBindingManager(requesterOrigin?.accountId)?.listBySessionKey(
+        params.childSessionKey,
+      ) ?? [];
+    const bindings =
+      managerBindings.length > 0
+        ? managerBindings
+        : listThreadBindingsBySessionKey({
+            targetSessionKey: params.childSessionKey,
+            ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
+            targetKind: "subagent",
+          });
+    if (!bindings?.length) {
+      return requesterOrigin;
+    }
+
+    let binding: (typeof bindings)[number] | undefined;
+    if (requesterThreadId) {
+      binding = bindings.find((entry) => {
+        if (entry.threadId !== requesterThreadId) {
+          return false;
+        }
+        if (requesterAccountId && entry.accountId !== requesterAccountId) {
+          return false;
+        }
+        return true;
+      });
+    }
+    if (!binding && bindings.length === 1) {
+      binding = bindings[0];
+    }
     if (!binding) {
       return requesterOrigin;
     }
@@ -498,28 +571,39 @@ async function sendSubagentAnnounceDirectly(params: {
       hasCompletionDirectTarget &&
       params.completionMessage?.trim()
     ) {
-      const completionThreadId =
-        completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
-          ? String(completionDirectOrigin.threadId)
-          : undefined;
-      await callGateway({
-        method: "send",
-        params: {
-          channel: completionChannel,
-          to: completionTo,
-          accountId: completionDirectOrigin?.accountId,
-          threadId: completionThreadId,
-          sessionKey: canonicalRequesterSessionKey,
-          message: params.completionMessage,
-          idempotencyKey: params.directIdempotencyKey,
-        },
-        timeoutMs: 15_000,
-      });
+      let activeDescendantRuns = 0;
+      try {
+        const { countActiveDescendantRuns } = await import("./subagent-registry.js");
+        activeDescendantRuns = Math.max(0, countActiveDescendantRuns(canonicalRequesterSessionKey));
+      } catch {
+        // Best-effort only; when unavailable keep historical direct-send behavior.
+      }
+      // Keep completion announcements coordinated via requester session routing
+      // while sibling/descendant runs are still active.
+      if (activeDescendantRuns === 0) {
+        const completionThreadId =
+          completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
+            ? String(completionDirectOrigin.threadId)
+            : undefined;
+        await callGateway({
+          method: "send",
+          params: {
+            channel: completionChannel,
+            to: completionTo,
+            accountId: completionDirectOrigin?.accountId,
+            threadId: completionThreadId,
+            sessionKey: canonicalRequesterSessionKey,
+            message: params.completionMessage,
+            idempotencyKey: params.directIdempotencyKey,
+          },
+          timeoutMs: 15_000,
+        });
 
-      return {
-        delivered: true,
-        path: "direct",
-      };
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
     }
 
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
@@ -642,7 +726,10 @@ export function buildSubagentSystemPrompt(params: {
       ? params.task.replace(/\s+/g, " ").trim()
       : "{{TASK_DESCRIPTION}}";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
-  const maxSpawnDepth = typeof params.maxSpawnDepth === "number" ? params.maxSpawnDepth : 1;
+  const maxSpawnDepth =
+    typeof params.maxSpawnDepth === "number"
+      ? params.maxSpawnDepth
+      : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
 
@@ -728,15 +815,15 @@ function buildAnnounceReplyInstruction(params: {
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
 }): string {
-  if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
-  }
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
     return `There are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
   }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
+  if (params.expectsCompletionMessage) {
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
   }
   return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
@@ -777,7 +864,7 @@ export async function runSubagentAnnounceFlow(params: {
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     // Lifecycle "end" can arrive before auto-compaction retries finish. If the
     // subagent is still active, wait for the embedded run to fully settle.
-    if (!expectsCompletionMessage && childSessionId && isEmbeddedPiRunActive(childSessionId)) {
+    if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedPiRunActive(childSessionId)) {
         // The child run is still active (e.g., compaction retry still in progress).
@@ -851,6 +938,8 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
 
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+
     let activeChildDescendantRuns = 0;
     try {
       const { countActiveDescendantRuns } = await import("./subagent-registry.js");
@@ -858,11 +947,19 @@ export async function runSubagentAnnounceFlow(params: {
     } catch {
       // Best-effort only; fall back to direct announce behavior when unavailable.
     }
-    if (!expectsCompletionMessage && activeChildDescendantRuns > 0) {
+    if (activeChildDescendantRuns > 0) {
       // The finished run still has active descendant subagents. Defer announcing
       // this run until descendants settle so we avoid posting in-progress updates.
       shouldDeleteChildSession = false;
       return false;
+    }
+
+    if (requesterDepth >= 1 && reply?.trim()) {
+      reply = await waitForSubagentOutputChange({
+        sessionKey: params.childSessionKey,
+        baselineReply: reply,
+        maxWaitMs: Math.max(250, Math.min(params.timeoutMs, 2_000)),
+      });
     }
 
     // Build status label
@@ -884,8 +981,7 @@ export async function runSubagentAnnounceFlow(params: {
     let completionMessage = "";
     let triggerMessage = "";
 
-    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-    let requesterIsSubagent = !expectsCompletionMessage && requesterDepth >= 1;
+    let requesterIsSubagent = requesterDepth >= 1;
     // If the requester subagent has already finished, bubble the announce to its
     // requester (typically main) so descendant completion is not silently lost.
     // BUT: only fallback if the parent SESSION is deleted, not just if the current
@@ -949,6 +1045,7 @@ export async function runSubagentAnnounceFlow(params: {
       findings,
       subagentName,
       spawnMode: params.spawnMode,
+      outcome,
     });
     const internalSummaryMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,

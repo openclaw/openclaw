@@ -116,6 +116,25 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock.mock.calls[1]?.[2]?.replyTo).toBeUndefined();
   });
 
+  it("does not consume replyToId for replyToMode=first on whitespace-only payloads", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "   " }, { text: "actual reply" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "actual reply",
+      expect.objectContaining({ token: "token", replyTo: "reply-1" }),
+    );
+  });
+
   it("sends bound-session text replies through webhook delivery", async () => {
     const threadBindings = createThreadBindingManager({
       accountId: "default",
@@ -140,6 +159,7 @@ describe("deliverDiscordReply", () => {
       token: "token",
       runtime,
       textLimit: 2000,
+      replyToId: "reply-1",
       sessionKey: "agent:main:subagent:child",
       threadBindings,
     });
@@ -151,6 +171,7 @@ describe("deliverDiscordReply", () => {
         webhookId: "wh_1",
         webhookToken: "tok_1",
         threadId: "thread-1",
+        replyTo: "reply-1",
       }),
     );
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
@@ -190,6 +211,43 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).toHaveBeenCalledWith(
       "channel:thread-1",
       "Fallback path",
+      expect.objectContaining({ token: "token", accountId: "default" }),
+    );
+  });
+
+  it("does not use thread webhook when outbound target is not a bound thread", async () => {
+    const threadBindings = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await threadBindings.bindTarget({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+      introText: "",
+    });
+
+    await deliverDiscordReply({
+      replies: [{ text: "Parent channel delivery" }],
+      target: "channel:parent-1",
+      token: "token",
+      accountId: "default",
+      runtime,
+      textLimit: 2000,
+      sessionKey: "agent:main:subagent:child",
+      threadBindings,
+    });
+
+    expect(sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:parent-1",
+      "Parent channel delivery",
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
   });

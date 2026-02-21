@@ -2,7 +2,17 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 let lifecycleHandler:
-  | ((evt: { stream?: string; runId: string; data?: { phase?: string } }) => void)
+  | ((evt: {
+      stream?: string;
+      runId: string;
+      data?: {
+        phase?: string;
+        startedAt?: number;
+        endedAt?: number;
+        aborted?: boolean;
+        error?: string;
+      };
+    }) => void)
   | undefined;
 
 vi.mock("../gateway/call.js", () => ({
@@ -29,7 +39,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async () => {});
+const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -89,6 +99,7 @@ describe("subagent registry steer restarts", () => {
 
     await flushAnnounce();
     expect(announceSpy).not.toHaveBeenCalled();
+    expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
 
     const replaced = mod.replaceSubagentRunAfterSteer({
       previousRunId: "run-old",
@@ -109,6 +120,15 @@ describe("subagent registry steer restarts", () => {
 
     await flushAnnounce();
     expect(announceSpy).toHaveBeenCalledTimes(1);
+    expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-new",
+      }),
+      expect.objectContaining({
+        runId: "run-new",
+      }),
+    );
 
     const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-new");
@@ -275,6 +295,56 @@ describe("subagent registry steer restarts", () => {
     expect(runs[0].runId).toBe("run-retry-reset-new");
     expect(runs[0].announceRetryCount).toBeUndefined();
     expect(runs[0].lastAnnounceRetryAt).toBeUndefined();
+  });
+
+  it("clears terminal lifecycle state when replacing after steer restart", async () => {
+    mod.registerSubagentRun({
+      runId: "run-terminal-state-old",
+      childSessionKey: "agent:main:subagent:terminal-state",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "terminal state",
+      cleanup: "keep",
+    });
+
+    const previous = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(previous?.runId).toBe("run-terminal-state-old");
+    if (previous) {
+      previous.endedHookEmittedAt = Date.now();
+      previous.endedReason = "subagent-complete";
+      previous.endedAt = Date.now();
+      previous.outcome = { status: "ok" };
+    }
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-terminal-state-old",
+      nextRunId: "run-terminal-state-new",
+      fallback: previous,
+    });
+    expect(replaced).toBe(true);
+
+    const runs = mod.listSubagentRunsForRequester("agent:main:main");
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe("run-terminal-state-new");
+    expect(runs[0].endedHookEmittedAt).toBeUndefined();
+    expect(runs[0].endedReason).toBeUndefined();
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-terminal-state-new",
+      data: { phase: "end" },
+    });
+
+    await flushAnnounce();
+    expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-terminal-state-new",
+      }),
+      expect.objectContaining({
+        runId: "run-terminal-state-new",
+      }),
+    );
   });
 
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
@@ -460,5 +530,49 @@ describe("subagent registry steer restarts", () => {
       }
       vi.useRealTimers();
     }
+  });
+
+  it("emits subagent_ended when completion cleanup expires with active descendants", async () => {
+    announceSpy.mockResolvedValue(false);
+
+    mod.registerSubagentRun({
+      runId: "run-parent-expiry",
+      childSessionKey: "agent:main:subagent:parent-expiry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "parent completion expiry",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+    mod.registerSubagentRun({
+      runId: "run-child-active",
+      childSessionKey: "agent:main:subagent:parent-expiry:subagent:child-active",
+      requesterSessionKey: "agent:main:subagent:parent-expiry",
+      requesterDisplayKey: "parent-expiry",
+      task: "child still running",
+      cleanup: "keep",
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-parent-expiry",
+      data: {
+        phase: "end",
+        startedAt: Date.now() - 7 * 60_000,
+        endedAt: Date.now() - 6 * 60_000,
+      },
+    });
+
+    await flushAnnounce();
+
+    const parentHookCall = runSubagentEndedHookMock.mock.calls.find((call) => {
+      const event = call[0] as { runId?: string; reason?: string };
+      return event.runId === "run-parent-expiry" && event.reason === "subagent-complete";
+    });
+    expect(parentHookCall).toBeDefined();
+    const parent = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-parent-expiry");
+    expect(parent?.cleanupCompletedAt).toBeTypeOf("number");
   });
 });

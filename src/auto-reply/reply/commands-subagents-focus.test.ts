@@ -195,7 +195,37 @@ describe("/focus, /unfocus, /agents", () => {
     );
   });
 
-  it("/agents lists active subagents with thread bindings and ACP bindings", async () => {
+  it("/focus rejects rebinding when the thread is focused by another user", async () => {
+    const fake = createFakeThreadBindingManager([
+      {
+        accountId: "default",
+        channelId: "parent-1",
+        threadId: "thread-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        label: "child",
+        boundBy: "user-2",
+        boundAt: Date.now(),
+      },
+    ]);
+    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
+    hoisted.callGatewayMock.mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "sessions.resolve") {
+        return { key: "agent:codex-acp:session-1" };
+      }
+      return {};
+    });
+
+    const params = createDiscordCommandParams("/focus codex-acp");
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Only user-2 can refocus this thread.");
+    expect(fake.manager.bindTarget).not.toHaveBeenCalled();
+  });
+
+  it("/agents includes bound persistent sessions and requester-scoped ACP bindings", async () => {
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:child-1",
@@ -224,6 +254,17 @@ describe("/focus, /unfocus, /agents", () => {
         channelId: "parent-1",
         threadId: "thread-2",
         targetKind: "acp",
+        targetSessionKey: "agent:main:main",
+        agentId: "codex-acp",
+        label: "main-session",
+        boundBy: "user-1",
+        boundAt: Date.now(),
+      },
+      {
+        accountId: "default",
+        channelId: "parent-1",
+        threadId: "thread-3",
+        targetKind: "acp",
         targetSessionKey: "agent:codex-acp:session-2",
         agentId: "codex-acp",
         label: "codex-acp",
@@ -240,7 +281,46 @@ describe("/focus, /unfocus, /agents", () => {
     expect(text).toContain("agents:");
     expect(text).toContain("thread:thread-1");
     expect(text).toContain("acp/session bindings:");
-    expect(text).toContain("session:agent:codex-acp:session-2");
+    expect(text).toContain("session:agent:main:main");
+    expect(text).not.toContain("session:agent:codex-acp:session-2");
+  });
+
+  it("/agents keeps finished session-mode runs visible while their thread binding remains", async () => {
+    addSubagentRunForTests({
+      runId: "run-session-1",
+      childSessionKey: "agent:main:subagent:persistent-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persistent task",
+      cleanup: "keep",
+      label: "persistent-1",
+      spawnMode: "session",
+      createdAt: Date.now(),
+      endedAt: Date.now(),
+    });
+
+    const fake = createFakeThreadBindingManager([
+      {
+        accountId: "default",
+        channelId: "parent-1",
+        threadId: "thread-persistent-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:persistent-1",
+        agentId: "main",
+        label: "persistent-1",
+        boundBy: "user-1",
+        boundAt: Date.now(),
+      },
+    ]);
+    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
+
+    const params = createDiscordCommandParams("/agents");
+    const result = await handleSubagentsCommand(params, true);
+    const text = result?.reply?.text ?? "";
+
+    expect(text).toContain("agents:");
+    expect(text).toContain("persistent-1");
+    expect(text).toContain("thread:thread-persistent-1");
   });
 
   it("/focus is discord-only", async () => {

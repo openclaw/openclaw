@@ -425,13 +425,18 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const isDiscord = isDiscordSurface(params);
     const accountId = isDiscord ? resolveDiscordAccountId(params) : undefined;
     const threadBindings = accountId ? getThreadBindingManager(accountId) : null;
-    const active = sortSubagentRuns(runs).filter((entry) => !entry.endedAt);
+    const visibleRuns = sortSubagentRuns(runs).filter((entry) => {
+      if (!entry.endedAt) {
+        return true;
+      }
+      return Boolean(threadBindings?.listBySessionKey(entry.childSessionKey)[0]);
+    });
     const lines = ["agents:", "-----"];
-    if (active.length === 0) {
+    if (visibleRuns.length === 0) {
       lines.push("(none)");
     } else {
       let index = 1;
-      for (const entry of active) {
+      for (const entry of visibleRuns) {
         const threadBinding = threadBindings?.listBySessionKey(entry.childSessionKey)[0];
         const bindingText = threadBinding
           ? `thread:${threadBinding.threadId}`
@@ -445,7 +450,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     if (threadBindings) {
       const acpBindings = threadBindings
         .listBindings()
-        .filter((entry) => entry.targetKind === "acp");
+        .filter((entry) => entry.targetKind === "acp" && entry.targetSessionKey === requesterKey);
       if (acpBindings.length > 0) {
         lines.push("", "acp/session bindings:", "-----");
         for (const binding of acpBindings) {
@@ -496,6 +501,22 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         reply: { text: "⚠️ Could not resolve a Discord channel for /focus." },
       };
     }
+    const senderId = params.command.senderId?.trim() || "";
+    if (currentThreadId) {
+      const existingBinding = threadBindings.getByThreadId(currentThreadId);
+      if (
+        existingBinding &&
+        existingBinding.boundBy &&
+        existingBinding.boundBy !== "system" &&
+        senderId &&
+        senderId !== existingBinding.boundBy
+      ) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚠️ Only ${existingBinding.boundBy} can refocus this thread.` },
+        };
+      }
+    }
     const label = focusTarget.label || token;
     const binding = await threadBindings.bindTarget({
       threadId: currentThreadId || undefined,
@@ -509,7 +530,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       targetSessionKey: focusTarget.targetSessionKey,
       agentId: focusTarget.agentId,
       label,
-      boundBy: params.command.senderId || "unknown",
+      boundBy: senderId || "unknown",
       introText: resolveThreadBindingIntroText({
         agentId: focusTarget.agentId,
         label,
