@@ -70,6 +70,10 @@ import Testing
             handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(response)))
         }
 
+        func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+            pongReceiveHandler(nil)
+        }
+
         func receive() async throws -> URLSessionWebSocketTask.Message {
             if self.helloDelayMs > 0 {
                 try await Task.sleep(nanoseconds: UInt64(self.helloDelayMs) * 1_000_000)
