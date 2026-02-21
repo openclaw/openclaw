@@ -205,15 +205,40 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
-function unwrapLoadedSkills(loaded: unknown): Skill[] {
-  if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+type ParsedSkillLoadResult = ReturnType<typeof loadSkillsFromDir>;
+
+function logSkillLoadDiagnostics(params: { result: ParsedSkillLoadResult; source: string }) {
+  const diagnostics = params.result.diagnostics;
+  if (!Array.isArray(diagnostics)) {
+    return;
   }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      return skills as Skill[];
+  for (const item of diagnostics) {
+    if (!item || typeof item !== "object") {
+      continue;
     }
+    const message =
+      "message" in item && typeof item.message === "string" ? item.message : "Unable to load skill";
+    const filePath = "path" in item && typeof item.path === "string" ? item.path : undefined;
+    const level = "type" in item && item.type === "error" ? "error" : "warn";
+
+    const commonMeta = {
+      source: params.source,
+      filePath,
+      message,
+    };
+
+    if (level === "error") {
+      skillsLogger.error("Failed to load skill.", commonMeta);
+    } else {
+      skillsLogger.warn("Failed to load skill.", commonMeta);
+    }
+  }
+}
+
+function unwrapLoadedSkills(loaded: ParsedSkillLoadResult): Skill[] {
+  const skills = loaded?.skills;
+  if (Array.isArray(skills)) {
+    return skills;
   }
   return [];
 }
@@ -253,6 +278,7 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      logSkillLoadDiagnostics({ result: loaded, source: params.source });
       return unwrapLoadedSkills(loaded);
     }
 
@@ -304,6 +330,7 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      logSkillLoadDiagnostics({ result: loaded, source: params.source });
       loadedSkills.push(...unwrapLoadedSkills(loaded));
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
@@ -392,8 +419,17 @@ function loadSkillEntries(
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
       frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed skills
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+      skillsLogger.warn(
+        `Failed to parse skill frontmatter in ${skill.filePath}; using empty frontmatter.`,
+        {
+          filePath: skill.filePath,
+          skillName: skill.name,
+          error: reason,
+        },
+      );
     }
     return {
       skill,
