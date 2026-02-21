@@ -81,4 +81,27 @@ describe("buildSystemPromptReport", () => {
     expect(report.bootstrapMaxChars).toBe(11_111);
     expect(report.bootstrapTotalMaxChars).toBe(22_222);
   });
+
+  it("ignores malformed injected files without path instead of throwing", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const malformedInjected = {
+      path: undefined,
+      content: "ignored",
+    } as unknown as { path: string; content: string };
+
+    const run = () =>
+      buildSystemPromptReport({
+        source: "run",
+        generatedAt: 0,
+        bootstrapMaxChars: 20_000,
+        systemPrompt: "system",
+        bootstrapFiles: [file],
+        injectedFiles: [malformedInjected, { path: "AGENTS.md", content: "trimmed" }],
+        skillsPrompt: "",
+        tools: [],
+      });
+
+    expect(run).not.toThrow();
+    expect(run().injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
 });

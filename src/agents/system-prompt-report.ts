@@ -40,10 +40,16 @@ function buildInjectedWorkspaceFiles(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
+  const injectedByPath = new Map<string, string>();
   const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
-    const normalizedPath = file.path.replace(/\\/g, "/");
+    const rawPath = typeof file.path === "string" ? file.path.trim() : "";
+    if (!rawPath) {
+      continue;
+    }
+    injectedByPath.set(rawPath, file.content);
+    const normalizedPath = rawPath.replace(/\\/g, "/");
+    injectedByPath.set(normalizedPath, file.content);
     const baseName = path.posix.basename(normalizedPath);
     if (!injectedByBaseName.has(baseName)) {
       injectedByBaseName.set(baseName, file.content);
@@ -51,15 +57,19 @@ function buildInjectedWorkspaceFiles(params: {
   }
   return params.bootstrapFiles.map((file) => {
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
+    const filePath = typeof file.path === "string" ? file.path : "";
+    const normalizedFilePath = filePath.replace(/\\/g, "/");
+    const fileName = typeof file.name === "string" ? file.name : "";
     const injected =
-      injectedByPath.get(file.path) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
+      injectedByPath.get(filePath) ??
+      injectedByPath.get(normalizedFilePath) ??
+      injectedByPath.get(fileName) ??
+      injectedByBaseName.get(fileName);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
-      name: file.name,
-      path: file.path,
+      name: fileName,
+      path: filePath,
       missing: file.missing,
       rawChars,
       injectedChars,
