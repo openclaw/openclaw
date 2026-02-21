@@ -7,6 +7,7 @@ import {
   IdentitySchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -604,6 +605,7 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
+    tts: TtsConfigSchema.optional(),
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

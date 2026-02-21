@@ -79,7 +79,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
     try {
       const cfg = loadConfig();
       const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const agentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+      const result = await textToSpeech({ text, cfg, channel, agentId });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,

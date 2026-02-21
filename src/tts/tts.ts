@@ -252,8 +252,56 @@ function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const raw: TtsConfig = cfg.messages?.tts ?? {};
+/**
+ * Returns per-agent TTS overrides for the given agent id, or undefined if not found/not set.
+ */
+export function getAgentTtsConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): TtsConfig | undefined {
+  const entry = cfg.agents?.list?.find((a) => a.id === agentId);
+  return entry?.tts;
+}
+
+function mergeTtsConfig(base: TtsConfig, override: Partial<TtsConfig>): TtsConfig {
+  if (!override || Object.keys(override).length === 0) {
+    return base;
+  }
+  const merged: TtsConfig = {
+    ...base,
+    ...override,
+    edge:
+      override.edge != null
+        ? { ...base.edge, ...override.edge }
+        : base.edge,
+    elevenlabs:
+      override.elevenlabs != null
+        ? {
+            ...base.elevenlabs,
+            ...override.elevenlabs,
+            voiceSettings:
+              override.elevenlabs.voiceSettings != null
+                ? { ...base.elevenlabs?.voiceSettings, ...override.elevenlabs.voiceSettings }
+                : base.elevenlabs?.voiceSettings,
+          }
+        : base.elevenlabs,
+    openai:
+      override.openai != null ? { ...base.openai, ...override.openai } : base.openai,
+    modelOverrides:
+      override.modelOverrides != null
+        ? { ...base.modelOverrides, ...override.modelOverrides }
+        : base.modelOverrides,
+  };
+  return merged;
+}
+
+export function resolveTtsConfig(
+  cfg: OpenClawConfig,
+  agentTtsOverride?: Partial<TtsConfig>,
+): ResolvedTtsConfig {
+  const base: TtsConfig = cfg.messages?.tts ?? {};
+  const raw: TtsConfig =
+    agentTtsOverride != null ? mergeTtsConfig(base, agentTtsOverride) : base;
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
@@ -535,8 +583,13 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  /** When set, per-agent TTS overrides (e.g. Edge voice) are applied. */
+  agentId?: string;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
+  const agentTts = params.agentId
+    ? getAgentTtsConfig(params.cfg, params.agentId)
+    : undefined;
+  const config = resolveTtsConfig(params.cfg, agentTts);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
@@ -795,8 +848,13 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  /** When set, per-agent TTS overrides (e.g. Edge voice) are applied. */
+  agentId?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
+  const agentTts = params.agentId
+    ? getAgentTtsConfig(params.cfg, params.agentId)
+    : undefined;
+  const config = resolveTtsConfig(params.cfg, agentTts);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
@@ -898,6 +956,7 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    agentId: params.agentId,
   });
 
   if (result.success && result.audioPath) {
