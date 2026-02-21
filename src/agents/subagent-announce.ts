@@ -29,6 +29,14 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import {
+  buildAnnounceFailureNotification,
+  logFinalFailure,
+  persistFailedAnnounce,
+  resolveAnnounceTimeoutMs,
+  withAnnounceRetry,
+  type FailedAnnouncePayload,
+} from "./subagent-announce-retry.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
@@ -438,88 +446,121 @@ async function sendSubagentAnnounceDirectly(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
+  /** Session ID for retry logging (optional). */
+  sessionId?: string;
+  /** Child session key for retry config resolution (optional). */
+  childSessionKey?: string;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const cfg = loadConfig();
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
   );
-  try {
-    const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
-    const completionChannelRaw =
-      typeof completionDirectOrigin?.channel === "string"
-        ? completionDirectOrigin.channel.trim()
-        : "";
-    const completionChannel =
-      completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
-        ? completionChannelRaw
-        : "";
-    const completionTo =
-      typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
-    const hasCompletionDirectTarget =
-      !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
 
-    if (
-      params.expectsCompletionMessage &&
-      hasCompletionDirectTarget &&
-      params.completionMessage?.trim()
-    ) {
-      const completionThreadId =
-        completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
-          ? String(completionDirectOrigin.threadId)
-          : undefined;
-      await callGateway({
-        method: "send",
-        params: {
-          channel: completionChannel,
-          to: completionTo,
-          accountId: completionDirectOrigin?.accountId,
-          threadId: completionThreadId,
-          sessionKey: canonicalRequesterSessionKey,
-          message: params.completionMessage,
-          idempotencyKey: params.directIdempotencyKey,
-        },
-        timeoutMs: 15_000,
-      });
+  // Resolve agent ID for timeout configuration
+  const agentId = params.childSessionKey
+    ? resolveAgentIdFromSessionKey(params.childSessionKey)
+    : undefined;
+  const sessionId = params.sessionId || params.childSessionKey || "unknown";
 
+  const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
+  const completionChannelRaw =
+    typeof completionDirectOrigin?.channel === "string"
+      ? completionDirectOrigin.channel.trim()
+      : "";
+  const completionChannel =
+    completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
+      ? completionChannelRaw
+      : "";
+  const completionTo =
+    typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
+  const hasCompletionDirectTarget =
+    !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
+
+  // Completion message direct delivery path (with retry)
+  if (
+    params.expectsCompletionMessage &&
+    hasCompletionDirectTarget &&
+    params.completionMessage?.trim()
+  ) {
+    const completionThreadId =
+      completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
+        ? String(completionDirectOrigin.threadId)
+        : undefined;
+
+    const result = await withAnnounceRetry(
+      async (_attempt, timeoutMs) => {
+        await callGateway({
+          method: "send",
+          params: {
+            channel: completionChannel,
+            to: completionTo,
+            accountId: completionDirectOrigin?.accountId,
+            threadId: completionThreadId,
+            sessionKey: canonicalRequesterSessionKey,
+            message: params.completionMessage,
+            idempotencyKey: params.directIdempotencyKey,
+          },
+          timeoutMs,
+        });
+      },
+      { sessionId, agentId },
+    );
+
+    if (result.success) {
       return {
         delivered: true,
         path: "direct",
       };
     }
 
-    const directOrigin = normalizeDeliveryContext(params.directOrigin);
-    const threadId =
-      directOrigin?.threadId != null && directOrigin.threadId !== ""
-        ? String(directOrigin.threadId)
-        : undefined;
-    await callGateway({
-      method: "agent",
-      params: {
-        sessionKey: canonicalRequesterSessionKey,
-        message: params.triggerMessage,
-        deliver: !params.requesterIsSubagent,
-        channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
-        accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
-        to: params.requesterIsSubagent ? undefined : directOrigin?.to,
-        threadId: params.requesterIsSubagent ? undefined : threadId,
-        idempotencyKey: params.directIdempotencyKey,
-      },
-      expectFinal: true,
-      timeoutMs: 15_000,
-    });
+    return {
+      delivered: false,
+      path: "direct",
+      error: result.lastError,
+    };
+  }
 
+  // Agent injection path (with retry)
+  const directOrigin = normalizeDeliveryContext(params.directOrigin);
+  const threadId =
+    directOrigin?.threadId != null && directOrigin.threadId !== ""
+      ? String(directOrigin.threadId)
+      : undefined;
+
+  const result = await withAnnounceRetry(
+    async (_attempt, timeoutMs) => {
+      await callGateway({
+        method: "agent",
+        params: {
+          sessionKey: canonicalRequesterSessionKey,
+          message: params.triggerMessage,
+          deliver: !params.requesterIsSubagent,
+          channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
+          accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
+          to: params.requesterIsSubagent ? undefined : directOrigin?.to,
+          threadId: params.requesterIsSubagent ? undefined : threadId,
+          idempotencyKey: params.directIdempotencyKey,
+        },
+        expectFinal: true,
+        timeoutMs,
+      });
+    },
+    { sessionId, agentId },
+  );
+
+  if (result.success) {
     return {
       delivered: true,
       path: "direct",
     };
-  } catch (err) {
-    return {
-      delivered: false,
-      path: "direct",
-      error: summarizeDeliveryError(err),
-    };
   }
+
+  return {
+    delivered: false,
+    path: "direct",
+    error: result.lastError,
+  };
 }
 
 async function deliverSubagentAnnouncement(params: {
@@ -535,6 +576,10 @@ async function deliverSubagentAnnouncement(params: {
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
   directIdempotencyKey: string;
+  /** Session ID for retry logging. */
+  sessionId?: string;
+  /** Child session key for config resolution. */
+  childSessionKey?: string;
 }): Promise<SubagentAnnounceDeliveryResult> {
   // Non-completion mode mirrors historical behavior: try queued/steered delivery first,
   // then (only if not queued) attempt direct delivery.
@@ -563,6 +608,8 @@ async function deliverSubagentAnnouncement(params: {
     directOrigin: params.directOrigin,
     requesterIsSubagent: params.requesterIsSubagent,
     expectsCompletionMessage: params.expectsCompletionMessage,
+    sessionId: params.sessionId,
+    childSessionKey: params.childSessionKey,
   });
   if (direct.delivered || !params.expectsCompletionMessage) {
     return direct;
@@ -952,12 +999,43 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
       directIdempotencyKey,
+      sessionId: announceSessionId,
+      childSessionKey: params.childSessionKey,
     });
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.error?.(
-        `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
-      );
+      // Log the failure with recovery instructions
+      logFinalFailure({
+        sessionId: announceSessionId,
+        childSessionKey: params.childSessionKey,
+        attempts: 3, // max retries from retry config
+        lastError: delivery.error,
+      });
+
+      // Persist the failed announcement for recovery
+      const failedPayload: FailedAnnouncePayload = {
+        sessionId: announceSessionId,
+        childSessionKey: params.childSessionKey,
+        childRunId: params.childRunId,
+        requesterSessionKey: targetRequesterSessionKey,
+        task: taskLabel,
+        result: findings,
+        timestamp: Date.now(),
+        attempts: 3,
+        lastAttemptAt: Date.now(),
+        lastError: delivery.error,
+        triggerMessage,
+        completionMessage,
+      };
+      persistFailedAnnounce(failedPayload);
+
+      // Inject system message about the failure so user is aware
+      const failureNotice = buildAnnounceFailureNotification(announceSessionId);
+      try {
+        await queueEmbeddedPiMessage(targetRequesterSessionKey, failureNotice);
+      } catch {
+        // Best-effort notification; log already captures the failure
+      }
     }
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);

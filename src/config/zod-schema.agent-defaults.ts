@@ -164,6 +164,15 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().positive().optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        announceTimeoutMs: z
+          .number()
+          .int()
+          .min(10_000)
+          .max(600_000)
+          .optional()
+          .describe(
+            "Base timeout (ms) for subagent completion announcement delivery. Used with exponential backoff on retries. Default: 120000.",
+          ),
       })
       .strict()
       .optional(),

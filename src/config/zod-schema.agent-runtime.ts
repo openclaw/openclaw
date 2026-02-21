@@ -621,6 +621,15 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        announceTimeoutMs: z
+          .number()
+          .int()
+          .min(10_000)
+          .max(600_000)
+          .optional()
+          .describe(
+            "Per-agent override for announcement delivery timeout (ms). Default: uses agents.defaults.subagents.announceTimeoutMs or 120000.",
+          ),
       })
       .strict()
       .optional(),
