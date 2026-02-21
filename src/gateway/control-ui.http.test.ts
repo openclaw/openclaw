@@ -30,6 +30,33 @@ describe("handleControlUiHttpRequest", () => {
     };
   }
 
+  function expectNotFoundResponse(params: {
+    handled: boolean;
+    res: ReturnType<typeof makeMockHttpResponse>["res"];
+    end: ReturnType<typeof makeMockHttpResponse>["end"];
+  }) {
+    expect(params.handled).toBe(true);
+    expect(params.res.statusCode).toBe(404);
+    expect(params.end).toHaveBeenCalledWith("Not Found");
+  }
+
+  async function withBasePathRootFixture<T>(params: {
+    siblingDir: string;
+    fn: (paths: { root: string; sibling: string }) => Promise<T>;
+  }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-root-"));
+    try {
+      const root = path.join(tmp, "ui");
+      const sibling = path.join(tmp, params.siblingDir);
+      await fs.mkdir(root, { recursive: true });
+      await fs.mkdir(sibling, { recursive: true });
+      await fs.writeFile(path.join(root, "index.html"), "<html>ok</html>\n");
+      return await params.fn({ root, sibling });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }
+
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -145,10 +172,7 @@ describe("handleControlUiHttpRequest", () => {
               root: { kind: "resolved", path: tmp },
             },
           );
-
-          expect(handled).toBe(true);
-          expect(res.statusCode).toBe(404);
-          expect(end).toHaveBeenCalledWith("Not Found");
+          expectNotFoundResponse({ handled, res, end });
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
@@ -221,10 +245,7 @@ describe("handleControlUiHttpRequest", () => {
               root: { kind: "resolved", path: tmp },
             },
           );
-
-          expect(handled).toBe(true);
-          expect(res.statusCode).toBe(404);
-          expect(end).toHaveBeenCalledWith("Not Found");
+          expectNotFoundResponse({ handled, res, end });
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
@@ -233,73 +254,58 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("rejects absolute-path escape attempts under basePath routes", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-root-"));
-    try {
-      const root = path.join(tmp, "ui");
-      const sibling = path.join(tmp, "ui-secrets");
-      await fs.mkdir(root, { recursive: true });
-      await fs.mkdir(sibling, { recursive: true });
-      await fs.writeFile(path.join(root, "index.html"), "<html>ok</html>\n");
-      const secretPath = path.join(sibling, "secret.txt");
-      await fs.writeFile(secretPath, "sensitive-data");
+    await withBasePathRootFixture({
+      siblingDir: "ui-secrets",
+      fn: async ({ root, sibling }) => {
+        const secretPath = path.join(sibling, "secret.txt");
+        await fs.writeFile(secretPath, "sensitive-data");
 
-      const secretPathUrl = secretPath.split(path.sep).join("/");
-      const absolutePathUrl = secretPathUrl.startsWith("/") ? secretPathUrl : `/${secretPathUrl}`;
-      const { res, end } = makeMockHttpResponse();
+        const secretPathUrl = secretPath.split(path.sep).join("/");
+        const absolutePathUrl = secretPathUrl.startsWith("/") ? secretPathUrl : `/${secretPathUrl}`;
+        const { res, end } = makeMockHttpResponse();
 
-      const handled = handleControlUiHttpRequest(
-        { url: `/openclaw/${absolutePathUrl}`, method: "GET" } as IncomingMessage,
-        res,
-        {
-          basePath: "/openclaw",
-          root: { kind: "resolved", path: root },
-        },
-      );
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(404);
-      expect(end).toHaveBeenCalledWith("Not Found");
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+        const handled = handleControlUiHttpRequest(
+          { url: `/openclaw/${absolutePathUrl}`, method: "GET" } as IncomingMessage,
+          res,
+          {
+            basePath: "/openclaw",
+            root: { kind: "resolved", path: root },
+          },
+        );
+        expectNotFoundResponse({ handled, res, end });
+      },
+    });
   });
 
   it("rejects symlink escape attempts under basePath routes", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-root-"));
-    try {
-      const root = path.join(tmp, "ui");
-      const sibling = path.join(tmp, "outside");
-      await fs.mkdir(path.join(root, "assets"), { recursive: true });
-      await fs.mkdir(sibling, { recursive: true });
-      await fs.writeFile(path.join(root, "index.html"), "<html>ok</html>\n");
-      const secretPath = path.join(sibling, "secret.txt");
-      await fs.writeFile(secretPath, "sensitive-data");
+    await withBasePathRootFixture({
+      siblingDir: "outside",
+      fn: async ({ root, sibling }) => {
+        await fs.mkdir(path.join(root, "assets"), { recursive: true });
+        const secretPath = path.join(sibling, "secret.txt");
+        await fs.writeFile(secretPath, "sensitive-data");
 
-      const linkPath = path.join(root, "assets", "leak.txt");
-      try {
-        await fs.symlink(secretPath, linkPath, "file");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EPERM") {
-          return;
+        const linkPath = path.join(root, "assets", "leak.txt");
+        try {
+          await fs.symlink(secretPath, linkPath, "file");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EPERM") {
+            return;
+          }
+          throw error;
         }
-        throw error;
-      }
 
-      const { res, end } = makeMockHttpResponse();
-      const handled = handleControlUiHttpRequest(
-        { url: "/openclaw/assets/leak.txt", method: "GET" } as IncomingMessage,
-        res,
-        {
-          basePath: "/openclaw",
-          root: { kind: "resolved", path: root },
-        },
-      );
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(404);
-      expect(end).toHaveBeenCalledWith("Not Found");
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+        const { res, end } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/openclaw/assets/leak.txt", method: "GET" } as IncomingMessage,
+          res,
+          {
+            basePath: "/openclaw",
+            root: { kind: "resolved", path: root },
+          },
+        );
+        expectNotFoundResponse({ handled, res, end });
+      },
+    });
   });
 });
