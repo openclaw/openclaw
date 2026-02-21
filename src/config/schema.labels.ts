@@ -257,6 +257,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.imessage": "iMessage",
   "channels.bluebubbles": "BlueBubbles",
   "channels.msteams": "MS Teams",
+  "channels.modelByChannel": "Channel Model Overrides",
   ...IRC_FIELD_LABELS,
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",

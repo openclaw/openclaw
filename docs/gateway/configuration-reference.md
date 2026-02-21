@@ -38,6 +38,29 @@ Pairing codes expire after 1 hour. Pending DM pairing requests are capped at **3
 Slack/Discord have a special fallback: if their provider section is missing entirely, runtime group policy can resolve to `open` (with a startup warning).
 </Note>
 
+### Channel model overrides
+
+Use `channels.modelByChannel` to pin specific channel IDs to a model. Values accept `provider/model` or configured model aliases. The channel mapping applies when a session does not already have a model override (for example, set via `/model`).
+
+```json5
+{
+  channels: {
+    modelByChannel: {
+      discord: {
+        "123456789012345678": "anthropic/claude-opus-4-6",
+      },
+      slack: {
+        C1234567890: "openai/gpt-4.1",
+      },
+      telegram: {
+        "-1001234567890": "openai/gpt-4.1-mini",
+        "-1001234567890:topic:99": "anthropic/claude-sonnet-4-6",
+      },
+    },
+  },
+}
+```
+
 ### WhatsApp
 
 WhatsApp runs through the gateway's web channel (Baileys Web). It starts automatically when a linked session exists.
