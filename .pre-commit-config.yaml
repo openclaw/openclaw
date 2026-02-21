@@ -55,6 +55,13 @@ repos:
         # Exclude vendor and scripts with embedded code or known issues
         exclude: "^(vendor/|scripts/e2e/)"
 
+  # Markdown linting
+  - repo: https://github.com/rvben/rumdl-pre-commit
+    rev: v0.1.10
+    hooks:
+      - id: rumdl
+        exclude: "^(dist/|vendor/)"
+
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.10
