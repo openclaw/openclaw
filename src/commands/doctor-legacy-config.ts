@@ -97,54 +97,15 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
     return { entry: updated, changed };
   };
 
-  const normalizeTelegramStreamingAliases = (params: {
+  const normalizePreviewStreamingAliases = (params: {
     entry: Record<string, unknown>;
     pathPrefix: string;
+    resolveStreaming: (entry: Record<string, unknown>) => string;
   }): { entry: Record<string, unknown>; changed: boolean } => {
     let updated = params.entry;
     const hadLegacyStreamMode = updated.streamMode !== undefined;
     const beforeStreaming = updated.streaming;
-    const resolved = resolveTelegramPreviewStreamMode(updated);
-    const shouldNormalize =
-      hadLegacyStreamMode ||
-      typeof beforeStreaming === "boolean" ||
-      (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
-    if (!shouldNormalize) {
-      return { entry: updated, changed: false };
-    }
-
-    let changed = false;
-    if (beforeStreaming !== resolved) {
-      updated = { ...updated, streaming: resolved };
-      changed = true;
-    }
-    if (hadLegacyStreamMode) {
-      const { streamMode: _ignored, ...rest } = updated;
-      updated = rest;
-      changed = true;
-      changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-      );
-    }
-    if (typeof beforeStreaming === "boolean") {
-      changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-    } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
-      changes.push(
-        `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
-      );
-    }
-
-    return { entry: updated, changed };
-  };
-
-  const normalizeDiscordStreamingAliases = (params: {
-    entry: Record<string, unknown>;
-    pathPrefix: string;
-  }): { entry: Record<string, unknown>; changed: boolean } => {
-    let updated = params.entry;
-    const hadLegacyStreamMode = updated.streamMode !== undefined;
-    const beforeStreaming = updated.streaming;
-    const resolved = resolveDiscordPreviewStreamMode(updated);
+    const resolved = params.resolveStreaming(updated);
     const shouldNormalize =
       hadLegacyStreamMode ||
       typeof beforeStreaming === "boolean" ||
@@ -229,6 +190,31 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
     return { entry: updated, changed };
   };
 
+  const normalizeStreamingAliasesForProvider = (params: {
+    provider: "telegram" | "slack" | "discord";
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+  }): { entry: Record<string, unknown>; changed: boolean } => {
+    if (params.provider === "telegram") {
+      return normalizePreviewStreamingAliases({
+        entry: params.entry,
+        pathPrefix: params.pathPrefix,
+        resolveStreaming: resolveTelegramPreviewStreamMode,
+      });
+    }
+    if (params.provider === "discord") {
+      return normalizePreviewStreamingAliases({
+        entry: params.entry,
+        pathPrefix: params.pathPrefix,
+        resolveStreaming: resolveDiscordPreviewStreamMode,
+      });
+    }
+    return normalizeSlackStreamingAliases({
+      entry: params.entry,
+      pathPrefix: params.pathPrefix,
+    });
+  };
+
   const normalizeProvider = (provider: "telegram" | "slack" | "discord") => {
     const channels = next.channels as Record<string, unknown> | undefined;
     const rawEntry = channels?.[provider];
@@ -247,28 +233,13 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
       updated = base.entry;
       changed = base.changed;
     }
-    if (provider === "telegram") {
-      const streaming = normalizeTelegramStreamingAliases({
-        entry: updated,
-        pathPrefix: `channels.${provider}`,
-      });
-      updated = streaming.entry;
-      changed = changed || streaming.changed;
-    } else if (provider === "discord") {
-      const streaming = normalizeDiscordStreamingAliases({
-        entry: updated,
-        pathPrefix: `channels.${provider}`,
-      });
-      updated = streaming.entry;
-      changed = changed || streaming.changed;
-    } else if (provider === "slack") {
-      const streaming = normalizeSlackStreamingAliases({
-        entry: updated,
-        pathPrefix: `channels.${provider}`,
-      });
-      updated = streaming.entry;
-      changed = changed || streaming.changed;
-    }
+    const providerStreaming = normalizeStreamingAliasesForProvider({
+      provider,
+      entry: updated,
+      pathPrefix: `channels.${provider}`,
+    });
+    updated = providerStreaming.entry;
+    changed = changed || providerStreaming.changed;
 
     const rawAccounts = updated.accounts;
     if (isRecord(rawAccounts)) {
@@ -289,28 +260,13 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
           accountEntry = res.entry;
           accountChanged = res.changed;
         }
-        if (provider === "telegram") {
-          const streaming = normalizeTelegramStreamingAliases({
-            entry: accountEntry,
-            pathPrefix: `channels.${provider}.accounts.${accountId}`,
-          });
-          accountEntry = streaming.entry;
-          accountChanged = accountChanged || streaming.changed;
-        } else if (provider === "discord") {
-          const streaming = normalizeDiscordStreamingAliases({
-            entry: accountEntry,
-            pathPrefix: `channels.${provider}.accounts.${accountId}`,
-          });
-          accountEntry = streaming.entry;
-          accountChanged = accountChanged || streaming.changed;
-        } else if (provider === "slack") {
-          const streaming = normalizeSlackStreamingAliases({
-            entry: accountEntry,
-            pathPrefix: `channels.${provider}.accounts.${accountId}`,
-          });
-          accountEntry = streaming.entry;
-          accountChanged = accountChanged || streaming.changed;
-        }
+        const accountStreaming = normalizeStreamingAliasesForProvider({
+          provider,
+          entry: accountEntry,
+          pathPrefix: `channels.${provider}.accounts.${accountId}`,
+        });
+        accountEntry = accountStreaming.entry;
+        accountChanged = accountChanged || accountStreaming.changed;
         if (accountChanged) {
           accounts[accountId] = accountEntry;
           accountsChanged = true;
