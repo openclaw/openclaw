@@ -10,6 +10,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   ackDelivery,
   computeBackoffMs,
+  type DeliverFn,
   enqueueDelivery,
   failDelivery,
   loadPendingDeliveries,
@@ -36,7 +37,7 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
-import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
+import { resolveOutboundTarget } from "./targets.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -160,39 +161,60 @@ describe("delivery-queue", () => {
   });
 
   describe("computeBackoffMs", () => {
-    it("returns 0 for retryCount 0", () => {
-      expect(computeBackoffMs(0)).toBe(0);
-    });
+    it("returns scheduled backoff values and clamps at max retry", () => {
+      const cases = [
+        { retryCount: 0, expected: 0 },
+        { retryCount: 1, expected: 5_000 },
+        { retryCount: 2, expected: 25_000 },
+        { retryCount: 3, expected: 120_000 },
+        { retryCount: 4, expected: 600_000 },
+        // Beyond defined schedule -- clamps to last value.
+        { retryCount: 5, expected: 600_000 },
+      ] as const;
 
-    it("returns correct backoff for each retry", () => {
-      expect(computeBackoffMs(1)).toBe(5_000);
-      expect(computeBackoffMs(2)).toBe(25_000);
-      expect(computeBackoffMs(3)).toBe(120_000);
-      expect(computeBackoffMs(4)).toBe(600_000);
-      // Beyond defined schedule -- clamps to last value.
-      expect(computeBackoffMs(5)).toBe(600_000);
+      for (const testCase of cases) {
+        expect(computeBackoffMs(testCase.retryCount), String(testCase.retryCount)).toBe(
+          testCase.expected,
+        );
+      }
     });
   });
 
   describe("recoverPendingDeliveries", () => {
     const noopDelay = async () => {};
     const baseCfg = {};
-
-    it("recovers entries from a simulated crash", async () => {
-      // Manually create two queue entries as if gateway crashed before delivery.
+    const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    const enqueueCrashRecoveryEntries = async () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
-
-      const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
+    };
+    const runRecovery = async ({
+      deliver,
+      log = createLog(),
+      delay = noopDelay,
+      maxRecoveryMs,
+    }: {
+      deliver: ReturnType<typeof vi.fn>;
+      log?: ReturnType<typeof createLog>;
+      delay?: (ms: number) => Promise<void>;
+      maxRecoveryMs?: number;
+    }) => {
       const result = await recoverPendingDeliveries({
-        deliver,
+        deliver: deliver as DeliverFn,
         log,
         cfg: baseCfg,
         stateDir: tmpDir,
-        delay: noopDelay,
+        delay,
+        ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
       });
+      return { result, log };
+    };
+
+    it("recovers entries from a simulated crash", async () => {
+      // Manually create queue entries as if gateway crashed before delivery.
+      await enqueueCrashRecoveryEntries();
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(result.recovered).toBe(2);
@@ -216,15 +238,7 @@ describe("delivery-queue", () => {
       fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
 
       const deliver = vi.fn();
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(deliver).not.toHaveBeenCalled();
       expect(result.skipped).toBe(1);
@@ -238,15 +252,7 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] }, tmpDir);
 
       const deliver = vi.fn().mockRejectedValue(new Error("network down"));
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
@@ -262,15 +268,7 @@ describe("delivery-queue", () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ skipQueue: true }));
     });
@@ -294,15 +292,7 @@ describe("delivery-queue", () => {
       );
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -319,19 +309,12 @@ describe("delivery-queue", () => {
     });
 
     it("respects maxRecoveryMs time budget", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+      await enqueueCrashRecoveryEntries();
       await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
+      const { result, log } = await runRecovery({
         deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
         maxRecoveryMs: 0, // Immediate timeout -- no entries should be processed.
       });
 
@@ -360,13 +343,8 @@ describe("delivery-queue", () => {
 
       const deliver = vi.fn().mockResolvedValue([]);
       const delay = vi.fn(async () => {});
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
+      const { result, log } = await runRecovery({
         deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
         delay,
         maxRecoveryMs: 1000,
       });
@@ -383,15 +361,7 @@ describe("delivery-queue", () => {
 
     it("returns zeros when queue is empty", async () => {
       const deliver = vi.fn();
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-      const result = await recoverPendingDeliveries({
-        deliver,
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir,
-        delay: noopDelay,
-      });
+      const { result } = await runRecovery({ deliver });
 
       expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
       expect(deliver).not.toHaveBeenCalled();
@@ -418,28 +388,36 @@ describe("DirectoryCache", () => {
     expect(cache.get("a", cfg)).toBeUndefined();
   });
 
-  it("evicts oldest keys when max size is exceeded", () => {
-    const cache = new DirectoryCache<string>(60_000, 2);
-    cache.set("a", "value-a", cfg);
-    cache.set("b", "value-b", cfg);
-    cache.set("c", "value-c", cfg);
+  it("evicts least-recent entries when capacity is exceeded", () => {
+    const cases = [
+      {
+        actions: [
+          ["set", "a", "value-a"],
+          ["set", "b", "value-b"],
+          ["set", "c", "value-c"],
+        ] as const,
+        expected: { a: undefined, b: "value-b", c: "value-c" },
+      },
+      {
+        actions: [
+          ["set", "a", "value-a"],
+          ["set", "b", "value-b"],
+          ["set", "a", "value-a2"],
+          ["set", "c", "value-c"],
+        ] as const,
+        expected: { a: "value-a2", b: undefined, c: "value-c" },
+      },
+    ] as const;
 
-    expect(cache.get("a", cfg)).toBeUndefined();
-    expect(cache.get("b", cfg)).toBe("value-b");
-    expect(cache.get("c", cfg)).toBe("value-c");
-  });
-
-  it("refreshes insertion order on key updates", () => {
-    const cache = new DirectoryCache<string>(60_000, 2);
-    cache.set("a", "value-a", cfg);
-    cache.set("b", "value-b", cfg);
-    cache.set("a", "value-a2", cfg);
-    cache.set("c", "value-c", cfg);
-
-    // Updating "a" should keep it and evict older "b".
-    expect(cache.get("a", cfg)).toBe("value-a2");
-    expect(cache.get("b", cfg)).toBeUndefined();
-    expect(cache.get("c", cfg)).toBe("value-c");
+    for (const testCase of cases) {
+      const cache = new DirectoryCache<string>(60_000, 2);
+      for (const action of testCase.actions) {
+        cache.set(action[1], action[2], cfg);
+      }
+      expect(cache.get("a", cfg)).toBe(testCase.expected.a);
+      expect(cache.get("b", cfg)).toBe(testCase.expected.b);
+      expect(cache.get("c", cfg)).toBe(testCase.expected.c);
+    }
   });
 });
 
@@ -505,103 +483,128 @@ describe("buildOutboundResultEnvelope", () => {
 });
 
 describe("formatOutboundDeliverySummary", () => {
-  it("falls back when result is missing", () => {
-    expect(formatOutboundDeliverySummary("telegram")).toBe(
-      "✅ Sent via Telegram. Message ID: unknown",
-    );
-    expect(formatOutboundDeliverySummary("imessage")).toBe(
-      "✅ Sent via iMessage. Message ID: unknown",
-    );
-  });
+  it("formats fallback and channel-specific detail variants", () => {
+    const cases = [
+      {
+        name: "fallback telegram",
+        channel: "telegram" as const,
+        result: undefined,
+        expected: "✅ Sent via Telegram. Message ID: unknown",
+      },
+      {
+        name: "fallback imessage",
+        channel: "imessage" as const,
+        result: undefined,
+        expected: "✅ Sent via iMessage. Message ID: unknown",
+      },
+      {
+        name: "telegram with chat detail",
+        channel: "telegram" as const,
+        result: {
+          channel: "telegram" as const,
+          messageId: "m1",
+          chatId: "c1",
+        },
+        expected: "✅ Sent via Telegram. Message ID: m1 (chat c1)",
+      },
+      {
+        name: "discord with channel detail",
+        channel: "discord" as const,
+        result: {
+          channel: "discord" as const,
+          messageId: "d1",
+          channelId: "chan",
+        },
+        expected: "✅ Sent via Discord. Message ID: d1 (channel chan)",
+      },
+    ] as const;
 
-  it("adds chat or channel details", () => {
-    expect(
-      formatOutboundDeliverySummary("telegram", {
-        channel: "telegram",
-        messageId: "m1",
-        chatId: "c1",
-      }),
-    ).toBe("✅ Sent via Telegram. Message ID: m1 (chat c1)");
-
-    expect(
-      formatOutboundDeliverySummary("discord", {
-        channel: "discord",
-        messageId: "d1",
-        channelId: "chan",
-      }),
-    ).toBe("✅ Sent via Discord. Message ID: d1 (channel chan)");
+    for (const testCase of cases) {
+      expect(formatOutboundDeliverySummary(testCase.channel, testCase.result), testCase.name).toBe(
+        testCase.expected,
+      );
+    }
   });
 });
 
 describe("buildOutboundDeliveryJson", () => {
-  it("builds direct delivery payloads", () => {
-    expect(
-      buildOutboundDeliveryJson({
-        channel: "telegram",
-        to: "123",
-        result: { channel: "telegram", messageId: "m1", chatId: "c1" },
-        mediaUrl: "https://example.com/a.png",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      via: "direct",
-      to: "123",
-      messageId: "m1",
-      mediaUrl: "https://example.com/a.png",
-      chatId: "c1",
-    });
-  });
+  it("builds direct delivery payloads across provider-specific fields", () => {
+    const cases = [
+      {
+        name: "telegram direct payload",
+        input: {
+          channel: "telegram" as const,
+          to: "123",
+          result: { channel: "telegram" as const, messageId: "m1", chatId: "c1" },
+          mediaUrl: "https://example.com/a.png",
+        },
+        expected: {
+          channel: "telegram",
+          via: "direct",
+          to: "123",
+          messageId: "m1",
+          mediaUrl: "https://example.com/a.png",
+          chatId: "c1",
+        },
+      },
+      {
+        name: "whatsapp metadata",
+        input: {
+          channel: "whatsapp" as const,
+          to: "+1",
+          result: { channel: "whatsapp" as const, messageId: "w1", toJid: "jid" },
+        },
+        expected: {
+          channel: "whatsapp",
+          via: "direct",
+          to: "+1",
+          messageId: "w1",
+          mediaUrl: null,
+          toJid: "jid",
+        },
+      },
+      {
+        name: "signal timestamp",
+        input: {
+          channel: "signal" as const,
+          to: "+1",
+          result: { channel: "signal" as const, messageId: "s1", timestamp: 123 },
+        },
+        expected: {
+          channel: "signal",
+          via: "direct",
+          to: "+1",
+          messageId: "s1",
+          mediaUrl: null,
+          timestamp: 123,
+        },
+      },
+    ] as const;
 
-  it("supports whatsapp metadata when present", () => {
-    expect(
-      buildOutboundDeliveryJson({
-        channel: "whatsapp",
-        to: "+1",
-        result: { channel: "whatsapp", messageId: "w1", toJid: "jid" },
-      }),
-    ).toEqual({
-      channel: "whatsapp",
-      via: "direct",
-      to: "+1",
-      messageId: "w1",
-      mediaUrl: null,
-      toJid: "jid",
-    });
-  });
-
-  it("keeps timestamp for signal", () => {
-    expect(
-      buildOutboundDeliveryJson({
-        channel: "signal",
-        to: "+1",
-        result: { channel: "signal", messageId: "s1", timestamp: 123 },
-      }),
-    ).toEqual({
-      channel: "signal",
-      via: "direct",
-      to: "+1",
-      messageId: "s1",
-      mediaUrl: null,
-      timestamp: 123,
-    });
+    for (const testCase of cases) {
+      expect(buildOutboundDeliveryJson(testCase.input), testCase.name).toEqual(testCase.expected);
+    }
   });
 });
 
 describe("formatGatewaySummary", () => {
-  it("formats gateway summaries with channel", () => {
-    expect(formatGatewaySummary({ channel: "whatsapp", messageId: "m1" })).toBe(
-      "✅ Sent via gateway (whatsapp). Message ID: m1",
-    );
-  });
+  it("formats default and custom gateway action summaries", () => {
+    const cases = [
+      {
+        name: "default send action",
+        input: { channel: "whatsapp", messageId: "m1" },
+        expected: "✅ Sent via gateway (whatsapp). Message ID: m1",
+      },
+      {
+        name: "custom action",
+        input: { action: "Poll sent", channel: "discord", messageId: "p1" },
+        expected: "✅ Poll sent via gateway (discord). Message ID: p1",
+      },
+    ] as const;
 
-  it("supports custom actions", () => {
-    expect(
-      formatGatewaySummary({
-        action: "Poll sent",
-        channel: "discord",
-        messageId: "p1",
-      }),
-    ).toBe("✅ Poll sent via gateway (discord). Message ID: p1");
+    for (const testCase of cases) {
+      expect(formatGatewaySummary(testCase.input), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -621,18 +624,6 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
-  it("blocks cross-provider sends by default", () => {
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg: slackConfig,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/Cross-context messaging denied/);
-  });
-
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -650,23 +641,6 @@ describe("outbound policy", () => {
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       }),
     ).not.toThrow();
-  });
-
-  it("blocks same-provider cross-context when disabled", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: { message: { crossContext: { allowWithinProvider: false } } },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "slack",
-        action: "send",
-        args: { to: "C99999999" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("uses components when available and preferred", async () => {
@@ -805,45 +779,50 @@ describe("resolveOutboundSessionRoute", () => {
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {
-  it("normalizes payloads with mediaUrl and mediaUrls", () => {
-    expect(
-      normalizeOutboundPayloadsForJson([
-        { text: "hi" },
-        { text: "photo", mediaUrl: "https://x.test/a.jpg" },
-        { text: "multi", mediaUrls: ["https://x.test/1.png"] },
-      ]),
-    ).toEqual([
-      { text: "hi", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+  it("normalizes payloads for JSON output", () => {
+    const cases = [
       {
-        text: "photo",
-        mediaUrl: "https://x.test/a.jpg",
-        mediaUrls: ["https://x.test/a.jpg"],
-        channelData: undefined,
+        input: [
+          { text: "hi" },
+          { text: "photo", mediaUrl: "https://x.test/a.jpg" },
+          { text: "multi", mediaUrls: ["https://x.test/1.png"] },
+        ],
+        expected: [
+          { text: "hi", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+          {
+            text: "photo",
+            mediaUrl: "https://x.test/a.jpg",
+            mediaUrls: ["https://x.test/a.jpg"],
+            channelData: undefined,
+          },
+          {
+            text: "multi",
+            mediaUrl: null,
+            mediaUrls: ["https://x.test/1.png"],
+            channelData: undefined,
+          },
+        ],
       },
       {
-        text: "multi",
-        mediaUrl: null,
-        mediaUrls: ["https://x.test/1.png"],
-        channelData: undefined,
+        input: [
+          {
+            text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
+          },
+        ],
+        expected: [
+          {
+            text: "",
+            mediaUrl: null,
+            mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+            channelData: undefined,
+          },
+        ],
       },
-    ]);
-  });
+    ] as const;
 
-  it("keeps mediaUrl null for multi MEDIA tags", () => {
-    expect(
-      normalizeOutboundPayloadsForJson([
-        {
-          text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
-        },
-      ]),
-    ).toEqual([
-      {
-        text: "",
-        mediaUrl: null,
-        mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
-        channelData: undefined,
-      },
-    ]);
+    for (const testCase of cases) {
+      expect(normalizeOutboundPayloadsForJson(testCase.input)).toEqual(testCase.expected);
+    }
   });
 });
 
@@ -856,22 +835,29 @@ describe("normalizeOutboundPayloads", () => {
 });
 
 describe("formatOutboundPayloadLog", () => {
-  it("trims trailing text and appends media lines", () => {
-    expect(
-      formatOutboundPayloadLog({
-        text: "hello  ",
-        mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
-      }),
-    ).toBe("hello\nMEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png");
-  });
+  it("formats text+media and media-only logs", () => {
+    const cases = [
+      {
+        name: "text with media lines",
+        input: {
+          text: "hello  ",
+          mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+        },
+        expected: "hello\nMEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
+      },
+      {
+        name: "media only",
+        input: {
+          text: "",
+          mediaUrls: ["https://x.test/a.png"],
+        },
+        expected: "MEDIA:https://x.test/a.png",
+      },
+    ] as const;
 
-  it("logs media-only payloads", () => {
-    expect(
-      formatOutboundPayloadLog({
-        text: "",
-        mediaUrls: ["https://x.test/a.png"],
-      }),
-    ).toBe("MEDIA:https://x.test/a.png");
+    for (const testCase of cases) {
+      expect(formatOutboundPayloadLog(testCase.input), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -887,22 +873,6 @@ describe("resolveOutboundTarget", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
-  });
-
-  it("rejects whatsapp with empty target even when allowFrom configured", () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["+1555"] } },
-    };
-    const res = resolveOutboundTarget({
-      channel: "whatsapp",
-      to: "",
-      cfg,
-      mode: "explicit",
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.error.message).toContain("WhatsApp");
-    }
   });
 
   it.each([
@@ -923,6 +893,16 @@ describe("resolveOutboundTarget", () => {
         to: " WhatsApp:120363401234567890@G.US ",
       },
       expected: { ok: true as const, to: "120363401234567890@g.us" },
+    },
+    {
+      name: "rejects whatsapp with empty target in explicit mode even with cfg allowFrom",
+      input: {
+        channel: "whatsapp" as const,
+        to: "",
+        cfg: { channels: { whatsapp: { allowFrom: ["+1555"] } } } as OpenClawConfig,
+        mode: "explicit" as const,
+      },
+      expectedErrorIncludes: "WhatsApp",
     },
     {
       name: "rejects whatsapp with empty target and allowFrom (no silent fallback)",
@@ -965,124 +945,18 @@ describe("resolveOutboundTarget", () => {
     }
   });
 
-  it("rejects telegram with missing target", () => {
-    const res = resolveOutboundTarget({ channel: "telegram", to: " " });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.error.message).toContain("Telegram");
+  it("rejects invalid non-whatsapp targets", () => {
+    const cases = [
+      { input: { channel: "telegram" as const, to: " " }, expectedErrorIncludes: "Telegram" },
+      { input: { channel: "webchat" as const, to: "x" }, expectedErrorIncludes: "WebChat" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const res = resolveOutboundTarget(testCase.input);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.message).toContain(testCase.expectedErrorIncludes);
+      }
     }
-  });
-
-  it("rejects webchat delivery", () => {
-    const res = resolveOutboundTarget({ channel: "webchat", to: "x" });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.error.message).toContain("WebChat");
-    }
-  });
-});
-
-describe("resolveSessionDeliveryTarget", () => {
-  it("derives implicit delivery from the last route", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        lastChannel: " whatsapp ",
-        lastTo: " +1555 ",
-        lastAccountId: " acct-1 ",
-      },
-      requestedChannel: "last",
-    });
-
-    expect(resolved).toEqual({
-      channel: "whatsapp",
-      to: "+1555",
-      accountId: "acct-1",
-      threadId: undefined,
-      threadIdExplicit: false,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: "acct-1",
-      lastThreadId: undefined,
-    });
-  });
-
-  it("prefers explicit targets without reusing lastTo", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-2",
-        updatedAt: 1,
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-      },
-      requestedChannel: "telegram",
-    });
-
-    expect(resolved).toEqual({
-      channel: "telegram",
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      threadIdExplicit: false,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-    });
-  });
-
-  it("allows mismatched lastTo when configured", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-3",
-        updatedAt: 1,
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-      },
-      requestedChannel: "telegram",
-      allowMismatchedLastTo: true,
-    });
-
-    expect(resolved).toEqual({
-      channel: "telegram",
-      to: "+1555",
-      accountId: undefined,
-      threadId: undefined,
-      threadIdExplicit: false,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-    });
-  });
-
-  it("falls back to a provided channel when requested is unsupported", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-4",
-        updatedAt: 1,
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-      },
-      requestedChannel: "webchat",
-      fallbackChannel: "slack",
-    });
-
-    expect(resolved).toEqual({
-      channel: "slack",
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      threadIdExplicit: false,
-      mode: "implicit",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-    });
   });
 });

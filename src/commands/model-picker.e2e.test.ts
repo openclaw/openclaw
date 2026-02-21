@@ -61,28 +61,6 @@ function createSelectAllMultiselect() {
 }
 
 describe("promptDefaultModel", () => {
-  it("filters internal router models from the selection list", async () => {
-    loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
-
-    const select = vi.fn(async (params) => {
-      const first = params.options[0];
-      return first?.value ?? "";
-    });
-    const prompter = makePrompter({ select });
-    const config = { agents: { defaults: {} } } as OpenClawConfig;
-
-    await promptDefaultModel({
-      config,
-      prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
-    });
-
-    const options = select.mock.calls[0]?.[0]?.options ?? [];
-    expectRouterModelFiltering(options);
-  });
-
   it("supports configuring vLLM during onboarding", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -133,21 +111,6 @@ describe("promptDefaultModel", () => {
 });
 
 describe("promptModelAllowlist", () => {
-  it("filters internal router models from the selection list", async () => {
-    loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
-
-    const multiselect = createSelectAllMultiselect();
-    const prompter = makePrompter({ multiselect });
-    const config = { agents: { defaults: {} } } as OpenClawConfig;
-
-    await promptModelAllowlist({ config, prompter });
-
-    const call = multiselect.mock.calls[0]?.[0];
-    const options = call?.options ?? [];
-    expectRouterModelFiltering(options as Array<{ value: string }>);
-    expect(call?.searchable).toBe(true);
-  });
-
   it("filters to allowed keys when provided", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -181,6 +144,37 @@ describe("promptModelAllowlist", () => {
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
       "anthropic/claude-opus-4-5",
     ]);
+  });
+});
+
+describe("router model filtering", () => {
+  it("filters internal router models in both default and allowlist prompts", async () => {
+    loadModelCatalog.mockResolvedValue(OPENROUTER_CATALOG);
+
+    const select = vi.fn(async (params) => {
+      const first = params.options[0];
+      return first?.value ?? "";
+    });
+    const multiselect = createSelectAllMultiselect();
+    const defaultPrompter = makePrompter({ select });
+    const allowlistPrompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter: defaultPrompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+    await promptModelAllowlist({ config, prompter: allowlistPrompter });
+
+    const defaultOptions = select.mock.calls[0]?.[0]?.options ?? [];
+    expectRouterModelFiltering(defaultOptions);
+
+    const allowlistCall = multiselect.mock.calls[0]?.[0];
+    expectRouterModelFiltering(allowlistCall?.options as Array<{ value: string }>);
+    expect(allowlistCall?.searchable).toBe(true);
   });
 });
 

@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.2.16</string>
+	<string>2026.2.21</string>
 	<key>CFBundleVersion</key>
-	<string>20260216</string>
+	<string>20260220</string>
 	<key>WKCompanionAppBundleIdentifier</key>
-	<string>ai.openclaw.ios</string>
+	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
 	<key>WKWatchKitApp</key>
 	<true/>
 </dict>

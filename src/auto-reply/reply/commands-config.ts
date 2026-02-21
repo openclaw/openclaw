@@ -17,7 +17,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
-import { logVerbose } from "../../globals.js";
+import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
@@ -30,19 +30,16 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   if (!configCommand) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /config from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/config");
+  if (unauthorized) {
+    return unauthorized;
   }
-  if (params.cfg.commands?.config !== true) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /config is disabled. Set commands.config=true to enable.",
-      },
-    };
+  const disabled = requireCommandFlagEnabled(params.cfg, {
+    label: "/config",
+    configKey: "config",
+  });
+  if (disabled) {
+    return disabled;
   }
   if (configCommand.action === "error") {
     return {
@@ -184,19 +181,16 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
   if (!debugCommand) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /debug from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/debug");
+  if (unauthorized) {
+    return unauthorized;
   }
-  if (params.cfg.commands?.debug !== true) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /debug is disabled. Set commands.debug=true to enable.",
-      },
-    };
+  const disabled = requireCommandFlagEnabled(params.cfg, {
+    label: "/debug",
+    configKey: "debug",
+  });
+  if (disabled) {
+    return disabled;
   }
   if (debugCommand.action === "error") {
     return {

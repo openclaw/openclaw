@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as skillScanner from "../security/skill-scanner.js";
 import {
   expectSingleNpmInstallIgnoreScriptsCall,
@@ -16,6 +16,10 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 const tempDirs: string[] = [];
+let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
+let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
+let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
+let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 
 function makeTempDir() {
   const dir = path.join(os.tmpdir(), `openclaw-plugin-install-${randomUUID()}`);
@@ -120,7 +124,6 @@ function setupPluginInstallDirs() {
 }
 
 async function installFromDirWithWarnings(params: { pluginDir: string; extensionsDir: string }) {
-  const { installPluginFromDir } = await import("./install.js");
   const warnings: string[] = [];
   const result = await installPluginFromDir({
     dirPath: params.pluginDir,
@@ -159,7 +162,6 @@ async function expectArchiveInstallReservedSegmentRejection(params: {
   });
 
   const extensionsDir = path.join(stateDir, "extensions");
-  const { installPluginFromArchive } = await import("./install.js");
   const result = await installPluginFromArchive({
     archivePath,
     extensionsDir,
@@ -182,6 +184,12 @@ afterEach(() => {
   }
 });
 
+beforeAll(async () => {
+  ({ installPluginFromArchive, installPluginFromDir, installPluginFromNpmSpec } =
+    await import("./install.js"));
+  ({ runCommandWithTimeout } = await import("../process/exec.js"));
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -193,7 +201,6 @@ describe("installPluginFromArchive", () => {
       version: "0.0.1",
     });
 
-    const { installPluginFromArchive } = await import("./install.js");
     const result = await installPluginFromArchive({
       archivePath,
       extensionsDir,
@@ -212,7 +219,6 @@ describe("installPluginFromArchive", () => {
       version: "0.0.1",
     });
 
-    const { installPluginFromArchive } = await import("./install.js");
     const first = await installPluginFromArchive({
       archivePath,
       extensionsDir,
@@ -249,7 +255,6 @@ describe("installPluginFromArchive", () => {
     fs.writeFileSync(archivePath, buffer);
 
     const extensionsDir = path.join(stateDir, "extensions");
-    const { installPluginFromArchive } = await import("./install.js");
     const result = await installPluginFromArchive({
       archivePath,
       extensionsDir,
@@ -278,7 +283,6 @@ describe("installPluginFromArchive", () => {
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
-    const { installPluginFromArchive } = await import("./install.js");
     const first = await installPluginFromArchive({
       archivePath: archiveV1,
       extensionsDir,
@@ -332,7 +336,6 @@ describe("installPluginFromArchive", () => {
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
-    const { installPluginFromArchive } = await import("./install.js");
     const result = await installPluginFromArchive({
       archivePath,
       extensionsDir,
@@ -433,7 +436,6 @@ describe("installPluginFromDir", () => {
     );
     fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
 
-    const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
     run.mockResolvedValue({
       code: 0,
@@ -444,7 +446,6 @@ describe("installPluginFromDir", () => {
       termination: "exit",
     });
 
-    const { installPluginFromDir } = await import("./install.js");
     const res = await installPluginFromDir({
       dirPath: pluginDir,
       extensionsDir: path.join(stateDir, "extensions"),
@@ -480,7 +481,6 @@ describe("installPluginFromNpmSpec", () => {
     const extensionsDir = path.join(stateDir, "extensions");
     fs.mkdirSync(extensionsDir, { recursive: true });
 
-    const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
 
     let packTmpDir = "";
@@ -491,7 +491,16 @@ describe("installPluginFromNpmSpec", () => {
         await packToArchive({ pkgDir, outDir: packTmpDir, outName: packedName });
         return {
           code: 0,
-          stdout: `${packedName}\n`,
+          stdout: JSON.stringify([
+            {
+              id: "@openclaw/voice-call@0.0.1",
+              name: "@openclaw/voice-call",
+              version: "0.0.1",
+              filename: packedName,
+              integrity: "sha512-plugin-test",
+              shasum: "pluginshasum",
+            },
+          ]),
           stderr: "",
           signal: null,
           killed: false,
@@ -501,13 +510,17 @@ describe("installPluginFromNpmSpec", () => {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
 
-    const { installPluginFromNpmSpec } = await import("./install.js");
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/voice-call@0.0.1",
       extensionsDir,
       logger: { info: () => {}, warn: () => {} },
     });
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.1");
+    expect(result.npmResolution?.integrity).toBe("sha512-plugin-test");
 
     expectSingleNpmPackIgnoreScriptsCall({
       calls: run.mock.calls,
@@ -519,12 +532,51 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("rejects non-registry npm specs", async () => {
-    const { installPluginFromNpmSpec } = await import("./install.js");
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });
     expect(result.ok).toBe(false);
     if (result.ok) {
       return;
     }
     expect(result.error).toContain("unsupported npm spec");
+  });
+
+  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          id: "@openclaw/voice-call@0.0.1",
+          name: "@openclaw/voice-call",
+          version: "0.0.1",
+          filename: "voice-call-0.0.1.tgz",
+          integrity: "sha512-new",
+          shasum: "newshasum",
+        },
+      ]),
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const onIntegrityDrift = vi.fn(async () => false);
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+    });
+
+    expect(onIntegrityDrift).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("integrity drift");
   });
 });

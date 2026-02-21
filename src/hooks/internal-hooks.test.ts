@@ -4,12 +4,14 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
+  type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
@@ -185,6 +187,21 @@ describe("hooks", () => {
     });
   });
 
+  describe("isGatewayStartupEvent", () => {
+    it("returns true for gateway:startup events with expected context", () => {
+      const context: GatewayStartupHookContext = {
+        cfg: {},
+      };
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", context);
+      expect(isGatewayStartupEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-startup gateway events", () => {
+      const event = createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {});
+      expect(isGatewayStartupEvent(event)).toBe(false);
+    });
+  });
+
   describe("isMessageReceivedEvent", () => {
     it("returns true for message:received events with expected context", () => {
       const context: MessageReceivedHookContext = {
@@ -198,11 +215,6 @@ describe("hooks", () => {
       expect(isMessageReceivedEvent(event)).toBe(true);
     });
 
-    it("returns false for non-message events", () => {
-      const event = createInternalHookEvent("command", "new", "test-session");
-      expect(isMessageReceivedEvent(event)).toBe(false);
-    });
-
     it("returns false for message:sent events", () => {
       const context: MessageSentHookContext = {
         to: "+1234567890",
@@ -211,14 +223,6 @@ describe("hooks", () => {
         channelId: "whatsapp",
       };
       const event = createInternalHookEvent("message", "sent", "test-session", context);
-      expect(isMessageReceivedEvent(event)).toBe(false);
-    });
-
-    it("returns false when context is missing required fields", () => {
-      const event = createInternalHookEvent("message", "received", "test-session", {
-        from: "+1234567890",
-        // missing channelId
-      });
       expect(isMessageReceivedEvent(event)).toBe(false);
     });
   });
@@ -249,11 +253,6 @@ describe("hooks", () => {
       expect(isMessageSentEvent(event)).toBe(true);
     });
 
-    it("returns false for non-message events", () => {
-      const event = createInternalHookEvent("command", "new", "test-session");
-      expect(isMessageSentEvent(event)).toBe(false);
-    });
-
     it("returns false for message:received events", () => {
       const context: MessageReceivedHookContext = {
         from: "+1234567890",
@@ -263,14 +262,41 @@ describe("hooks", () => {
       const event = createInternalHookEvent("message", "received", "test-session", context);
       expect(isMessageSentEvent(event)).toBe(false);
     });
+  });
 
-    it("returns false when context is missing required fields", () => {
-      const event = createInternalHookEvent("message", "sent", "test-session", {
+  describe("message type-guard shared negatives", () => {
+    it("returns false for non-message and missing-context shapes", () => {
+      const cases: Array<{
+        match: (event: ReturnType<typeof createInternalHookEvent>) => boolean;
+      }> = [
+        {
+          match: isMessageReceivedEvent,
+        },
+        {
+          match: isMessageSentEvent,
+        },
+      ];
+      const nonMessageEvent = createInternalHookEvent("command", "new", "test-session");
+      const missingReceivedContext = createInternalHookEvent(
+        "message",
+        "received",
+        "test-session",
+        {
+          from: "+1234567890",
+          // missing channelId
+        },
+      );
+      const missingSentContext = createInternalHookEvent("message", "sent", "test-session", {
         to: "+1234567890",
         channelId: "whatsapp",
         // missing success
       });
-      expect(isMessageSentEvent(event)).toBe(false);
+
+      for (const testCase of cases) {
+        expect(testCase.match(nonMessageEvent)).toBe(false);
+      }
+      expect(isMessageReceivedEvent(missingReceivedContext)).toBe(false);
+      expect(isMessageSentEvent(missingSentContext)).toBe(false);
     });
   });
 

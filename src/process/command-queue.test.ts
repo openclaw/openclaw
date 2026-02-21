@@ -52,28 +52,21 @@ describe("command queue", () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push(id);
-      await new Promise((resolve) => setTimeout(resolve, 2));
+      await Promise.resolve();
       active -= 1;
       return id;
     };
 
-    vi.useFakeTimers();
-    try {
-      const resultsPromise = Promise.all([
-        enqueueCommand(makeTask(1)),
-        enqueueCommand(makeTask(2)),
-        enqueueCommand(makeTask(3)),
-      ]);
-      await vi.advanceTimersByTimeAsync(20);
-      const results = await resultsPromise;
+    const results = await Promise.all([
+      enqueueCommand(makeTask(1)),
+      enqueueCommand(makeTask(2)),
+      enqueueCommand(makeTask(3)),
+    ]);
 
-      expect(results).toEqual([1, 2, 3]);
-      expect(calls).toEqual([1, 2, 3]);
-      expect(maxActive).toBe(1);
-      expect(getQueueSize()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(results).toEqual([1, 2, 3]);
+    expect(calls).toEqual([1, 2, 3]);
+    expect(maxActive).toBe(1);
+    expect(getQueueSize()).toBe(0);
   });
 
   it("logs enqueue depth after push", async () => {
@@ -91,9 +84,12 @@ describe("command queue", () => {
 
     vi.useFakeTimers();
     try {
-      // First task holds the queue long enough to trigger wait notice.
+      let releaseFirst!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
       const first = enqueueCommand(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 8));
+        await blocker;
       });
 
       const second = enqueueCommand(async () => {}, {
@@ -104,7 +100,8 @@ describe("command queue", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(30);
+      await vi.advanceTimersByTimeAsync(6);
+      releaseFirst();
       await Promise.all([first, second]);
 
       expect(waited).not.toBeNull();
@@ -151,9 +148,9 @@ describe("command queue", () => {
     try {
       const drainPromise = waitForActiveTasks(5000);
 
-      // Resolve the blocker after a short delay.
-      setTimeout(() => resolve1(), 10);
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(50);
+      resolve1();
+      await vi.advanceTimersByTimeAsync(50);
 
       const { drained } = await drainPromise;
       expect(drained).toBe(true);

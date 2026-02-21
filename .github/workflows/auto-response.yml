@@ -13,7 +13,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    runs-on: self-hosted
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
@@ -134,7 +134,7 @@ jobs:
             const invalidLabel = "invalid";
             const dirtyLabel = "dirty";
             const noisyPrMessage =
-              "Closing this PR because it looks dirty (too many unrelated commits). Please recreate the PR from a clean branch.";
+              "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
             const pullRequest = context.payload.pull_request;
             if (pullRequest) {

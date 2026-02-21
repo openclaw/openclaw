@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,9 +27,9 @@ describe("run-node script", () => {
         const nodeCalls: string[][] = [];
         const spawn = (cmd: string, args: string[]) => {
           if (cmd === "pnpm") {
-            void fs.writeFile(argsPath, args.join(" "), "utf-8");
+            fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
             if (!args.includes("--no-clean")) {
-              void fs.rm(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
+              fsSync.rmSync(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
             }
           }
           if (cmd === process.execPath) {

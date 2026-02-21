@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const loadConfig = vi.fn(() => ({
   gateway: {
     mode: "remote",
-    remote: { url: "ws://remote.example:18789", token: "rtok" },
+    remote: { url: "wss://remote.example:18789", token: "rtok" },
     auth: { token: "ltok" },
   },
 }));
@@ -133,16 +134,6 @@ function createRuntimeCapture() {
   return { runtime, runtimeLogs, runtimeErrors };
 }
 
-async function withUserEnv(user: string, fn: () => Promise<void>) {
-  const originalUser = process.env.USER;
-  try {
-    process.env.USER = user;
-    await fn();
-  } finally {
-    process.env.USER = originalUser;
-  }
-}
-
 describe("gateway-status command", () => {
   it("prints human output by default", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
@@ -206,7 +197,7 @@ describe("gateway-status command", () => {
 
   it("skips invalid ssh-auto discovery targets", async () => {
     const { runtime } = createRuntimeCapture();
-    await withUserEnv("steipete", async () => {
+    await withEnvAsync({ USER: "steipete" }, async () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
@@ -234,7 +225,7 @@ describe("gateway-status command", () => {
 
   it("infers SSH target from gateway.remote.url and ssh config", async () => {
     const { runtime } = createRuntimeCapture();
-    await withUserEnv("steipete", async () => {
+    await withEnvAsync({ USER: "steipete" }, async () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
@@ -268,11 +259,11 @@ describe("gateway-status command", () => {
 
   it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
     const { runtime } = createRuntimeCapture();
-    await withUserEnv("", async () => {
+    await withEnvAsync({ USER: "" }, async () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
-          remote: { url: "ws://studio.example:18789", token: "rtok" },
+          remote: { url: "wss://studio.example:18789", token: "rtok" },
           auth: { token: "ltok" },
         },
       });
@@ -298,7 +289,7 @@ describe("gateway-status command", () => {
     loadConfig.mockReturnValueOnce({
       gateway: {
         mode: "remote",
-        remote: { url: "ws://studio.example:18789", token: "rtok" },
+        remote: { url: "wss://studio.example:18789", token: "rtok" },
         auth: { token: "ltok" },
       },
     });

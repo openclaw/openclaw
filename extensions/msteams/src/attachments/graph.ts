@@ -1,10 +1,12 @@
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   GRAPH_ROOT,
   inferPlaceholder,
   isRecord,
   normalizeContentType,
+  resolveRequestUrl,
   resolveAllowedHosts,
 } from "./shared.js";
 import type {
@@ -265,35 +267,24 @@ export async function downloadMSTeamsGraphMedia(params: {
           const encodedUrl = Buffer.from(shareUrl).toString("base64url");
           const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
-          const spRes = await fetchFn(sharesUrl, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            redirect: "follow",
+          const media = await downloadAndStoreMSTeamsRemoteMedia({
+            url: sharesUrl,
+            filePathHint: name,
+            maxBytes: params.maxBytes,
+            contentTypeHint: "application/octet-stream",
+            preserveFilenames: params.preserveFilenames,
+            fetchImpl: async (input, init) => {
+              const headers = new Headers(init?.headers);
+              headers.set("Authorization", `Bearer ${accessToken}`);
+              return await fetchFn(resolveRequestUrl(input), {
+                ...init,
+                headers,
+                redirect: "follow",
+              });
+            },
           });
-
-          if (spRes.ok) {
-            const buffer = Buffer.from(await spRes.arrayBuffer());
-            if (buffer.byteLength <= params.maxBytes) {
-              const mime = await getMSTeamsRuntime().media.detectMime({
-                buffer,
-                headerMime: spRes.headers.get("content-type") ?? undefined,
-                filePath: name,
-              });
-              const originalFilename = params.preserveFilenames ? name : undefined;
-              const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-                buffer,
-                mime ?? "application/octet-stream",
-                "inbound",
-                params.maxBytes,
-                originalFilename,
-              );
-              sharePointMedia.push({
-                path: saved.path,
-                contentType: saved.contentType,
-                placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
-              });
-              downloadedReferenceUrls.add(shareUrl);
-            }
-          }
+          sharePointMedia.push(media);
+          downloadedReferenceUrls.add(shareUrl);
         } catch {
           // Ignore SharePoint download failures.
         }
