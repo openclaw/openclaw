@@ -763,6 +763,7 @@ async function runWebSearch(params: {
       const title = entry.title ?? "";
       const url = entry.url ?? "";
       const rawSiteName = resolveSiteName(url);
+      
       return {
         title: title ? wrapWebContent(title, "web_search") : "",
         url,
