@@ -21,15 +21,12 @@ export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
-  emptyAllowFrom?: "deny" | "allow";
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => TParsed;
 }): boolean {
   const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
   if (allowFrom.length === 0) {
-    // Fail closed by default. Callers can opt into legacy "empty = allow all"
-    // behavior explicitly when a surface intentionally treats an empty list as open.
-    return params.emptyAllowFrom === "allow";
+    return false;
   }
   if (allowFrom.includes("*")) {
     return true;
