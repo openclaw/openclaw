@@ -97,6 +97,13 @@ func (tm *TranslationMemory) Save() error {
 	if err != nil {
 		return err
 	}
+	// Ensure file is closed on error paths, but we'll explicitly close before rename
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
 
 	keys := make([]string, 0, len(tm.entries))
 	for key := range tm.entries {
@@ -109,24 +116,22 @@ func (tm *TranslationMemory) Save() error {
 		entry := tm.entries[key]
 		payload, err := json.Marshal(entry)
 		if err != nil {
-			_ = file.Close()
 			return err
 		}
 		if _, err := writer.Write(payload); err != nil {
-			_ = file.Close()
 			return err
 		}
 		if _, err := writer.WriteString("\n"); err != nil {
-			_ = file.Close()
 			return err
 		}
 	}
 	if err := writer.Flush(); err != nil {
-		_ = file.Close()
 		return err
 	}
+	// Close the file explicitly before rename (required on Windows)
 	if err := file.Close(); err != nil {
 		return err
 	}
+	closed = true
 	return os.Rename(tmpPath, tm.path)
 }
