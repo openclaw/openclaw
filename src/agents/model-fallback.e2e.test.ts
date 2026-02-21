@@ -610,3 +610,39 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("gpt-4.1-mini");
   });
 });
+
+  it("continues to second fallback when first fallback throws unclassified error after primary classified error", async () => {
+    // This tests the fix for "2nd model blocks 3rd" - when primary fails with a 
+    // classified FailoverError, and first fallback fails with unclassified Error, 
+    // we should continue to try the second fallback instead of failing immediately.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-4.1"],
+          },
+        },
+      },
+    } as OpenClawConfig);
+    
+    // Primary fails with classified error (rate limit) - should fall back
+    // First fallback fails with unclassified error - should continue to second fallback  
+    // Second fallback succeeds
+    const run = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limit exceeded"), { status: 429 })) // Primary: classified
+      .mockRejectedValueOnce(new Error("some unknown error")) // Fallback #1: unclassified - should continue
+      .mockResolvedValueOnce("ok"); // Fallback #2: success
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4.1");
+  });
