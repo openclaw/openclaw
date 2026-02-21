@@ -102,6 +102,56 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
   };
 }
 
+function createDefaultModelPickerData(): ModelsProviderData {
+  return createModelsProviderData({
+    openai: ["gpt-4.1", "gpt-4o"],
+    anthropic: ["claude-sonnet-4-5"],
+  });
+}
+
+function createModelCommandDefinition(): ChatCommandDefinition {
+  return {
+    key: "model",
+    nativeName: "model",
+    description: "Switch model",
+    textAliases: ["/model"],
+    acceptsArgs: true,
+    argsParsing: "none" as CommandArgsParsing,
+    scope: "native",
+  };
+}
+
+function mockModelCommandPipeline(modelCommand: ChatCommandDefinition) {
+  vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
+    name === "model" ? modelCommand : undefined,
+  );
+  vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
+  vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+}
+
+function createModelsViewSelectData(): PickerSelectData {
+  return {
+    cmd: "model",
+    act: "model",
+    view: "models",
+    u: "owner",
+    p: "openai",
+    pg: "1",
+  };
+}
+
+function createModelsViewSubmitData(): PickerButtonData {
+  return {
+    cmd: "model",
+    act: "submit",
+    view: "models",
+    u: "owner",
+    p: "openai",
+    pg: "1",
+    mi: "2",
+  };
+}
+
 function createBoundThreadBindingManager(params: {
   accountId: string;
   threadId: string;
@@ -171,26 +221,11 @@ describe("Discord model picker interactions", () => {
 
   it("requires submit click before routing selected model through /model pipeline", async () => {
     const context = createModelPickerContext();
-    const pickerData = createModelsProviderData({
-      openai: ["gpt-4.1", "gpt-4o"],
-      anthropic: ["claude-sonnet-4-5"],
-    });
-    const modelCommand: ChatCommandDefinition = {
-      key: "model",
-      nativeName: "model",
-      description: "Switch model",
-      textAliases: ["/model"],
-      acceptsArgs: true,
-      argsParsing: "none" as CommandArgsParsing,
-      scope: "native",
-    };
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
 
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
-      name === "model" ? modelCommand : undefined,
-    );
-    vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
-    vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+    mockModelCommandPipeline(modelCommand);
 
     const dispatchSpy = vi
       .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
@@ -202,14 +237,7 @@ describe("Discord model picker interactions", () => {
       values: ["gpt-4o"],
     });
 
-    const selectData: PickerSelectData = {
-      cmd: "model",
-      act: "model",
-      view: "models",
-      u: "owner",
-      p: "openai",
-      pg: "1",
-    };
+    const selectData = createModelsViewSelectData();
 
     await select.run(selectInteraction as unknown as PickerSelectInteraction, selectData);
 
@@ -218,15 +246,7 @@ describe("Discord model picker interactions", () => {
 
     const button = createDiscordModelPickerFallbackButton(context);
     const submitInteraction = createInteraction({ userId: "owner" });
-    const submitData: PickerButtonData = {
-      cmd: "model",
-      act: "submit",
-      view: "models",
-      u: "owner",
-      p: "openai",
-      pg: "1",
-      mi: "2",
-    };
+    const submitData = createModelsViewSubmitData();
 
     await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
 
@@ -247,26 +267,11 @@ describe("Discord model picker interactions", () => {
 
   it("shows timeout status and skips recents write when apply is still processing", async () => {
     const context = createModelPickerContext();
-    const pickerData = createModelsProviderData({
-      openai: ["gpt-4.1", "gpt-4o"],
-      anthropic: ["claude-sonnet-4-5"],
-    });
-    const modelCommand: ChatCommandDefinition = {
-      key: "model",
-      nativeName: "model",
-      description: "Switch model",
-      textAliases: ["/model"],
-      acceptsArgs: true,
-      argsParsing: "none" as CommandArgsParsing,
-      scope: "native",
-    };
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
 
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
-      name === "model" ? modelCommand : undefined,
-    );
-    vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
-    vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+    mockModelCommandPipeline(modelCommand);
 
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
@@ -284,28 +289,13 @@ describe("Discord model picker interactions", () => {
       values: ["gpt-4o"],
     });
 
-    const selectData: PickerSelectData = {
-      cmd: "model",
-      act: "model",
-      view: "models",
-      u: "owner",
-      p: "openai",
-      pg: "1",
-    };
+    const selectData = createModelsViewSelectData();
 
     await select.run(selectInteraction as unknown as PickerSelectInteraction, selectData);
 
     const button = createDiscordModelPickerFallbackButton(context);
     const submitInteraction = createInteraction({ userId: "owner" });
-    const submitData: PickerButtonData = {
-      cmd: "model",
-      act: "submit",
-      view: "models",
-      u: "owner",
-      p: "openai",
-      pg: "1",
-      mi: "2",
-    };
+    const submitData = createModelsViewSubmitData();
 
     await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
 
@@ -355,30 +345,15 @@ describe("Discord model picker interactions", () => {
 
   it("clicking recents model button applies model through /model pipeline", async () => {
     const context = createModelPickerContext();
-    const pickerData = createModelsProviderData({
-      openai: ["gpt-4.1", "gpt-4o"],
-      anthropic: ["claude-sonnet-4-5"],
-    });
-    const modelCommand: ChatCommandDefinition = {
-      key: "model",
-      nativeName: "model",
-      description: "Switch model",
-      textAliases: ["/model"],
-      acceptsArgs: true,
-      argsParsing: "none" as CommandArgsParsing,
-      scope: "native",
-    };
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
 
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
     vi.spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels").mockResolvedValue([
       "openai/gpt-4o",
       "anthropic/claude-sonnet-4-5",
     ]);
-    vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
-      name === "model" ? modelCommand : (undefined as never),
-    );
-    vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
-    vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+    mockModelCommandPipeline(modelCommand);
 
     const dispatchSpy = vi
       .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
@@ -419,26 +394,11 @@ describe("Discord model picker interactions", () => {
       targetSessionKey: "agent:worker:subagent:bound",
       agentId: "worker",
     });
-    const pickerData = createModelsProviderData({
-      openai: ["gpt-4.1", "gpt-4o"],
-      anthropic: ["claude-sonnet-4-5"],
-    });
-    const modelCommand: ChatCommandDefinition = {
-      key: "model",
-      nativeName: "model",
-      description: "Switch model",
-      textAliases: ["/model"],
-      acceptsArgs: true,
-      argsParsing: "none" as CommandArgsParsing,
-      scope: "native",
-    };
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
 
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
-      name === "model" ? modelCommand : undefined,
-    );
-    vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
-    vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+    mockModelCommandPipeline(modelCommand);
     vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({} as never);
     const verboseSpy = vi.spyOn(globalsModule, "logVerbose").mockImplementation(() => {});
 
@@ -451,14 +411,7 @@ describe("Discord model picker interactions", () => {
       type: ChannelType.PublicThread,
       id: "thread-bound",
     };
-    const selectData: PickerSelectData = {
-      cmd: "model",
-      act: "model",
-      view: "models",
-      u: "owner",
-      p: "openai",
-      pg: "1",
-    };
+    const selectData = createModelsViewSelectData();
     await select.run(selectInteraction as unknown as PickerSelectInteraction, selectData);
 
     const button = createDiscordModelPickerFallbackButton(context);
@@ -467,15 +420,7 @@ describe("Discord model picker interactions", () => {
       type: ChannelType.PublicThread,
       id: "thread-bound",
     };
-    const submitData: PickerButtonData = {
-      cmd: "model",
-      act: "submit",
-      view: "models",
-      u: "owner",
-      p: "openai",
-      pg: "1",
-      mi: "2",
-    };
+    const submitData = createModelsViewSubmitData();
 
     await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
 
