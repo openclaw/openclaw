@@ -1,6 +1,8 @@
+import { registerApiProvider } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { resolvePluginProviders } from "../plugins/providers.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
@@ -101,6 +103,28 @@ export async function ensureOpenClawModelsJson(
   const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
   if (implicitCopilot && !providers["github-copilot"]) {
     providers["github-copilot"] = implicitCopilot;
+  }
+
+  try {
+    const pluginProviders = resolvePluginProviders({ config: cfg });
+    for (const pp of pluginProviders) {
+      if (!pp.id || !pp.models?.models?.length) {
+        continue;
+      }
+      if (providers[pp.id]) {
+        continue;
+      }
+      providers[pp.id] = pp.models as ProviderConfig;
+      if (pp.apiProvider?.api && pp.apiProvider.stream && pp.apiProvider.streamSimple) {
+        registerApiProvider({
+          api: pp.apiProvider.api,
+          stream: pp.apiProvider.stream as never,
+          streamSimple: pp.apiProvider.streamSimple as never,
+        });
+      }
+    }
+  } catch {
+    // Plugin loading may fail; don't block model resolution.
   }
 
   if (Object.keys(providers).length === 0) {

@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vertex-anthropic-auth",
+  "version": "2026.2.10",
+  "private": true,
+  "description": "OpenClaw Anthropic Vertex AI provider plugin",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/vertex-sdk": "^0.14.3",
+    "google-auth-library": "^9.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

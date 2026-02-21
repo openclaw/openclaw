@@ -1,0 +1,9 @@
+{
+  "id": "vertex-anthropic-auth",
+  "providers": ["vertex-anthropic"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

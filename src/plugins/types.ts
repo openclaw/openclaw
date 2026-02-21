@@ -122,6 +122,11 @@ export type ProviderPlugin = {
   auth: ProviderAuthMethod[];
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  apiProvider?: {
+    api: string;
+    stream: (...args: unknown[]) => unknown;
+    streamSimple: (...args: unknown[]) => unknown;
+  };
 };
 
 export type OpenClawPluginGatewayMethod = {
