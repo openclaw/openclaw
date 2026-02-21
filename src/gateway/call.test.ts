@@ -333,9 +333,16 @@ describe("buildGatewayConnectionDetails", () => {
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
-    expect(() => buildGatewayConnectionDetails()).toThrow("SECURITY ERROR");
-    expect(() => buildGatewayConnectionDetails()).toThrow("plaintext ws://");
-    expect(() => buildGatewayConnectionDetails()).toThrow("wss://");
+    let thrown: unknown;
+    try {
+      buildGatewayConnectionDetails();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("SECURITY ERROR");
+    expect((thrown as Error).message).toContain("plaintext ws://");
+    expect((thrown as Error).message).toContain("wss://");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {
