@@ -87,11 +87,24 @@ function validateGatewayUrlOverrideForAgentTools(urlOverride: string): string {
 }
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
-  // Prefer an explicit override; otherwise let callGateway choose based on config.
-  const url =
-    typeof opts?.gatewayUrl === "string" && opts.gatewayUrl.trim()
-      ? validateGatewayUrlOverrideForAgentTools(opts.gatewayUrl)
-      : undefined;
+  // Prefer an explicit override; otherwise resolve the default URL.
+  // For local mode, always use loopback (127.0.0.1) regardless of bind mode
+  // (lan/tailnet). Internal tool→gateway calls are in-process, so loopback
+  // is always reachable and avoids triggering the CWE-319 plaintext security
+  // check that blocks ws:// to non-loopback addresses. (#22104)
+  // For remote mode, leave url undefined so callGateway resolves the remote URL.
+  const cfg = loadConfig();
+  const isRemoteMode = cfg.gateway?.mode === "remote";
+  let resolvedUrl: string | undefined;
+  if (typeof opts?.gatewayUrl === "string" && opts.gatewayUrl.trim()) {
+    resolvedUrl = validateGatewayUrlOverrideForAgentTools(opts.gatewayUrl);
+  } else if (!isRemoteMode) {
+    const port = resolveGatewayPort(cfg);
+    const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+    const scheme = tlsEnabled ? "wss" : "ws";
+    resolvedUrl = `${scheme}://127.0.0.1:${port}`;
+  }
+  const url = resolvedUrl;
   const token =
     typeof opts?.gatewayToken === "string" && opts.gatewayToken.trim()
       ? opts.gatewayToken.trim()

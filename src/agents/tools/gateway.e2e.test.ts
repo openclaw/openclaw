@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const callGatewayMock = vi.fn();
+const loadConfigMock = vi.fn().mockReturnValue({});
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
+  loadConfig: (...args: unknown[]) => loadConfigMock(...args),
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({
@@ -13,11 +14,12 @@ vi.mock("../../gateway/call.js", () => ({
 describe("gateway tool defaults", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
+    loadConfigMock.mockReturnValue({});
   });
 
-  it("leaves url undefined so callGateway can use config", () => {
+  it("resolves to loopback URL for local mode (avoids CWE-319 block on LAN IPs)", () => {
     const opts = resolveGatewayOptions();
-    expect(opts.url).toBeUndefined();
+    expect(opts.url).toBe("ws://127.0.0.1:18789");
   });
 
   it("accepts allowlisted gatewayUrl overrides (SSRF hardening)", async () => {
@@ -68,6 +70,12 @@ describe("gateway tool defaults", () => {
         scopes: [],
       }),
     );
+  });
+
+  it("leaves url undefined in remote mode so callGateway resolves remote URL", () => {
+    loadConfigMock.mockReturnValueOnce({ gateway: { mode: "remote" } });
+    const opts = resolveGatewayOptions();
+    expect(opts.url).toBeUndefined();
   });
 
   it("rejects non-allowlisted overrides (SSRF hardening)", async () => {
