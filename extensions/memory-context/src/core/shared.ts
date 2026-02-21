@@ -68,6 +68,39 @@ export function stripChannelPrefix(text: string): string {
 }
 
 /**
+ * Returns true if the content (after stripping channel prefixes) is noise
+ * that should not be stored or indexed for recall.
+ *
+ * Noise categories:
+ *   - HEARTBEAT template prompts & HEARTBEAT_OK responses
+ *   - NO_REPLY markers
+ *   - Raw audio metadata ("[Audio] ... file_key")
+ *   - Queued message notifications
+ *   - Content too short (≤ 6 chars) to be useful recall context
+ */
+export function isNoiseSegment(content: string): boolean {
+  const t = content.trim();
+  if (!t) return true;
+
+  // Too short to be useful for recall (emoji, single char, etc.)
+  if (t.length <= 6) return true;
+
+  // Exact markers
+  if (t === "NO_REPLY" || t === "HEARTBEAT_OK") return true;
+
+  // HEARTBEAT template prompt (contains the instruction boilerplate)
+  if (t.includes("HEARTBEAT") && t.includes("HEARTBEAT.md")) return true;
+
+  // Raw audio metadata: "[Audio]\n...file_key..."
+  if (t.startsWith("[Audio]") && t.includes("file_key")) return true;
+
+  // Queued messages notification
+  if (t.startsWith("[Queued messages]")) return true;
+
+  return false;
+}
+
+/**
  * Extract text content from a message-like object.
  * Handles both string content and array-of-blocks content.
  */

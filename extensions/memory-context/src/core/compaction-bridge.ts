@@ -11,7 +11,7 @@ import type { WarmStore, ConversationRole } from "./store.js";
 import { extractKnowledge, type LLMCallFn } from "./knowledge-extractor.js";
 import { applyKnowledgeUpdates } from "./knowledge-updater.js";
 import { maybeRedact } from "./redaction.js";
-import { extractText, stripChannelPrefix } from "./shared.js";
+import { extractText, stripChannelPrefix, isNoiseSegment } from "./shared.js";
 
 export type AgentMessageLike = {
   role?: string;
@@ -59,6 +59,11 @@ export async function archiveCompactedMessages(
     text = stripChannelPrefix(text);
     if (!text.trim()) {
       continue; // After stripping, nothing left (was purely a system message)
+    }
+
+    // Skip noise segments that add no recall value
+    if (isNoiseSegment(text)) {
+      continue;
     }
 
     // Apply redaction before storage

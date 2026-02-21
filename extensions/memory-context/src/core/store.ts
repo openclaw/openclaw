@@ -7,6 +7,7 @@ import { extractEntities, type ExtractedEntity } from "./entity.js";
 import { type EvictionConfig, DEFAULT_EVICTION } from "./eviction.js";
 import { estimateTokens } from "./runtime.js";
 import { hybridSearch, type HybridSearchResult } from "./search.js";
+import { stripChannelPrefix, isNoiseSegment } from "./shared.js";
 import { extractTopics } from "./topic.js";
 import { VectorIndex, type VectorIndexInterface } from "./vector-index.js";
 import { saveVectors, loadVectors, getVectorPath, type VectorEntry } from "./vector-persist.js";
@@ -143,6 +144,8 @@ export class WarmStore {
 
     const eviction = this.opts.eviction ?? DEFAULT_EVICTION;
 
+    let noiseSkipped = 0;
+
     for await (const seg of this.cold.loadAll()) {
       // Cross-session: load all; otherwise filter to our session
       if (!this.opts.crossSession && seg.sessionId !== this.opts.sessionId) {
@@ -157,8 +160,16 @@ export class WarmStore {
         }
       }
 
-      // Dedup on load
-      const dk = dedupKey(seg.sessionId, seg.role, seg.content);
+      // Clean legacy content: strip channel prefixes that were stored pre-filter.
+      // Then skip noise segments that add no recall value.
+      const cleaned = stripChannelPrefix(seg.content);
+      if (isNoiseSegment(cleaned)) {
+        noiseSkipped++;
+        continue;
+      }
+
+      // Dedup on load (use cleaned content)
+      const dk = dedupKey(seg.sessionId, seg.role, cleaned);
       if (this.dedupSet.has(dk)) {
         continue;
       }
@@ -175,7 +186,7 @@ export class WarmStore {
         sessionKey: seg.sessionKey,
         timestamp: seg.timestamp,
         role: seg.role,
-        content: seg.content,
+        content: cleaned,
         embedding: usedCache ? cachedVec : undefined,
         tokens: seg.tokens,
         metadata: {
@@ -191,6 +202,10 @@ export class WarmStore {
         this.index.add(restored.id, restored.embedding);
       }
       this.bm25.add(restored.id, restored.content);
+    }
+
+    if (noiseSkipped > 0) {
+      console.info(`[memory-context] skipped ${noiseSkipped} noise segments on load`);
     }
 
     // Enforce maxSegments on startup
@@ -339,8 +354,11 @@ export class WarmStore {
     role: ConversationRole;
     content: string;
     timestamp?: number;
-  }): Promise<ConversationSegment> {
+  }): Promise<ConversationSegment | null> {
     await this.init();
+
+    // Skip noise at ingest time
+    if (isNoiseSegment(input.content)) return null;
 
     const work = async () => {
       // Dedup: check if identical content already exists for this session+role
@@ -408,6 +426,9 @@ export class WarmStore {
     timestamp?: number;
   }): Promise<ConversationSegment | null> {
     await this.init();
+
+    // Skip noise at ingest time
+    if (isNoiseSegment(input.content)) return null;
 
     // Dedup
     const dk = dedupKey(this.opts.sessionId, input.role, input.content);
