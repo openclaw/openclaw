@@ -48,6 +48,10 @@ const CronToolSchema = Type.Object({
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  /** Current channel (e.g. "whatsapp", "telegram") for auto-converting reminders */
+  currentChannel?: string;
+  /** Current channel target (e.g. phone number, chat ID) for reminder delivery */
+  currentChannelTo?: string;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -408,7 +412,32 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
               ? params.contextMessages
               : 0;
-          if (
+
+          // Auto-convert one-shot reminders to isolated agentTurn for reliable delivery
+          // When: schedule.kind="at", sessionTarget="main", payload.kind="systemEvent", and we have channel context
+          const typedJob = job as {
+            schedule?: { kind?: string };
+            sessionTarget?: string;
+            payload?: { kind?: string; text?: string };
+          };
+          const isOneShotReminder = typedJob.schedule?.kind === "at";
+          const isMainSession = !typedJob.sessionTarget || typedJob.sessionTarget === "main";
+          const isSystemEvent = typedJob.payload?.kind === "systemEvent";
+          const hasChannelContext = opts?.currentChannel && opts?.currentChannelTo;
+
+          if (isOneShotReminder && isMainSession && isSystemEvent && hasChannelContext) {
+            // Auto-convert to agentTurn with deliver:true for reliable message delivery
+            const reminderText = typedJob.payload?.text || "Reminder";
+            (job as Record<string, unknown>).sessionTarget = "isolated";
+            (job as Record<string, unknown>).payload = {
+              kind: "agentTurn",
+              message: `REMINDER: Send this message to the user via ${opts.currentChannel}: "${reminderText}"`,
+              deliver: true,
+              bestEffortDeliver: true,
+              channel: opts.currentChannel,
+              to: opts.currentChannelTo,
+            };
+          } else if (
             job &&
             typeof job === "object" &&
             "payload" in job &&
