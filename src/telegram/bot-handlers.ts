@@ -453,6 +453,140 @@ export const registerTelegramHandlers = ({
     return false;
   };
 
+  const buildTelegramEditSenderLabel = (msg: Message) => {
+    const senderChat = msg.sender_chat;
+    const senderName =
+      [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
+      msg.from?.username ||
+      senderChat?.title ||
+      senderChat?.username;
+    const senderUsername = msg.from?.username ?? senderChat?.username;
+    const senderUsernameLabel = senderUsername ? `@${senderUsername}` : undefined;
+    let senderLabel = senderName;
+    if (senderName && senderUsernameLabel) {
+      senderLabel = `${senderName} (${senderUsernameLabel})`;
+    } else if (!senderName && senderUsernameLabel) {
+      senderLabel = senderUsernameLabel;
+    }
+    const senderId = msg.from?.id ?? senderChat?.id;
+    if (!senderLabel && senderId != null) {
+      senderLabel = `id:${senderId}`;
+    }
+    return senderLabel || "unknown";
+  };
+
+  const handleTelegramEditedMessage = async (params: {
+    ctx: TelegramUpdateKeyContext;
+    msg: Message;
+    requireConfiguredGroup: boolean;
+  }) => {
+    try {
+      if (shouldSkipUpdate(params.ctx)) {
+        return;
+      }
+
+      const msg = params.msg;
+      if (msg.from?.is_bot) {
+        return;
+      }
+
+      const chatId = msg.chat.id;
+      const isChannelPost = msg.chat.type === "channel";
+      const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup" || isChannelPost;
+      const isForum = msg.chat.is_forum === true;
+      const messageThreadId = msg.message_thread_id;
+      const senderId =
+        msg.from?.id != null
+          ? String(msg.from.id)
+          : msg.sender_chat?.id != null
+            ? String(msg.sender_chat.id)
+            : String(chatId);
+      const senderUsername = msg.from?.username ?? msg.sender_chat?.username ?? "";
+      const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
+        isForum,
+        messageThreadId,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
+      });
+      const {
+        resolvedThreadId,
+        storeAllowFrom,
+        groupConfig,
+        topicConfig,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+      } = groupAllowContext;
+
+      if (params.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
+        logVerbose(`Blocked telegram channel ${chatId} (channel disabled)`);
+        return;
+      }
+
+      if (
+        shouldSkipGroupMessage({
+          isGroup,
+          chatId,
+          chatTitle: msg.chat.title,
+          resolvedThreadId,
+          senderId,
+          senderUsername,
+          effectiveGroupAllow,
+          hasGroupAllowOverride,
+          groupConfig,
+          topicConfig,
+        })
+      ) {
+        return;
+      }
+
+      if (!isGroup) {
+        const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+        if (dmPolicy === "disabled") {
+          return;
+        }
+        const effectiveDmAllow = normalizeAllowFromWithStore({
+          allowFrom: telegramCfg.allowFrom,
+          storeAllowFrom,
+        });
+        if (dmPolicy !== "open") {
+          const allowed = isAllowlistAuthorized(effectiveDmAllow, senderId, senderUsername);
+          if (!allowed) {
+            return;
+          }
+        }
+      }
+
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      const route = resolveAgentRoute({
+        cfg: loadConfig(),
+        channel: "telegram",
+        accountId,
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
+        parentPeer,
+      });
+      const sessionKey = route.sessionKey;
+      const senderLabel = buildTelegramEditSenderLabel(msg);
+      const chatLabel = isGroup
+        ? msg.chat.title?.trim() || (isChannelPost ? "Telegram channel" : "Telegram group")
+        : senderLabel !== "unknown"
+          ? `DM with ${senderLabel}`
+          : "DM";
+      const text = `Telegram message edited in ${chatLabel}.`;
+      enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: `telegram:message:edited:${chatId}:${resolvedThreadId ?? "main"}:${
+          msg.message_id
+        }`,
+      });
+      logVerbose(`telegram: edit event enqueued: ${text}`);
+    } catch (err) {
+      runtime.error?.(danger(`telegram edit handler failed: ${String(err)}`));
+    }
+  };
+
   // Handle emoji reactions to messages.
   bot.on("message_reaction", async (ctx) => {
     try {
@@ -544,6 +678,35 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
     }
   });
+
+  bot.on("edited_message", async (ctx) => {
+    const msg =
+      (ctx as { editedMessage?: Message }).editedMessage ?? ctx.update?.edited_message ?? undefined;
+    if (!msg) {
+      return;
+    }
+    await handleTelegramEditedMessage({
+      ctx,
+      msg,
+      requireConfiguredGroup: false,
+    });
+  });
+
+  bot.on("edited_channel_post", async (ctx) => {
+    const msg =
+      (ctx as { editedChannelPost?: Message }).editedChannelPost ??
+      ctx.update?.edited_channel_post ??
+      undefined;
+    if (!msg) {
+      return;
+    }
+    await handleTelegramEditedMessage({
+      ctx,
+      msg,
+      requireConfiguredGroup: true,
+    });
+  });
+
   const processInboundMessage = async (params: {
     ctx: TelegramContext;
     msg: Message;
