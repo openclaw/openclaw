@@ -240,6 +240,7 @@ jobs:
             ${{ runner.temp }}/vitest-slowest.md
 
   # Types, lint, and format check.
+  # (oxfmt requires consistent formatting)
   check:
     name: "check"
     needs: [docs-scope]
