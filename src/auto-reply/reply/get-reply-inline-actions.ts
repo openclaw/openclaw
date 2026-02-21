@@ -54,8 +54,7 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-function extractTextFromToolResult(result: any): string | null {
+function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
     return null;
   }
