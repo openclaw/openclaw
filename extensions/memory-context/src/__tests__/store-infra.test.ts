@@ -59,8 +59,8 @@ describe("store dedup", () => {
       maxSegments: 100,
     });
 
-    await store.addSegment({ role: "user", content: "hello" });
-    await store.addSegment({ role: "user", content: "world" });
+    await store.addSegment({ role: "user", content: "hello there friend" });
+    await store.addSegment({ role: "user", content: "world is great today" });
 
     expect(store.stats().count).toBe(2);
   });
