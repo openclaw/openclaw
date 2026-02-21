@@ -115,10 +115,16 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
       return parsed as unknown as ArmStateFile;
     }
 
-  const group = typeof parsed.group === "string" ? parsed.group : "";
-  if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "flashlight" && group !== "all") {
-    return null;
-  }
+    const group = typeof parsed.group === "string" ? parsed.group : "";
+    if (
+      group !== "camera" &&
+      group !== "screen" &&
+      group !== "writes" &&
+      group !== "flashlight" &&
+      group !== "all"
+    ) {
+      return null;
+    }
     if (
       !Array.isArray(parsed.armedCommands) ||
       !parsed.armedCommands.every((v: unknown) => typeof v === "string")
@@ -259,7 +265,13 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   if (!value) {
     return null;
   }
-  if (value === "camera" || value === "screen" || value === "writes" || value === "flashlight" || value === "all") {
+  if (
+    value === "camera" ||
+    value === "screen" ||
+    value === "writes" ||
+    value === "flashlight" ||
+    value === "all"
+  ) {
     return value;
   }
   return null;
