@@ -76,8 +76,12 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
-- `/subagents list|stop|log|info|send` (inspect, stop, log, or message sub-agent runs for the current session)
+- `/subagents list|kill|log|info|send|steer|spawn` (inspect, control, or spawn sub-agent runs for the current session)
+- `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
+- `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
+- `/tell <id|#> <message>` (alias for `/steer`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
@@ -114,7 +118,8 @@ Notes:
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
-- `/restart` is disabled by default; set `commands.restart: true` to enable it.
+- `/restart` is enabled by default; set `commands.restart: false` to disable it.
+- Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
@@ -154,6 +159,7 @@ Examples:
 Notes:
 
 - `/model` and `/model list` show a compact, numbered picker (model family + available providers).
+- On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
 - `/model <#>` selects from that picker (and prefers the current provider when possible).
 - `/model status` shows the detailed view, including configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
 

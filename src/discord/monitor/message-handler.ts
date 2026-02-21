@@ -1,42 +1,28 @@
 import type { Client } from "@buape/carbon";
-import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { ReplyToMode } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { DiscordGuildEntryResolved } from "./allow-list.js";
-import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { danger } from "../../globals.js";
+import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
-import { resolveDiscordMessageText } from "./message-utils.js";
+import {
+  hasDiscordMessageStickers,
+  resolveDiscordMessageChannelId,
+  resolveDiscordMessageText,
+} from "./message-utils.js";
 
-type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
-type DiscordConfig = NonNullable<
-  import("../../config/config.js").OpenClawConfig["channels"]
->["discord"];
+type DiscordMessageHandlerParams = Omit<
+  DiscordMessagePreflightParams,
+  "ackReactionScope" | "groupPolicy" | "data" | "client"
+>;
 
-export function createDiscordMessageHandler(params: {
-  cfg: LoadedConfig;
-  discordConfig: DiscordConfig;
-  accountId: string;
-  token: string;
-  runtime: RuntimeEnv;
-  botUserId?: string;
-  guildHistories: Map<string, HistoryEntry[]>;
-  historyLimit: number;
-  mediaMaxBytes: number;
-  textLimit: number;
-  replyToMode: ReplyToMode;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels?: Array<string | number>;
-  allowFrom?: Array<string | number>;
-  guildEntries?: Record<string, DiscordGuildEntryResolved>;
-}): DiscordMessageHandler {
+export function createDiscordMessageHandler(
+  params: DiscordMessageHandlerParams,
+): DiscordMessageHandler {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
@@ -49,7 +35,10 @@ export function createDiscordMessageHandler(params: {
       if (!message || !authorId) {
         return null;
       }
-      const channelId = message.channelId;
+      const channelId = resolveDiscordMessageChannelId({
+        message,
+        eventChannelId: entry.data.channel_id,
+      });
       if (!channelId) {
         return null;
       }
@@ -61,6 +50,9 @@ export function createDiscordMessageHandler(params: {
         return false;
       }
       if (message.attachments && message.attachments.length > 0) {
+        return false;
+      }
+      if (hasDiscordMessageStickers(message)) {
         return false;
       }
       const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
