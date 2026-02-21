@@ -54,6 +54,7 @@ import {
   createDiscordComponentStringSelect,
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
@@ -67,6 +68,8 @@ import {
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordCommandArgFallbackButton,
+  createDiscordModelPickerFallbackButton,
+  createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
@@ -244,8 +247,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     globalSetting: cfg.commands?.native,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
-  const ephemeralDefault = true;
+  const ephemeralDefault = slashCommand.ephemeral;
   const voiceEnabled = discordCfg.voice?.enabled !== false;
 
   if (token) {
@@ -476,6 +480,18 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const components: BaseMessageInteractiveComponent[] = [
     createDiscordCommandArgFallbackButton({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      sessionPrefix,
+    }),
+    createDiscordModelPickerFallbackButton({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      sessionPrefix,
+    }),
+    createDiscordModelPickerFallbackSelect({
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,

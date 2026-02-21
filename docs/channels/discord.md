@@ -258,6 +258,29 @@ Now create some channels on your Discord server and start chatting. Your agent c
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 
+## Forum channels
+
+Discord forum and media channels only accept thread posts. OpenClaw supports two ways to create them:
+
+- Send a message to the forum parent (`channel:<forumId>`) to auto-create a thread. The thread title uses the first non-empty line of your message.
+- Use `openclaw message thread create` to create a thread directly. Do not pass `--message-id` for forum channels.
+
+Example: send to forum parent to create a thread
+
+```bash
+openclaw message send --channel discord --target channel:<forumId> \
+  --message "Topic title\nBody of the post"
+```
+
+Example: create a forum thread explicitly
+
+```bash
+openclaw message thread create --channel discord --target channel:<forumId> \
+  --thread-name "Topic title" --message "Body of the post"
+```
+
+Forum parents do not accept Discord components. If you need components, send to the thread itself (`channel:<threadId>`).
+
 ## Interactive components
 
 OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results are routed back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
@@ -271,6 +294,8 @@ Supported blocks:
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
+
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -508,6 +533,10 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 - Commands may still be visible in Discord UI for users who are not authorized; execution still enforces OpenClaw auth and returns "not authorized".
 
 See [Slash commands](/tools/slash-commands) for command catalog and behavior.
+
+Default slash command settings:
+
+- `ephemeral: true`
 
 ## Feature details
 
@@ -944,7 +973,7 @@ High-signal Discord fields:
 
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
-- command: `commands.native`, `commands.useAccessGroups`, `configWrites`
+- command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streamMode`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
