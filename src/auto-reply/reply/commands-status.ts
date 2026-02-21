@@ -12,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { resolveRouterConfig } from "../../hooks/pre-route.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -159,6 +160,10 @@ export async function buildStatusReply(params: {
       })
     : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const routerCfg = resolveRouterConfig(cfg);
+  const routerLine = routerCfg
+    ? `🔀 Routing: smart (${routerCfg.model ?? "default"} via ${routerCfg.provider ?? "ollama"})`
+    : undefined;
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
@@ -197,6 +202,7 @@ export async function buildStatusReply(params: {
     subagentsLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
+    routerLine,
   });
 
   return { text: statusText };

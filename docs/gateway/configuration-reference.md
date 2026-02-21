@@ -2382,6 +2382,69 @@ Written by the macOS onboarding assistant. Derives defaults:
 
 ---
 
+## Router (pre-route model selection)
+
+Lightweight LLM-based message classifier that runs **before** the main agent. It makes a single call to a small, fast model (local Ollama or any OpenAI-compatible API) and selects which model handles the request based on the result.
+
+The classifier never sees the system prompt, tools, or conversation history — only a short classification prompt and the user's message (plus optional recent context snippets).
+
+```json5
+{
+  router: {
+    enabled: true,
+    provider: "ollama", // ollama | openai-compatible
+    baseUrl: "http://localhost:11434", // Ollama default
+    // apiKey: "env:OPENROUTER_API_KEY", // for openai-compatible; supports "env:VAR" syntax
+    model: "qwen3:4b-instruct-2507-q4_K_M",
+    timeoutMs: 10000,
+    tiers: {
+      "1": "minimax/MiniMax-Text-01", // casual
+      "2": "anthropic/claude-haiku-4-5-20251001", // code
+      "3": "anthropic/claude-opus-4-6", // complex
+    },
+    defaultTier: "2",
+  },
+}
+```
+
+| Field         | Type                                | Default                             | Description                                                               |
+| ------------- | ----------------------------------- | ----------------------------------- | ------------------------------------------------------------------------- |
+| `enabled`     | `boolean`                           | `false`                             | Enable/disable the router.                                                |
+| `provider`    | `"ollama"` \| `"openai-compatible"` | `"ollama"`                          | Provider type for the classifier model.                                   |
+| `baseUrl`     | `string`                            | `"http://localhost:11434"` (Ollama) | Base URL for the provider API.                                            |
+| `apiKey`      | `string`                            | —                                   | API key. Supports `"env:VAR_NAME"` to read from environment.              |
+| `model`       | `string`                            | `"qwen3:4b-instruct-2507-q4_K_M"`   | Model used for classification.                                            |
+| `timeoutMs`   | `number`                            | `10000`                             | Timeout in ms for the classification call.                                |
+| `tiers`       | `Record<string, string>`            | (required)                          | Routing table: maps tier labels to OpenClaw model references.             |
+| `defaultTier` | `string`                            | (required)                          | Fallback tier when classification fails or returns an unrecognized value. |
+
+<Accordion title="How it works">
+
+1. User sends a message.
+2. The router calls the configured model with a tiny classification prompt (~300 tokens) and the user's message.
+3. The model returns a tier label (e.g. `1`, `2`, or `3`).
+4. The tier is resolved to a full model reference via `router.tiers`.
+5. The agent run uses that model instead of `agents.defaults.model.primary`.
+6. On failure or timeout, `router.defaultTier` is used (graceful fallback — the agent always runs).
+
+</Accordion>
+
+<Accordion title="Custom classification prompt">
+
+The built-in prompt classifies into three tiers: casual (1), code (2), complex (3). To customize:
+
+1. Create `~/.openclaw/router/ROUTER.md` with your classification prompt.
+2. The file is read at classification time — no restart needed.
+3. If the file is empty or missing, the built-in prompt is used.
+
+</Accordion>
+
+<Note>
+The routed model is shown as a badge in the web chat UI. Session resets and heartbeat messages bypass the router.
+</Note>
+
+---
+
 ## Bridge (legacy, removed)
 
 Current builds no longer include the TCP bridge. Nodes connect over the Gateway WebSocket. `bridge.*` keys are no longer part of the config schema (validation fails until removed; `openclaw doctor --fix` can strip unknown keys).

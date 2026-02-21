@@ -45,6 +45,7 @@ export type ChatProps = {
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
+  routedModel: string | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -272,45 +273,62 @@ export function renderChat(props: ChatProps) {
             `
           : nothing
       }
-      ${repeat(
-        buildChatItems(props),
-        (item) => item.key,
-        (item) => {
-          if (item.kind === "divider") {
-            return html`
-              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
-                <span class="chat-divider__line"></span>
-                <span class="chat-divider__label">${item.label}</span>
-                <span class="chat-divider__line"></span>
-              </div>
-            `;
+      ${(() => {
+        const chatItems = buildChatItems(props);
+        // Find the last assistant group to attach the routed model badge.
+        let lastAssistantGroupKey: string | undefined;
+        if (props.routedModel) {
+          for (let i = chatItems.length - 1; i >= 0; i--) {
+            const ci = chatItems[i];
+            if (ci.kind === "group" && normalizeRoleForGrouping(ci.role) === "assistant") {
+              lastAssistantGroupKey = ci.key;
+              break;
+            }
           }
+        }
+        return repeat(
+          chatItems,
+          (item) => item.key,
+          (item) => {
+            if (item.kind === "divider") {
+              return html`
+                <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+                  <span class="chat-divider__line"></span>
+                  <span class="chat-divider__label">${item.label}</span>
+                  <span class="chat-divider__line"></span>
+                </div>
+              `;
+            }
 
-          if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity);
-          }
+            if (item.kind === "reading-indicator") {
+              return renderReadingIndicatorGroup(assistantIdentity);
+            }
 
-          if (item.kind === "stream") {
-            return renderStreamingGroup(
-              item.text,
-              item.startedAt,
-              props.onOpenSidebar,
-              assistantIdentity,
-            );
-          }
+            if (item.kind === "stream") {
+              return renderStreamingGroup(
+                item.text,
+                item.startedAt,
+                props.onOpenSidebar,
+                assistantIdentity,
+                props.routedModel ?? undefined,
+              );
+            }
 
-          if (item.kind === "group") {
-            return renderMessageGroup(item, {
-              onOpenSidebar: props.onOpenSidebar,
-              showReasoning,
-              assistantName: props.assistantName,
-              assistantAvatar: assistantIdentity.avatar,
-            });
-          }
+            if (item.kind === "group") {
+              return renderMessageGroup(item, {
+                onOpenSidebar: props.onOpenSidebar,
+                showReasoning,
+                assistantName: props.assistantName,
+                assistantAvatar: assistantIdentity.avatar,
+                routedModel:
+                  item.key === lastAssistantGroupKey ? (props.routedModel ?? undefined) : undefined,
+              });
+            }
 
-          return nothing;
-        },
-      )}
+            return nothing;
+          },
+        );
+      })()}
     </div>
   `;
 

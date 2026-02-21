@@ -87,6 +87,7 @@ type StatusArgs = {
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
   includeTranscriptUsage?: boolean;
+  routerLine?: string;
   now?: number;
 };
 
@@ -597,6 +598,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    args.routerLine,
     fallbackLine,
     usageCostLine,
     cacheLine,

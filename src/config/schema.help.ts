@@ -355,6 +355,19 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.modelByChannel":
     "Map provider -> channel id -> model override (values are provider/model or aliases).",
   ...IRC_FIELD_HELP,
+  "router.enabled": "Enable pre-route LLM-based message classification (default: false).",
+  "router.provider":
+    'Provider type for the classifier model ("ollama" or "openai-compatible"). Default: "ollama".',
+  "router.baseUrl":
+    "Base URL for the classification provider. Ollama default: http://localhost:11434.",
+  "router.apiKey":
+    'API key for the classification provider. Supports "env:VAR_NAME" syntax to read from environment.',
+  "router.model": 'Model to use for classification (default: "qwen3:4b-instruct-2507-q4_K_M").',
+  "router.timeoutMs": "Timeout in ms for the classification call (default: 10000).",
+  "router.tiers":
+    'Routing table mapping tier labels to OpenClaw model references (e.g. { "1": "minimax/MiniMax-Text-01", "2": "anthropic/claude-haiku-4-5-20251001", "3": "anthropic/claude-opus-4-6" }).',
+  "router.defaultTier":
+    "Default tier used when classification fails or returns an unrecognized value.",
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
     'Override native skill commands for Discord (bool or "auto").',

@@ -612,6 +612,53 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 }
 ```
 
+### Pre-route model selection (router)
+
+Route messages to different models based on complexity. A small local model classifies each message before the agent runs.
+
+```json5
+{
+  // Router: classify messages and pick the right model tier
+  router: {
+    enabled: true,
+    provider: "ollama", // or "openai-compatible"
+    model: "qwen3:4b-instruct-2507-q4_K_M",
+    timeoutMs: 10000,
+    tiers: {
+      "1": "minimax/MiniMax-Text-01", // casual / simple
+      "2": "anthropic/claude-haiku-4-5-20251001", // code tasks
+      "3": "anthropic/claude-opus-4-6", // complex / architecture
+    },
+    defaultTier: "2",
+  },
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-haiku-4-5-20251001" },
+    },
+  },
+}
+```
+
+For an OpenAI-compatible provider (e.g. OpenRouter):
+
+```json5
+{
+  router: {
+    enabled: true,
+    provider: "openai-compatible",
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiKey: "env:OPENROUTER_API_KEY",
+    model: "qwen/qwen3-4b",
+    tiers: {
+      "1": "minimax/MiniMax-Text-01",
+      "2": "anthropic/claude-sonnet-4-5",
+      "3": "anthropic/claude-opus-4-6",
+    },
+    defaultTier: "2",
+  },
+}
+```
+
 ## Tips
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.

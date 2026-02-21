@@ -1,3 +1,4 @@
+import type { RouterConfig } from "../hooks/pre-route.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
@@ -97,6 +98,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  router?: RouterConfig;
 };
 
 export type ConfigValidationIssue = {

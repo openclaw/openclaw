@@ -662,6 +662,44 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    router: z
+      .object({
+        enabled: z.boolean().optional(),
+        provider: z.enum(["ollama", "openai-compatible"]).optional(),
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
+        model: z.string().optional(),
+        timeoutMs: z.number().int().nonnegative().optional(),
+        tiers: z.record(z.string(), z.string()).optional(),
+        defaultTier: z.string().optional(),
+      })
+      .strict()
+      .superRefine((router, ctx) => {
+        if (router.enabled === false) {
+          return;
+        }
+        if (!router.tiers || Object.keys(router.tiers).length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "router.tiers is required when router is enabled",
+            path: ["tiers"],
+          });
+        }
+        if (!router.defaultTier) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "router.defaultTier is required when router is enabled",
+            path: ["defaultTier"],
+          });
+        } else if (router.tiers && !router.tiers[router.defaultTier]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `router.defaultTier "${router.defaultTier}" not found in router.tiers`,
+            path: ["defaultTier"],
+          });
+        }
+      })
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

@@ -75,6 +75,7 @@ export function renderStreamingGroup(
   startedAt: number,
   onOpenSidebar?: (content: string) => void,
   assistant?: AssistantIdentity,
+  routedModel?: string,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
@@ -97,6 +98,7 @@ export function renderStreamingGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
+          ${routedModel ? html`<span class="chat-group-timestamp">🔀 ${routedModel}</span>` : nothing}
           <span class="chat-group-timestamp">${timestamp}</span>
         </div>
       </div>
@@ -111,6 +113,7 @@ export function renderMessageGroup(
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
+    routedModel?: string;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -147,6 +150,7 @@ export function renderMessageGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
+          ${opts.routedModel ? html`<span class="chat-group-timestamp">🔀 ${opts.routedModel}</span>` : nothing}
           <span class="chat-group-timestamp">${timestamp}</span>
         </div>
       </div>
