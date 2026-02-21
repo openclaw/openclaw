@@ -169,6 +169,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
+  it("injects thread starter context even when isNewSession is false", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          ThreadStarterBody: "Original thread message",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        isNewSession: false,
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain("[Thread starter - for context]");
+    expect(call?.followupRun.prompt).toContain("Original thread message");
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({

@@ -263,7 +263,7 @@ export async function runPreparedReply(
   const threadContextNote =
     isNewSession && threadHistoryBody
       ? `[Thread history - for context]\n${threadHistoryBody}`
-      : isNewSession && threadStarterBody
+      : threadStarterBody
         ? `[Thread starter - for context]\n${threadStarterBody}`
         : undefined;
   const skillResult = await ensureSkillSnapshot({
