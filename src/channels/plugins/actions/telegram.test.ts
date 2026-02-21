@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { telegramMessageActions } from "./telegram.js";
-
-const handleTelegramAction = vi.fn(async () => ({ ok: true }));
+const { handleTelegramAction } = vi.hoisted(() => ({
+  handleTelegramAction: vi.fn(async () => ({ ok: true })),
+}));
 
 vi.mock("../../../agents/tools/telegram-actions.js", () => ({
   handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
 }));
+import { telegramMessageActions } from "./telegram.js";
 
 describe("telegramMessageActions", () => {
   it("excludes sticker actions when not enabled", () => {

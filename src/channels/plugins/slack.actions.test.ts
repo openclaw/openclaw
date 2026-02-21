@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSlackActions } from "./slack.actions.js";
-
-const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
+const { handleSlackAction } = vi.hoisted(() => ({
+  handleSlackAction: vi.fn(async () => ({ details: { ok: true } })),
+}));
 
 vi.mock("../../agents/tools/slack-actions.js", () => ({
   handleSlackAction: (...args: unknown[]) => handleSlackAction(...args),
 }));
+import { createSlackActions } from "./slack.actions.js";
 
 describe("slack actions adapter", () => {
   it("forwards threadId for read", async () => {

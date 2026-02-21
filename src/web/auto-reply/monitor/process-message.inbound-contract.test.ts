@@ -10,7 +10,7 @@ vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
   }),
 }));
 
-import { processMessage } from "./process-message.js";
+const { processMessage } = await import("./process-message.js");
 
 describe("web processMessage inbound contract", () => {
   it("passes a finalized MsgContext to the dispatcher", async () => {

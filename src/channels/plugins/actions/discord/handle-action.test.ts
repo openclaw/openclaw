@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleDiscordMessageAction } from "./handle-action.js";
-
-const handleDiscordAction = vi.fn(async () => ({ details: { ok: true } }));
+const { handleDiscordAction } = vi.hoisted(() => ({
+  handleDiscordAction: vi.fn(async () => ({ details: { ok: true } })),
+}));
 
 vi.mock("../../../../agents/tools/discord-actions.js", () => ({
   handleDiscordAction: (...args: unknown[]) => handleDiscordAction(...args),
 }));
+import { handleDiscordMessageAction } from "./handle-action.js";
 
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
