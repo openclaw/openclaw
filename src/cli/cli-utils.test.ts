@@ -20,8 +20,13 @@ describe("waitForever", () => {
 
 describe("shouldSkipRespawnForArgv", () => {
   it("skips respawn for help/version calls", () => {
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "--help"])).toBe(true);
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "-V"])).toBe(true);
+    const cases = [
+      ["node", "openclaw", "--help"],
+      ["node", "openclaw", "-V"],
+    ] as const;
+    for (const argv of cases) {
+      expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
+    }
   });
 
   it("keeps respawn path for normal commands", () => {
@@ -79,9 +84,10 @@ describe("parseByteSize", () => {
   });
 
   it("rejects invalid values", () => {
-    expect(() => parseByteSize("")).toThrow();
-    expect(() => parseByteSize("nope")).toThrow();
-    expect(() => parseByteSize("-5kb")).toThrow();
+    const cases = ["", "nope", "-5kb"] as const;
+    for (const input of cases) {
+      expect(() => parseByteSize(input), input || "<empty>").toThrow();
+    }
   });
 });
 
