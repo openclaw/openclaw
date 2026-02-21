@@ -230,7 +230,7 @@ export function mergeSessionEntry(
   patch: Partial<SessionEntry>,
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
+  const updatedAt = patch.updatedAt ?? existing?.updatedAt ?? Date.now();
   if (!existing) {
     return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
   }
