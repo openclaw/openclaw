@@ -82,6 +82,11 @@ export function isModernModelRef(ref: ModelRef): boolean {
   if (provider === "opencode" && id === "alpha-glm-4.7") {
     return false;
   }
+  // Opencode MiniMax variants have been intermittently unstable in live runs;
+  // prefer the rest of the modern catalog for deterministic smoke coverage.
+  if (provider === "opencode" && matchesPrefix(id, MINIMAX_PREFIXES)) {
+    return false;
+  }
 
   if (provider === "openrouter" || provider === "opencode") {
     return matchesAny(id, [
