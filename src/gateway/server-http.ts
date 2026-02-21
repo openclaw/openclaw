@@ -155,6 +155,7 @@ async function authorizeCanvasRequest(params: {
       connectAuth: { token, password: token },
       req,
       trustedProxies,
+      allowTailscaleHeaderAuth: false,
       rateLimiter,
     });
     if (authResult.ok) {
@@ -532,6 +533,7 @@ export function createGatewayHttpServer(opts: {
             connectAuth: token ? { token, password: token } : null,
             req,
             trustedProxies,
+            allowTailscaleHeaderAuth: false,
             rateLimiter,
           });
           if (!authResult.ok) {

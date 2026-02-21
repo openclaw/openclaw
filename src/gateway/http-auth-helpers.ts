@@ -17,6 +17,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
     connectAuth: token ? { token, password: token } : null,
     req: params.req,
     trustedProxies: params.trustedProxies,
+    allowTailscaleHeaderAuth: false,
     rateLimiter: params.rateLimiter,
   });
   if (!authResult.ok) {

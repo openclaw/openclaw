@@ -325,6 +325,11 @@ export async function authorizeGatewayConnect(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  /**
+   * Opt-in for accepting Tailscale Serve identity headers as primary auth.
+   * Default is disabled for HTTP surfaces; WS connect enables this explicitly.
+   */
+  allowTailscaleHeaderAuth?: boolean;
   /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
   rateLimiter?: AuthRateLimiter;
   /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
@@ -334,6 +339,7 @@ export async function authorizeGatewayConnect(params: {
 }): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
+  const allowTailscaleHeaderAuth = params.allowTailscaleHeaderAuth === true;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
   if (auth.mode === "trusted-proxy") {
@@ -376,7 +382,7 @@ export async function authorizeGatewayConnect(params: {
     }
   }
 
-  if (auth.allowTailscale && !localDirect) {
+  if (allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
