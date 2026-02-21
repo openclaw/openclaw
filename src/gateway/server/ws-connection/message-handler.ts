@@ -786,8 +786,10 @@ export function attachGatewayWsMessageHandler(params: {
               return;
             }
           } else {
+            // Older pair records may have been created before roles/scopes metadata
+            // became required for every reconnection.
             const hasLegacyPairedMetadata =
-              paired.roles === undefined && paired.scopes === undefined;
+              paired.roles === undefined || paired.scopes === undefined;
             const pairedRoles = Array.isArray(paired.roles)
               ? paired.roles
               : paired.role
