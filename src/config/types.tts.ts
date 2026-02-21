@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "cli";
 
 export type TtsMode = "final" | "all";
 
@@ -58,6 +58,12 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+  };
+  /** CLI/local TTS (e.g. qwen-tts, MLX-Audio). Placeholders: {text}, {output}, {format}. */
+  cli?: {
+    command: string;
+    args?: string[];
+    timeoutSeconds?: number;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

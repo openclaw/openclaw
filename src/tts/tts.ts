@@ -25,6 +25,7 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { runExec } from "../process/exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   edgeTTS,
@@ -114,6 +115,11 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+  };
+  cli?: {
+    command: string;
+    args: string[];
+    timeoutMs: number;
   };
   edge: {
     enabled: boolean;
@@ -290,6 +296,14 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
+    cli:
+      raw.cli?.command?.trim()
+        ? {
+            command: raw.cli.command.trim(),
+            args: Array.isArray(raw.cli.args) ? raw.cli.args.map(String) : [],
+            timeoutMs: (raw.cli.timeoutSeconds ?? 60) * 1000,
+          }
+        : undefined,
     edge: {
       enabled: raw.edge?.enabled ?? true,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
@@ -441,6 +455,12 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (config.edge.enabled) {
+    return "edge";
+  }
+  if (config.cli?.command) {
+    return "cli";
+  }
   return "edge";
 }
 
@@ -508,7 +528,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "cli"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -517,6 +537,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "cli") {
+    return Boolean(config.cli?.command);
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -527,6 +550,58 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${error.message}`;
+}
+
+function formatToExtension(format: string): string {
+  const lower = format.toLowerCase().trim();
+  if (lower === "ogg" || lower === "opus") {
+    return ".ogg";
+  }
+  if (lower === "wav") {
+    return ".wav";
+  }
+  return ".mp3";
+}
+
+function formatFromExtension(extension: string): string {
+  if (extension === ".ogg" || extension === ".opus") {
+    return "ogg";
+  }
+  if (extension === ".wav") {
+    return "wav";
+  }
+  return "mp3";
+}
+
+async function runCliTts(params: {
+  text: string;
+  config: ResolvedTtsConfig;
+  outputFormat: string;
+  outputExtension: string;
+}): Promise<{ audioPath: string; outputFormat: string }> {
+  const cli = params.config.cli;
+  if (!cli?.command) {
+    throw new Error("cli: not configured");
+  }
+  const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+  const audioPath = path.join(tempDir, `voice-${Date.now()}${params.outputExtension}`);
+  const args = (cli.args ?? []).map((arg) =>
+    arg
+      .replace(/\{text\}/g, params.text)
+      .replace(/\{output\}/g, audioPath)
+      .replace(/\{format\}/g, params.outputFormat),
+  );
+  await runExec(cli.command, args, { timeoutMs: cli.timeoutMs });
+  if (!existsSync(audioPath)) {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    throw new Error("cli: command did not produce output file");
+  }
+  scheduleCleanup(tempDir);
+  return { audioPath, outputFormat: params.outputFormat };
 }
 
 export async function textToSpeech(params: {
@@ -558,6 +633,29 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "cli") {
+        if (!config.cli?.command) {
+          errors.push("cli: not configured");
+          continue;
+        }
+        const cliOutputFormat = formatFromExtension(output.extension);
+        const cliResult = await runCliTts({
+          text: params.text,
+          config,
+          outputFormat: cliOutputFormat,
+          outputExtension: output.extension,
+        });
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: cliResult.audioPath });
+        return {
+          success: true,
+          audioPath: cliResult.audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider: "cli",
+          outputFormat: cliResult.outputFormat,
+          voiceCompatible,
+        };
+      }
+
       if (provider === "edge") {
         if (!config.edge.enabled) {
           errors.push("edge: disabled");
@@ -722,6 +820,31 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "cli") {
+        if (!config.cli?.command) {
+          errors.push("cli: not configured");
+          continue;
+        }
+        const cliResult = await runCliTts({
+          text: params.text,
+          config,
+          outputFormat: "wav",
+          outputExtension: ".wav",
+        });
+        const audioBuffer = readFileSync(cliResult.audioPath);
+        try {
+          rmSync(path.dirname(cliResult.audioPath), { recursive: true, force: true });
+        } catch {
+          // ignore cleanup
+        }
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider: "cli",
+        };
+      }
+
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
         continue;
