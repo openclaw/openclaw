@@ -3,7 +3,6 @@ import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   readConfigFileSnapshot,
@@ -12,7 +11,6 @@ import {
 } from "../../config/config.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
-import { logVerbose } from "../../globals.js";
 import { resolveIMessageAccount } from "../../imessage/accounts.js";
 import {
   addChannelAllowFromStoreEntry,
@@ -25,6 +23,7 @@ import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
+import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type AllowlistScope = "dm" | "group" | "all";
@@ -331,11 +330,9 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   if (parsed.action === "error") {
     return { shouldContinue: false, reply: { text: `⚠️ ${parsed.message}` } };
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /allowlist from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/allowlist");
+  if (unauthorized) {
+    return unauthorized;
   }
 
   const channelId =
@@ -520,11 +517,13 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  if (!isCommandFlagEnabled(params.cfg, "config")) {
-    return {
-      shouldContinue: false,
-      reply: { text: "⚠️ /allowlist edits are disabled. Set commands.config=true to enable." },
-    };
+  const disabled = requireCommandFlagEnabled(params.cfg, {
+    label: "/allowlist edits",
+    configKey: "config",
+    disabledVerb: "are",
+  });
+  if (disabled) {
+    return disabled;
   }
 
   const shouldUpdateConfig = parsed.target !== "store";
