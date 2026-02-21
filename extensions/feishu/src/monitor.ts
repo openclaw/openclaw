@@ -281,6 +281,7 @@ async function monitorWebhook({
     if (guard.isTripped()) {
       return;
     }
+
     void Promise.resolve(webhookHandler(req, res))
       .catch((err) => {
         if (!guard.isTripped()) {

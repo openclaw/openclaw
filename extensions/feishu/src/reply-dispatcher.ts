@@ -8,8 +8,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { MentionTarget } from "./mention.js";
-import { buildMentionedCardContent } from "./mention.js";
+import { buildMentionedCardContent, type MentionTarget } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
@@ -68,13 +67,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }),
   });
 
-  const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
+  const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", account.accountId, {
     fallbackLimit: 4000,
   });
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
-  const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", account.accountId);
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "feishu",
+    accountId: account.accountId,
+  });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const streamingEnabled = account.config?.streaming === true && renderMode !== "raw";
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";

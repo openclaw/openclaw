@@ -22,27 +22,21 @@ export function resolveFeishuGroupConfig(params: {
 }): FeishuGroupConfig | undefined {
   const groups = params.cfg?.groups ?? {};
   const groupId = params.groupId?.trim();
-  if (!groupId) {
-    return undefined;
-  }
+  if (!groupId) return undefined;
 
-  const direct = groups[groupId];
-  if (direct) {
-    return direct;
-  }
+  const direct = groups[groupId] as FeishuGroupConfig | undefined;
+  if (direct) return direct;
 
   const lowered = groupId.toLowerCase();
   const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
-  return matchKey ? groups[matchKey] : undefined;
+  return matchKey ? (groups[matchKey] as FeishuGroupConfig | undefined) : undefined;
 }
 
 export function resolveFeishuGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
   const cfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
-  if (!cfg) {
-    return undefined;
-  }
+  if (!cfg) return undefined;
 
   const groupConfig = resolveFeishuGroupConfig({
     cfg,
@@ -59,12 +53,8 @@ export function isFeishuGroupAllowed(params: {
   senderName?: string | null;
 }): boolean {
   const { groupPolicy } = params;
-  if (groupPolicy === "disabled") {
-    return false;
-  }
-  if (groupPolicy === "open") {
-    return true;
-  }
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
   return resolveFeishuAllowlistMatch(params).allowed;
 }
 

@@ -11,6 +11,11 @@ const FileType = Type.Union([
   Type.Literal("shortcut"),
 ]);
 
+const DocType = Type.Union([
+  Type.Literal("docx", { description: "New generation document (default)" }),
+  Type.Literal("doc", { description: "Legacy document" }),
+]);
+
 export const FeishuDriveSchema = Type.Union([
   Type.Object({
     action: Type.Literal("list"),
@@ -40,6 +45,23 @@ export const FeishuDriveSchema = Type.Union([
     action: Type.Literal("delete"),
     file_token: Type.String({ description: "File token to delete" }),
     type: FileType,
+  }),
+  Type.Object({
+    action: Type.Literal("import_document"),
+    title: Type.String({
+      description: "Document title",
+    }),
+    content: Type.String({
+      description:
+        "Markdown content to import. Supports full Markdown syntax including tables, lists, code blocks, etc.",
+    }),
+    folder_token: Type.Optional(
+      Type.String({
+        description:
+          "Target folder token (optional, defaults to root). Use 'list' to find folder tokens.",
+      }),
+    ),
+    doc_type: Type.Optional(DocType),
   }),
 ]);
 

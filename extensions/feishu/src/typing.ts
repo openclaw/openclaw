@@ -36,7 +36,6 @@ export async function addTypingIndicator(params: {
       },
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
     const reactionId = (response as any)?.data?.reaction_id ?? null;
     return { messageId, reactionId };
   } catch (err) {
@@ -55,14 +54,10 @@ export async function removeTypingIndicator(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, state, accountId } = params;
-  if (!state.reactionId) {
-    return;
-  }
+  if (!state.reactionId) return;
 
   const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    return;
-  }
+  if (!account.configured) return;
 
   const client = createFeishuClient(account);
 
