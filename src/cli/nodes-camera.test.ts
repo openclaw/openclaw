@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   cameraTempPath,
   parseCameraClipPayload,
@@ -11,15 +11,6 @@ import {
   writeUrlToFile,
 } from "./nodes-camera.js";
 import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
-
-async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempDir("openclaw-test-", run);
