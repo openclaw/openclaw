@@ -1,7 +1,9 @@
 import {
   CombinedAutocompleteProvider,
   Container,
+  Key,
   Loader,
+  matchesKey,
   ProcessTerminal,
   Text,
   TUI,
@@ -215,6 +217,24 @@ export function resolveGatewayDisconnectState(reason?: string): {
   };
 }
 
+export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
+  const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
+  const now = params?.now ?? (() => Date.now());
+  let lastBackspaceAt = -1;
+
+  return (data: string): string => {
+    if (!matchesKey(data, Key.backspace)) {
+      return data;
+    }
+    const ts = now();
+    if (lastBackspaceAt >= 0 && ts - lastBackspaceAt <= dedupeWindowMs) {
+      return "";
+    }
+    lastBackspaceAt = ts;
+    return data;
+  };
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -395,6 +415,14 @@ export async function runTui(opts: TuiOptions) {
   });
 
   const tui = new TUI(new ProcessTerminal());
+  const dedupeBackspace = createBackspaceDeduper();
+  tui.addInputListener((data) => {
+    const next = dedupeBackspace(data);
+    if (next.length === 0) {
+      return { consume: true };
+    }
+    return { data: next };
+  });
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
