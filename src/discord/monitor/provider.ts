@@ -299,7 +299,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             );
             const existing = nextGuilds[entry.guildId] ?? {};
             const mergedChannels = { ...sourceGuild.channels, ...existing.channels };
-            const mergedGuild = { ...sourceGuild, ...existing, channels: mergedChannels };
+            const mergedGuild = {
+              ...sourceGuild,
+              ...existing,
+              channels: Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined,
+            };
             nextGuilds[entry.guildId] = mergedGuild;
             if (source.channelKey && entry.channelId) {
               const sourceChannel = sourceGuild.channels?.[source.channelKey];
