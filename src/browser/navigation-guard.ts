@@ -5,6 +5,7 @@ import {
 } from "../infra/net/ssrf.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
+const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
 
 export class InvalidBrowserNavigationUrlError extends Error {
   constructor(message: string) {
@@ -42,7 +43,12 @@ export async function assertBrowserNavigationAllowed(
   }
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
-    return;
+    if (SAFE_NON_NETWORK_URLS.has(parsed.href)) {
+      return;
+    }
+    throw new InvalidBrowserNavigationUrlError(
+      `Navigation blocked: unsupported protocol "${parsed.protocol}"`,
+    );
   }
 
   await resolvePinnedHostnameWithPolicy(parsed.hostname, {
