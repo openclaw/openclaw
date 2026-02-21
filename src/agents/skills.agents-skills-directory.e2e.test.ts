@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { writeSkill } from "./skills.test-helpers.js";
 
+const tempDirs: string[] = [];
+
+async function createTempDir(prefix: string) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
 function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
   return buildWorkspaceSkillsPrompt(workspaceDir, {
     managedSkillsDir: managedDir,
@@ -13,7 +21,7 @@ function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir:
 }
 
 async function createWorkspaceSkillDirs() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+  const workspaceDir = await createTempDir("openclaw-");
   return {
     workspaceDir,
     managedDir: path.join(workspaceDir, ".managed"),
@@ -25,12 +33,17 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   let fakeHome: string;
 
   beforeEach(async () => {
-    fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
+    fakeHome = await createTempDir("openclaw-home-");
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all(
+      tempDirs
+        .splice(0, tempDirs.length)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   });
 
   it("loads project .agents/skills/ above managed and below workspace", async () => {
