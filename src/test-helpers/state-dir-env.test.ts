@@ -42,4 +42,24 @@ describe("state-dir-env helpers", () => {
     await expect(fs.stat(capturedStateDir)).rejects.toThrow();
     await expect(fs.stat(capturedTempRoot)).rejects.toThrow();
   });
+
+  it("withStateDirEnv restores env and cleans temp root when callback throws", async () => {
+    const prevOpenClaw = process.env.OPENCLAW_STATE_DIR;
+    const prevLegacy = process.env.CLAWDBOT_STATE_DIR;
+
+    let capturedTempRoot = "";
+    let capturedStateDir = "";
+    await expect(
+      withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
+        capturedTempRoot = tempRoot;
+        capturedStateDir = stateDir;
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(process.env.OPENCLAW_STATE_DIR).toBe(prevOpenClaw);
+    expect(process.env.CLAWDBOT_STATE_DIR).toBe(prevLegacy);
+    await expect(fs.stat(capturedStateDir)).rejects.toThrow();
+    await expect(fs.stat(capturedTempRoot)).rejects.toThrow();
+  });
 });
