@@ -37,6 +37,7 @@ export function createWebOnMessageHandler(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      lifecycleOwnerAgentId?: string;
     },
   ) =>
     processMessage({
@@ -58,6 +59,7 @@ export function createWebOnMessageHandler(params: {
       buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
       groupHistory: opts?.groupHistory,
       suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
+      lifecycleOwnerAgentId: opts?.lifecycleOwnerAgentId,
     });
 
   return async (msg: WebInboundMsg) => {
