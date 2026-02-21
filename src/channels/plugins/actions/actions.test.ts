@@ -764,6 +764,19 @@ describe("slack actions adapter", () => {
     });
   });
 
+  it("forwards numeric threadId for read", async () => {
+    await runSlackAction("read", {
+      channelId: "C1",
+      threadId: 1771653565.731329,
+    });
+
+    expectFirstSlackAction({
+      action: "readMessages",
+      channelId: "C1",
+      threadId: "1771653565.731329",
+    });
+  });
+
   it("forwards normalized limit for emoji-list", async () => {
     await runSlackAction("emoji-list", {
       limit: "2.9",
