@@ -578,6 +578,7 @@ export const SlackAccountSchema = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     streaming: z.boolean().optional(),
+    streamMode: z.enum(["replace", "status_final", "append", "off"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),

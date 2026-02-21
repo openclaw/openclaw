@@ -312,6 +312,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let appendSourceText = "";
   let statusUpdateCount = 0;
   const updateDraftFromPartial = (text?: string) => {
+    if (streamMode === "off") {
+      return;
+    }
     const trimmed = text?.trimEnd();
     if (!trimmed) {
       return;
