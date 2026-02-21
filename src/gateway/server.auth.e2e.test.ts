@@ -873,7 +873,13 @@ describe("gateway server auth/connect", () => {
         const { randomUUID } = await import("node:crypto");
         const os = await import("node:os");
         const path = await import("node:path");
-        const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+        const scopes = [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+        ];
         const { device } = await createSignedDevice({
           token: "secret",
           scopes,

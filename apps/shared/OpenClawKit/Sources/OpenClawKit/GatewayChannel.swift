@@ -318,7 +318,7 @@ public actor GatewayChannelActor {
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
-            scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+            scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
             caps: [],
             commands: [],
             permissions: [:],
