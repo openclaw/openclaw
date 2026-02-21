@@ -45,7 +45,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { compactEmbeddedPiSessionDirect, estimateSessionFileTokens } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
@@ -60,6 +60,14 @@ import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+
+/**
+ * When the session store exceeds this fraction of the context window, force
+ * compaction before prompting.  This prevents unbounded session growth that
+ * context pruning (cache-ttl) or DM history limiting would otherwise mask
+ * from the library's auto-compaction trigger.  (#11971)
+ */
+const SESSION_GROWTH_COMPACTION_THRESHOLD = 0.8;
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -481,6 +489,63 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       try {
+        // Session-growth guard: the session store may grow unbounded when
+        // context pruning (cache-ttl) or DM history limiting masks the true
+        // session size from the library's auto-compaction trigger.  Check the
+        // actual stored token count and force compaction if needed.  (#11971)
+        if (params.sessionFile) {
+          try {
+            const storeTokens = await estimateSessionFileTokens(params.sessionFile);
+            const compactionThreshold = Math.floor(
+              ctxInfo.tokens * SESSION_GROWTH_COMPACTION_THRESHOLD,
+            );
+            if (storeTokens > compactionThreshold) {
+              log.warn(
+                `[session-growth-guard] Session store (${storeTokens} tokens) exceeds ` +
+                  `${Math.round(SESSION_GROWTH_COMPACTION_THRESHOLD * 100)}% of context ` +
+                  `window (${ctxInfo.tokens}); forcing pre-prompt compaction`,
+              );
+              const preCompactResult = await compactEmbeddedPiSessionDirect({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                messageChannel: params.messageChannel,
+                messageProvider: params.messageProvider,
+                agentAccountId: params.agentAccountId,
+                authProfileId: lastProfileId,
+                sessionFile: params.sessionFile,
+                workspaceDir: resolvedWorkspace,
+                agentDir,
+                config: params.config,
+                skillsSnapshot: params.skillsSnapshot,
+                senderIsOwner: params.senderIsOwner,
+                provider,
+                model: modelId,
+                thinkLevel,
+                reasoningLevel: params.reasoningLevel,
+                bashElevated: params.bashElevated,
+                extraSystemPrompt: params.extraSystemPrompt,
+                ownerNumbers: params.ownerNumbers,
+              });
+              if (preCompactResult.compacted) {
+                autoCompactionCount += 1;
+                log.info(
+                  `[session-growth-guard] Pre-prompt compaction succeeded ` +
+                    `(${preCompactResult.result?.tokensBefore} -> ` +
+                    `${preCompactResult.result?.tokensAfter ?? "?"} tokens)`,
+                );
+              } else {
+                log.warn(
+                  `[session-growth-guard] Pre-prompt compaction did not compact: ${preCompactResult.reason ?? "unknown"}`,
+                );
+              }
+            }
+          } catch (guardErr) {
+            log.warn(
+              `[session-growth-guard] Failed to check session size: ${describeUnknownError(guardErr)}`,
+            );
+          }
+        }
+
         while (true) {
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });

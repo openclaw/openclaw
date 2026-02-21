@@ -28,6 +28,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import { estimateMessagesTokens } from "../compaction.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
@@ -749,4 +750,25 @@ export async function compactEmbeddedPiSession(
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => compactEmbeddedPiSessionDirect(params)),
   );
+}
+
+/**
+ * Estimates total tokens stored in a session file without creating a full
+ * agent session.  Used by the session-growth guard in run.ts to detect when
+ * context pruning or history limiting has masked unbounded session growth
+ * from the library's auto-compaction trigger.  (#11971)
+ */
+export async function estimateSessionFileTokens(sessionFile: string): Promise<number> {
+  try {
+    await fs.access(sessionFile);
+  } catch {
+    return 0;
+  }
+  try {
+    const sm = SessionManager.open(sessionFile);
+    const ctx = sm.buildSessionContext();
+    return estimateMessagesTokens(ctx.messages);
+  } catch {
+    return 0;
+  }
 }
