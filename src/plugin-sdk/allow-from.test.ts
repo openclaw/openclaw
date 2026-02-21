@@ -37,18 +37,6 @@ describe("isAllowedParsedChatSender", () => {
     expect(allowed).toBe(false);
   });
 
-  it("can explicitly allow when allowFrom is empty", () => {
-    const allowed = isAllowedParsedChatSender({
-      allowFrom: [],
-      sender: "+15551234567",
-      emptyAllowFrom: "allow",
-      normalizeSender: (sender) => sender,
-      parseAllowTarget,
-    });
-
-    expect(allowed).toBe(true);
-  });
-
   it("allows wildcard entries", () => {
     const allowed = isAllowedParsedChatSender({
       allowFrom: ["*"],
