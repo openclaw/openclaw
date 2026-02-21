@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
@@ -10,6 +11,7 @@ const mocks = {
   scanSummary: vi.fn(),
   fetchGuard: vi.fn(),
 };
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 function mockDownloadResponse() {
   mocks.fetchGuard.mockResolvedValue({
@@ -85,20 +87,6 @@ async function writeTarBz2Skill(params: {
   });
 }
 
-function restoreOpenClawStateDir(originalValue: string | undefined): void {
-  if (originalValue === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-    return;
-  }
-  process.env.OPENCLAW_STATE_DIR = originalValue;
-}
-
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
-afterEach(() => {
-  restoreOpenClawStateDir(originalStateDir);
-});
-
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => mocks.runCommand(...args),
 }));
@@ -117,6 +105,7 @@ vi.mock("../security/skill-scanner.js", async (importOriginal) => {
 
 describe("installSkill download extraction safety (tar.bz2)", () => {
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     mocks.runCommand.mockReset();
     mocks.scanSummary.mockReset();
     mocks.fetchGuard.mockReset();
@@ -127,6 +116,10 @@ describe("installSkill download extraction safety (tar.bz2)", () => {
       info: 0,
       findings: [],
     });
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it("rejects tar.bz2 traversal before extraction", async () => {
