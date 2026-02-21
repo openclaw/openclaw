@@ -298,3 +298,35 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(store[sessionKey]?.outputTokens).toBe(50);
   });
 });
+
+describe("createFollowupRunner passes agentDir to embedded run", () => {
+  it("uses queued run agentDir when invoking runEmbeddedPiAgent", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const agentDir = path.join("/tmp", "agent-dir");
+    const queued = baseQueuedRun();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner({
+      ...queued,
+      run: {
+        ...queued.run,
+        agentDir,
+      },
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
+    expect(call?.agentDir).toBe(agentDir);
+  });
+});
