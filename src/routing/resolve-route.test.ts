@@ -342,6 +342,21 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.channel");
   });
 
+  test("binding accountId matching is canonicalized", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [{ agentId: "biz", match: { channel: "discord", accountId: "BIZ" } }],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: " biz ",
+      peer: { kind: "direct", id: "u-1" },
+    });
+    expect(route.agentId).toBe("biz");
+    expect(route.matchedBy).toBe("binding.account");
+    expect(route.accountId).toBe("biz");
+  });
+
   test("defaultAgentId is used when no binding matches", () => {
     const cfg: OpenClawConfig = {
       agents: {

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
@@ -201,5 +202,50 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
+  });
+});
+
+describe("resolveAndPersistSessionFile", () => {
+  let tempDir: string;
+  let storePath: string;
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-file-test-"));
+    sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    storePath = path.join(sessionsDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("persists fallback topic transcript paths for sessions without sessionFile", async () => {
+    const sessionId = "topic-session-id";
+    const sessionKey = "agent:main:telegram:group:123:topic:456";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
+    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, sessionsDir, 456);
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey,
+      sessionStore,
+      storePath,
+      sessionEntry: sessionStore[sessionKey],
+      fallbackSessionFile,
+    });
+
+    expect(result.sessionFile).toBe(fallbackSessionFile);
+
+    const saved = loadSessionStore(storePath, { skipCache: true });
+    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
 });
