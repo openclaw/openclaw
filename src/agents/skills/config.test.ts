@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isBundledSkillAllowed,
-  resolveBundledAllowlist,
-  type SkillEntry,
-} from "./config.js";
+import { isBundledSkillAllowed, resolveBundledAllowlist, type SkillEntry } from "./config.js";
 
 function mockBundledEntry(name: string): SkillEntry {
   return {
