@@ -15,14 +15,6 @@ import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-regis
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
-  addAllowlistUserEntriesFromConfigEntry,
-  buildAllowlistResolutionSummary,
-  mergeAllowlist,
-  resolveAllowlistIdAdditions,
-  patchAllowlistUsersInConfigEntries,
-  summarizeMapping,
-} from "../../channels/allowlists/resolve-utils.js";
-import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -35,11 +27,7 @@ import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
-import { attachDiscordGatewayLogging } from "../gateway-logging.js";
-import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
-import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
@@ -57,7 +45,6 @@ import {
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
-import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -73,6 +60,8 @@ import {
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
+import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
+import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { createThreadBindingManager } from "./thread-bindings.js";
 
@@ -294,160 +283,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const ephemeralDefault = slashCommand.ephemeral;
   const voiceEnabled = discordCfg.voice?.enabled !== false;
 
-  const resolveAllowlistConfig = async () => {
-    if (!token) {
-      return;
-    }
-    if (guildEntries && Object.keys(guildEntries).length > 0) {
-      try {
-        const entries: Array<{ input: string; guildKey: string; channelKey?: string }> = [];
-        for (const [guildKey, guildCfg] of Object.entries(guildEntries)) {
-          if (guildKey === "*") {
-            continue;
-          }
-          const channels = guildCfg?.channels ?? {};
-          const channelKeys = Object.keys(channels).filter((key) => key !== "*");
-          if (channelKeys.length === 0) {
-            const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
-            entries.push({ input, guildKey });
-            continue;
-          }
-          for (const channelKey of channelKeys) {
-            entries.push({
-              input: `${guildKey}/${channelKey}`,
-              guildKey,
-              channelKey,
-            });
-          }
-        }
-        if (entries.length > 0) {
-          const resolved = await resolveDiscordChannelAllowlist({
-            token,
-            entries: entries.map((entry) => entry.input),
-            fetcher: discordRestFetch,
-          });
-          const nextGuilds = { ...guildEntries };
-          const mapping: string[] = [];
-          const unresolved: string[] = [];
-          for (const entry of resolved) {
-            const source = entries.find((item) => item.input === entry.input);
-            if (!source) {
-              continue;
-            }
-            const sourceGuild = guildEntries?.[source.guildKey] ?? {};
-            if (!entry.resolved || !entry.guildId) {
-              unresolved.push(entry.input);
-              continue;
-            }
-            mapping.push(
-              entry.channelId
-                ? `${entry.input}→${entry.guildId}/${entry.channelId}`
-                : `${entry.input}→${entry.guildId}`,
-            );
-            const existing = nextGuilds[entry.guildId] ?? {};
-            const mergedChannels = { ...sourceGuild.channels, ...existing.channels };
-            const mergedGuild = { ...sourceGuild, ...existing, channels: mergedChannels };
-            nextGuilds[entry.guildId] = mergedGuild;
-            if (source.channelKey && entry.channelId) {
-              const sourceChannel = sourceGuild.channels?.[source.channelKey];
-              if (sourceChannel) {
-                nextGuilds[entry.guildId] = {
-                  ...mergedGuild,
-                  channels: {
-                    ...mergedChannels,
-                    [entry.channelId]: {
-                      ...sourceChannel,
-                      ...mergedChannels?.[entry.channelId],
-                    },
-                  },
-                };
-              }
-            }
-          }
-          guildEntries = nextGuilds;
-          summarizeMapping("discord channels", mapping, unresolved, runtime);
-        }
-      } catch (err) {
-        runtime.log?.(
-          `discord channel resolve failed; using config entries. ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-
-    const allowEntries =
-      allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
-    if (allowEntries.length > 0) {
-      try {
-        const resolvedUsers = await resolveDiscordUserAllowlist({
-          token,
-          entries: allowEntries.map((entry) => String(entry)),
-          fetcher: discordRestFetch,
-        });
-        const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(resolvedUsers);
-        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
-        summarizeMapping("discord users", mapping, unresolved, runtime);
-      } catch (err) {
-        runtime.log?.(
-          `discord user resolve failed; using config entries. ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-
-    if (guildEntries && Object.keys(guildEntries).length > 0) {
-      const userEntries = new Set<string>();
-      for (const guild of Object.values(guildEntries)) {
-        if (!guild || typeof guild !== "object") {
-          continue;
-        }
-        addAllowlistUserEntriesFromConfigEntry(userEntries, guild);
-        const channels = (guild as { channels?: Record<string, unknown> }).channels ?? {};
-        for (const channel of Object.values(channels)) {
-          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
-        }
-      }
-
-      if (userEntries.size > 0) {
-        try {
-          const resolvedUsers = await resolveDiscordUserAllowlist({
-            token,
-            entries: Array.from(userEntries),
-            fetcher: discordRestFetch,
-          });
-          const { resolvedMap, mapping, unresolved } =
-            buildAllowlistResolutionSummary(resolvedUsers);
-
-          const nextGuilds = { ...guildEntries };
-          for (const [guildKey, guildConfig] of Object.entries(guildEntries ?? {})) {
-            if (!guildConfig || typeof guildConfig !== "object") {
-              continue;
-            }
-            const nextGuild = { ...guildConfig } as Record<string, unknown>;
-            const users = (guildConfig as { users?: string[] }).users;
-            if (Array.isArray(users) && users.length > 0) {
-              const additions = resolveAllowlistIdAdditions({ existing: users, resolvedMap });
-              nextGuild.users = mergeAllowlist({ existing: users, additions });
-            }
-            const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
-            if (channels && typeof channels === "object") {
-              nextGuild.channels = patchAllowlistUsersInConfigEntries({
-                entries: channels,
-                resolvedMap,
-              });
-            }
-            nextGuilds[guildKey] = nextGuild;
-          }
-          guildEntries = nextGuilds;
-          summarizeMapping("discord channel users", mapping, unresolved, runtime);
-        } catch (err) {
-          runtime.log?.(
-            `discord channel user resolve failed; using config entries. ${formatErrorMessage(err)}`,
-          );
-        }
-      }
-    }
-  };
-
-  await resolveAllowlistConfig();
+  const allowlistResolved = await resolveDiscordAllowlistConfig({
+    token,
+    guildEntries,
+    allowFrom,
+    fetcher: discordRestFetch,
+    runtime,
+  });
+  guildEntries = allowlistResolved.guildEntries;
+  allowFrom = allowlistResolved.allowFrom;
 
   if (shouldLogVerbose()) {
     logVerbose(
@@ -711,120 +555,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 
-  const runGatewayLifecycle = async () => {
-    // Start exec approvals handler after client is ready
-    if (execApprovalsHandler) {
-      await execApprovalsHandler.start();
-    }
-
-    const gateway = client.getPlugin<GatewayPlugin>("gateway");
-    if (gateway) {
-      registerGateway(account.accountId, gateway);
-    }
-    const gatewayEmitter = getDiscordGatewayEmitter(gateway);
-    const stopGatewayLogging = attachDiscordGatewayLogging({
-      emitter: gatewayEmitter,
-      runtime,
-    });
-    const abortSignal = opts.abortSignal;
-    const onAbort = () => {
-      if (!gateway) {
-        return;
-      }
-      // Carbon emits an error when maxAttempts is 0; keep a one-shot listener to avoid
-      // an unhandled error after we tear down listeners during abort.
-      gatewayEmitter?.once("error", () => {});
-      gateway.options.reconnect = { maxAttempts: 0 };
-      gateway.disconnect();
-    };
-    if (abortSignal?.aborted) {
-      onAbort();
-    } else {
-      abortSignal?.addEventListener("abort", onAbort, { once: true });
-    }
-
-    // Timeout to detect zombie connections where HELLO is never received.
-    const HELLO_TIMEOUT_MS = 30000;
-    let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    const onGatewayDebug = (msg: unknown) => {
-      const message = String(msg);
-      if (!message.includes("WebSocket connection opened")) {
-        return;
-      }
-      if (helloTimeoutId) {
-        clearTimeout(helloTimeoutId);
-      }
-      helloTimeoutId = setTimeout(() => {
-        if (!gateway?.isConnected) {
-          runtime.log?.(
-            danger(
-              `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
-            ),
-          );
-          gateway?.disconnect();
-          gateway?.connect(false);
-        }
-        helloTimeoutId = undefined;
-      }, HELLO_TIMEOUT_MS);
-    };
-    gatewayEmitter?.on("debug", onGatewayDebug);
-
-    // Disallowed intents (4014) should stop the provider without crashing the gateway.
-    let sawDisallowedIntents = false;
-    try {
-      await waitForDiscordGatewayStop({
-        gateway: gateway
-          ? {
-              emitter: gatewayEmitter,
-              disconnect: () => gateway.disconnect(),
-            }
-          : undefined,
-        abortSignal,
-        onGatewayError: (err) => {
-          if (isDiscordDisallowedIntentsError(err)) {
-            sawDisallowedIntents = true;
-            runtime.error?.(
-              danger(
-                "discord: gateway closed with code 4014 (missing privileged gateway intents). Enable the required intents in the Discord Developer Portal or disable them in config.",
-              ),
-            );
-            return;
-          }
-          runtime.error?.(danger(`discord gateway error: ${String(err)}`));
-        },
-        shouldStopOnError: (err) => {
-          const message = String(err);
-          return (
-            message.includes("Max reconnect attempts") ||
-            message.includes("Fatal Gateway error") ||
-            isDiscordDisallowedIntentsError(err)
-          );
-        },
-      });
-    } catch (err) {
-      if (!sawDisallowedIntents && !isDiscordDisallowedIntentsError(err)) {
-        throw err;
-      }
-    } finally {
-      unregisterGateway(account.accountId);
-      stopGatewayLogging();
-      if (helloTimeoutId) {
-        clearTimeout(helloTimeoutId);
-      }
-      gatewayEmitter?.removeListener("debug", onGatewayDebug);
-      abortSignal?.removeEventListener("abort", onAbort);
-      if (voiceManager) {
-        await voiceManager.destroy();
-        voiceManagerRef.current = null;
-      }
-      if (execApprovalsHandler) {
-        await execApprovalsHandler.stop();
-      }
-      threadBindings.stop();
-    }
-  };
-
-  await runGatewayLifecycle();
+  await runDiscordGatewayLifecycle({
+    accountId: account.accountId,
+    client,
+    runtime,
+    abortSignal: opts.abortSignal,
+    isDisallowedIntentsError: isDiscordDisallowedIntentsError,
+    voiceManager,
+    voiceManagerRef,
+    execApprovalsHandler,
+    threadBindings,
+  });
 }
 
 async function clearDiscordNativeCommands(params: {

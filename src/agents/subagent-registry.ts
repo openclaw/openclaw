@@ -13,6 +13,10 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import {
+  resolveCleanupCompletionReason,
+  resolveDeferredCleanupDecision,
+} from "./subagent-registry-cleanup.js";
+import {
   emitSubagentEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
   runOutcomesEqual,
@@ -437,6 +441,10 @@ async function finalizeSubagentCleanup(
     entry,
     now,
     activeDescendantRuns: Math.max(0, countActiveDescendantRuns(entry.childSessionKey)),
+    announceExpiryMs: ANNOUNCE_EXPIRY_MS,
+    maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
+    deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
+    resolveAnnounceRetryDelayMs,
   });
 
   if (deferredDecision.kind === "defer-descendants") {
@@ -478,63 +486,6 @@ async function finalizeSubagentCleanup(
   setTimeout(() => {
     resumeSubagentRun(runId);
   }, deferredDecision.resumeDelayMs).unref?.();
-}
-
-type DeferredCleanupDecision =
-  | {
-      kind: "defer-descendants";
-      delayMs: number;
-    }
-  | {
-      kind: "give-up";
-      reason: "retry-limit" | "expiry";
-      retryCount?: number;
-    }
-  | {
-      kind: "retry";
-      retryCount: number;
-      resumeDelayMs?: number;
-    };
-
-function resolveCleanupCompletionReason(entry: SubagentRunRecord) {
-  return entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
-}
-
-function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
-  return typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
-}
-
-function resolveDeferredCleanupDecision(params: {
-  entry: SubagentRunRecord;
-  now: number;
-  activeDescendantRuns: number;
-}): DeferredCleanupDecision {
-  const endedAgo = resolveEndedAgoMs(params.entry, params.now);
-  if (params.entry.expectsCompletionMessage === true && params.activeDescendantRuns > 0) {
-    if (endedAgo > ANNOUNCE_EXPIRY_MS) {
-      return { kind: "give-up", reason: "expiry" };
-    }
-    // Normal defer: descendants are still active.
-    return { kind: "defer-descendants", delayMs: MIN_ANNOUNCE_RETRY_DELAY_MS };
-  }
-
-  const retryCount = (params.entry.announceRetryCount ?? 0) + 1;
-  if (retryCount >= MAX_ANNOUNCE_RETRY_COUNT || endedAgo > ANNOUNCE_EXPIRY_MS) {
-    return {
-      kind: "give-up",
-      reason: retryCount >= MAX_ANNOUNCE_RETRY_COUNT ? "retry-limit" : "expiry",
-      retryCount,
-    };
-  }
-
-  return {
-    kind: "retry",
-    retryCount,
-    resumeDelayMs:
-      params.entry.expectsCompletionMessage === true
-        ? resolveAnnounceRetryDelayMs(retryCount)
-        : undefined,
-  };
 }
 
 async function emitCompletionEndedHookIfNeeded(
