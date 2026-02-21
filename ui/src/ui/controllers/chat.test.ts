@@ -213,4 +213,55 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toEqual([existingMessage]);
   });
+
+  it("shows an assistant error bubble when own run errors", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Thinking...",
+      chatStreamStartedAt: 100,
+      chatMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Hello" }],
+          timestamp: 1,
+        },
+      ],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "insufficient_quota",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.lastError).toBe("LLM error: insufficient_quota");
+    expect(state.chatMessages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "LLM error: insufficient_quota" }],
+    });
+  });
+
+  it("formats structured API errors like TUI", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage:
+        '429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account rate limit."},"request_id":"req_123"}',
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.lastError).toBe(
+      "HTTP 429 rate_limit_error: This request would exceed your account rate limit. (request_id: req_123)",
+    );
+  });
 });
