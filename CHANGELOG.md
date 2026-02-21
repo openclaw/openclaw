@@ -913,6 +913,7 @@ Docs: https://docs.openclaw.ai
 
 ### Added
 
+- Doctor: warn when system RAM is at or below 2 GB with swap suggestion.
 - Cron: run history deep-links to session chat from the dashboard. (#10776) Thanks @tyler6204.
 - Cron: per-run session keys in run log entries and default labels for cron sessions. (#10776) Thanks @tyler6204.
 - Cron: legacy payload field compatibility (`deliver`, `channel`, `to`, `bestEffortDeliver`) in schema. (#10776) Thanks @tyler6204.

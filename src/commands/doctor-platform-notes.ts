@@ -119,6 +119,23 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
 }
 
+const LOW_MEMORY_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+
+export function noteLowMemoryWarning(deps?: { totalMemBytes?: number; noteFn?: typeof note }) {
+  const totalMem = deps?.totalMemBytes ?? os.totalmem();
+  if (totalMem > LOW_MEMORY_THRESHOLD_BYTES) {
+    return;
+  }
+  const totalMB = Math.round(totalMem / (1024 * 1024));
+  const lines = [
+    `- System has ${totalMB} MB of RAM (threshold: 2048 MB).`,
+    "- Doctor and other heavy operations may run out of memory.",
+    "- Consider adding swap:",
+    "  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile",
+  ];
+  (deps?.noteFn ?? note)(lines.join("\n"), "Low memory");
+}
+
 export function noteDeprecatedLegacyEnvVars(
   env: NodeJS.ProcessEnv = process.env,
   deps?: { noteFn?: typeof note },
