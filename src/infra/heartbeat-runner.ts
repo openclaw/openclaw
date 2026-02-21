@@ -663,6 +663,14 @@ export async function runHeartbeatOnce(opts: {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
+    // Preserve the real delivery target so that reply/session.ts records it as
+    // lastTo instead of the synthetic sender id (which may be "heartbeat").
+    // Without this, forum-topic sessions get lastTo="heartbeat" and subsequent
+    // announce delivery fails because it can't resolve a valid chat target.
+    OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
+    OriginatingTo: delivery.to,
+    AccountId: delivery.accountId,
+    MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
   };
