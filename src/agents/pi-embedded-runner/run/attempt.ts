@@ -14,6 +14,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { PluginHookAfterToolsResolvedEvent } from "../../../plugins/types.js";
 import {
   isCronSessionKey,
   isSubagentSessionKey,
@@ -157,6 +158,44 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+function cloneToolParametersForHook(parameters: unknown): unknown {
+  try {
+    return structuredClone(parameters);
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildAfterToolsResolvedToolMetadata(
+  tools: Array<{ name?: string; label?: string; description?: string; parameters?: unknown }>,
+): PluginHookAfterToolsResolvedEvent["tools"] {
+  return tools
+    .map((tool) => {
+      const name = typeof tool.name === "string" ? tool.name.trim() : "";
+      if (!name) {
+        return null;
+      }
+
+      const meta: PluginHookAfterToolsResolvedEvent["tools"][number] = { name };
+      if (typeof tool.label === "string" && tool.label.trim().length > 0) {
+        meta.label = tool.label;
+      }
+      if (typeof tool.description === "string" && tool.description.trim().length > 0) {
+        meta.description = tool.description;
+      }
+
+      if (tool.parameters !== undefined) {
+        const clonedParameters = cloneToolParametersForHook(tool.parameters);
+        if (clonedParameters !== undefined) {
+          meta.parameters = clonedParameters;
+        }
+      }
+
+      return meta;
+    })
+    .filter((tool): tool is PluginHookAfterToolsResolvedEvent["tools"][number] => tool !== null);
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -384,6 +423,10 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       config: params.config,
     });
+    const hookAgentId =
+      typeof params.agentId === "string" && params.agentId.trim()
+        ? normalizeAgentId(params.agentId)
+        : sessionAgentId;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
@@ -595,6 +638,31 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+
+      if (hookRunner?.hasHooks("after_tools_resolved")) {
+        const resolvedTools = buildAfterToolsResolvedToolMetadata([
+          ...builtInTools,
+          ...allCustomTools,
+        ]);
+        void hookRunner
+          .runAfterToolsResolved(
+            {
+              tools: resolvedTools,
+              provider: params.provider,
+              model: params.modelId,
+            },
+            {
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+            },
+          )
+          .catch((err) => {
+            log.warn(`after_tools_resolved hook failed: ${String(err)}`);
+          });
+      }
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
@@ -911,14 +979,6 @@ export async function runEmbeddedAttempt(
       }
 
       // Hook runner was already obtained earlier before tool creation
-      const hookAgentId =
-        typeof params.agentId === "string" && params.agentId.trim()
-          ? normalizeAgentId(params.agentId)
-          : resolveSessionAgentIds({
-              sessionKey: params.sessionKey,
-              config: params.config,
-            }).sessionAgentId;
-
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       try {

@@ -9,6 +9,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolsResolvedEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
@@ -63,6 +64,7 @@ export type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookAgentEndEvent,
+  PluginHookAfterToolsResolvedEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
   PluginHookAfterCompactionEvent,
@@ -314,6 +316,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("agent_end", event, ctx);
+  }
+
+  /**
+   * Run after_tools_resolved hook.
+   * Allows plugins to observe the final resolved tool list for this attempt.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAfterToolsResolved(
+    event: PluginHookAfterToolsResolvedEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("after_tools_resolved", event, ctx);
   }
 
   /**
@@ -716,6 +730,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runLlmInput,
     runLlmOutput,
     runAgentEnd,
+    runAfterToolsResolved,
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,

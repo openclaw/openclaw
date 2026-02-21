@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { injectHistoryImagesIntoMessages } from "./attempt.js";
+import { buildAfterToolsResolvedToolMetadata, injectHistoryImagesIntoMessages } from "./attempt.js";
 
 describe("injectHistoryImagesIntoMessages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
@@ -56,5 +56,35 @@ describe("injectHistoryImagesIntoMessages", () => {
     expect(didMutate).toBe(false);
     const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
     expect(firstAssistant?.content).toBe("noop");
+  });
+});
+
+describe("buildAfterToolsResolvedToolMetadata", () => {
+  it("deep clones parameters so hook mutations do not affect runtime schemas", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        command: { type: "string" },
+      },
+      required: ["command"],
+    };
+    const tools = [{ name: "exec", parameters }];
+
+    const metadata = buildAfterToolsResolvedToolMetadata(tools);
+    const execMeta = metadata.find((tool) => tool.name === "exec");
+    expect(execMeta).toBeDefined();
+    if (!execMeta || !execMeta.parameters || typeof execMeta.parameters !== "object") {
+      throw new Error("expected exec metadata with object parameters");
+    }
+
+    (execMeta.parameters as { properties?: Record<string, unknown> }).properties = {};
+    expect(parameters.properties.command).toEqual({ type: "string" });
+  });
+
+  it("keeps tools with undefined parameters", () => {
+    const metadata = buildAfterToolsResolvedToolMetadata([{ name: "client_tool" }]);
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0]).toMatchObject({ name: "client_tool" });
+    expect(metadata[0]?.parameters).toBeUndefined();
   });
 });
