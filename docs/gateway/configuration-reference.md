@@ -1340,6 +1340,22 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      typecast: {
+        apiKey: "typecast_api_key",
+        baseHost: "https://api.typecast.ai",
+        voiceId: "tc_xxx",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "normal",
+        emotionIntensity: 1.0,
+        seed: 42,
+        output: {
+          volume: 100,
+          audioPitch: 0,
+          audioTempo: 1.0,
+          audioFormat: "mp3",
+        },
+      },
     },
   },
 }
@@ -1347,7 +1363,13 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
-- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, and `TYPECAST_API_KEY`.
+- `typecast.voiceId`: required voice ID (`tc_xxx` or `uc_xxx`).
+- `typecast.model`: `ssfm-v21` or `ssfm-v30` (default `ssfm-v30`).
+- `typecast.language`: ISO 639-3 code (e.g. `kor`, `eng`). Auto-detected if unset.
+- `typecast.emotionPreset`: `normal|happy|sad|angry|whisper|toneup|tonedown`.
+- `typecast.emotionIntensity`: `0..2` (default `1.0`).
+- `typecast.output`: `volume` (0..200), `audioPitch` (-12..12), `audioTempo` (0.5..2), `audioFormat` (wav|mp3).
 
 ---
 

@@ -154,6 +154,7 @@
     "@mariozechner/pi-coding-agent": "0.54.0",
     "@mariozechner/pi-tui": "0.54.0",
     "@mozilla/readability": "^0.6.0",
+    "@neosapience/typecast-js": "^0.1.5",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.14.1",

@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "typecast";
 
 export type TtsMode = "final" | "all";
 
@@ -58,6 +58,23 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+  };
+  /** Typecast AI configuration. */
+  typecast?: {
+    apiKey?: string;
+    baseHost?: string;
+    voiceId?: string;
+    model?: "ssfm-v21" | "ssfm-v30";
+    language?: string;
+    emotionPreset?: "normal" | "happy" | "sad" | "angry" | "whisper" | "toneup" | "tonedown";
+    emotionIntensity?: number;
+    seed?: number;
+    output?: {
+      volume?: number;
+      audioPitch?: number;
+      audioTempo?: number;
+      audioFormat?: "wav" | "mp3";
+    };
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

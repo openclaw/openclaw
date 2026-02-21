@@ -71,6 +71,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
+      '@neosapience/typecast-js':
+        specifier: ^0.1.5
+        version: 0.1.5
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -1723,6 +1726,10 @@ packages:
 
   '@napi-rs/wasm-runtime@1.1.1':
     resolution: {integrity: sha512-p64ah1M1ld8xjWv3qbvFwHiFVWrq1yFvV4f7w+mzaqiR4IlSgkqhcRdHwsGgomwzBH51sRY4NEowLxnaBjcW/A==}
+
+  '@neosapience/typecast-js@0.1.5':
+    resolution: {integrity: sha512-Kqm79+63wIIL0hzcRziFiwUnKuhaUJH8wSKUUsZ4RLA3NP4dpXWumgpqiL1e4gpJFDhOs+CIvOtoDpnjH8ihoQ==}
+    engines: {node: '>=16.0.0'}
 
   '@noble/ciphers@2.1.1':
     resolution: {integrity: sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw==}
@@ -7525,6 +7532,8 @@ snapshots:
       '@emnapi/runtime': 1.8.1
       '@tybys/wasm-util': 0.10.1
     optional: true
+
+  '@neosapience/typecast-js@0.1.5': {}
 
   '@noble/ciphers@2.1.1': {}
 
