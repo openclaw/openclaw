@@ -271,8 +271,9 @@ sidebar-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 12px 10px;
+  padding: 14px 12px;
   border-bottom: var(--sidebar-border);
+  min-height: 52px;
   flex-shrink: 0;
 }
 
@@ -2301,6 +2302,75 @@ pre {
   button {
     border-width: 1.5px;
   }
+}
+
+/* ─── Sessions List ─── */
+
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: var(--lg-radius-sm);
+  font-size: 0.88rem;
+  transition: background var(--lg-duration-fast) ease;
+}
+
+.session-row:hover {
+  background: var(--lg-bg-interactive);
+}
+
+.session-row__info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.session-row__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.35;
+  flex-shrink: 0;
+}
+
+.session-row__dot--active {
+  background: var(--success);
+  opacity: 1;
+}
+
+.session-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.session-row__channel {
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+
+.session-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.session-row__time {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Responsive ─── */

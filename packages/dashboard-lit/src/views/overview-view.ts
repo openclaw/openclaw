@@ -10,7 +10,11 @@ import {
   type OverviewSnapshot,
 } from "../controllers/overview.js";
 import { loadPresence, type PresenceEntry } from "../controllers/presence.js";
-import { loadSessions, type SessionsListResult } from "../controllers/sessions.js";
+import {
+  loadSessions,
+  type SessionSummary,
+  type SessionsListResult,
+} from "../controllers/sessions.js";
 import { storeGatewayUrl, storeToken } from "../lib/local-settings.js";
 
 // ── Cron types (inline to avoid adding a controller just for one RPC) ──
@@ -90,7 +94,7 @@ export class OverviewView extends LitElement {
     try {
       const [presence, sessions, cron] = await Promise.allSettled([
         loadPresence(this.gateway.request),
-        loadSessions(this.gateway.request, { limit: 0 }),
+        loadSessions(this.gateway.request, { limit: 20, includeDerivedTitles: true }),
         this.gateway.request<CronStatus>("cron.status", {}),
       ]);
       this.presenceEntries = presence.status === "fulfilled" ? presence.value : [];
@@ -138,6 +142,7 @@ export class OverviewView extends LitElement {
       <div class="overview-grid">
         ${this.renderHealthSection(connected, snapshot)}
         ${this.renderStatsSection()}
+        ${this.renderSessionsSection()}
         ${connected ? nothing : this.renderConnectionSection(g)}
         ${this.renderDebugSections(g)}
       </div>
@@ -178,7 +183,7 @@ export class OverviewView extends LitElement {
               Tick Interval
             </div>
             <div class="stat-value">
-              ${snapshot.tickIntervalMs != null ? `${snapshot.tickIntervalMs}ms` : "—"}
+              ${snapshot.tickIntervalMs != null ? `${(snapshot.tickIntervalMs / 1000).toFixed(snapshot.tickIntervalMs % 1000 === 0 ? 0 : 1)}s` : "—"}
             </div>
           </div>
           <div class="stat-card">
@@ -252,7 +257,7 @@ export class OverviewView extends LitElement {
             <div class="stat-value">
               ${this.sessionsResult?.count ?? "—"}
             </div>
-            <div class="stat-hint">Active sessions</div>
+            <div class="stat-hint">${this.renderActiveHint()}</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">
@@ -273,6 +278,76 @@ export class OverviewView extends LitElement {
           </div>
         </div>
       </section>
+    `;
+  }
+
+  /* ── Sessions ────────────────────────────────────── */
+
+  private renderActiveHint() {
+    const sessions = this.sessionsResult?.sessions;
+    if (!sessions || sessions.length === 0) {
+      return "Total sessions";
+    }
+    const now = Date.now();
+    const activeCount = sessions.filter(
+      (s) => s.updatedAt != null && now - s.updatedAt < 3_600_000,
+    ).length;
+    if (activeCount === 0) {
+      return "No sessions active in the last hour";
+    }
+    return `${activeCount} active in the last hour`;
+  }
+
+  private renderSessionsSection() {
+    const sessions = this.sessionsResult?.sessions;
+    if (!sessions || sessions.length === 0) {
+      return nothing;
+    }
+
+    const total = this.sessionsResult?.count ?? sessions.length;
+
+    return html`
+      <section class="panel overview-panel">
+        <h3 class="panel-title">
+          ${icon("fileText", { className: "icon-sm" })}
+          Sessions
+        </h3>
+        <div class="sessions-list">
+          ${sessions.map((s) => this.renderSessionRow(s))}
+        </div>
+        ${
+          total > sessions.length
+            ? html`
+                <div class="muted" style="margin-top: 8px; font-size: 0.82rem;">
+                  Showing ${sessions.length} of ${total}
+                </div>
+              `
+            : nothing
+        }
+      </section>
+    `;
+  }
+
+  private renderSessionRow(s: SessionSummary) {
+    const title = s.derivedTitle || s.displayName || s.label || s.key;
+    const now = Date.now();
+    const isActive = s.updatedAt != null && now - s.updatedAt < 3_600_000;
+
+    return html`
+      <div class="session-row">
+        <div class="session-row__info">
+          <span class="session-row__dot ${isActive ? "session-row__dot--active" : ""}"></span>
+          <span class="session-row__name" title=${s.key}>${title}</span>
+          ${s.channel ? html`<span class="session-row__channel muted">${s.channel}</span>` : nothing}
+        </div>
+        <div class="session-row__meta">
+          ${
+            s.updatedAt != null
+              ? html`<span class="session-row__time muted">${formatRelativeTime(s.updatedAt)}</span>`
+              : nothing
+          }
+        </div>
+      </div>
     `;
   }
 
