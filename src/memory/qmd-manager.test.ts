@@ -933,6 +933,86 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("diversifies mixed session and memory search results so memory hits are retained", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search" && args.includes("workspace-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ docid: "m1", score: 0.6, snippet: "@@ -1,1\nmemory fact" }]),
+        );
+        return child;
+      }
+      if (args[0] === "search" && args.includes("sessions-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: "s1", score: 0.99, snippet: "@@ -1,1\nsession top 1" },
+            { docid: "s2", score: 0.95, snippet: "@@ -1,1\nsession top 2" },
+            { docid: "s3", score: 0.91, snippet: "@@ -1,1\nsession top 3" },
+            { docid: "s4", score: 0.88, snippet: "@@ -1,1\nsession top 4" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (_query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          switch (arg) {
+            case "m1":
+              return [{ collection: "workspace-main", path: "memory/facts.md" }];
+            case "s1":
+            case "s2":
+            case "s3":
+            case "s4":
+              return [
+                {
+                  collection: "sessions-main",
+                  path: `${String(arg)}.md`,
+                },
+              ];
+            default:
+              return [];
+          }
+        },
+      }),
+      close: () => {},
+    };
+
+    const results = await manager.search("fact", {
+      maxResults: 4,
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+
+    expect(results).toHaveLength(4);
+    expect(results.some((entry) => entry.source === "memory")).toBe(true);
+    expect(results.some((entry) => entry.source === "sessions")).toBe(true);
+    await manager.close();
+  });
+
   it("logs and continues when qmd embed times out", async () => {
     vi.useFakeTimers();
     cfg = {

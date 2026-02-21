@@ -492,7 +492,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
-    return this.clampResultsByInjectedChars(results.slice(0, limit));
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
   }
 
   async sync(params?: {
@@ -1269,6 +1269,52 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     return clamped;
+  }
+
+  private diversifyResultsBySource(
+    results: MemorySearchResult[],
+    limit: number,
+  ): MemorySearchResult[] {
+    const target = Math.max(0, limit);
+    if (target <= 0) {
+      return [];
+    }
+    if (results.length <= 1) {
+      return results.slice(0, target);
+    }
+    const bySource = new Map<MemorySource, MemorySearchResult[]>();
+    for (const entry of results) {
+      const list = bySource.get(entry.source) ?? [];
+      list.push(entry);
+      bySource.set(entry.source, list);
+    }
+    const hasSessions = bySource.has("sessions");
+    const hasMemory = bySource.has("memory");
+    if (!hasSessions || !hasMemory) {
+      return results.slice(0, target);
+    }
+    const sourceOrder = Array.from(bySource.entries())
+      .toSorted((a, b) => (b[1][0]?.score ?? 0) - (a[1][0]?.score ?? 0))
+      .map(([source]) => source);
+    const diversified: MemorySearchResult[] = [];
+    while (diversified.length < target) {
+      let emitted = false;
+      for (const source of sourceOrder) {
+        const next = bySource.get(source)?.shift();
+        if (!next) {
+          continue;
+        }
+        diversified.push(next);
+        emitted = true;
+        if (diversified.length >= target) {
+          break;
+        }
+      }
+      if (!emitted) {
+        break;
+      }
+    }
+    return diversified;
   }
 
   private shouldSkipUpdate(force?: boolean): boolean {
