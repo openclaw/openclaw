@@ -557,9 +557,19 @@ function maybeRepairDiscordNumericIds(
         let depth = 1;
         let i = braceStart + 1;
         while (i < rawText.length && depth > 0) {
-          if (rawText[i] === "{") {
+          const ch = rawText[i];
+          if (ch === '"' || ch === "'") {
+            // Skip quoted strings so braces inside them don't affect depth
+            i++;
+            while (i < rawText.length && rawText[i] !== ch) {
+              if (rawText[i] === "\\") {
+                i++;
+              } // skip escaped chars
+              i++;
+            }
+          } else if (ch === "{") {
             depth++;
-          } else if (rawText[i] === "}") {
+          } else if (ch === "}") {
             depth--;
           }
           i++;
