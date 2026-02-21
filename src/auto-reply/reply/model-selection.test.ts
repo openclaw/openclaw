@@ -68,6 +68,34 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
+  it("prefers per-agent thinkingDefault over global defaults", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:discord:channel:c1";
+    const sessionEntry = makeEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: { thinkingDefault: "medium" },
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(await state.resolveDefaultThinkingLevel()).toBe("medium");
+  });
+
   it("inherits parent override from explicit parentSessionKey", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:discord:channel:c1";

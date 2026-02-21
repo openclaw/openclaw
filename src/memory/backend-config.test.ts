@@ -108,6 +108,57 @@ describe("resolveMemoryBackendConfig", () => {
     expect(devNames.has("workspace-dev")).toBe(true);
   });
 
+  it("adds per-agent qmd extra collections only for the configured agent", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          {
+            id: "main",
+            default: true,
+            workspace: "/workspace/root",
+          },
+          {
+            id: "nicole",
+            workspace: "/workspace/nicole",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  {
+                    name: "family-sessions",
+                    path: "/workspace/family/qmd/sessions",
+                    pattern: "**/*.md",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+        },
+      },
+    } as OpenClawConfig;
+
+    const mainResolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const nicoleResolved = resolveMemoryBackendConfig({ cfg, agentId: "nicole" });
+
+    const expectedPath = path.normalize("/workspace/family/qmd/sessions");
+    const mainPaths = new Set((mainResolved.qmd?.collections ?? []).map((entry) => entry.path));
+    const nicoleCollections = nicoleResolved.qmd?.collections ?? [];
+
+    expect(mainPaths.has(expectedPath)).toBe(false);
+    expect(
+      nicoleCollections.some(
+        (entry) =>
+          entry.path === expectedPath && entry.pattern === "**/*.md" && entry.kind === "custom",
+      ),
+    ).toBe(true);
+  });
+
   it("resolves qmd update timeout overrides", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

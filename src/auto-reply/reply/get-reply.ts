@@ -1,4 +1,5 @@
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -9,6 +10,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -71,7 +73,19 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const agentCfg = cfg.agents?.defaults;
+  const agentConfigOverride = resolveAgentConfig(cfg, agentId);
+  const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  const agentCfg: AgentDefaultsConfig = Object.assign(
+    {},
+    cfg.agents?.defaults,
+    agentOverrideRest as Partial<AgentDefaultsConfig>,
+  );
+  const existingModel = agentCfg.model && typeof agentCfg.model === "object" ? agentCfg.model : {};
+  if (typeof overrideModel === "string") {
+    agentCfg.model = { ...existingModel, primary: overrideModel };
+  } else if (overrideModel) {
+    agentCfg.model = { ...existingModel, ...overrideModel };
+  }
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,

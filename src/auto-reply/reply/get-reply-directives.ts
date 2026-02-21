@@ -7,7 +7,13 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
@@ -336,8 +342,11 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  const heartbeatThinkLevel =
+    opts?.isHeartbeat === true ? normalizeThinkLevel(opts.heartbeatThinkingOverride) : undefined;
   const resolvedThinkLevel =
     directives.thinkLevel ??
+    heartbeatThinkLevel ??
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
