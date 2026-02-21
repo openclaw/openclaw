@@ -1,7 +1,10 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
+import {
+  normalizeToolCallArguments,
+  sanitizeToolCallIdsForCloudCodeAssist,
+} from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
@@ -56,10 +59,14 @@ export async function sanitizeSessionMessagesImages(
   };
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (default max side 1200px).
+  // First normalize tool call arguments (remove null properties that fail AJV validation)
+  const normalizedArgs = allowNonImageSanitization
+    ? normalizeToolCallArguments(messages)
+    : messages;
   const sanitizedIds =
     allowNonImageSanitization && options?.sanitizeToolCallIds
-      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
-      : messages;
+      ? sanitizeToolCallIdsForCloudCodeAssist(normalizedArgs, options.toolCallIdMode)
+      : normalizedArgs;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
