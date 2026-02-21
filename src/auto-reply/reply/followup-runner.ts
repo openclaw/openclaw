@@ -9,6 +9,7 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { parseSlackTarget } from "../../slack/targets.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -125,6 +126,42 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+
+      const replyToChannel =
+        queued.originatingChannel ??
+        (queued.run.messageProvider?.toLowerCase() as OriginatingChannelType | undefined);
+      const replyToMode = resolveReplyToMode(
+        queued.run.config,
+        replyToChannel,
+        queued.originatingAccountId,
+        queued.originatingChatType,
+      );
+      // Tool auto-threading (Slack) relies on `currentThreadTs/currentChannelId` living on the run.
+      // Followup runs don't have an inbound TemplateContext, so reconstruct the bits we need from
+      // the queued routing info.
+      const slackTarget = (() => {
+        if (replyToChannel !== "slack") {
+          return null;
+        }
+        if (!queued.originatingTo) {
+          return null;
+        }
+        const parsed = parseSlackTarget(queued.originatingTo, { defaultKind: "channel" });
+        return parsed?.kind === "channel" ? parsed : null;
+      })();
+      const queuedThreadTs =
+        replyToChannel === "slack" &&
+        queued.originatingThreadId != null &&
+        queued.originatingThreadId !== ""
+          ? String(queued.originatingThreadId)
+          : undefined;
+      const toolReplyToMode =
+        replyToChannel === "slack" && queuedThreadTs ? ("all" as const) : replyToMode;
+      const hasRepliedRef =
+        replyToChannel === "slack" && (toolReplyToMode === "first" || toolReplyToMode === "all")
+          ? { value: false }
+          : undefined;
+
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -145,6 +182,10 @@ export function createFollowupRunner(params: {
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
               messageThreadId: queued.originatingThreadId,
+              currentChannelId: slackTarget?.id,
+              currentThreadTs: queuedThreadTs,
+              replyToMode: toolReplyToMode,
+              hasRepliedRef,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
@@ -233,15 +274,6 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel =
-        queued.originatingChannel ??
-        (queued.run.messageProvider?.toLowerCase() as OriginatingChannelType | undefined);
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
-      );
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
         payloads: sanitizedPayloads,

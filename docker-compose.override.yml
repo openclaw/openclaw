@@ -1,0 +1,4 @@
+services:
+  openclaw-gateway:
+    network_mode: host
+    command: ["node", "dist/index.js", "gateway", "--bind", "loopback", "--port", "18789"]
