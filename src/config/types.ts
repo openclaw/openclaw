@@ -23,6 +23,7 @@ export * from "./types.plugins.js";
 export * from "./types.queue.js";
 export * from "./types.sandbox.js";
 export * from "./types.signal.js";
+export * from "./types.spixi.js";
 export * from "./types.skills.js";
 export * from "./types.slack.js";
 export * from "./types.telegram.js";

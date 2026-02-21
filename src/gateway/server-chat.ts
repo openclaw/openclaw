@@ -1,10 +1,32 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
+import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../auto-reply/reply/response-prefix-template.js";
+import { type MsgContext } from "../auto-reply/templating.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { updateSessionStore } from "../config/sessions.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
-import { loadSessionEntry } from "./session-utils.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
+import { ChannelMessage } from "./server-channels.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
+import {
+  loadSessionEntry,
+  resolveGatewaySessionStoreTarget,
+  getSessionDefaults,
+} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
@@ -489,6 +511,277 @@ export function createAgentEventHandler({
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
+    }
+  };
+}
+
+function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
+  ok: boolean;
+  error?: string;
+} {
+  if (fs.existsSync(params.transcriptPath)) {
+    return { ok: true };
+  }
+  try {
+    fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: params.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function appendTranscriptMessage(params: {
+  role: "user" | "assistant";
+  message: string;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+}): { ok: boolean; message?: Record<string, unknown>; error?: string } {
+  if (!params.storePath) {
+    return { ok: false, error: "store path missing" };
+  }
+
+  const transcriptPath = params.sessionFile
+    ? params.sessionFile
+    : path.join(path.dirname(params.storePath), `${params.sessionId}.jsonl`);
+
+  if (!fs.existsSync(transcriptPath)) {
+    const ensured = ensureTranscriptFile({ transcriptPath, sessionId: params.sessionId });
+    if (!ensured.ok) {
+      return { ok: false, error: ensured.error };
+    }
+  }
+
+  const now = Date.now();
+  const messageId = randomUUID().slice(0, 8);
+  const messageBody: Record<string, unknown> = {
+    role: params.role,
+    content: [{ type: "text", text: params.message }],
+    timestamp: now,
+    stopReason: params.role === "assistant" ? "injected" : undefined,
+  };
+
+  const transcriptEntry = {
+    type: "message",
+    id: messageId,
+    timestamp: new Date(now).toISOString(),
+    message: messageBody,
+  };
+
+  try {
+    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+    return { ok: true, message: messageBody };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// Helper to handle inbound messages from channels (like Spixi, Telegram, etc)
+export function createChannelMessageHandler(deps: {
+  loadConfig: () => OpenClawConfig;
+  log: SubsystemLogger;
+  agentRunSeq: Map<string, number>;
+  chatRunState: ChatRunState;
+  nodeSendToSession: NodeSendToSession;
+  broadcast: ChatEventBroadcast;
+  // We need to resolve session key from channel ID + sender ID
+  // Since we don't have a DB for channel->session mapping yet, we use a deterministic key or "headless" mode?
+  // Current chat.send uses explicit sessionKey.
+  // For external channels, we need to map (channel, account, from) -> sessionKey.
+  // For now, let's auto-generate a deterministic session key if one doesn't exist?
+  // Or check if there's a convention.
+  // In v1, we used "channel:id:from".
+  resolveSessionKey: (channel: string, from: string) => string;
+  onReply?: (channelId: string, accountId: string, to: string, text: string) => Promise<void>;
+}) {
+  return async (channelId: string, accountId: string, msg: ChannelMessage) => {
+    const cfg = deps.loadConfig();
+    const sessionKey = deps.resolveSessionKey(channelId, msg.from);
+
+    deps.log.info(
+      `[${channelId}:${accountId}] Inbound message from ${msg.from} to session ${sessionKey}`,
+    );
+
+    // EXPLICITLY ENSURE SESSION EXISTS
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
+
+    let sessionId: string | undefined;
+    let storePath = target.storePath;
+    let sessionFile: string | undefined;
+
+    if (!storePath) {
+      deps.log.error(`[${channelId}] Cannot resolve storePath for sessionKey: ${sessionKey}`);
+      return;
+    }
+
+    await updateSessionStore(storePath, (store) => {
+      const primaryKey = target.storeKeys[0] ?? sessionKey;
+      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+
+      let entry = existingKey ? store[existingKey] : undefined;
+      const forceAllow = cfg.channels?.forceAllowSendPolicy === true;
+      if (!entry) {
+        // Create new session entry
+        const defaults = getSessionDefaults(cfg);
+        deps.log.info(
+          `[${channelId}] Initializing new session ${sessionKey} with defaults: model=${defaults.model}, provider=${defaults.modelProvider}`,
+        );
+
+        entry = {
+          sessionId: randomUUID(),
+          updatedAt: Date.now(),
+          systemSent: false,
+          abortedLastRun: false,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          label: `Channel ${msg.from}`,
+          origin: {},
+          lastChannel: channelId,
+          lastTo: msg.from,
+          // Only force allow if config option is set
+          ...(forceAllow ? { sendPolicy: "allow" } : {}),
+          contextTokens: defaults.contextTokens ?? undefined,
+          model: defaults.model ?? undefined,
+          modelProvider: defaults.modelProvider ?? undefined,
+        };
+        store[primaryKey] = entry;
+        deps.log.info(
+          `[${channelId}] Created new session entry for ${sessionKey} (si=${entry.sessionId})`,
+        );
+      } else {
+        // Update entry
+        entry.updatedAt = Date.now();
+        entry.lastChannel = channelId;
+        entry.lastTo = msg.from;
+        // Only force allow if config option is set
+        if (forceAllow && (!entry.sendPolicy || (entry.sendPolicy as unknown) === "auto")) {
+          entry.sendPolicy = "allow";
+        }
+      }
+      sessionId = entry.sessionId;
+      sessionFile = entry.sessionFile;
+      // Don't return anything to imply "no structural change" other than in-place mutation which updateSessionStore handles
+      return undefined;
+    });
+
+    if (!sessionId) {
+      deps.log.error(`[${channelId}] Failed to resolve sessionId for ${sessionKey}`);
+      return;
+    }
+
+    // APPEND USER MESSAGE TO TRANSCRIPT
+    appendTranscriptMessage({
+      role: "user",
+      message: msg.text,
+      sessionId,
+      storePath,
+      sessionFile,
+    });
+
+    const clientRunId = msg.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // Create abort controller for run
+    const abortController = new AbortController();
+
+    const stampedMessage = injectTimestamp(msg.text, timestampOptsFromConfig(cfg));
+
+    const ctx: MsgContext = {
+      Body: msg.text,
+      BodyForAgent: stampedMessage,
+      BodyForCommands: msg.text,
+      RawBody: msg.text,
+      CommandBody: msg.text,
+      SessionKey: sessionKey,
+      Provider: channelId,
+      Surface: channelId,
+      OriginatingChannel: channelId,
+      ChatType: "direct",
+      CommandAuthorized: true,
+      MessageSid: clientRunId,
+      SenderId: msg.from,
+      SenderName: msg.from,
+      SenderUsername: msg.from,
+    };
+
+    const agentId = resolveDefaultAgentId(cfg);
+    let prefixContext: ResponsePrefixContext = {
+      identityName: resolveIdentityName(cfg, agentId),
+    };
+
+    const finalReplyParts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix,
+      responsePrefixContextProvider: () => prefixContext,
+      onError: (err) => {
+        deps.log.warn(`[${channelId}] dispatch failed: ${formatForLog(err)}`);
+      },
+      deliver: async (payload, info) => {
+        if (info.kind !== "final") {
+          return;
+        }
+        const text = payload.text?.trim() ?? "";
+        if (text) {
+          finalReplyParts.push(text);
+        }
+      },
+    });
+
+    try {
+      await dispatchInboundMessage({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          runId: clientRunId,
+          abortSignal: abortController.signal,
+          disableBlockStreaming: true,
+          onModelSelected: (ctx) => {
+            prefixContext.provider = ctx.provider;
+            prefixContext.model = extractShortModelName(ctx.model);
+            prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+            prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+          },
+        },
+      });
+
+      // Send reply back to channel?
+      // dispatchInboundMessage handles "reply" via dispatcher.deliver
+      // But dispatcher.deliver pushes to finalReplyParts.
+      // We need to sending these parts BACK to the channel.
+      // The channel plugin should have "outbound" capability.
+      // But wait, the Agent (via tools) sends messages.
+      // Or specific auto-reply logic?
+      // In webchat, we just broadcast the reply to the UI.
+      // For CHANNELS, the agent should used "sendMessage" tool OR the system should auto-reply if it's a "chat" response.
+
+      // If the agent used "sendMessage" tool, that's handled by tool execution.
+      // If the agent just "spoke" (text content), that goes to dispatcher.
+      // We need to route dispatcher output back to the channel's `sendText` method.
+
+      // This requires access to the channel runtime to call `sendText`.
+      // BUT we are in gateway server code.
+      // We can use `deps` to get access to sending mechanism?
+      // Or we assume the agent uses tools?
+      // Usually, standard "chat" response should be sent back.
+
+      if (finalReplyParts.length > 0) {
+        const replyText = finalReplyParts.join("\n\n");
+        deps.log.info(`[${channelId}] Agent reply: ${replyText}`);
+        if (deps.onReply) {
+          await deps.onReply(channelId, accountId, msg.from, replyText);
+        }
+      }
+    } catch (err) {
+      deps.log.error(`[${channelId}] dispatch error: ${formatForLog(err)}`);
     }
   };
 }

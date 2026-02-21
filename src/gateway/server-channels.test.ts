@@ -9,7 +9,7 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/regis
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createChannelManager } from "./server-channels.js";
+import { ChannelMessage, createChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
   const computeBackoff = vi.fn(() => 10);
@@ -96,6 +96,7 @@ function createManager() {
     loadConfig: () => ({}),
     channelLogs,
     channelRuntimeEnvs,
+    handleChannelMessage: (channelId: string, accountId: string, msg: ChannelMessage) => ({}),
   });
 }
 
