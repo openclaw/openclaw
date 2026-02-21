@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
+} from "./index.js";
 import * as sdk from "./index.js";
 
 describe("plugin-sdk exports", () => {
@@ -45,5 +52,13 @@ describe("plugin-sdk exports", () => {
     for (const key of forbidden) {
       expect(Object.prototype.hasOwnProperty.call(sdk, key)).toBe(false);
     }
+  });
+
+  it("re-exports plugin authoring types", () => {
+    expectTypeOf<OpenClawPluginDefinition>().toEqualTypeOf<OpenClawPluginDefinition>();
+    expectTypeOf<OpenClawPluginModule>().toEqualTypeOf<OpenClawPluginModule>();
+    expectTypeOf<OpenClawPluginToolContext>().toEqualTypeOf<OpenClawPluginToolContext>();
+    expectTypeOf<OpenClawPluginToolFactory>().toEqualTypeOf<OpenClawPluginToolFactory>();
+    expectTypeOf<OpenClawPluginToolOptions>().toEqualTypeOf<OpenClawPluginToolOptions>();
   });
 });

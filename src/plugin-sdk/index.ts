@@ -74,8 +74,13 @@ export {
 export type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
   ProviderAuthContext,
   ProviderAuthResult,
 } from "../plugins/types.js";
