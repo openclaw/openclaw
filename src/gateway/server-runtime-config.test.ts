@@ -160,6 +160,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         resolveGatewayRuntimeConfig({
           cfg,
           port: 18789,
+          env: {},
         }),
       ).rejects.toThrow("gateway auth mode is token, but no token was configured");
     });
