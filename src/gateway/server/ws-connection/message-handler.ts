@@ -351,6 +351,7 @@ export function attachGatewayWsMessageHandler(params: {
           connectAuth: connectParams.auth,
           req: upgradeReq,
           trustedProxies,
+          allowTailscaleHeaderAuth: true,
           rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
           clientIp,
           rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
