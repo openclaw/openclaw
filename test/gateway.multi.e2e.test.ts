@@ -30,6 +30,7 @@ type NodeListPayload = {
 };
 
 const GATEWAY_START_TIMEOUT_MS = 45_000;
+const GATEWAY_STOP_TIMEOUT_MS = 1_500;
 const E2E_TIMEOUT_MS = 120_000;
 
 const getFreePort = async () => {
@@ -184,7 +185,7 @@ const stopGatewayInstance = async (inst: GatewayInstance) => {
       }
       inst.child.once("exit", () => resolve(true));
     }),
-    sleep(5_000).then(() => false),
+    sleep(GATEWAY_STOP_TIMEOUT_MS).then(() => false),
   ]);
   if (!exited && inst.child.exitCode === null && !inst.child.killed) {
     try {
