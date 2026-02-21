@@ -4,6 +4,12 @@
 
 하트비트 체크 시 실행할 작업. 가이드가 아닌 **실행 항목**.
 
+## ⚠️ 중복 방지 규칙
+
+- **Daily/Weekly/Monthly 크론 작업은 크론 스케줄러가 정해진 시각에 1회 트리거한다.**
+- **하트비트에서는 크론 작업을 직접 실행하지 않는다.** 하트비트는 "Every Heartbeat" 섹션만 수행.
+- 하트비트 역할: Active Tracking (이슈 추적 등 상태 변화 감지) + 이상 징후 알림만.
+
 ---
 
 ## Every Heartbeat (매시간)
@@ -82,6 +88,7 @@
 - MEMORY.md 전체 프로젝트 진행 점검
 - 각 프로젝트 최근 커밋 (7일)
 - \_MASTER_DASHBOARD.md 업데이트
+- KPI 대시보드 갱신 (kpi-collector.ps1 → \_KPI_DASHBOARD.md)
 - pnpm test:coverage (MAIBOT, ≥70% threshold)
 - pnpm audit (보안)
 - 주간 종합 리포트 → Discord DM
