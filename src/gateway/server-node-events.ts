@@ -274,6 +274,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
+      const cfg = loadConfig();
+      if (cfg?.tools?.nodes?.notifyOnExit === false) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
@@ -500,6 +504,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
+      const cfg = loadConfig();
+      if (cfg?.tools?.nodes?.notifyOnExit === false) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
@@ -522,10 +530,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const timedOut = obj.timedOut === true;
       const output = typeof obj.output === "string" ? obj.output.trim() : "";
       const reason = typeof obj.reason === "string" ? obj.reason.trim() : "";
-      const cfg = loadConfig();
-      if (cfg?.tools?.nodes?.notifyOnExit === false) {
-        return;
-      }
 
       let text = "";
       if (evt.event === "exec.started") {

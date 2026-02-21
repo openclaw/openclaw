@@ -168,22 +168,28 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
-  it("suppresses node exec events when tools.nodes.notifyOnExit is false", async () => {
-    loadConfigMock.mockReturnValue({
-      tools: { nodes: { notifyOnExit: false } },
-    } as OpenClawConfig);
-    const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-1", {
-      event: "exec.finished",
-      payloadJSON: JSON.stringify({
-        sessionKey: "test",
-        runId: "r1",
-        exitCode: 0,
-        output: "hello",
-      }),
-    });
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
+  it.each(["exec.finished", "exec.started", "exec.denied"] as const)(
+    "suppresses %s events when tools.nodes.notifyOnExit is false",
+    async (event) => {
+      loadConfigMock.mockReturnValue({
+        tools: { nodes: { notifyOnExit: false } },
+      } as OpenClawConfig);
+      const ctx = buildCtx();
+      await handleNodeEvent(ctx, "node-1", {
+        event,
+        payloadJSON: JSON.stringify({
+          sessionKey: "test",
+          runId: "r1",
+          exitCode: 0,
+          output: "hello",
+          command: "ls",
+          reason: "not allowed",
+        }),
+      });
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("voice transcript events", () => {
