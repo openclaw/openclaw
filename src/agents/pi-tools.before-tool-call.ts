@@ -3,6 +3,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import { findInlineToolSecretViolation } from "./tool-inline-secret-policy.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -79,6 +80,15 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const inlineSecretViolation = findInlineToolSecretViolation(params);
+  if (inlineSecretViolation) {
+    return {
+      blocked: true,
+      reason:
+        `Inline secret-like tool parameter "${inlineSecretViolation.path}" is not allowed. ` +
+        "Move credentials to config/env/auth profiles or plugin config.",
+    };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");

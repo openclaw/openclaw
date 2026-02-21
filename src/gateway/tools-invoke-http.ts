@@ -5,6 +5,7 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
+import { findInlineToolSecretViolation } from "../agents/tool-inline-secret-policy.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -203,6 +204,19 @@ export async function handleToolsInvokeHttpRequest(
     argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
       ? (argsRaw as Record<string, unknown>)
       : {};
+  const inlineSecretViolation = findInlineToolSecretViolation(args);
+  if (inlineSecretViolation) {
+    sendJson(res, 400, {
+      ok: false,
+      error: {
+        type: "tool_error",
+        message:
+          `Inline secret-like tool parameter "${inlineSecretViolation.path}" is not allowed. ` +
+          "Move credentials to config/env/auth profiles or plugin config.",
+      },
+    });
+    return true;
+  }
 
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =

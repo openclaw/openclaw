@@ -124,6 +124,27 @@ describe("before_tool_call hook integration", () => {
       },
     );
   });
+
+  it("blocks inline secret-like parameters before hook dispatch", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "gateway", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await expect(
+      tool.execute(
+        "call-inline-secret",
+        {
+          apiKey: "sk-live-123",
+        },
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toThrow(/Inline secret-like tool parameter "apiKey" is not allowed/);
+    expect(execute).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
 });
 
 describe("before_tool_call hook deduplication (#15502)", () => {

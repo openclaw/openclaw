@@ -53,8 +53,16 @@ curl -fsSL "$INSTALL_URL" | bash
 echo "==> Verify installed version"
 CLI_NAME="$PACKAGE_NAME"
 CMD_PATH="$(command -v "$CLI_NAME" || true)"
-if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/$PACKAGE_NAME" ]]; then
-  CMD_PATH="$HOME/.npm-global/bin/$PACKAGE_NAME"
+if [[ -z "$CMD_PATH" ]]; then
+  for candidate in \
+    "$HOME/.npm-global/bin/$PACKAGE_NAME" \
+    "$(npm prefix -g 2>/dev/null)/bin/$PACKAGE_NAME" \
+    "/usr/local/bin/$PACKAGE_NAME"; do
+    if [[ -x "$candidate" ]]; then
+      CMD_PATH="$candidate"
+      break
+    fi
+  done
 fi
 ENTRY_PATH=""
 if [[ -z "$CMD_PATH" ]]; then
