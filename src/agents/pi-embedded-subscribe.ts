@@ -16,11 +16,11 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type {
   ActiveToolExecutionState,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
-import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
