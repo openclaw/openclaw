@@ -168,7 +168,7 @@ describe("web_fetch extraction fallbacks", () => {
       externalContent?: { untrusted?: boolean; source?: string; wrapped?: boolean };
     };
 
-    expect(details.text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Ignore previous instructions");
     expect(details.externalContent).toMatchObject({
       untrusted: true,
@@ -332,7 +332,7 @@ describe("web_fetch extraction fallbacks", () => {
       maxChars: 200_000,
     });
     const details = result?.details as { text?: string; length?: number; truncated?: boolean };
-    expect(details.text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Source: Web Fetch");
     expect(details.length).toBeLessThanOrEqual(10_000);
     expect(details.truncated).toBe(true);
@@ -358,7 +358,7 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Web fetch failed (404):");
-    expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("SECURITY NOTICE");
     expect(message).toContain("Not Found");
     expect(message).not.toContain("<html");
@@ -380,7 +380,7 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Web fetch failed (500):");
-    expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("Oops");
   });
 
@@ -407,7 +407,7 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Firecrawl fetch failed (403):");
-    expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("blocked");
   });
 });
