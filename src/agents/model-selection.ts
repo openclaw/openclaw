@@ -202,19 +202,41 @@ export function buildModelAliasIndex(params: {
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
-    if (!parsed) {
-      continue;
-    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) {
       continue;
     }
-    const aliasKey = normalizeAliasKey(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
+    const keyStr = String(keyRaw ?? "").trim();
+    // Determine which value is the short name and which is the full model path.
+    // Style A: key is full path ("google/gemini-2.5-flash"), alias is short name ("flash")
+    // Style B: key is short name ("flash"), alias is full path ("google/gemini-2.5-flash")
+    const keyHasSlash = keyStr.includes("/");
+    const aliasHasSlash = alias.includes("/");
+    let shortName: string;
+    let fullModelPath: string;
+    if (!keyHasSlash && aliasHasSlash) {
+      // Style B: key="flash", alias="google/gemini-2.5-flash"
+      shortName = keyStr;
+      fullModelPath = alias;
+    } else if (keyHasSlash && !aliasHasSlash) {
+      // Style A: key="anthropic/claude-3-5-sonnet", alias="fast"
+      shortName = alias;
+      fullModelPath = keyStr;
+    } else {
+      // Ambiguous: both or neither have slashes — fall back to treating key as
+      // the model specifier and alias as the short name (legacy behavior)
+      shortName = alias;
+      fullModelPath = keyStr;
+    }
+    const parsed = parseModelRef(fullModelPath, params.defaultProvider);
+    if (!parsed) {
+      continue;
+    }
+    const aliasKey = normalizeAliasKey(shortName);
+    byAlias.set(aliasKey, { alias: fullModelPath, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
-    existing.push(alias);
+    existing.push(shortName);
     byKey.set(key, existing);
   }
 

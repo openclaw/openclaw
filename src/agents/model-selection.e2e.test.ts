@@ -114,6 +114,57 @@ describe("model-selection", () => {
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
     });
+
+    it("should resolve short-name keys with full-path aliases (#20042)", () => {
+      // Config style: "flash": { alias: "google/gemini-2.5-flash" }
+      // The key is the user-typed short name, alias is the full model path.
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              flash: { alias: "google/gemini-2.5-flash" },
+              sonnet: { alias: "anthropic/claude-sonnet-4-6" },
+              opus: { alias: "anthropic/claude-opus-4-6" },
+            },
+          },
+        },
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+      });
+
+      // Short-name lookup must resolve to the full model path
+      expect(index.byAlias.get("flash")?.ref).toEqual({
+        provider: "google",
+        model: "gemini-2.5-flash",
+      });
+      expect(index.byAlias.get("sonnet")?.ref).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+      expect(index.byAlias.get("opus")?.ref).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+
+      // byKey reverse lookup should map back to short names
+      expect(index.byKey.get(modelKey("google", "gemini-2.5-flash"))).toEqual(["flash"]);
+      expect(index.byKey.get(modelKey("anthropic", "claude-sonnet-4-6"))).toEqual(["sonnet"]);
+
+      // End-to-end: resolveModelRefFromString with "flash" must find google model
+      const resolved = resolveModelRefFromString({
+        raw: "flash",
+        defaultProvider: "anthropic",
+        aliasIndex: index,
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "google",
+        model: "gemini-2.5-flash",
+      });
+      expect(resolved?.alias).toBe("google/gemini-2.5-flash");
+    });
   });
 
   describe("resolveModelRefFromString", () => {
