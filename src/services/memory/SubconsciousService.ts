@@ -553,7 +553,14 @@ CRITICAL: Write the memories in the EXACT SAME LANGUAGE as the CURRENT USER MESS
 Keep it fluid, natural, and conversational.
 Do not use log formats ("human", "assistant"), remove all that.
 Maintain a bulleted list format, one memory per line.
-The raw memories include fuzzy relative timestamps like [hace 2 semanas] or [yesterday morning]. Incorporate them naturally into each sentence (e.g. "Hace dos semanas Julio me preguntó...") rather than keeping them as bracketed labels.
+The raw memories include fuzzy relative timestamps like [hace 2 semanas] or [yesterday morning]. Incorporate them naturally into each sentence rather than keeping them as bracketed labels.
+
+STRICT RULES — NEVER break these:
+1. Do NOT invent or infer ANY fact, action, method, or context that is not EXPLICITLY stated in the RAW MEMORIES below.
+2. Do NOT add sensory details like "te escuché", "vi", "sentí" unless that is literally written in the source.
+3. If the source says "Julio spoke on the phone", write "Julio habló por teléfono" — do NOT say "te escuché hablar por teléfono" as that implies the AI was present.
+4. Only rephrase style and point-of-view (1st person). Keep ALL facts strictly sourced from the raw text.
+5. When uncertain, stay closer to the original wording rather than embellishing.
 ${soulContext ? `\n=== YOUR UNIQUE PERSONA (SOUL) ===\n${soulContext}\n=========================\nYou MUST write these memories adopting this personality, tone, and worldview.\n` : ""}${storyContext ? `\n=== YOUR ONGOING NARRATIVE (STORY) ===\n${storyContext}\n=========================\nUse this as background context to better understand the relationship and history with the user.\n` : ""}
 CURRENT USER MESSAGE (Detect language from this):
 "${currentPrompt}"
