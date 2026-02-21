@@ -734,7 +734,7 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              silent: isLocalClient,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -753,6 +753,7 @@ export function attachGatewayWsMessageHandler(params: {
                   },
                   { dropIfSlow: true },
                 );
+                return true;
               }
             } else if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
