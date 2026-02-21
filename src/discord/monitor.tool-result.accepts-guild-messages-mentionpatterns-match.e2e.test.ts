@@ -17,7 +17,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    loadConfig: () => loadConfigMock(),
   };
 });
 
