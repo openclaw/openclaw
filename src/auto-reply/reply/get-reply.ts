@@ -9,8 +9,11 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
@@ -133,6 +136,85 @@ export async function getReplyFromConfig(
       ctx: finalized,
       cfg,
     });
+
+    // Fire message:preprocessed hooks (after media + link understanding, before agent)
+    {
+      const preprocessedHookRunner = getGlobalHookRunner();
+      const processedContent =
+        finalized.BodyForCommands ?? finalized.Body ?? finalized.RawBody ?? "";
+      const rawContent = ctx.RawBody ?? ctx.Body ?? "";
+      const channelId = (
+        finalized.OriginatingChannel ??
+        finalized.Surface ??
+        finalized.Provider ??
+        ""
+      ).toLowerCase();
+
+      if (preprocessedHookRunner?.hasHooks("message_preprocessed")) {
+        void preprocessedHookRunner
+          .runMessagePreprocessed(
+            {
+              from: finalized.From ?? "",
+              content: processedContent,
+              rawContent,
+              timestamp: (() => {
+                const t = new Date(finalized.Timestamp).getTime();
+                return Number.isFinite(t) ? t : Date.now();
+              })(),
+              metadata: {
+                to: finalized.To,
+                provider: finalized.Provider,
+                surface: finalized.Surface,
+                threadId: finalized.MessageThreadId,
+                originatingChannel: finalized.OriginatingChannel,
+                senderId: finalized.SenderId,
+                senderName: finalized.SenderName,
+                messageId: finalized.MessageSidFull ?? finalized.MessageSid,
+              },
+            },
+            {
+              channelId,
+              accountId: finalized.AccountId,
+              conversationId:
+                finalized.OriginatingTo ?? finalized.To ?? finalized.From ?? undefined,
+            },
+          )
+          .catch((err) => {
+            logVerbose(`get-reply: message_preprocessed hook failed: ${String(err)}`);
+          });
+      }
+
+      const hookEvent = createInternalHookEvent(
+        "message",
+        "preprocessed",
+        finalized.SessionKey ?? "",
+        {
+          text: processedContent,
+          rawText: rawContent,
+          channel: channelId,
+          chatType: finalized.ChatType,
+          from: finalized.From,
+          to: finalized.To,
+          senderId: finalized.SenderId,
+          senderName: finalized.SenderName,
+          senderUsername: finalized.SenderUsername,
+          messageId:
+            finalized.MessageSidFull ??
+            finalized.MessageSid ??
+            finalized.MessageSidFirst ??
+            finalized.MessageSidLast,
+          threadId: finalized.MessageThreadId,
+          timestamp: finalized.Timestamp,
+          accountId: finalized.AccountId,
+          mediaUrls: finalized.MediaUrls,
+          mediaTypes: finalized.MediaTypes,
+          groupId: finalized.OriginatingTo,
+        },
+      );
+      void triggerInternalHook(hookEvent).catch((err) => {
+        logVerbose(`get-reply: message:preprocessed hook failed: ${String(err)}`);
+      });
+    }
   }
 
   const commandAuthorized = finalized.CommandAuthorized;

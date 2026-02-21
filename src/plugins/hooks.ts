@@ -27,6 +27,7 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
+  PluginHookMessagePreprocessedEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -60,6 +61,7 @@ export type {
   PluginHookBeforeResetEvent,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
+  PluginHookMessagePreprocessedEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -339,6 +341,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookMessageContext,
   ): Promise<void> {
     return runVoidHook("message_received", event, ctx);
+  }
+
+  /**
+   * Run message_preprocessed hook.
+   * Fires after media/link understanding, before agent processing.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runMessagePreprocessed(
+    event: PluginHookMessagePreprocessedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_preprocessed", event, ctx);
   }
 
   /**
@@ -627,6 +641,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runMessageReceived,
+    runMessagePreprocessed,
     runMessageSending,
     runMessageSent,
     // Tool hooks

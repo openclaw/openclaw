@@ -306,6 +306,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "message_received"
+  | "message_preprocessed"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -440,6 +441,16 @@ export type PluginHookMessageContext = {
 export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+};
+
+// message_preprocessed hook (after media/link understanding, before agent)
+export type PluginHookMessagePreprocessedEvent = {
+  from: string;
+  content: string;
+  rawContent?: string;
+  transcript?: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
 };
@@ -599,6 +610,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  message_preprocessed: (
+    event: PluginHookMessagePreprocessedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
   message_sending: (
