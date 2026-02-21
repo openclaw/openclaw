@@ -62,6 +62,12 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import {
+  buildTelegramStatusReactionVariants,
+  resolveTelegramAllowedEmojiReactions,
+  resolveTelegramReactionVariant,
+  resolveTelegramStatusReactionEmojis,
+} from "./status-reaction-variants.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -522,14 +528,24 @@ export const buildTelegramMessageContext = async ({
       messageId: number,
       reactions: Array<{ type: "emoji"; emoji: string }>,
     ) => Promise<void>;
+    getChat?: (chatId: number | string) => Promise<unknown>;
   };
   const reactionApi =
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
+  const getChatApi = typeof api.getChat === "function" ? api.getChat.bind(api) : null;
 
   // Status Reactions controller (lifecycle reactions)
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
     statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+  const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
+    initialEmoji: ackReaction,
+    overrides: statusReactionsConfig?.emojis,
+  });
+  const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
+    resolvedStatusReactionEmojis,
+  );
+  let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null = null;
   const statusReactionController: StatusReactionController | null =
     statusReactionsEnabled && msg.message_id
       ? createStatusReactionController({
@@ -537,13 +553,36 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
-                await reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji }]);
+                if (!allowedStatusReactionEmojisPromise) {
+                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
+                    chat: msg.chat,
+                    chatId,
+                    getChat: getChatApi ?? undefined,
+                  }).catch((err) => {
+                    logVerbose(
+                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                    );
+                    return null;
+                  });
+                }
+                const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
+                const resolvedEmoji = resolveTelegramReactionVariant({
+                  requestedEmoji: emoji,
+                  variantsByRequestedEmoji: statusReactionVariantsByEmoji,
+                  allowedEmojiReactions: allowedStatusReactionEmojis,
+                });
+                if (!resolvedEmoji) {
+                  return;
+                }
+                await reactionApi(chatId, msg.message_id, [
+                  { type: "emoji", emoji: resolvedEmoji },
+                ]);
               }
             },
             // Telegram replaces atomically — no removeReaction needed
           },
           initialEmoji: ackReaction,
-          emojis: statusReactionsConfig?.emojis,
+          emojis: resolvedStatusReactionEmojis,
           timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
