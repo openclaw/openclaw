@@ -12,20 +12,66 @@ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
-// instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
-// contain nested unions. Tool schemas need to stay provider-friendly, so we
-// accept "any object" here and validate at runtime.
-
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_SESSION_TARGETS = ["main", "isolated"] as const;
+const CRON_DELIVERY_MODES = ["none", "announce"] as const;
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
+
+// Fully typed schedule schema (flattened union — kind determines which fields apply).
+const CronScheduleSchema = Type.Object({
+  kind: stringEnum(CRON_SCHEDULE_KINDS),
+  at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
+  expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
+  tz: Type.Optional(Type.String({ description: "Timezone (kind=cron)" })),
+  everyMs: Type.Optional(Type.Number({ description: "Interval in ms (kind=every)" })),
+  anchorMs: Type.Optional(Type.Number({ description: "Anchor epoch ms (kind=every)" })),
+});
+
+// Fully typed payload schema (flattened union — kind determines which fields apply).
+const CronPayloadSchema = Type.Object({
+  kind: stringEnum(CRON_PAYLOAD_KINDS),
+  text: Type.Optional(Type.String({ description: "Message text (kind=systemEvent)" })),
+  message: Type.Optional(Type.String({ description: "Agent prompt (kind=agentTurn)" })),
+  model: Type.Optional(Type.String()),
+  thinking: Type.Optional(Type.String()),
+  timeoutSeconds: Type.Optional(Type.Number()),
+});
+
+const CronDeliverySchema = Type.Object({
+  mode: Type.Optional(stringEnum(CRON_DELIVERY_MODES)),
+  channel: Type.Optional(Type.String()),
+  to: Type.Optional(Type.String()),
+  bestEffort: Type.Optional(Type.Boolean()),
+});
+
+// Typed job schema for add action. Runtime normalization still handles coercion.
+const CronJobSchema = Type.Object({
+  name: Type.Optional(Type.String({ description: "Job name" })),
+  schedule: CronScheduleSchema,
+  payload: CronPayloadSchema,
+  sessionTarget: stringEnum(CRON_SESSION_TARGETS),
+  delivery: Type.Optional(CronDeliverySchema),
+  enabled: Type.Optional(Type.Boolean()),
+});
+
+// Typed patch schema for update action.
+const CronPatchSchema = Type.Object({
+  name: Type.Optional(Type.String()),
+  schedule: Type.Optional(CronScheduleSchema),
+  payload: Type.Optional(CronPayloadSchema),
+  sessionTarget: Type.Optional(stringEnum(CRON_SESSION_TARGETS)),
+  delivery: Type.Optional(CronDeliverySchema),
+  enabled: Type.Optional(Type.Boolean()),
+});
 
 // Flattened schema: runtime validates per-action requirements.
 const CronToolSchema = Type.Object({
@@ -34,10 +80,10 @@ const CronToolSchema = Type.Object({
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
   includeDisabled: Type.Optional(Type.Boolean()),
-  job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  job: Type.Optional(CronJobSchema),
   jobId: Type.Optional(Type.String()),
   id: Type.Optional(Type.String()),
-  patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  patch: Type.Optional(CronPatchSchema),
   text: Type.Optional(Type.String()),
   mode: optionalStringEnum(CRON_WAKE_MODES),
   runMode: optionalStringEnum(CRON_RUN_MODES),

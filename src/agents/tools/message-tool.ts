@@ -215,9 +215,22 @@ function buildSendSchema(options: {
     ),
     card: Type.Optional(
       Type.Object(
-        {},
         {
-          additionalProperties: true,
+          type: Type.Optional(Type.String({ description: "Card type, e.g. AdaptiveCard" })),
+          version: Type.Optional(Type.String()),
+          body: Type.Optional(
+            Type.Array(
+              Type.Object({
+                type: Type.Optional(Type.String()),
+                text: Type.Optional(Type.String()),
+                size: Type.Optional(Type.String()),
+                weight: Type.Optional(Type.String()),
+                wrap: Type.Optional(Type.Boolean()),
+              }),
+            ),
+          ),
+        },
+        {
           description: "Adaptive Card JSON object (when supported by the channel)",
         },
       ),

@@ -37,7 +37,7 @@ const OPENAI_MODEL_APIS = new Set([
   "openai-responses",
   "openai-codex-responses",
 ]);
-const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
+const OPENAI_PROVIDERS = new Set(["openai", "openai-codex", "xai"]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
   if (!modelApi) {
