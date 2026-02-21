@@ -71,6 +71,36 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
+
+  it("includes discord channel topics only for new sessions", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "discord:channel:123",
+      OriginatingChannel: "discord",
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+      ChannelTopic: "  Shipping updates  ",
+      IsNewSession: "true",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel_topic"]).toBe("Shipping updates");
+  });
+
+  it("omits discord channel topics for existing sessions", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "discord:channel:123",
+      OriginatingChannel: "discord",
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+      ChannelTopic: "Shipping updates",
+      IsNewSession: "false",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel_topic"]).toBeUndefined();
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {
