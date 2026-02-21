@@ -4,30 +4,60 @@ import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
-  it("includes owner numbers when provided", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      ownerNumbers: ["+123", " +456 ", ""],
-    });
+  it("formats owner section for plain, hash, and missing owner lists", () => {
+    const cases = [
+      {
+        name: "plain owner numbers",
+        params: {
+          workspaceDir: "/tmp/openclaw",
+          ownerNumbers: ["+123", " +456 ", ""],
+        },
+        expectAuthorizedSection: true,
+        contains: [
+          "Authorized senders: +123, +456. These senders are allowlisted; do not assume they are the owner.",
+        ],
+        notContains: [] as string[],
+      },
+      {
+        name: "hashed owner numbers",
+        params: {
+          workspaceDir: "/tmp/openclaw",
+          ownerNumbers: ["+123", "+456", ""],
+          ownerDisplay: "hash" as const,
+        },
+        expectAuthorizedSection: true,
+        contains: ["Authorized senders:"],
+        notContains: ["+123", "+456"],
+        hashMatch: /[a-f0-9]{12}/,
+      },
+      {
+        name: "missing owners",
+        params: {
+          workspaceDir: "/tmp/openclaw",
+        },
+        expectAuthorizedSection: false,
+        contains: [] as string[],
+        notContains: ["## Authorized Senders", "Authorized senders:"],
+      },
+    ] as const;
 
-    expect(prompt).toContain("## Authorized Senders");
-    expect(prompt).toContain(
-      "Authorized senders: +123, +456. These senders are allowlisted; do not assume they are the owner.",
-    );
-  });
-
-  it("hashes owner numbers when ownerDisplay is hash", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      ownerNumbers: ["+123", "+456", ""],
-      ownerDisplay: "hash",
-    });
-
-    expect(prompt).toContain("## Authorized Senders");
-    expect(prompt).toContain("Authorized senders:");
-    expect(prompt).not.toContain("+123");
-    expect(prompt).not.toContain("+456");
-    expect(prompt).toMatch(/[a-f0-9]{12}/);
+    for (const testCase of cases) {
+      const prompt = buildAgentSystemPrompt(testCase.params);
+      if (testCase.expectAuthorizedSection) {
+        expect(prompt, testCase.name).toContain("## Authorized Senders");
+      } else {
+        expect(prompt, testCase.name).not.toContain("## Authorized Senders");
+      }
+      for (const value of testCase.contains) {
+        expect(prompt, `${testCase.name}:${value}`).toContain(value);
+      }
+      for (const value of testCase.notContains) {
+        expect(prompt, `${testCase.name}:${value}`).not.toContain(value);
+      }
+      if (testCase.hashMatch) {
+        expect(prompt, testCase.name).toMatch(testCase.hashMatch);
+      }
+    }
   });
 
   it("uses a stable, keyed HMAC when ownerDisplaySecret is provided", () => {
@@ -53,15 +83,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(tokenA).toBeDefined();
     expect(tokenB).toBeDefined();
     expect(tokenA).not.toBe(tokenB);
-  });
-
-  it("omits owner section when numbers are missing", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-    });
-
-    expect(prompt).not.toContain("## Authorized Senders");
-    expect(prompt).not.toContain("Authorized senders:");
   });
 
   it("omits extended sections in minimal prompt mode", () => {
@@ -224,39 +245,41 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("includes user timezone when provided (12-hour)", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
-      userTimeFormat: "12",
-    });
+  it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
+    const cases = [
+      {
+        name: "12-hour",
+        params: {
+          workspaceDir: "/tmp/openclaw",
+          userTimezone: "America/Chicago",
+          userTime: "Monday, January 5th, 2026 — 3:26 PM",
+          userTimeFormat: "12" as const,
+        },
+      },
+      {
+        name: "24-hour",
+        params: {
+          workspaceDir: "/tmp/openclaw",
+          userTimezone: "America/Chicago",
+          userTime: "Monday, January 5th, 2026 — 15:26",
+          userTimeFormat: "24" as const,
+        },
+      },
+      {
+        name: "timezone-only",
+        params: {
+          workspaceDir: "/tmp/openclaw",
+          userTimezone: "America/Chicago",
+          userTimeFormat: "24" as const,
+        },
+      },
+    ] as const;
 
-    expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Time zone: America/Chicago");
-  });
-
-  it("includes user timezone when provided (24-hour)", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 15:26",
-      userTimeFormat: "24",
-    });
-
-    expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Time zone: America/Chicago");
-  });
-
-  it("shows timezone when only timezone is provided", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      userTimezone: "America/Chicago",
-      userTimeFormat: "24",
-    });
-
-    expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Time zone: America/Chicago");
+    for (const testCase of cases) {
+      const prompt = buildAgentSystemPrompt(testCase.params);
+      expect(prompt, testCase.name).toContain("## Current Date & Time");
+      expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
+    }
   });
 
   it("hints to use session_status for current date/time", () => {
