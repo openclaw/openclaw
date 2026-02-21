@@ -2,7 +2,7 @@
 summary: "Bind Discord threads to subagent sessions — zoom in/out UX for direct subagent interaction"
 owner: "onutc"
 status: "draft"
-last_updated: "2026-02-20"
+last_updated: "2026-02-21"
 title: "Thread-Bound Subagents"
 ---
 
@@ -428,13 +428,77 @@ Expected user-visible behavior:
 
 ## Appendix: Plugin hook architecture
 
-Clean architecture recommendation: remove direct core-to-Discord coupling (for example `autoBindSpawnedDiscordSubagent` invoked from `subagent-spawn.ts`) and move channel behavior behind plugin hooks.
+### Current baseline
 
-- Core emits channel-agnostic lifecycle hooks:
-  - `subagent_spawned` (includes child session metadata and origin context)
-  - `subagent_ended` (includes completion/termination metadata)
-- Discord plugin subscribes to those hooks and performs Discord-specific actions:
-  - on `subagent_spawned`, create/bind thread and webhook persona
-  - on `subagent_ended`, unbind/cleanup thread routing
+The architecture is moving to plugin-driven lifecycle hooks:
 
-This keeps core routing and subagent orchestration channel-agnostic, while enabling equivalent Slack/Telegram thread binding by implementing the same hook handlers in those plugins.
+- `subagent_spawning` (pre-run provisioning; can return `ok` / `error`)
+- `subagent_spawned` (post-run registration notification)
+- `subagent_ended` (cleanup/unbind lifecycle)
+
+Discord-specific thread binding and unbinding should live in the Discord extension, not core subagent orchestration code.
+
+### Strict separation target (channel-agnostic core)
+
+To fully remove remaining core Discord imports, add one more channel-agnostic hook for completion routing:
+
+- `subagent_delivery_target` (or `subagent_completion_route`)
+  - Purpose: resolve where completion/user-facing follow-up should be delivered for a child session.
+  - Called by core announcement flow before direct delivery.
+  - Channel plugins may return an override delivery context (for example, bound Discord thread).
+
+Recommended event/result shape:
+
+```ts
+type PluginHookSubagentDeliveryTargetEvent = {
+  childSessionKey: string;
+  requesterSessionKey: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  spawnMode?: "run" | "session";
+  expectsCompletionMessage: boolean;
+};
+
+type PluginHookSubagentDeliveryTargetResult = {
+  origin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+};
+```
+
+### Required core follow-up changes
+
+1. `src/agents/subagent-registry-completion.ts`
+   - Remove direct `unbindThreadBindingsBySessionKey` import/call.
+   - Emit `subagent_ended` hook only.
+   - If no hook is registered, do nothing (core remains channel-agnostic).
+
+2. `src/agents/subagent-announce.ts`
+   - Remove `resolveDiscordThreadCompletionOrigin` and dynamic import from `../discord/monitor/thread-bindings.js`.
+   - Replace with `subagent_delivery_target` hook call.
+   - Use hook-returned origin override when present; otherwise use existing requester-origin fallback behavior.
+
+3. `src/plugins/types.ts` and `src/plugins/hooks.ts`
+   - Add typed hook definitions and runner method for `subagent_delivery_target`.
+   - Keep hook execution sequential and deterministic.
+
+4. `extensions/discord/src/subagent-hooks.ts`
+   - Implement `subagent_delivery_target` handler:
+     - lookup active binding for `childSessionKey`
+     - return bound thread delivery origin when available
+     - return `undefined` otherwise
+
+### Result
+
+After the above, core subagent lifecycle + completion routing is fully channel-agnostic:
+
+- core emits lifecycle and routing-intent hooks
+- extensions implement channel-specific binding/routing behavior
+- no direct core dependency on Discord thread-binding internals
