@@ -398,6 +398,7 @@ Example:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
     - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - names/tags are supported for `users`, but IDs are safer; `openclaw security audit` warns when name/tag entries are used
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
