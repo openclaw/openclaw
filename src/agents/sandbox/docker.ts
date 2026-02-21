@@ -286,8 +286,22 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.network) {
     args.push("--network", params.cfg.network);
   }
-  if (params.cfg.user) {
-    args.push("--user", params.cfg.user);
+  // When no explicit user is configured, fall back to the gateway process's
+  // UID:GID so the container can access workspace files owned by the gateway
+  // user. This is required for the recommended git-based install pattern where
+  // the gateway runs as a dedicated non-root user: without it, the container
+  // runs as root with --cap-drop ALL which strips DAC_OVERRIDE, making all
+  // write operations fail on workspace dirs owned by the gateway user.
+  // process.getuid/getgid are POSIX-only; on non-POSIX platforms (Windows)
+  // we skip the fallback and let Docker pick the image default.
+  // See: https://github.com/openclaw/openclaw/issues/20979
+  const effectiveUser =
+    params.cfg.user ||
+    (typeof process.getuid === "function"
+      ? `${process.getuid()}:${typeof process.getgid === "function" ? process.getgid() : process.getuid()}`
+      : null);
+  if (effectiveUser) {
+    args.push("--user", effectiveUser);
   }
   const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
   if (envSanitization.blocked.length > 0) {
