@@ -12,6 +12,7 @@ import {
 } from "./send/formatting.js";
 import {
   buildMediaContent,
+  generateWaveform,
   prepareImageInfo,
   resolveMediaDurationMs,
   uploadMediaMaybeEncrypted,
@@ -102,6 +103,7 @@ export async function sendMessageMatrix(
       const imageInfo = isImage
         ? await prepareImageInfo({ buffer: media.buffer, client })
         : undefined;
+      const waveform = useVoice ? await generateWaveform(media.buffer) : undefined;
       const [firstChunk, ...rest] = chunks;
       const body = useVoice ? "Voice message" : (firstChunk ?? media.fileName ?? "(file)");
       const content = buildMediaContent({
@@ -113,6 +115,7 @@ export async function sendMessageMatrix(
         mimetype: media.contentType,
         size: media.buffer.byteLength,
         durationMs,
+        waveform,
         relation,
         isVoice: useVoice,
         imageInfo,

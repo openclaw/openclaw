@@ -66,7 +66,9 @@ export type MatrixMediaContent = MessageEventContent &
     file?: EncryptedFile;
     filename?: string;
     "org.matrix.msc3245.voice"?: Record<string, never>;
-    "org.matrix.msc1767.audio"?: { duration: number };
+    "org.matrix.msc1767.audio"?:
+      | { duration: number; waveform?: number[] }
+      | Record<string, unknown>;
   };
 
 export type MatrixOutboundContent = MatrixTextContent | MatrixMediaContent;
