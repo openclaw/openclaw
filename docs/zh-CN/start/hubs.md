@@ -112,7 +112,7 @@ x-i18n:
 
 - [工具概览](/tools)
 - [OpenProse](/prose)
-- [CLI 参考](/cli)
+- [CLI 参考](/reference/cli)
 - [Exec 工具](/tools/exec)
 - [提权模式](/tools/elevated)
 - [定时任务](/automation/cron-jobs)

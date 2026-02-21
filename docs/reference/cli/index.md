@@ -12,45 +12,45 @@ This page describes the current CLI behavior. If commands change, update this do
 
 ## Command pages
 
-- [`setup`](/cli/setup)
-- [`onboard`](/cli/onboard)
-- [`configure`](/cli/configure)
+- [`setup`](/reference/cli/setup)
+- [`onboard`](/reference/cli/onboard)
+- [`configure`](/reference/cli/configure)
 - [`config`](/cli/config)
-- [`doctor`](/cli/doctor)
-- [`dashboard`](/cli/dashboard)
-- [`reset`](/cli/reset)
-- [`uninstall`](/cli/uninstall)
-- [`update`](/cli/update)
-- [`message`](/cli/message)
-- [`agent`](/cli/agent)
-- [`agents`](/cli/agents)
+- [`doctor`](/reference/cli/doctor)
+- [`dashboard`](/reference/cli/dashboard)
+- [`reset`](/reference/cli/reset)
+- [`uninstall`](/reference/cli/uninstall)
+- [`update`](/reference/cli/update)
+- [`message`](/reference/cli/message)
+- [`agent`](/reference/cli/agent)
+- [`agents`](/reference/cli/agents)
 - [`acp`](/cli/acp)
-- [`status`](/cli/status)
-- [`health`](/cli/health)
-- [`sessions`](/cli/sessions)
-- [`gateway`](/cli/gateway)
-- [`logs`](/cli/logs)
-- [`system`](/cli/system)
-- [`models`](/cli/models)
-- [`memory`](/cli/memory)
-- [`nodes`](/cli/nodes)
+- [`status`](/reference/cli/status)
+- [`health`](/reference/cli/health)
+- [`sessions`](/reference/cli/sessions)
+- [`gateway`](/reference/cli/gateway)
+- [`logs`](/reference/cli/logs)
+- [`system`](/reference/cli/system)
+- [`models`](/reference/cli/models)
+- [`memory`](/reference/cli/memory)
+- [`nodes`](/reference/cli/nodes)
 - [`devices`](/cli/devices)
 - [`node`](/cli/node)
-- [`approvals`](/cli/approvals)
-- [`sandbox`](/cli/sandbox)
-- [`tui`](/cli/tui)
-- [`browser`](/cli/browser)
-- [`cron`](/cli/cron)
-- [`dns`](/cli/dns)
-- [`docs`](/cli/docs)
-- [`hooks`](/cli/hooks)
+- [`approvals`](/reference/cli/approvals)
+- [`sandbox`](/reference/cli/sandbox)
+- [`tui`](/reference/cli/tui)
+- [`browser`](/reference/cli/browser)
+- [`cron`](/reference/cli/cron)
+- [`dns`](/reference/cli/dns)
+- [`docs`](/reference/cli/docs)
+- [`hooks`](/reference/cli/hooks)
 - [`webhooks`](/cli/webhooks)
-- [`pairing`](/cli/pairing)
-- [`plugins`](/cli/plugins) (plugin commands)
-- [`channels`](/cli/channels)
-- [`security`](/cli/security)
-- [`skills`](/cli/skills)
-- [`voicecall`](/cli/voicecall) (plugin; if installed)
+- [`pairing`](/reference/cli/pairing)
+- [`plugins`](/reference/cli/plugins) (plugin commands)
+- [`channels`](/reference/cli/channels)
+- [`security`](/reference/cli/security)
+- [`skills`](/reference/cli/skills)
+- [`voicecall`](/reference/cli/voicecall) (plugin; if installed)
 
 ## Global flags
 
@@ -475,7 +475,7 @@ Options:
 
 Unified outbound messaging + channel actions.
 
-See: [/cli/message](/cli/message)
+See: [/reference/cli/message](/reference/cli/message)
 
 Subcommands:
 
@@ -967,7 +967,7 @@ Location:
 
 ## Browser
 
-Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`openclaw browser`](/cli/browser) and the [Browser tool](/tools/browser).
+Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`openclaw browser`](/reference/cli/browser) and the [Browser tool](/tools/browser).
 
 Common options:
 

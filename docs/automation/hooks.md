@@ -817,7 +817,7 @@ test("my handler works", async () => {
 - **`src/hooks/config.ts`**: Eligibility checking
 - **`src/hooks/hooks-status.ts`**: Status reporting
 - **`src/hooks/loader.ts`**: Dynamic module loader
-- **`src/cli/hooks-cli.ts`**: CLI commands
+- **`src/reference/cli/hooks-cli.ts`**: CLI commands
 - **`src/gateway/server-startup.ts`**: Loads hooks at gateway start
 - **`src/auto-reply/reply/commands-core.ts`**: Triggers command events
 
@@ -995,7 +995,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 ## See Also
 
-- [CLI Reference: hooks](/cli/hooks)
+- [CLI Reference: hooks](/reference/cli/hooks)
 - [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [Configuration](/gateway/configuration#hooks)

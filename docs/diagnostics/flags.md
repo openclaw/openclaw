@@ -82,7 +82,7 @@ Or tail while reproducing:
 tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"
 ```
 
-For remote gateways, you can also use `openclaw logs --follow` (see [/cli/logs](/cli/logs)).
+For remote gateways, you can also use `openclaw logs --follow` (see [/reference/cli/logs](/reference/cli/logs)).
 
 ## Notes
 

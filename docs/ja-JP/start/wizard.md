@@ -72,6 +72,6 @@ openclaw agents add <name>
 
 ## 関連ドキュメント
 
-- CLIコマンドリファレンス：[`openclaw onboard`](/cli/onboard)
+- CLIコマンドリファレンス：[`openclaw onboard`](/reference/cli/onboard)
 - macOSアプリのオンボーディング：[オンボーディング](/start/onboarding)
 - エージェント初回起動の手順：[エージェントブートストラップ](/start/bootstrapping)

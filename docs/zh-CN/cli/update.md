@@ -98,4 +98,4 @@ openclaw update status --timeout 10
 - `openclaw doctor`（在 git 检出上会提供先运行更新的选项）
 - [开发渠道](/install/development-channels)
 - [更新](/install/updating)
-- [CLI 参考](/cli)
+- [CLI 参考](/reference/cli)
