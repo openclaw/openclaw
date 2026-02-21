@@ -71,7 +71,8 @@ $output = @{
 if ($OutputJson) {
     $dir = Split-Path $OutputJson -Parent
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $output | ConvertTo-Json -Depth 5 | Set-Content -Path $OutputJson -Encoding UTF8
+    $json = $output | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($OutputJson, $json, [System.Text.UTF8Encoding]::new($false))
     Write-Host "`nSaved to: $OutputJson" -ForegroundColor Green
 }
 

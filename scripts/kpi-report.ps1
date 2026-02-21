@@ -115,7 +115,7 @@ $(if ($prevData) { "- 이전 수집: $($prevData.collected_at)" } else { "- 첫 
 # 4. Write dashboard
 $dashDir = Split-Path $dashboardPath -Parent
 if (-not (Test-Path $dashDir)) { New-Item -ItemType Directory -Path $dashDir -Force | Out-Null }
-Set-Content -Path $dashboardPath -Value $dashboard -Encoding UTF8
+[System.IO.File]::WriteAllText($dashboardPath, $dashboard, [System.Text.UTF8Encoding]::new($false))
 Write-Host "`nDashboard updated: $dashboardPath" -ForegroundColor Green
 Write-Host "JSON saved: $jsonPath" -ForegroundColor Green
 Write-Host "=== KPI Report Complete ===" -ForegroundColor Green
