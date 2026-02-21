@@ -704,7 +704,7 @@ final class GatewayConnectionController {
         var addr = in_addr()
         let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
         guard parsed else { return false }
-        let value = ntohl(addr.s_addr)
+        let value = UInt32(bigEndian: addr.s_addr)
         let firstOctet = UInt8((value >> 24) & 0xFF)
         return firstOctet == 127
     }
