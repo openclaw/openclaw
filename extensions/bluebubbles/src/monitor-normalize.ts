@@ -651,11 +651,9 @@ export function normalizeWebhookMessage(
     return null;
   }
 
-  const text =
-    readString(message, "text") ??
-    readString(message, "body") ??
-    readString(message, "subject") ??
-    "";
+  const subject = readString(message, "subject");
+  const body = readString(message, "text") ?? readString(message, "body") ?? "";
+  const text = subject && body ? `${subject}\n${body}` : (subject ?? body);
 
   const { senderId, senderName } = extractSenderInfo(message);
   const { chatGuid, chatIdentifier, chatId, chatName, isGroup, participants } =
