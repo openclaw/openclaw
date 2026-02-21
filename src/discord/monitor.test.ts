@@ -727,7 +727,10 @@ describe("discord reaction notification gating", () => {
       expect(
         shouldEmitDiscordReactionNotification({
           ...testCase.input,
-          allowlist: testCase.input.allowlist ? [...testCase.input.allowlist] : undefined,
+          allowlist:
+            "allowlist" in testCase.input && testCase.input.allowlist
+              ? [...testCase.input.allowlist]
+              : undefined,
         }),
         testCase.name,
       ).toBe(testCase.expected);
