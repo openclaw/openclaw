@@ -46,7 +46,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       .filter((account) => account.enabled)
       .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 
-    const actions: string[] = [];
+    const actions: ChannelMessageActionName[] = [];
 
     // Send (buttons) is available whenever there's at least one enabled account
     if (enabledAccounts.length > 0) {
