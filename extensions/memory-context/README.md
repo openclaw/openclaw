@@ -1,5 +1,7 @@
 # memory-context Plugin
 
+> **This is an optional plugin for openclaw. It is disabled by default and must be explicitly enabled in configuration before it takes effect.** See [Enabling the Plugin](#enabling-the-plugin) below.
+
 Cross-session conversation memory system. Automatically archives conversation content during compaction and smart-trim, then recalls relevant historical context in subsequent conversations via hybrid search (vector + BM25).
 
 ## Features
@@ -18,7 +20,7 @@ Cross-session conversation memory system. Automatically archives conversation co
 
 ## Enabling the Plugin
 
-Add the following to `~/.openclaw/openclaw.json`:
+**This plugin is not active by default.** You must add the following configuration to `~/.openclaw/openclaw.json` to enable it:
 
 ```json
 {
@@ -36,7 +38,9 @@ Add the following to `~/.openclaw/openclaw.json`:
 ```
 
 - `plugins.entries.memory-context` — Registers the plugin and passes configuration
-- `plugins.slots.memory` — Binds `memory-context` to the memory slot (required, otherwise the plugin will not be invoked)
+- `plugins.slots.memory` — Binds `memory-context` to the memory slot (**required** — without this binding the plugin will not be invoked even if registered)
+
+> **Both `entries` and `slots` are required.** If either is missing, the plugin remains inactive.
 
 ## Configuring Embedding API Key
 
