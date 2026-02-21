@@ -206,6 +206,7 @@ export async function setAnthropicApiKey(
   });
 }
 
+<<<<<<< HEAD
 export async function setOpenaiApiKey(
   key: SecretInput,
   agentDir?: string,
