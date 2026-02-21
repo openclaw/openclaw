@@ -4,6 +4,7 @@ import { callGatewayFromCli } from "./gateway-rpc.js";
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
   browserProfile?: string;
+  relay?: string;
 };
 
 type BrowserRequestParams = {
@@ -43,13 +44,17 @@ export async function callBrowserRequest<T>(
       ? resolvedTimeoutMs
       : undefined;
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
+  const query = normalizeQuery(params.query) || {};
+  if (opts.relay) {
+    query.relay = opts.relay;
+  }
   const payload = await callGatewayFromCli(
     "browser.request",
     { ...opts, timeout },
     {
       method: params.method,
       path: params.path,
-      query: normalizeQuery(params.query),
+      query: Object.keys(query).length > 0 ? query : undefined,
       body: params.body,
       timeoutMs: resolvedTimeout,
     },

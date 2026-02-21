@@ -48,6 +48,11 @@ async function getGatewayToken() {
   return token || ''
 }
 
+async function getRelayName() {
+  const stored = await chrome.storage.local.get(['relayName'])
+  return String(stored.relayName || '').trim()
+}
+
 function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
   void chrome.action.setBadgeText({ tabId, text: cfg.text })
@@ -62,10 +67,15 @@ async function ensureRelayConnection() {
   relayConnectPromise = (async () => {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
+    const relayName = await getRelayName()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = gatewayToken
-      ? `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(gatewayToken)}`
-      : `ws://127.0.0.1:${port}/extension`
+    
+    let wsUrl = `ws://127.0.0.1:${port}/extension`
+    const params = new URLSearchParams()
+    if (gatewayToken) params.set('token', gatewayToken)
+    if (relayName) params.set('name', relayName)
+    const qs = params.toString()
+    if (qs) wsUrl += `?${qs}`
 
     // Fast preflight: is the relay server up?
     try {

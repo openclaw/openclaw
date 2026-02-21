@@ -21,6 +21,7 @@ export function registerBrowserCli(program: Command) {
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
     .option("--browser-profile <name>", "Browser profile name (default from config)")
+    .option("--relay <name>", "Chrome extension relay name (when multiple devices connected)")
     .option("--json", "Output machine-readable JSON", false)
     .addHelpText(
       "after",

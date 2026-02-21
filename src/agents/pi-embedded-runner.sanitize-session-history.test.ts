@@ -163,7 +163,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("assistant");
   });
 
-  it("does not synthesize tool results for openai-responses", async () => {
+  it("synthesizes missing tool results for openai-responses", async () => {
     const messages = [
       {
         role: "assistant",
@@ -179,8 +179,11 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result).toHaveLength(1);
+    expect(result).toHaveLength(2);
     expect(result[0]?.role).toBe("assistant");
+    expect(result[1]?.role).toBe("toolResult");
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
+    expect((result[1] as { isError?: boolean }).isError).toBe(true);
   });
 
   it("drops malformed tool calls missing input or arguments", async () => {
