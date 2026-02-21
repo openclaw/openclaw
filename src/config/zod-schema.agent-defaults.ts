@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GuardModelConfigSchema } from "./types.security.js";
 import {
   HeartbeatSchema,
   MemorySearchSchema,
@@ -12,7 +13,6 @@ import {
   CliBackendSchema,
   HumanDelaySchema,
 } from "./zod-schema.core.js";
-import { GuardModelConfigSchema } from "./zod-schema.providers-core.js";
 
 export const AgentDefaultsSchema = z
   .object({

@@ -1,7 +1,7 @@
-import { Logger } from "../logger.js";
-import { wrapExternalContent, detectSuspiciousPatterns } from "./external-content.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { detectSuspiciousPatterns } from "./external-content.js";
 
-const logger = new Logger("guard-model");
+const logger = createSubsystemLogger("guard-model");
 
 export interface GuardModelResult {
   sanitizedContent: string;
