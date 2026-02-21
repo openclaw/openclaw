@@ -209,6 +209,9 @@ export const CommandsSchema = z
   })
   .strict()
   .optional()
-  .default(
-    () => ({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" }) as const,
-  );
+  .default(() => ({
+    native: "auto" as const,
+    nativeSkills: "auto" as const,
+    restart: true,
+    ownerDisplay: "raw" as const,
+  }));
