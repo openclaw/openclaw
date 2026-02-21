@@ -41,6 +41,7 @@ export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-sl
 export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-02-21-novnc-auth-default";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
+export const DEFAULT_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 export const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;

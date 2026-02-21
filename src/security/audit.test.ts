@@ -703,6 +703,47 @@ describe("security audit", () => {
     );
   });
 
+  it("warns when sandbox browser uses bridge network without cdpSourceRange", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            browser: {
+              enabled: true,
+              network: "bridge",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("agents.defaults.sandbox.browser");
+  });
+
+  it("does not warn when sandbox browser uses dedicated default network", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            browser: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expect(hasFinding(res, "sandbox.browser_cdp_bridge_unrestricted")).toBe(false);
+  });
+
   it("flags ineffective gateway.nodes.denyCommands entries", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

@@ -30,7 +30,7 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
-## Onboarding
+## Quick setup (beginner)
 
 1. Install the Nextcloud Talk plugin.
 2. On your Nextcloud server, create a bot:
@@ -106,7 +106,7 @@ Minimal config:
 | Reactions       | Supported     |
 | Native commands | Not supported |
 
-## Configuration
+## Configuration reference (Nextcloud Talk)
 
 Full configuration: [Configuration](/gateway/configuration)
 
