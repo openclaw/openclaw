@@ -56,6 +56,7 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
 export const normalizeAllowFromWithStore = (params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: string[];
+  dmPolicy?: string;
 }): NormalizedAllowFrom => normalizeAllowFrom(mergeAllowFromSources(params));
 
 export const isSenderAllowed = (params: {
