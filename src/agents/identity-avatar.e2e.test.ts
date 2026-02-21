@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentAvatar } from "./identity-avatar.js";
 
@@ -24,9 +24,25 @@ async function expectLocalAvatarPath(
   }
 }
 
+const tempRoots: string[] = [];
+
+async function createTempAvatarRoot() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+  tempRoots.push(root);
+  return root;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots
+      .splice(0, tempRoots.length)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
+  );
+});
+
 describe("resolveAgentAvatar", () => {
   it("resolves local avatar from config when inside workspace", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const root = await createTempAvatarRoot();
     const workspace = path.join(root, "work");
     const avatarPath = path.join(workspace, "avatars", "main.png");
     await writeFile(avatarPath);
@@ -47,7 +63,7 @@ describe("resolveAgentAvatar", () => {
   });
 
   it("rejects avatars outside the workspace", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const root = await createTempAvatarRoot();
     const workspace = path.join(root, "work");
     await fs.mkdir(workspace, { recursive: true });
     const outsidePath = path.join(root, "outside.png");
@@ -73,7 +89,7 @@ describe("resolveAgentAvatar", () => {
   });
 
   it("falls back to IDENTITY.md when config has no avatar", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const root = await createTempAvatarRoot();
     const workspace = path.join(root, "work");
     const avatarPath = path.join(workspace, "avatars", "fallback.png");
     await writeFile(avatarPath);
@@ -94,7 +110,7 @@ describe("resolveAgentAvatar", () => {
   });
 
   it("returns missing for non-existent local avatar files", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const root = await createTempAvatarRoot();
     const workspace = path.join(root, "work");
     await fs.mkdir(workspace, { recursive: true });
 
