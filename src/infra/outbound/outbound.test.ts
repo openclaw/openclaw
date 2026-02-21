@@ -847,9 +847,13 @@ describe("normalizeOutboundPayloadsForJson", () => {
     ];
 
     for (const testCase of cases) {
-      expect(
-        normalizeOutboundPayloadsForJson(testCase.input.map((payload) => ({ ...payload }))),
-      ).toEqual(testCase.expected);
+      const input = testCase.input.map((payload) => {
+        if ("mediaUrls" in payload && payload.mediaUrls) {
+          return { ...payload, mediaUrls: [...payload.mediaUrls] };
+        }
+        return { ...payload };
+      });
+      expect(normalizeOutboundPayloadsForJson(input)).toEqual(testCase.expected);
     }
   });
 });
