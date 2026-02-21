@@ -1,11 +1,104 @@
 import type { RequestClient } from "@buape/carbon";
+import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { loadConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
-import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
+import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
+import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.js";
+
+function resolveTargetChannelId(target: string): string | undefined {
+  if (!target.startsWith("channel:")) {
+    return undefined;
+  }
+  const channelId = target.slice("channel:".length).trim();
+  return channelId || undefined;
+}
+
+function resolveBoundThreadBinding(params: {
+  threadBindings?: ThreadBindingManager;
+  sessionKey?: string;
+  target: string;
+}): ThreadBindingRecord | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (!params.threadBindings || !sessionKey) {
+    return undefined;
+  }
+  const bindings = params.threadBindings.listBySessionKey(sessionKey);
+  if (bindings.length === 0) {
+    return undefined;
+  }
+  const targetChannelId = resolveTargetChannelId(params.target);
+  if (!targetChannelId) {
+    return undefined;
+  }
+  return bindings.find((entry) => entry.threadId === targetChannelId);
+}
+
+function resolveBindingPersona(binding: ThreadBindingRecord | undefined): {
+  username?: string;
+  avatarUrl?: string;
+} {
+  if (!binding) {
+    return {};
+  }
+  const baseLabel = binding.label?.trim() || binding.agentId;
+  const username = (`🤖 ${baseLabel}`.trim() || "🤖 agent").slice(0, 80);
+
+  let avatarUrl: string | undefined;
+  try {
+    const avatar = resolveAgentAvatar(loadConfig(), binding.agentId);
+    if (avatar.kind === "remote") {
+      avatarUrl = avatar.url;
+    }
+  } catch {
+    avatarUrl = undefined;
+  }
+  return { username, avatarUrl };
+}
+
+async function sendDiscordChunkWithFallback(params: {
+  target: string;
+  text: string;
+  token: string;
+  accountId?: string;
+  rest?: RequestClient;
+  replyTo?: string;
+  binding?: ThreadBindingRecord;
+  username?: string;
+  avatarUrl?: string;
+}) {
+  const text = params.text.trim();
+  if (!text) {
+    return;
+  }
+  const binding = params.binding;
+  if (binding?.webhookId && binding?.webhookToken) {
+    try {
+      await sendWebhookMessageDiscord(text, {
+        webhookId: binding.webhookId,
+        webhookToken: binding.webhookToken,
+        accountId: binding.accountId,
+        threadId: binding.threadId,
+        replyTo: params.replyTo,
+        username: params.username,
+        avatarUrl: params.avatarUrl,
+      });
+      return;
+    } catch {
+      // Fall through to the standard bot sender path.
+    }
+  }
+  await sendMessageDiscord(params.target, text, {
+    token: params.token,
+    rest: params.rest,
+    accountId: params.accountId,
+    replyTo: params.replyTo,
+  });
+}
 
 export async function deliverDiscordReply(params: {
   replies: ReplyPayload[];
@@ -20,6 +113,8 @@ export async function deliverDiscordReply(params: {
   replyToMode?: ReplyToMode;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  sessionKey?: string;
+  threadBindings?: ThreadBindingManager;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
@@ -40,6 +135,12 @@ export async function deliverDiscordReply(params: {
     replyUsed = true;
     return replyTo;
   };
+  const binding = resolveBoundThreadBinding({
+    threadBindings: params.threadBindings,
+    sessionKey: params.sessionKey,
+    target: params.target,
+  });
+  const persona = resolveBindingPersona(binding);
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
@@ -59,16 +160,20 @@ export async function deliverDiscordReply(params: {
         chunks.push(text);
       }
       for (const chunk of chunks) {
-        const trimmed = chunk.trim();
-        if (!trimmed) {
+        if (!chunk.trim()) {
           continue;
         }
         const replyTo = resolveReplyTo();
-        await sendMessageDiscord(params.target, trimmed, {
+        await sendDiscordChunkWithFallback({
+          target: params.target,
+          text: chunk,
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
           replyTo,
+          binding,
+          username: persona.username,
+          avatarUrl: persona.avatarUrl,
         });
       }
       continue;
@@ -79,7 +184,7 @@ export async function deliverDiscordReply(params: {
       continue;
     }
 
-    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord
+    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
       const replyTo = resolveReplyTo();
       await sendVoiceMessageDiscord(params.target, firstMedia, {
@@ -88,17 +193,19 @@ export async function deliverDiscordReply(params: {
         accountId: params.accountId,
         replyTo,
       });
-      // Voice messages cannot include text; send remaining text separately if present
-      if (text.trim()) {
-        const replyTo = resolveReplyTo();
-        await sendMessageDiscord(params.target, text, {
-          token: params.token,
-          rest: params.rest,
-          accountId: params.accountId,
-          replyTo,
-        });
-      }
-      // Additional media items are sent as regular attachments (voice is single-file only)
+      // Voice messages cannot include text; send remaining text separately if present.
+      await sendDiscordChunkWithFallback({
+        target: params.target,
+        text,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        replyTo: resolveReplyTo(),
+        binding,
+        username: persona.username,
+        avatarUrl: persona.avatarUrl,
+      });
+      // Additional media items are sent as regular attachments (voice is single-file only).
       for (const extra of mediaList.slice(1)) {
         const replyTo = resolveReplyTo();
         await sendMessageDiscord(params.target, "", {

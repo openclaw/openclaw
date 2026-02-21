@@ -117,7 +117,7 @@ function normalizeTelegramStreamingConfig(value: {
     delete value.streamMode;
     return;
   }
-  value.streaming = true;
+  value.streaming = false;
 }
 
 export const TelegramAccountSchemaBase = z
@@ -385,6 +385,14 @@ export const DiscordAccountSchema = z
     slashCommand: z
       .object({
         ephemeral: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),

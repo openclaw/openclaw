@@ -69,6 +69,11 @@ export function isLocalPath(url: string): boolean {
     return true;
   }
 
+  // Windows rooted path on current drive (e.g. \tmp\file.txt)
+  if (url.startsWith("\\") && !url.startsWith("\\\\")) {
+    return true;
+  }
+
   // Windows drive-letter absolute path (e.g. C:\foo\bar.txt or C:/foo/bar.txt)
   if (/^[a-zA-Z]:[\\/]/.test(url)) {
     return true;

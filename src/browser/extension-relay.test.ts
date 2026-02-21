@@ -170,11 +170,17 @@ describe("chrome extension relay server", () => {
     ext.close();
   });
 
-  it("uses gateway token for relay auth headers on loopback URLs", async () => {
+  it("uses relay-scoped token only for known relay ports", async () => {
     const port = await getFreePort();
-    const headers = getChromeExtensionRelayAuthHeaders(`http://127.0.0.1:${port}`);
+    const unknown = getChromeExtensionRelayAuthHeaders(`http://127.0.0.1:${port}`);
+    expect(unknown).toEqual({});
+
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const headers = getChromeExtensionRelayAuthHeaders(cdpUrl);
     expect(Object.keys(headers)).toContain("x-openclaw-relay-token");
-    expect(headers["x-openclaw-relay-token"]).toBe(TEST_GATEWAY_TOKEN);
+    expect(headers["x-openclaw-relay-token"]).not.toBe(TEST_GATEWAY_TOKEN);
   });
 
   it("rejects CDP access without relay auth token", async () => {
@@ -200,13 +206,15 @@ describe("chrome extension relay server", () => {
     expect(err.message).toContain("401");
   });
 
-  it("accepts extension websocket access with gateway token query param", async () => {
+  it("accepts extension websocket access with relay token query param", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
+    const token = relayAuthHeaders(`ws://127.0.0.1:${port}/extension`)["x-openclaw-relay-token"];
+    expect(token).toBeTruthy();
     const ext = new WebSocket(
-      `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(TEST_GATEWAY_TOKEN)}`,
+      `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(String(token))}`,
     );
     await waitForOpen(ext);
     ext.close();
@@ -403,7 +411,20 @@ describe("chrome extension relay server", () => {
 
   it("reuses an already-bound relay port when another process owns it", async () => {
     const port = await getFreePort();
+    let probeToken: string | undefined;
     const fakeRelay = createServer((req, res) => {
+      if (req.url?.startsWith("/json/version")) {
+        const header = req.headers["x-openclaw-relay-token"];
+        probeToken = Array.isArray(header) ? header[0] : header;
+        if (!probeToken) {
+          res.writeHead(401);
+          res.end("Unauthorized");
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ Browser: "OpenClaw/extension-relay" }));
+        return;
+      }
       if (req.url?.startsWith("/extension/status")) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ connected: false }));
@@ -427,6 +448,8 @@ describe("chrome extension relay server", () => {
         connected?: boolean;
       };
       expect(status.connected).toBe(false);
+      expect(probeToken).toBeTruthy();
+      expect(probeToken).not.toBe("test-gateway-token");
     } finally {
       if (prev === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
