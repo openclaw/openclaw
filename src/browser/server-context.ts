@@ -1,4 +1,15 @@
 import fs from "node:fs";
+import type { ResolvedBrowserProfile } from "./config.js";
+import type { PwAiModule } from "./pw-ai-module.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  BrowserTab,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+} from "./server-context.types.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
@@ -9,7 +20,6 @@ import {
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
@@ -20,21 +30,11 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
-import type {
-  BrowserServerState,
-  BrowserRouteContext,
-  BrowserTab,
-  ContextOptions,
-  ProfileContext,
-  ProfileRuntimeState,
-  ProfileStatus,
-} from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -137,7 +137,6 @@ function createProfileContext(
 
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
-    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
 
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
@@ -149,7 +148,6 @@ function createProfileContext(
           cdpUrl: profile.cdpUrl,
           url,
           ...ssrfPolicyOpts,
-          navigationChecked: true,
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
@@ -166,7 +164,6 @@ function createProfileContext(
       cdpUrl: profile.cdpUrl,
       url,
       ...ssrfPolicyOpts,
-      navigationChecked: true,
     })
       .then((r) => r.targetId)
       .catch(() => null);
@@ -196,6 +193,7 @@ function createProfileContext(
     };
 
     const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
+    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const endpoint = endpointUrl.search
       ? (() => {
           endpointUrl.searchParams.set("url", url);
