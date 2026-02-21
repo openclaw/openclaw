@@ -378,27 +378,27 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
     }
   });
-  it("defaults telegram.streaming to false when telegram section exists", async () => {
+  it("defaults telegram.streaming to off when telegram section exists", async () => {
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.streaming).toBe(false);
+      expect(res.config.channels?.telegram?.streaming).toBe("off");
       expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
     }
   });
-  it("migrates legacy telegram.streamMode=off to streaming=false", async () => {
+  it("migrates legacy telegram.streamMode=off to streaming=off", async () => {
     const res = validateConfigObject({ channels: { telegram: { streamMode: "off" } } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.streaming).toBe(false);
+      expect(res.config.channels?.telegram?.streaming).toBe("off");
       expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
     }
   });
-  it("migrates legacy telegram.streamMode=block to streaming=true", async () => {
+  it("migrates legacy telegram.streamMode=block to streaming=block", async () => {
     const res = validateConfigObject({ channels: { telegram: { streamMode: "block" } } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.streaming).toBe(true);
+      expect(res.config.channels?.telegram?.streaming).toBe("block");
       expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
     }
   });
@@ -416,8 +416,111 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.accounts?.ops?.streaming).toBe(false);
+      expect(res.config.channels?.telegram?.accounts?.ops?.streaming).toBe("off");
       expect(res.config.channels?.telegram?.accounts?.ops?.streamMode).toBeUndefined();
+    }
+  });
+  it("normalizes channels.discord.streaming booleans in legacy migration", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          streaming: true,
+        },
+      },
+    });
+    expect(res.changes).toContain(
+      "Normalized channels.discord.streaming boolean → enum (partial).",
+    );
+    expect(res.config?.channels?.discord?.streaming).toBe("partial");
+    expect(res.config?.channels?.discord?.streamMode).toBeUndefined();
+  });
+  it("migrates channels.discord.streamMode to channels.discord.streaming in legacy migration", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          streaming: false,
+          streamMode: "block",
+        },
+      },
+    });
+    expect(res.changes).toContain(
+      "Moved channels.discord.streamMode → channels.discord.streaming (block).",
+    );
+    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (block).");
+    expect(res.config?.channels?.discord?.streaming).toBe("block");
+    expect(res.config?.channels?.discord?.streamMode).toBeUndefined();
+  });
+  it("migrates discord.streaming=true to streaming=partial", async () => {
+    const res = validateConfigObject({ channels: { discord: { streaming: true } } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.streaming).toBe("partial");
+      expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    }
+  });
+  it("migrates discord.streaming=false to streaming=off", async () => {
+    const res = validateConfigObject({ channels: { discord: { streaming: false } } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.streaming).toBe("off");
+      expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    }
+  });
+  it("keeps explicit discord.streamMode and normalizes to streaming", async () => {
+    const res = validateConfigObject({
+      channels: { discord: { streamMode: "block", streaming: false } },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.streaming).toBe("block");
+      expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    }
+  });
+  it("migrates discord.accounts.*.streaming alias to streaming enum", async () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              streaming: true,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe("partial");
+      expect(res.config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
+    }
+  });
+  it("migrates slack.streamMode values to slack.streaming enum", async () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          streamMode: "status_final",
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.slack?.streaming).toBe("progress");
+      expect(res.config.channels?.slack?.streamMode).toBeUndefined();
+      expect(res.config.channels?.slack?.nativeStreaming).toBe(true);
+    }
+  });
+  it("migrates legacy slack.streaming boolean to nativeStreaming", async () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          streaming: false,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.slack?.streaming).toBe("partial");
+      expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
     }
   });
   it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {
