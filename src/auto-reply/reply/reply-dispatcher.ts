@@ -1,10 +1,11 @@
 import type { HumanDelayConfig } from "../../config/types.js";
-import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { registerDispatcher } from "./dispatcher-registry.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { triggerMessageSent } from "../../hooks/message-hooks.js";
+import { sleep } from "../../utils.js";
+import { registerDispatcher } from "./dispatcher-registry.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -54,6 +55,12 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Hook context for message:sent events */
+  hookContext?: {
+    sessionKey?: string;
+    channel?: string;
+    target?: string;
+  };
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -154,6 +161,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+
+        // Trigger message:sent hook after successful delivery
+        if (options.hookContext?.sessionKey) {
+          await triggerMessageSent(options.hookContext.sessionKey, normalized, {
+            target: options.hookContext.target,
+            channel: options.hookContext.channel,
+            kind,
+          });
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
