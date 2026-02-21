@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
@@ -15,7 +16,7 @@ describe("loader", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let tmpDir: string;
-  let originalBundledDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
@@ -28,18 +29,13 @@ describe("loader", () => {
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
-    originalBundledDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
   });
 
   afterEach(async () => {
     clearInternalHooks();
-    // Restore original env var
-    if (originalBundledDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_HOOKS_DIR = originalBundledDir;
-    }
+    envSnapshot.restore();
   });
 
   afterAll(async () => {

@@ -202,7 +202,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     // Second call: main agent trigger (not "Sub-agent announce step." anymore)
     const second = agentCalls[1]?.params as { sessionKey?: string; message?: string } | undefined;
-    expect(second?.sessionKey).toBe("main");
+    expect(second?.sessionKey).toBe("agent:main:main");
     expect(second?.message).toContain("subagent task");
 
     // No direct send to external channel (main agent handles delivery)
@@ -263,6 +263,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       vi.useRealTimers();
     }
 
+    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
+    await waitFor(() => Boolean(deletedKey));
+
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
 
@@ -290,7 +293,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
           deliver?: boolean;
         }
       | undefined;
-    expect(second?.sessionKey).toBe("discord:group:req");
+    expect(second?.sessionKey).toBe("agent:main:discord:group:req");
     expect(second?.deliver).toBe(true);
     expect(second?.message).toContain("subagent task");
 
@@ -355,7 +358,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     // Second call: main agent trigger
     const second = agentCalls[1]?.params as { sessionKey?: string; deliver?: boolean } | undefined;
-    expect(second?.sessionKey).toBe("discord:group:req");
+    expect(second?.sessionKey).toBe("agent:main:discord:group:req");
     expect(second?.deliver).toBe(true);
 
     // No direct send to external channel (main agent handles delivery)

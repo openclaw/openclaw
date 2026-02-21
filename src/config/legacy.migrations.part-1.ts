@@ -1,4 +1,10 @@
 import {
+  resolveDiscordPreviewStreamMode,
+  resolveSlackNativeStreaming,
+  resolveSlackStreamingMode,
+  resolveTelegramPreviewStreamMode,
+} from "./discord-preview-streaming.js";
+import {
   ensureRecord,
   getRecord,
   isRecord,
@@ -204,6 +210,115 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         );
       }
       raw.channels = channels;
+    },
+  },
+  {
+    id: "channels.streaming-keys->channels.streaming",
+    describe:
+      "Normalize legacy streaming keys to channels.<provider>.streaming (Telegram/Discord/Slack)",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+
+      const migrateProviderEntry = (params: {
+        provider: "telegram" | "discord" | "slack";
+        entry: Record<string, unknown>;
+        pathPrefix: string;
+      }) => {
+        const hasLegacyStreamMode = params.entry.streamMode !== undefined;
+        const legacyStreaming = params.entry.streaming;
+        const legacyNativeStreaming = params.entry.nativeStreaming;
+
+        if (params.provider === "telegram") {
+          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
+            return;
+          }
+          const resolved = resolveTelegramPreviewStreamMode(params.entry);
+          params.entry.streaming = resolved;
+          if (hasLegacyStreamMode) {
+            delete params.entry.streamMode;
+            changes.push(
+              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
+            );
+          }
+          if (typeof legacyStreaming === "boolean") {
+            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
+          }
+          return;
+        }
+
+        if (params.provider === "discord") {
+          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
+            return;
+          }
+          const resolved = resolveDiscordPreviewStreamMode(params.entry);
+          params.entry.streaming = resolved;
+          if (hasLegacyStreamMode) {
+            delete params.entry.streamMode;
+            changes.push(
+              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
+            );
+          }
+          if (typeof legacyStreaming === "boolean") {
+            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
+          }
+          return;
+        }
+
+        if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
+          return;
+        }
+        const resolvedStreaming = resolveSlackStreamingMode(params.entry);
+        const resolvedNativeStreaming = resolveSlackNativeStreaming(params.entry);
+        params.entry.streaming = resolvedStreaming;
+        params.entry.nativeStreaming = resolvedNativeStreaming;
+        if (hasLegacyStreamMode) {
+          delete params.entry.streamMode;
+          changes.push(
+            `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolvedStreaming}).`,
+          );
+        }
+        if (typeof legacyStreaming === "boolean") {
+          changes.push(
+            `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`,
+          );
+        } else if (typeof legacyNativeStreaming !== "boolean" && hasLegacyStreamMode) {
+          changes.push(`Set ${params.pathPrefix}.nativeStreaming → ${resolvedNativeStreaming}.`);
+        }
+      };
+
+      const migrateProvider = (provider: "telegram" | "discord" | "slack") => {
+        const providerEntry = getRecord(channels[provider]);
+        if (!providerEntry) {
+          return;
+        }
+        migrateProviderEntry({
+          provider,
+          entry: providerEntry,
+          pathPrefix: `channels.${provider}`,
+        });
+        const accounts = getRecord(providerEntry.accounts);
+        if (!accounts) {
+          return;
+        }
+        for (const [accountId, accountValue] of Object.entries(accounts)) {
+          const account = getRecord(accountValue);
+          if (!account) {
+            continue;
+          }
+          migrateProviderEntry({
+            provider,
+            entry: account,
+            pathPrefix: `channels.${provider}.accounts.${accountId}`,
+          });
+        }
+      };
+
+      migrateProvider("telegram");
+      migrateProvider("discord");
+      migrateProvider("slack");
     },
   },
   {

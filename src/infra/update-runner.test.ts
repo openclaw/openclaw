@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
@@ -421,11 +422,8 @@ describe("runGatewayUpdate", () => {
   });
 
   it("updates global bun installs when detected", async () => {
-    const oldBunInstall = process.env.BUN_INSTALL;
     const bunInstall = path.join(tempDir, "bun-install");
-    process.env.BUN_INSTALL = bunInstall;
-
-    try {
+    await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
       const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
       const pkgRoot = path.join(bunGlobalRoot, "openclaw");
       await seedGlobalPackageRoot(pkgRoot);
@@ -449,13 +447,7 @@ describe("runGatewayUpdate", () => {
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
       expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
-    } finally {
-      if (oldBunInstall === undefined) {
-        delete process.env.BUN_INSTALL;
-      } else {
-        process.env.BUN_INSTALL = oldBunInstall;
-      }
-    }
+    });
   });
 
   it("rejects git roots that are not a openclaw checkout", async () => {

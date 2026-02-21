@@ -16,6 +16,45 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("hashes owner numbers when ownerDisplay is hash", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers: ["+123", "+456", ""],
+      ownerDisplay: "hash",
+    });
+
+    expect(prompt).toContain("## Authorized Senders");
+    expect(prompt).toContain("Authorized senders:");
+    expect(prompt).not.toContain("+123");
+    expect(prompt).not.toContain("+456");
+    expect(prompt).toMatch(/[a-f0-9]{12}/);
+  });
+
+  it("uses a stable, keyed HMAC when ownerDisplaySecret is provided", () => {
+    const secretA = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers: ["+123"],
+      ownerDisplay: "hash",
+      ownerDisplaySecret: "secret-key-A",
+    });
+
+    const secretB = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers: ["+123"],
+      ownerDisplay: "hash",
+      ownerDisplaySecret: "secret-key-B",
+    });
+
+    const lineA = secretA.split("## Authorized Senders")[1]?.split("\n")[1];
+    const lineB = secretB.split("## Authorized Senders")[1]?.split("\n")[1];
+    const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
+    const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
+
+    expect(tokenA).toBeDefined();
+    expect(tokenB).toBeDefined();
+    expect(tokenA).not.toBe(tokenB);
+  });
+
   it("omits owner section when numbers are missing", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -575,15 +614,14 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("instead of full-file `cat`");
   });
 
-  it("defaults to depth 1 and maxSpawnDepth 2 when not provided", () => {
+  it("defaults to depth 1 and maxSpawnDepth 1 when not provided", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
       task: "basic task",
     });
 
-    // Default maxSpawnDepth is 2, so depth-1 subagents are orchestrators.
-    expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("You CAN spawn your own sub-agents");
+    // Should not include spawning guidance (default maxSpawnDepth is 1, depth 1 is leaf)
+    expect(prompt).not.toContain("## Sub-Agent Spawning");
     expect(prompt).toContain("spawned by the main agent");
   });
 });
