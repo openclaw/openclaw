@@ -80,6 +80,19 @@ export type CronPayloadPatch =
       channel?: CronMessageChannel;
       to?: string;
       bestEffortDeliver?: boolean;
+    }
+  | {
+      kind?: undefined;
+      message?: string;
+      model?: string;
+      thinking?: string;
+      text?: string;
+      timeoutSeconds?: number;
+      allowUnsafeExternalContent?: boolean;
+      deliver?: boolean;
+      channel?: CronMessageChannel;
+      to?: string;
+      bestEffortDeliver?: boolean;
     };
 
 export type CronJobState = {

@@ -90,12 +90,5 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
-/local/
-package-lock.json
-.claude/settings.local.json
-.agents/
-.agents
-.agent/
-
-# Local iOS signing overrides
-apps/ios/LocalSigning.xcconfig
+local/
+openclaw-*.log
