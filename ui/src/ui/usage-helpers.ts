@@ -294,7 +294,7 @@ export function parseToolSummary(content: string) {
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
   for (const line of lines) {
-    const match = /^\[Tool:\s*([^\]]+)\]/.exec(line.trim());
+    const match = /^\[Tool:\s*([^\]\s]+)/.exec(line.trim());
     if (match) {
       const name = match[1];
       toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);

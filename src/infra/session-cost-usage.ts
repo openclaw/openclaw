@@ -9,7 +9,11 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
+import {
+  countToolResults,
+  extractFileReadPaths,
+  extractToolCallNames,
+} from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import type {
   CostBreakdown,
@@ -27,6 +31,7 @@ import type {
   SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
+  SessionFilesRead,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
@@ -42,6 +47,7 @@ export type {
   SessionDailyMessageCounts,
   SessionDailyModelUsage,
   SessionDailyUsage,
+  SessionFilesRead,
   SessionLatencyStats,
   SessionLogEntry,
   SessionMessageCounts,
@@ -157,6 +163,7 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
     model,
     stopReason,
     toolNames: extractToolCallNames(message),
+    fileReadPaths: extractFileReadPaths(message),
     toolResultCounts: countToolResults(message),
   };
 };
@@ -494,6 +501,7 @@ export async function loadSessionCostSummary(params: {
     errors: 0,
   };
   const toolUsageMap = new Map<string, number>();
+  const fileReadMap = new Map<string, number>();
   const modelUsageMap = new Map<string, SessionModelUsage>();
   const errorStopReasons = new Set(["error", "aborted", "timeout"]);
   const latencyValues: number[] = [];
@@ -556,6 +564,12 @@ export async function loadSessionCostSummary(params: {
         messageCounts.toolCalls += entry.toolNames.length;
         for (const name of entry.toolNames) {
           toolUsageMap.set(name, (toolUsageMap.get(name) ?? 0) + 1);
+        }
+      }
+
+      if (entry.fileReadPaths.length > 0) {
+        for (const filePath of entry.fileReadPaths) {
+          fileReadMap.set(filePath, (fileReadMap.get(filePath) ?? 0) + 1);
         }
       }
 
@@ -703,6 +717,16 @@ export async function loadSessionCostSummary(params: {
       }
     : undefined;
 
+  const filesRead = fileReadMap.size
+    ? {
+        totalReads: Array.from(fileReadMap.values()).reduce((sum, count) => sum + count, 0),
+        uniqueFiles: fileReadMap.size,
+        files: Array.from(fileReadMap.entries())
+          .map(([filePath, count]) => ({ path: filePath, count }))
+          .toSorted((a, b) => b.count - a.count),
+      }
+    : undefined;
+
   const modelUsage = modelUsageMap.size
     ? Array.from(modelUsageMap.values()).toSorted((a, b) => {
         const costDiff = b.totals.totalCost - a.totals.totalCost;
@@ -729,6 +753,7 @@ export async function loadSessionCostSummary(params: {
     dailyModelUsage: dailyModelUsage.length ? dailyModelUsage : undefined,
     messageCounts,
     toolUsage,
+    filesRead,
     modelUsage,
     latency: computeLatencyStats(latencyValues),
     ...totals,
@@ -902,9 +927,13 @@ export async function loadSessionLogs(params: {
             if (b.type === "text" && typeof b.text === "string") {
               return b.text;
             }
-            if (b.type === "tool_use") {
+            if (b.type === "tool_use" || b.type === "toolCall" || b.type === "tool_call") {
               const name = typeof b.name === "string" ? b.name : "unknown";
-              return `[Tool: ${name}]`;
+              // Include file path for file-reading tools
+              const input = (b.input ?? b.arguments) as Record<string, unknown> | undefined;
+              const filePath = input?.path ?? input?.file_path ?? input?.file;
+              const pathSuffix = typeof filePath === "string" ? ` ${filePath}` : "";
+              return `[Tool: ${name}${pathSuffix}]`;
             }
             if (b.type === "tool_result") {
               return `[Tool Result]`;
