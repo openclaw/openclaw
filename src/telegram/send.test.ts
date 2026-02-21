@@ -595,16 +595,20 @@ describe("sendMessageTelegram", () => {
         fileName: "video.mp4",
       });
 
-      const opts = {
+      const opts: Parameters<typeof sendMessageTelegram>[2] = {
         token: "tok",
         api,
         mediaUrl: "https://example.com/video.mp4",
         asVideoNote: true,
-        ...testCase.options,
+        ...("replyToMessageId" in testCase.options
+          ? { replyToMessageId: testCase.options.replyToMessageId }
+          : {}),
+        ...("buttons" in testCase.options
+          ? {
+              buttons: testCase.options.buttons.map((row) => row.map((button) => ({ ...button }))),
+            }
+          : {}),
       };
-      if (opts.buttons) {
-        opts.buttons = opts.buttons.map((row) => [...row]);
-      }
 
       await sendMessageTelegram(chatId, testCase.text, opts);
 
