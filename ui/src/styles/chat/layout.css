@@ -100,9 +100,13 @@
   stroke-linejoin: round;
 }
 
-/* New messages indicator - floating pill above compose */
+/* New messages indicator - floating pill above compose.
+   Must stay a small, content-sized button; never stretch to fill the
+   flex-column parent (.chat). width:fit-content + align-self:center
+   prevent the element from becoming an invisible full-viewport overlay. */
 .chat-new-messages {
   align-self: center;
+  width: fit-content;
   display: inline-flex;
   align-items: center;
   gap: 6px;

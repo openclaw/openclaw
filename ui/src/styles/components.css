@@ -1235,9 +1235,10 @@
   line-height: 1;
 }
 
-/* New messages indicator */
+/* New messages indicator - keep as a small content-sized pill (see layout.css) */
 .chat-new-messages {
   align-self: center;
+  width: fit-content;
   margin: 8px auto 0;
   border-radius: 999px;
   padding: 6px 12px;
