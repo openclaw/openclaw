@@ -368,11 +368,8 @@ export class TwilioProvider implements VoiceCallProvider {
       return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
     }
 
-    // For outbound calls, only connect to stream when call is in-progress
-    if (callStatus !== "in-progress") {
-      return TwilioProvider.EMPTY_TWIML;
-    }
-
+    // For outbound calls, connect to stream or pause until ready
+    // Don't return empty TwiML as it causes calls to fail
     const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
     return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
   }
