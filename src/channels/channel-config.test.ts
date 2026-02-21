@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type ChannelMatchSource,
   buildChannelKeyCandidates,
@@ -42,7 +43,18 @@ describe("resolveChannelEntryMatch", () => {
 });
 
 describe("resolveChannelEntryMatchWithFallback", () => {
-  const fallbackCases = [
+  const fallbackCases = typedCases<{
+    name: string;
+    entries: Record<string, { allow: boolean }>;
+    args: {
+      keys: string[];
+      parentKeys?: string[];
+      wildcardKey?: string;
+    };
+    expectedEntryKey: string;
+    expectedSource: ChannelMatchSource;
+    expectedMatchKey: string;
+  }>([
     {
       name: "prefers direct matches over parent and wildcard",
       entries: { a: { allow: true }, parent: { allow: false }, "*": { allow: false } },
@@ -67,7 +79,7 @@ describe("resolveChannelEntryMatchWithFallback", () => {
       expectedSource: "wildcard",
       expectedMatchKey: "*",
     },
-  ] as const;
+  ]);
 
   for (const testCase of fallbackCases) {
     it(testCase.name, () => {
