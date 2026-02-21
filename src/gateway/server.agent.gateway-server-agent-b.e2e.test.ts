@@ -285,6 +285,8 @@ describe("gateway server agent", () => {
     await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
     const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
     expect(call.message).toBe(BARE_SESSION_RESET_PROMPT);
+    expect(call.message).toBeTypeOf("string");
+    expect(call.message).toContain("Execute your Session Startup sequence now");
     expect(typeof call.sessionId).toBe("string");
     expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
