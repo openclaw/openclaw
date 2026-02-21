@@ -2,10 +2,13 @@ import { inspect } from "node:util";
 import {
   Client,
   ReadyListener,
+  type BaseCommand,
   type BaseMessageInteractiveComponent,
   type Modal,
+  type Plugin,
 } from "@buape/carbon";
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
+import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
@@ -38,6 +41,8 @@ import { fetchDiscordApplicationId } from "../probe.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
+import { createDiscordVoiceCommand } from "../voice/command.js";
+import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -49,6 +54,7 @@ import {
   createDiscordComponentStringSelect,
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
@@ -62,6 +68,8 @@ import {
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordCommandArgFallbackButton,
+  createDiscordModelPickerFallbackButton,
+  createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
@@ -239,8 +247,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     globalSetting: cfg.commands?.native,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
-  const ephemeralDefault = true;
+  const ephemeralDefault = slashCommand.ephemeral;
+  const voiceEnabled = discordCfg.voice?.enabled !== false;
 
   if (token) {
     if (guildEntries && Object.keys(guildEntries).length > 0) {
@@ -428,7 +438,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ),
     );
   }
-  const commands = commandSpecs.map((spec) =>
+  const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
+  const commands: BaseCommand[] = commandSpecs.map((spec) =>
     createDiscordNativeCommand({
       command: spec,
       cfg,
@@ -438,6 +449,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ephemeralDefault,
     }),
   );
+  if (nativeEnabled && voiceEnabled) {
+    commands.push(
+      createDiscordVoiceCommand({
+        cfg,
+        discordConfig: discordCfg,
+        accountId: account.accountId,
+        groupPolicy,
+        useAccessGroups,
+        getManager: () => voiceManagerRef.current,
+        ephemeralDefault,
+      }),
+    );
+  }
 
   // Initialize exec approvals handler if enabled
   const execApprovalsConfig = discordCfg.execApprovals ?? {};
@@ -456,6 +480,18 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const components: BaseMessageInteractiveComponent[] = [
     createDiscordCommandArgFallbackButton({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      sessionPrefix,
+    }),
+    createDiscordModelPickerFallbackButton({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      sessionPrefix,
+    }),
+    createDiscordModelPickerFallbackSelect({
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -506,6 +542,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   }
 
+  const clientPlugins: Plugin[] = [
+    createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime }),
+  ];
+  if (voiceEnabled) {
+    clientPlugins.push(new VoicePlugin());
+  }
   const client = new Client(
     {
       baseUrl: "http://localhost",
@@ -521,7 +563,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       components,
       modals,
     },
-    [createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime })],
+    clientPlugins,
   );
 
   await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
@@ -529,6 +571,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const logger = createSubsystemLogger("discord/monitor");
   const guildHistories = new Map<string, HistoryEntry[]>();
   let botUserId: string | undefined;
+  let voiceManager: DiscordVoiceManager | null = null;
 
   if (nativeDisabledExplicit) {
     await clearDiscordNativeCommands({
@@ -543,6 +586,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     botUserId = botUser?.id;
   } catch (err) {
     runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
+  }
+
+  if (voiceEnabled) {
+    voiceManager = new DiscordVoiceManager({
+      client,
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId,
+    });
+    voiceManagerRef.current = voiceManager;
+    registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
   }
 
   const messageHandler = createDiscordMessageHandler({
@@ -697,6 +753,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     abortSignal?.removeEventListener("abort", onAbort);
+    if (voiceManager) {
+      await voiceManager.destroy();
+      voiceManagerRef.current = null;
+    }
     if (execApprovalsHandler) {
       await execApprovalsHandler.stop();
     }

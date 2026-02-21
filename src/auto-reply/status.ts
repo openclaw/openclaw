@@ -2,10 +2,15 @@ import fs from "node:fs";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
+import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
@@ -66,6 +71,7 @@ type StatusArgs = {
   agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
+  parentSessionKey?: string;
   sessionScope?: SessionScope;
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
@@ -264,6 +270,36 @@ const formatUsagePair = (input?: number | null, output?: number | null) => {
   return `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
 };
 
+const formatCacheLine = (
+  input?: number | null,
+  cacheRead?: number | null,
+  cacheWrite?: number | null,
+) => {
+  if (!cacheRead && !cacheWrite) {
+    return null;
+  }
+  if (
+    (typeof cacheRead !== "number" || cacheRead <= 0) &&
+    (typeof cacheWrite !== "number" || cacheWrite <= 0)
+  ) {
+    return null;
+  }
+
+  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
+  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
+
+  const totalInput =
+    (typeof cacheRead === "number" ? cacheRead : 0) +
+    (typeof cacheWrite === "number" ? cacheWrite : 0) +
+    (typeof input === "number" ? input : 0);
+  const hitRate =
+    totalInput > 0 && typeof cacheRead === "number"
+      ? Math.round((cacheRead / totalInput) * 100)
+      : 0;
+
+  return `🗄️ Cache: ${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
+};
+
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
   if (!decisions || decisions.length === 0) {
     return null;
@@ -359,6 +395,8 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
+  let cacheRead = entry?.cacheRead;
+  let cacheWrite = entry?.cacheWrite;
   let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
@@ -499,7 +537,46 @@ export function buildStatusMessage(args: StatusArgs): string {
     state: entry,
   });
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}`;
+  const channelModelNote = (() => {
+    if (!args.config || !entry) {
+      return undefined;
+    }
+    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+      return undefined;
+    }
+    const channelOverride = resolveChannelModelOverride({
+      cfg: args.config,
+      channel: entry.channel ?? entry.origin?.provider,
+      groupId: entry.groupId,
+      groupChannel: entry.groupChannel,
+      groupSubject: entry.subject,
+      parentSessionKey: args.parentSessionKey,
+    });
+    if (!channelOverride) {
+      return undefined;
+    }
+    const aliasIndex = buildModelAliasIndex({
+      cfg: args.config,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const resolvedOverride = resolveModelRefFromString({
+      raw: channelOverride.model,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (!resolvedOverride) {
+      return undefined;
+    }
+    if (
+      resolvedOverride.ref.provider !== selectedProvider ||
+      resolvedOverride.ref.model !== selectedModel
+    ) {
+      return undefined;
+    }
+    return "channel override";
+  })();
+  const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
+  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
@@ -509,6 +586,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
+  const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
@@ -521,6 +599,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     modelLine,
     fallbackLine,
     usageCostLine,
+    cacheLine,
     `📚 ${contextLine}`,
     mediaLine,
     args.usageLine,

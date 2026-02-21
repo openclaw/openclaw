@@ -78,6 +78,8 @@ export type SessionEntry = {
    * totalTokens as stale/unknown for context-utilization displays.
    */
   totalTokensFresh?: boolean;
+  cacheRead?: number;
+  cacheWrite?: number;
   modelProvider?: string;
   model?: string;
   /**
@@ -150,7 +152,7 @@ export type GroupKeyResolution = {
 
 export type SessionSkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string }>;
+  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   resolvedSkills?: Skill[];

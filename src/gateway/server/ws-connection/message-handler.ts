@@ -21,6 +21,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import {
@@ -340,7 +341,9 @@ export function attachGatewayWsMessageHandler(params: {
           isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
         const disableControlUiDeviceAuth =
           isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
-        const allowControlUiBypass = allowInsecureControlUi || disableControlUiDeviceAuth;
+        // `allowInsecureAuth` is retained for compatibility, but must not bypass
+        // secure-context/device-auth requirements.
+        const allowControlUiBypass = disableControlUiDeviceAuth;
         const device = disableControlUiDeviceAuth ? null : deviceRaw;
 
         const hasDeviceTokenCandidate = Boolean(connectParams.auth?.token && device);
@@ -427,7 +430,9 @@ export function attachGatewayWsMessageHandler(params: {
 
           if (isControlUi && !allowControlUiBypass) {
             const errorMessage = "control ui requires HTTPS or localhost (secure context)";
-            markHandshakeFailure("control-ui-insecure-auth");
+            markHandshakeFailure("control-ui-insecure-auth", {
+              insecureAuthConfigured: allowInsecureControlUi,
+            });
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
             close(1008, errorMessage);
             return;
@@ -743,9 +748,12 @@ export function attachGatewayWsMessageHandler(params: {
                     return;
                   }
                 } else {
-                  const allowedScopes = new Set(pairedScopes);
-                  const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
-                  if (missingScope) {
+                  const scopesAllowed = roleScopesAllow({
+                    role,
+                    requestedScopes: scopes,
+                    allowedScopes: pairedScopes,
+                  });
+                  if (!scopesAllowed) {
                     logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
                     const ok = await requirePairing("scope-upgrade");
                     if (!ok) {
