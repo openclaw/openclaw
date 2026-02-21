@@ -118,17 +118,18 @@ export function scheduleFollowupDrain(
 
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
         if (summaryPrompt) {
-          const run = queue.lastRun;
-          if (!run) {
-            break;
-          }
           if (
-            !(await drainNextQueueItem(queue.items, async () => {
+            !(await drainNextQueueItem(queue.items, async (item) => {
               await runFollowup({
                 prompt: summaryPrompt,
-                run,
+                run: item.run,
                 enqueuedAt: Date.now(),
                 queueManaged: true,
+                onQueueOutcome: item.onQueueOutcome,
+                originatingChannel: item.originatingChannel,
+                originatingTo: item.originatingTo,
+                originatingAccountId: item.originatingAccountId,
+                originatingThreadId: item.originatingThreadId,
               });
             }))
           ) {

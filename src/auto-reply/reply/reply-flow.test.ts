@@ -1195,6 +1195,36 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
   });
+
+  it("binds overflow summary followup to the next queued runId (not the newest enqueued)", async () => {
+    const key = `test-overflow-summary-runid-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first", runId: "run-1" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second", runId: "run-2" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "third", runId: "run-3" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.run.runId).toBe("run-2");
+    expect(calls[1]?.run.runId).toBe("run-3");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;
