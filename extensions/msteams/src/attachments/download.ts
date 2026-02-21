@@ -1,4 +1,5 @@
 import { getMSTeamsRuntime } from "../runtime.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   extractInlineImageCandidates,
   inferPlaceholder,
@@ -6,6 +7,7 @@ import {
   isRecord,
   isUrlAllowed,
   normalizeContentType,
+  resolveRequestUrl,
   resolveAuthAllowedHosts,
   resolveAllowedHosts,
 } from "./shared.js";
@@ -149,19 +151,6 @@ async function fetchWithAuthFallback(params: {
   return firstAttempt;
 }
 
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  return String(input);
-}
-
 function readRedirectUrl(baseUrl: string, res: Response): string | null {
   if (![301, 302, 303, 307, 308].includes(res.status)) {
     return null;
@@ -258,8 +247,13 @@ export async function downloadMSTeamsAttachments(params: {
       continue;
     }
     try {
-      const fetched = await getMSTeamsRuntime().channel.media.fetchRemoteMedia({
+      const media = await downloadAndStoreMSTeamsRemoteMedia({
         url: candidate.url,
+        filePathHint: candidate.fileHint ?? candidate.url,
+        maxBytes: params.maxBytes,
+        contentTypeHint: candidate.contentTypeHint,
+        placeholder: candidate.placeholder,
+        preserveFilenames: params.preserveFilenames,
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
@@ -269,27 +263,8 @@ export async function downloadMSTeamsAttachments(params: {
             allowHosts,
             authAllowHosts,
           }),
-        filePathHint: candidate.fileHint ?? candidate.url,
-        maxBytes: params.maxBytes,
       });
-      const mime = await getMSTeamsRuntime().media.detectMime({
-        buffer: fetched.buffer,
-        headerMime: fetched.contentType,
-        filePath: candidate.fileHint ?? candidate.url,
-      });
-      const originalFilename = params.preserveFilenames ? candidate.fileHint : undefined;
-      const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-        fetched.buffer,
-        mime ?? candidate.contentTypeHint,
-        "inbound",
-        params.maxBytes,
-        originalFilename,
-      );
-      out.push({
-        path: saved.path,
-        contentType: saved.contentType,
-        placeholder: candidate.placeholder,
-      });
+      out.push(media);
     } catch {
       // Ignore download failures and continue with next candidate.
     }
