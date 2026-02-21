@@ -379,6 +379,18 @@ export async function runAgentTurnWithFallback(params: {
                     await blockReplyPipeline.flush({ force: true });
                   }
                 : undefined,
+            onBlockReplyHold:
+              params.blockStreamingEnabled && blockReplyPipeline
+                ? () => {
+                    blockReplyPipeline.hold();
+                  }
+                : undefined,
+            onBlockReplyResume:
+              params.blockStreamingEnabled && blockReplyPipeline
+                ? () => {
+                    blockReplyPipeline.resume();
+                  }
+                : undefined,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onToolResult: onToolResult

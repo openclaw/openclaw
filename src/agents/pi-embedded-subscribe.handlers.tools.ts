@@ -135,8 +135,9 @@ export async function handleToolExecutionStart(
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
-  if (ctx.params.onBlockReplyFlush) {
-    void ctx.params.onBlockReplyFlush();
+  // Hold the coalescer instead of flushing — text will coalesce with post-tool text
+  if (ctx.params.onBlockReplyHold) {
+    ctx.params.onBlockReplyHold();
   }
 
   const rawToolName = String(evt.toolName);
@@ -261,6 +262,9 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
+  // Resume coalescer idle timer now that tool execution is complete
+  ctx.params.onBlockReplyResume?.();
+
   const toolName = normalizeToolName(String(evt.toolName));
   const toolCallId = String(evt.toolCallId);
   const isError = Boolean(evt.isError);
