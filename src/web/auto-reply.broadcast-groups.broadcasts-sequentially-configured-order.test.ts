@@ -12,6 +12,7 @@ import {
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import { maybeBroadcastMessage } from "./auto-reply/monitor/broadcast.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -170,5 +171,69 @@ describe("broadcast groups", () => {
 
     expect(resolver).toHaveBeenCalledTimes(2);
     resetLoadConfigMock();
+  });
+
+  it("passes a deterministic lifecycle owner to every broadcasted agent", async () => {
+    const lifecycleOwners: string[] = [];
+    const emittedBy: string[] = [];
+
+    const processMessage = vi.fn(
+      async (
+        _msg: import("./auto-reply/types.js").WebInboundMsg,
+        route: ReturnType<typeof import("../routing/resolve-route.js").resolveAgentRoute>,
+        _groupHistoryKey: string,
+        opts?: { lifecycleOwnerAgentId?: string },
+      ) => {
+        if (opts?.lifecycleOwnerAgentId) {
+          lifecycleOwners.push(opts.lifecycleOwnerAgentId);
+          if (route.agentId === opts.lifecycleOwnerAgentId) {
+            emittedBy.push(route.agentId);
+          }
+        }
+        return true;
+      },
+    );
+
+    const didBroadcast = await maybeBroadcastMessage({
+      cfg: {
+        agents: {
+          list: [{ id: "alfred" }, { id: "baerbel" }],
+        },
+        broadcast: {
+          strategy: "parallel",
+          "+1000": ["unknown", "baerbel", "alfred"],
+        },
+      } as OpenClawConfig,
+      msg: {
+        id: "m1",
+        from: "+1000",
+        conversationId: "+1000",
+        to: "+2000",
+        accountId: "default",
+        body: "hello",
+        timestamp: Date.now(),
+        chatType: "direct",
+        chatId: "direct:+1000",
+        sendComposing: vi.fn(async () => {}),
+        reply: vi.fn(async () => {}),
+        sendMedia: vi.fn(async () => {}),
+      } as import("./auto-reply/types.js").WebInboundMsg,
+      peerId: "+1000",
+      route: {
+        agentId: "main",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+      } as ReturnType<typeof import("../routing/resolve-route.js").resolveAgentRoute>,
+      groupHistoryKey: "agent:main:main",
+      groupHistories: new Map(),
+      processMessage,
+    });
+
+    expect(didBroadcast).toBe(true);
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(lifecycleOwners.length).toBeGreaterThan(0);
+    expect(new Set(lifecycleOwners)).toEqual(new Set(["baerbel"]));
+    expect(emittedBy).toEqual(["baerbel"]);
   });
 });
