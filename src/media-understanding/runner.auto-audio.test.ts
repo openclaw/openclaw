@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -24,7 +25,9 @@ async function withAudioFixture(
   await fs.writeFile(tmpPath, Buffer.from("RIFF"));
   const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
   const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media);
+  const cache = createMediaAttachmentCache(media, {
+    localPathRoots: [resolvePreferredOpenClawTmpDir(), os.tmpdir()],
+  });
 
   try {
     await run({ ctx, media, cache });
