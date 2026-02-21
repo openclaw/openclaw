@@ -1,0 +1,67 @@
+{
+  "id": "ai-assistant-security-openclaw",
+  "name": "AI Assistant Security",
+  "description": "AI Assistant Security plugin for OpenClaw, to protect your LLM models and Agent lifecycle (including tool calls) from harmful requests.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "description": "The API endpoint for the AI Assistant Security service."
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "The API key for AI Assistant Security service."
+      },
+      "appId": {
+        "type": "string",
+        "description": "Application scenario, used to identify the business context of the current call."
+      },
+      "openClawDir": {
+        "type": "string",
+        "description": "The root directory of OpenClaw. If not provided, it defaults to the parent directory of the plugin's resolved path."
+      },
+      "logRecord": {
+        "type": "boolean",
+        "description": "Whether to enable log recording.",
+        "default": false
+      },
+      "enableFetch": {
+        "type": "boolean",
+        "description": "Enable global fetch hook for LLM requests.",
+        "default": true
+      },
+      "enableBeforeToolCall": {
+        "type": "boolean",
+        "description": "Enable hook for before_tool_call event.",
+        "default": true
+      },
+      "enableAfterToolCall": {
+        "type": "boolean",
+        "description": "Enable hook for after_tool_call event.",
+        "default": true
+      },
+      "failureThreshold": {
+        "type": "integer",
+        "description": "The number of consecutive failures before triggering degradation. Default is 3.",
+        "default": 3
+      },
+      "retryInterval": {
+        "type": "integer",
+        "description": "The base interval in seconds to retry probing after degradation. Will increase exponentially. Default is 60 (1 minute).",
+        "default": 60
+      },
+      "maxRetryInterval": {
+        "type": "integer",
+        "description": "The maximum interval in seconds for exponential backoff. Default is 3600 (1 hour).",
+        "default": 3600
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "description": "Request timeout in milliseconds for the moderation API. Default is 30000.",
+        "default": 30000
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@omni-shield/ai-assistant-security-openclaw",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "AI Assistant Security plugin for OpenClaw, to protect your LLM models and Agent lifecycle (including tool calls) from harmful requests.",
+  "packageManager": "pnpm@8.15.9",
+  "files": [
+    "package.json",
+    "bundle.js",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "publish:dev": "pnpm build && node scripts/publish-bnpm.js",
+    "publish:prod": "pnpm build && node scripts/publish-npm.js",
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --outfile=bundle.js --external:./package.json"
+  },
+  "peerDependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./bundle.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.2",
+    "openclaw": ">=2026.1.26",
+    "esbuild": "^0.27.3",
+    "node-machine-id": "^1.1.12"
+  },
+  "dependencies": {},
+  "publishConfig": {
+    "access": "public"
+  }
+}
