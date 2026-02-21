@@ -243,6 +243,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
 
+      // Flush any in-flight draft send so messageId() is populated.
+      // Without this, a race between the fire-and-forget sendMessageSlack()
+      // and the deliver callback can cause canFinalizeViaPreviewEdit to
+      // evaluate false, resulting in a duplicate Slack message.
+      await draftStream?.flush();
+
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
