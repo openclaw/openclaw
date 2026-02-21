@@ -196,6 +196,24 @@ function mockSingleSuccessfulAttempt() {
   );
 }
 
+function mockSingleErrorAttempt(params: {
+  errorMessage: string;
+  provider?: string;
+  model?: string;
+}) {
+  runEmbeddedAttemptMock.mockResolvedValueOnce(
+    makeAttempt({
+      assistantTexts: [],
+      lastAssistant: buildAssistant({
+        stopReason: "error",
+        errorMessage: params.errorMessage,
+        ...(params.provider ? { provider: params.provider } : {}),
+        ...(params.model ? { model: params.model } : {}),
+      }),
+    }),
+  );
+}
+
 async function withTimedAgentWorkspace<T>(
   run: (ctx: { agentDir: string; workspaceDir: string; now: number }) => Promise<T>,
 ) {
@@ -347,15 +365,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     try {
       await writeAuthStore(agentDir);
 
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: [],
-          lastAssistant: buildAssistant({
-            stopReason: "error",
-            errorMessage: "rate limit",
-          }),
-        }),
-      );
+      mockSingleErrorAttempt({ errorMessage: "rate limit" });
 
       await runEmbeddedPiAgent({
         sessionId: "session:test",
@@ -523,17 +533,11 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     try {
       await writeAuthStore(agentDir);
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: [],
-          lastAssistant: buildAssistant({
-            stopReason: "error",
-            errorMessage: "insufficient credits",
-            provider: "openai",
-            model: "mock-rotated",
-          }),
-        }),
-      );
+      mockSingleErrorAttempt({
+        errorMessage: "insufficient credits",
+        provider: "openai",
+        model: "mock-rotated",
+      });
 
       let thrown: unknown;
       try {

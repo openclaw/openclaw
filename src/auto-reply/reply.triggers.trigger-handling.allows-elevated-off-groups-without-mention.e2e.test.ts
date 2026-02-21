@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
 import {
@@ -6,6 +5,7 @@ import {
   loadGetReplyFromConfig,
   MAIN_SESSION_KEY,
   makeWhatsAppElevatedCfg,
+  readSessionStore,
   requireSessionStorePath,
   runDirectElevatedToggleAndLoadStore,
   withTempHome,
@@ -66,8 +66,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode set to ask");
 
-      const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
-      const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
+      const store = await readSessionStore(cfg);
       expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("on");
     });
   });

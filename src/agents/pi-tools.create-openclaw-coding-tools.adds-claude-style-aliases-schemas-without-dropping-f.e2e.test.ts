@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
+import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 
 describe("createOpenClawCodingTools", () => {
   it("uses workspaceDir for Read tool path resolution", async () => {
@@ -88,12 +89,7 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alias-"));
     try {
       const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-      const readTool = tools.find((tool) => tool.name === "read");
-      const writeTool = tools.find((tool) => tool.name === "write");
-      const editTool = tools.find((tool) => tool.name === "edit");
-      expect(readTool).toBeDefined();
-      expect(writeTool).toBeDefined();
-      expect(editTool).toBeDefined();
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
 
       const filePath = "alias-test.txt";
       await writeTool?.execute("tool-alias-1", {
