@@ -247,6 +247,7 @@ function resolveZaiGlm5ForwardCompatModel(
 const GOOGLE_VERTEX_PROVIDERS = ["google-vertex", "google", "google-gemini-cli"] as const;
 const GEMINI_31_TEMPLATE_MAP: Record<string, string[]> = {
   "gemini-3.1-pro-preview": ["gemini-3-pro-preview"],
+  "gemini-3.1-pro-preview-customtools": ["gemini-3-pro-preview"],
   "gemini-3.1-flash-preview": ["gemini-3-flash-preview"],
 };
 
