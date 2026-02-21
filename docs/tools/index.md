@@ -422,6 +422,7 @@ Notes:
 - `send` routes WhatsApp via the Gateway; other channels go direct.
 - `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
 - When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.
+- If a turn mixes inline assistant text and `message` tool sends, the `message` send can appear first in channel output. If you want a single canonical outbound message, use `message` + `NO_REPLY`.
 
 ### `cron`
 

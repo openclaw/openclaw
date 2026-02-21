@@ -118,6 +118,24 @@ current run, or collected for a followup turn.
 
 Details: [Queueing](/concepts/queue).
 
+## `message` tool sends vs inline reply ordering
+
+When a run mixes **inline assistant text** with a `message` tool send in the same turn,
+outbound order can appear surprising in channel UIs.
+
+Current behavior (observed):
+
+- `message` tool sends are dispatched immediately through channel delivery paths.
+- Inline assistant text follows the normal reply/stream pipeline for the run.
+- As a result, users may see the `message` tool output **before** inline text from the same turn.
+
+Recommended patterns:
+
+- Prefer a single output mode per turn:
+  - Inline assistant reply only, or
+  - `message` tool send + final `NO_REPLY`
+- If ordering matters, avoid mixing both in one run.
+
 ## Streaming, chunking, and batching
 
 Block streaming sends partial replies as the model produces text blocks.
