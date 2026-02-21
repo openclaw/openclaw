@@ -21,6 +21,10 @@ async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>):
   }
 }
 
+async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
+  return await withTempDir("openclaw-test-", run);
+}
+
 describe("nodes camera helpers", () => {
   function stubFetchResponse(response: Response) {
     vi.stubGlobal(
@@ -62,6 +66,12 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("rejects invalid camera.clip payload", () => {
+    expect(() =>
+      parseCameraClipPayload({ format: "mp4", base64: "AAEC", durationMs: 1234 }),
+    ).toThrow(/invalid camera\.clip payload/i);
+  });
+
   it("builds stable temp paths when id provided", () => {
     const p = cameraTempPath({
       kind: "snap",
@@ -74,7 +84,7 @@ describe("nodes camera helpers", () => {
   });
 
   it("writes camera clip payload to temp path", async () => {
-    await withTempDir("openclaw-test-", async (dir) => {
+    await withCameraTempDir(async (dir) => {
       const out = await writeCameraClipPayloadToFile({
         payload: {
           format: "mp4",
@@ -91,8 +101,27 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("writes camera clip payload from url", async () => {
+    stubFetchResponse(new Response("url-clip", { status: 200 }));
+    await withCameraTempDir(async (dir) => {
+      const out = await writeCameraClipPayloadToFile({
+        payload: {
+          format: "mp4",
+          url: "https://example.com/clip.mp4",
+          durationMs: 200,
+          hasAudio: false,
+        },
+        facing: "back",
+        tmpDir: dir,
+        id: "clip2",
+      });
+      expect(out).toBe(path.join(dir, "openclaw-camera-clip-back-clip2.mp4"));
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("url-clip");
+    });
+  });
+
   it("writes base64 to file", async () => {
-    await withTempDir("openclaw-test-", async (dir) => {
+    await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
       await writeBase64ToFile(out, "aGk=");
       await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
@@ -105,7 +134,7 @@ describe("nodes camera helpers", () => {
 
   it("writes url payload to file", async () => {
     stubFetchResponse(new Response("url-content", { status: 200 }));
-    await withTempDir("openclaw-test-", async (dir) => {
+    await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
       await writeUrlToFile(out, "https://example.com/clip.mp4");
       await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
@@ -142,6 +171,24 @@ describe("nodes camera helpers", () => {
     await expect(writeUrlToFile("/tmp/ignored", "https://example.com/empty.bin")).rejects.toThrow(
       /empty response body/i,
     );
+  });
+
+  it("removes partially written file when url stream fails", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.error(new Error("stream exploded"));
+      },
+    });
+    stubFetchResponse(new Response(stream, { status: 200 }));
+
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "broken.bin");
+      await expect(writeUrlToFile(out, "https://example.com/broken.bin")).rejects.toThrow(
+        /stream exploded/i,
+      );
+      await expect(fs.stat(out)).rejects.toThrow();
+    });
   });
 });
 
