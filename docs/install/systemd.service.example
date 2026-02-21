@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/var/lib/openclaw
+ExecStart=/usr/local/bin/openclaw gateway --port 18789
+TimeoutStopSec=5
+KillMode=mixed
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
