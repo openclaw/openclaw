@@ -222,6 +222,24 @@ describe("createOpenClawCodingTools safeBins", () => {
     }
   });
 
+  it("blocks sort --compress-program from bypassing safeBins", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const { tmpDir, execTool } = await createSafeBinsExecTool({
+      tmpPrefix: "openclaw-safe-bins-sort-compress-",
+      safeBins: ["sort"],
+    });
+
+    await expect(
+      execTool.execute("call1", {
+        command: "sort --compress-program=sh",
+        workdir: tmpDir,
+      }),
+    ).rejects.toThrow("exec denied: allowlist miss");
+  });
+
   it("blocks shell redirection metacharacters in safeBins mode", async () => {
     if (process.platform === "win32") {
       return;

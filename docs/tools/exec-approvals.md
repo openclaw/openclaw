@@ -127,9 +127,10 @@ positional file args and path-like tokens, so they can only operate on the incom
 Validation is deterministic from argv shape only (no host filesystem existence checks), which
 prevents file-existence oracle behavior from allow/deny differences.
 File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
-`sort --files0-from`, `wc --files0-from`, `jq -f/--from-file`, `grep -f/--file`).
+`sort --files0-from`, `sort --compress-program`, `wc --files0-from`, `jq -f/--from-file`,
+`grep -f/--file`).
 Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
-behavior (for example `sort -o/--output` and grep recursive flags).
+behavior (for example `sort -o/--output/--compress-program` and grep recursive flags).
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
 used to smuggle file reads.
