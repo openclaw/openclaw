@@ -221,6 +221,28 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps webhook mode running until aborted", async () => {
+    const abort = new AbortController();
+    let settled = false;
+    const task = monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+      abortSignal: abort.signal,
+    }).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    abort.abort();
+    await task;
+    expect(settled).toBe(true);
+  });
+
   it("falls back to configured webhookSecret when not passed explicitly", async () => {
     await monitorTelegramProvider({
       token: "tok",

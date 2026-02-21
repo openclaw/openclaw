@@ -152,7 +152,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
 
     if (opts.useWebhook) {
-      await startTelegramWebhook({
+      const webhook = await startTelegramWebhook({
         token,
         accountId: account.accountId,
         config: cfg,
@@ -165,6 +165,17 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
       });
+      // Keep the channel task alive in webhook mode so the gateway manager
+      // does not treat a successful startup as an immediate exit/restart.
+      if (opts.abortSignal) {
+        if (opts.abortSignal.aborted) {
+          webhook.stop();
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          opts.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
       return;
     }
 
