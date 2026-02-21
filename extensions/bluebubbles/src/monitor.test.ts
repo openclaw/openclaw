@@ -429,6 +429,41 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.body).toBe("ok");
     });
 
+    it("accepts POST requests with message fields at top level (BlueBubbles standard format)", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      // BlueBubbles may send message fields directly at the top level without a wrapper
+      const payload = {
+        type: "new-message",
+        text: "hello",
+        handle: { address: "+15551234567" },
+        isGroup: false,
+        isFromMe: false,
+        guid: "msg-1",
+        date: Date.now(),
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("ok");
+    });
+
     it("rejects requests with invalid JSON", async () => {
       const account = createMockAccount();
       const config: OpenClawConfig = {};
