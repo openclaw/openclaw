@@ -27,10 +27,9 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
-  // Handle Minimax (M2.1 is chatty/reasoning-like)
-  if (normalized.includes("minimax")) {
-    return true;
-  }
+  // Note: Minimax M2.1 uses the Anthropic-compatible messages API and sends
+  // structured `thinking` content blocks (like Claude), so it does NOT need
+  // tag-based reasoning wrapping. It should NOT be listed here.
 
   return false;
 }
