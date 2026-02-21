@@ -223,7 +223,6 @@
   },
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
-    "minimumReleaseAge": 2880,
     "overrides": {
       "hono": "4.11.10",
       "fast-xml-parser": "5.3.6",
@@ -247,6 +246,9 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "updateConfig": {
+      "minimumReleaseAge": 2880
+    }
   }
 }
