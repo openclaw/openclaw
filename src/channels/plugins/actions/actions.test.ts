@@ -5,6 +5,19 @@ const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { o
 const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const sendReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const removeReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+const sendRemoteDeleteSignal = vi.fn(async (..._args: unknown[]) => true);
+const sendPollCreateSignal = vi.fn(async (..._args: unknown[]) => ({
+  messageId: "999",
+  timestamp: 999,
+}));
+const sendPollVoteSignal = vi.fn(async (..._args: unknown[]) => ({
+  messageId: "999",
+  timestamp: 999,
+}));
+const sendPollTerminateSignal = vi.fn(async (..._args: unknown[]) => ({
+  messageId: "999",
+  timestamp: 999,
+}));
 const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 
 vi.mock("../../../agents/tools/discord-actions.js", () => ({
@@ -20,6 +33,13 @@ vi.mock("../../../signal/send-reactions.js", () => ({
   removeReactionSignal,
 }));
 
+vi.mock("../../../signal/send.js", () => ({
+  sendRemoteDeleteSignal: (...args: unknown[]) => sendRemoteDeleteSignal(...args),
+  sendPollCreateSignal: (...args: unknown[]) => sendPollCreateSignal(...args),
+  sendPollVoteSignal: (...args: unknown[]) => sendPollVoteSignal(...args),
+  sendPollTerminateSignal: (...args: unknown[]) => sendPollTerminateSignal(...args),
+}));
+
 vi.mock("../../../agents/tools/slack-actions.js", () => ({
   handleSlackAction,
 }));
@@ -29,6 +49,9 @@ const { handleDiscordMessageAction } = await import("./discord/handle-action.js"
 const { telegramMessageActions } = await import("./telegram.js");
 const { signalMessageActions } = await import("./signal.js");
 const { createSlackActions } = await import("../slack.actions.js");
+type SignalActionInput = Parameters<NonNullable<typeof signalMessageActions.handleAction>>[0];
+const pollVoteAction = "pollVote" as unknown as SignalActionInput["action"];
+const pollTerminateAction = "pollTerminate" as unknown as SignalActionInput["action"];
 
 function telegramCfg(): OpenClawConfig {
   return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
@@ -611,7 +634,13 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
     } as OpenClawConfig;
-    expect(signalMessageActions.listActions?.({ cfg }) ?? []).toEqual(["send"]);
+    expect(signalMessageActions.listActions?.({ cfg }) ?? []).toEqual([
+      "send",
+      "unsend",
+      "poll",
+      "pollVote",
+      "pollTerminate",
+    ]);
   });
 
   it("enables react when at least one account allows reactions", () => {
@@ -625,7 +654,14 @@ describe("signalMessageActions", () => {
         },
       },
     } as OpenClawConfig;
-    expect(signalMessageActions.listActions?.({ cfg }) ?? []).toEqual(["send", "react"]);
+    expect(signalMessageActions.listActions?.({ cfg }) ?? []).toEqual([
+      "send",
+      "react",
+      "unsend",
+      "poll",
+      "pollVote",
+      "pollTerminate",
+    ]);
   });
 
   it("skips send for plugin dispatch", () => {
@@ -654,6 +690,7 @@ describe("signalMessageActions", () => {
   });
 
   it("uses account-level actions when enabled", async () => {
+    sendReactionSignal.mockClear();
     const cfg = {
       channels: {
         signal: {
@@ -679,6 +716,7 @@ describe("signalMessageActions", () => {
   });
 
   it("normalizes uuid recipients", async () => {
+    sendReactionSignal.mockClear();
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
@@ -747,6 +785,421 @@ describe("signalMessageActions", () => {
       targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
       targetAuthorUuid: undefined,
     });
+  });
+
+  it("handles unsend action", async () => {
+    sendRemoteDeleteSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    const result = await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: "unsend",
+      params: {
+        to: "+15551234567",
+        messageId: "1234567890",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendRemoteDeleteSignal).toHaveBeenCalledWith("+15551234567", 1234567890, {
+      accountId: undefined,
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      deleted: "1234567890",
+    });
+  });
+
+  it("handles unsend for group target", async () => {
+    sendRemoteDeleteSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: "unsend",
+      params: {
+        to: "signal:group:group-id",
+        messageId: "9876543210",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendRemoteDeleteSignal).toHaveBeenCalledWith("signal:group:group-id", 9876543210, {
+      accountId: undefined,
+    });
+  });
+
+  it("rejects unsend when action is disabled", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { unsend: false } } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: "unsend",
+        params: {
+          to: "+15551234567",
+          messageId: "1234567890",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/actions\.unsend/);
+  });
+
+  it("rejects unsend with invalid messageId", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: "unsend",
+        params: {
+          to: "+15551234567",
+          messageId: "0",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/Invalid messageId/);
+  });
+
+  it("rejects unsend when remote delete fails", async () => {
+    sendRemoteDeleteSignal.mockClear().mockResolvedValueOnce(false);
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: "unsend",
+        params: {
+          to: "+15551234567",
+          messageId: "1234567890",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/Failed to delete/);
+  });
+
+  it("enables poll, pollVote, and pollTerminate by default", () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+    const actions = signalMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("poll");
+    expect(actions).toContain("pollVote");
+    expect(actions).toContain("pollTerminate");
+  });
+
+  it("hides poll when disabled", () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { poll: false } } },
+    } as OpenClawConfig;
+    const actions = signalMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).not.toContain("poll");
+  });
+
+  it("handles poll action", async () => {
+    sendPollCreateSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    const result = await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: "poll",
+      params: {
+        to: "+15551234567",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        pollMulti: false,
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollCreateSignal).toHaveBeenCalledWith("+15551234567", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: false,
+      accountId: undefined,
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      messageId: "999",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: false,
+    });
+  });
+
+  it("defaults poll action to allow multiple selections", async () => {
+    sendPollCreateSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: "poll",
+      params: {
+        to: "+15551234567",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollCreateSignal).toHaveBeenCalledWith("+15551234567", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: true,
+      accountId: undefined,
+    });
+  });
+
+  it("rejects poll when action is disabled", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { poll: false } } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: "poll",
+        params: {
+          to: "+15551234567",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/actions\.poll/);
+  });
+
+  it("hides pollVote when disabled", () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { pollVote: false } } },
+    } as OpenClawConfig;
+    const actions = signalMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).not.toContain("pollVote");
+  });
+
+  it("hides pollTerminate when disabled", () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { pollTerminate: false } } },
+    } as OpenClawConfig;
+    const actions = signalMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).not.toContain("pollTerminate");
+  });
+
+  it("handles pollVote action", async () => {
+    sendPollVoteSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    const result = await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: pollVoteAction,
+      params: {
+        to: "+15551234567",
+        messageId: "1234567890",
+        targetAuthor: "+15559999999",
+        pollOptions: [0, 2],
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollVoteSignal).toHaveBeenCalledWith("+15551234567", {
+      pollAuthor: "+15559999999",
+      pollTimestamp: 1234567890,
+      optionIndexes: [0, 2],
+      accountId: undefined,
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      voted: [0, 2],
+    });
+  });
+
+  it("handles pollVote for group target", async () => {
+    sendPollVoteSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: pollVoteAction,
+      params: {
+        to: "group:abc123",
+        messageId: "9876543210",
+        targetAuthor: "+15559999999",
+        pollOptions: [1],
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollVoteSignal).toHaveBeenCalledWith("group:abc123", {
+      pollAuthor: "+15559999999",
+      pollTimestamp: 9876543210,
+      optionIndexes: [1],
+      accountId: undefined,
+    });
+  });
+
+  it("rejects pollVote when action is disabled", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { pollVote: false } } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: pollVoteAction,
+        params: {
+          to: "+15551234567",
+          messageId: "1234567890",
+          targetAuthor: "+15559999999",
+          pollOptions: [0],
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/actions\.pollVote/);
+  });
+
+  it("accepts pollOption (singular) for pollVote", async () => {
+    sendPollVoteSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: pollVoteAction,
+      params: {
+        to: "+15551234567",
+        messageId: "1234567890",
+        targetAuthor: "+15559999999",
+        pollOption: [1],
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollVoteSignal).toHaveBeenCalledWith("+15551234567", {
+      pollAuthor: "+15559999999",
+      pollTimestamp: 1234567890,
+      optionIndexes: [1],
+      accountId: undefined,
+    });
+  });
+
+  it("rejects pollVote without pollOptions", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: pollVoteAction,
+        params: {
+          to: "+15551234567",
+          messageId: "1234567890",
+          targetAuthor: "+15559999999",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/pollOptions/);
+  });
+
+  it("handles pollTerminate action", async () => {
+    sendPollTerminateSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    const result = await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: pollTerminateAction,
+      params: {
+        to: "+15551234567",
+        messageId: "1234567890",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollTerminateSignal).toHaveBeenCalledWith("+15551234567", {
+      pollTimestamp: 1234567890,
+      accountId: undefined,
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      closed: "1234567890",
+    });
+  });
+
+  it("handles pollTerminate for group target", async () => {
+    sendPollTerminateSignal.mockClear();
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    await signalMessageActions.handleAction!({
+      channel: "signal",
+      action: pollTerminateAction,
+      params: {
+        to: "group:xyz789",
+        messageId: "9876543210",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(sendPollTerminateSignal).toHaveBeenCalledWith("group:xyz789", {
+      pollTimestamp: 9876543210,
+      accountId: undefined,
+    });
+  });
+
+  it("rejects pollTerminate when action is disabled", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111", actions: { pollTerminate: false } } },
+    } as OpenClawConfig;
+
+    await expect(
+      signalMessageActions.handleAction!({
+        channel: "signal",
+        action: pollTerminateAction,
+        params: {
+          to: "+15551234567",
+          messageId: "1234567890",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/actions\.pollTerminate/);
   });
 });
 

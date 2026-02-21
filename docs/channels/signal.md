@@ -240,6 +240,67 @@ Config:
   - `minimal`/`extensive` enables agent reactions and sets the guidance level.
 - Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
+## Unsend (message tool)
+
+- Use `message action=unsend` with `channel=signal` to delete a message you sent.
+- Targets: recipient E.164, UUID, or group (same format as reactions).
+- `messageId` is the Signal timestamp of the message to delete.
+- Works for both DMs and groups.
+
+Examples:
+
+```
+message action=unsend channel=signal target=+15551234567 messageId=1737630212345
+message action=unsend channel=signal target=uuid:123e4567-e89b-12d3-a456-426614174000 messageId=1737630212345
+message action=unsend channel=signal target=signal:group:<groupId> messageId=1737630212345
+```
+
+Config:
+
+- `channels.signal.actions.unsend`: enable/disable unsend actions (default true).
+- Per-account override: `channels.signal.accounts.<id>.actions.unsend`.
+
+## Poll create/vote/close (message tool)
+
+- Use `message action=poll` to create a poll.
+- Use `message action=pollVote` to vote in a poll.
+- Use `message action=pollTerminate` to close a poll (only the poll creator can close).
+
+**Poll create requirements:**
+
+- `pollQuestion`: poll question text.
+- `pollOption`: array of 2+ option strings.
+- `pollMulti` (optional): `true` to allow multiple selections (default true), `false` for single-select.
+
+**Poll vote requirements:**
+
+- `messageId`: poll timestamp (from the poll message).
+- `targetAuthor`: poll creator's E.164 or UUID.
+- `pollOption`: array of 0-indexed option numbers to vote for.
+
+**Poll close requirements:**
+
+- `messageId`: poll timestamp.
+- Only the poll creator can close the poll.
+
+Examples:
+
+```
+message action=poll channel=signal target=+15551234567 pollQuestion="Lunch?" pollOption=["Pizza","Sushi"] pollMulti=true
+message action=poll channel=signal target=signal:group:<groupId> pollQuestion="Where to meet?" pollOption=["Cafe","Office"] pollMulti=false
+message action=pollVote channel=signal target=+15551234567 messageId=1737630212345 targetAuthor=+15559999999 pollOption=[0,2]
+message action=pollVote channel=signal target=signal:group:<groupId> messageId=1737630212345 targetAuthor=uuid:<creator-uuid> pollOption=[1]
+message action=pollTerminate channel=signal target=+15551234567 messageId=1737630212345
+message action=pollTerminate channel=signal target=signal:group:<groupId> messageId=1737630212345
+```
+
+Config:
+
+- `channels.signal.actions.poll`: enable/disable poll create actions (default true).
+- `channels.signal.actions.pollVote`: enable/disable poll vote actions (default true).
+- `channels.signal.actions.pollTerminate`: enable/disable poll close actions (default true).
+- Per-account overrides: `channels.signal.accounts.<id>.actions.poll`, `channels.signal.accounts.<id>.actions.pollVote`, `channels.signal.accounts.<id>.actions.pollTerminate`.
+
 ## Delivery targets (CLI/cron)
 
 - DMs: `signal:+15551234567` (or plain E.164).
