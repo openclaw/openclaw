@@ -251,11 +251,17 @@ describe("web_search searxng config resolution", () => {
   });
 
   it("uses config baseUrl when provided", () => {
-    expect(resolveSearXngBaseUrl({ baseUrl: "http://localhost:9999" })).toBe("http://localhost:9999");
-    expect(resolveSearXngBaseUrl({ baseUrl: "https://search.example.com" })).toBe("https://search.example.com");
+    expect(resolveSearXngBaseUrl({ baseUrl: "http://localhost:9999" })).toBe(
+      "http://localhost:9999",
+    );
+    expect(resolveSearXngBaseUrl({ baseUrl: "https://search.example.com" })).toBe(
+      "https://search.example.com",
+    );
   });
 
   it("trims whitespace from baseUrl", () => {
-    expect(resolveSearXngBaseUrl({ baseUrl: "  http://localhost:8080  " })).toBe("http://localhost:8080");
+    expect(resolveSearXngBaseUrl({ baseUrl: "  http://localhost:8080  " })).toBe(
+      "http://localhost:8080",
+    );
   });
 });

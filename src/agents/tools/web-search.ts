@@ -615,13 +615,14 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
-
 async function runSearXngSearch(params: {
   query: string;
   count: number;
   baseUrl: string;
   timeoutSeconds: number;
-}): Promise<{ results: Array<{ title: string; url: string; description: string; published?: string }> }> {
+}): Promise<{
+  results: Array<{ title: string; url: string; description: string; published?: string }>;
+}> {
   const url = new URL(`${params.baseUrl.replace(/\/$/, "")}/search`);
 
   const formData = new URLSearchParams();
@@ -680,7 +681,7 @@ async function runWebSearch(params: {
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
         : params.provider === "grok"
           ? `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
-          : `${params.provider}:${params.query}:${params.count}:${params.searxngBaseUrl ?? DEFAULT_SEARXNG_BASE_URL}`
+          : `${params.provider}:${params.query}:${params.count}:${params.searxngBaseUrl ?? DEFAULT_SEARXNG_BASE_URL}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -744,7 +745,6 @@ async function runWebSearch(params: {
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
   }
-
 
   if (params.provider === "searxng") {
     const { results } = await runSearXngSearch({
@@ -890,8 +890,8 @@ export function createWebSearchTool(options?: {
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
             : provider === "searxng"
-                ? "no-key-needed" // SearXNG doesn't require an API key
-                : resolveSearchApiKey(search);
+              ? "no-key-needed" // SearXNG doesn't require an API key
+              : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
