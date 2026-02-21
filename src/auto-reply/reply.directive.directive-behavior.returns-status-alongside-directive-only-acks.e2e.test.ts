@@ -1,8 +1,10 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
+  assertElevatedOffStatusReply,
   installDirectiveBehaviorE2EHooks,
   makeRestrictedElevatedDisabledConfig,
   runEmbeddedPiAgent,
@@ -27,7 +29,7 @@ describe("directive behavior", () => {
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
-    };
+    } as unknown as OpenClawConfig;
   }
 
   async function runQueueDirective(params: { home: string; storePath: string; body: string }) {
@@ -55,7 +57,7 @@ describe("directive behavior", () => {
         {
           agents: {
             defaults: {
-              model: "anthropic/claude-opus-4-5",
+              model: { primary: "anthropic/claude-opus-4-5" },
               workspace: path.join(home, "openclaw"),
             },
           },
@@ -70,11 +72,8 @@ describe("directive behavior", () => {
       );
 
       const text = extractReplyText(res);
-      expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Session: agent:main:main");
-      const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
-      expect(optionsLine).toBeTruthy();
-      expect(optionsLine).not.toContain("elevated");
+      assertElevatedOffStatusReply(text);
 
       const store = loadSessionStore(storePath);
       expect(store["agent:main:main"]?.elevatedLevel).toBe("off");
@@ -94,7 +93,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeRestrictedElevatedDisabledConfig(home),
+        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
       );
 
       const text = extractReplyText(res);

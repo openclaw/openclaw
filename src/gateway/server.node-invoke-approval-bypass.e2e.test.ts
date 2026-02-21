@@ -19,6 +19,13 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
+  // Yield a couple of macrotasks so any accidental async forwarding would fire.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(hasInvoke()).toBe(false);
+}
+
 async function getConnectedNodeId(ws: WebSocket): Promise<string> {
   const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
     ws,
@@ -60,12 +67,45 @@ describe("node.invoke approval bypass", () => {
     await server.close();
   });
 
-  const connectOperator = async (scopes: string[]) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws, { token: "secret", scopes });
+  const approveAllPendingPairings = async () => {
+    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+    const list = await listDevicePairing();
+    for (const pending of list.pending) {
+      await approveDevicePairing(pending.requestId);
+    }
+  };
+
+  const connectOperatorWithRetry = async (
+    scopes: string[],
+    resolveDevice?: () => NonNullable<Parameters<typeof connectReq>[1]>["device"],
+  ) => {
+    const connectOnce = async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+      const res = await connectReq(ws, {
+        token: "secret",
+        scopes,
+        ...(resolveDevice ? { device: resolveDevice() } : {}),
+      });
+      return { ws, res };
+    };
+
+    let { ws, res } = await connectOnce();
+    const message =
+      res && typeof res === "object" && "error" in res
+        ? ((res as { error?: { message?: string } }).error?.message ?? "")
+        : "";
+    if (!res.ok && message.includes("pairing required")) {
+      ws.close();
+      await approveAllPendingPairings();
+      ({ ws, res } = await connectOnce());
+    }
     expect(res.ok).toBe(true);
     return ws;
+  };
+
+  const connectOperator = async (scopes: string[]) => {
+    return await connectOperatorWithRetry(scopes);
   };
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
@@ -85,20 +125,12 @@ describe("node.invoke approval bypass", () => {
       signedAtMs,
       token: "secret",
     });
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws, {
-      token: "secret",
-      scopes,
-      device: {
-        id: deviceId!,
-        publicKey: publicKeyRaw,
-        signature: signDevicePayload(privateKeyPem, payload),
-        signedAt: signedAtMs,
-      },
-    });
-    expect(res.ok).toBe(true);
-    return ws;
+    return await connectOperatorWithRetry(scopes, () => ({
+      id: deviceId!,
+      publicKey: publicKeyRaw,
+      signature: signDevicePayload(privateKeyPem, payload),
+      signedAt: signedAtMs,
+    }));
   };
 
   const connectLinuxNode = async (onInvoke: (payload: unknown) => void) => {
@@ -171,8 +203,7 @@ describe("node.invoke approval bypass", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("rawCommand does not match command");
 
-    await sleep(50);
-    expect(sawInvoke).toBe(false);
+    await expectNoForwardedInvoke(() => sawInvoke);
 
     ws.close();
     node.stop();
@@ -201,8 +232,7 @@ describe("node.invoke approval bypass", () => {
     expect(res.error?.message ?? "").toContain("params.runId");
 
     // Ensure the node didn't receive the invoke (gateway should fail early).
-    await sleep(50);
-    expect(sawInvoke).toBe(false);
+    await expectNoForwardedInvoke(() => sawInvoke);
 
     ws.close();
     node.stop();
@@ -225,8 +255,7 @@ describe("node.invoke approval bypass", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("exec.approvals.node");
 
-    await sleep(50);
-    expect(sawInvoke).toBe(false);
+    await expectNoForwardedInvoke(() => sawInvoke);
 
     ws.close();
     node.stop();
@@ -268,10 +297,11 @@ describe("node.invoke approval bypass", () => {
     });
     expect(invoke.ok).toBe(true);
 
-    expect(lastInvokeParams).toBeTruthy();
-    expect(lastInvokeParams?.approved).toBe(true);
-    expect(lastInvokeParams?.approvalDecision).toBe("allow-once");
-    expect(lastInvokeParams?.injected).toBeUndefined();
+    const invokeParams = lastInvokeParams as Record<string, unknown> | null;
+    expect(invokeParams).toBeTruthy();
+    expect(invokeParams?.["approved"]).toBe(true);
+    expect(invokeParams?.["approvalDecision"]).toBe("allow-once");
+    expect(invokeParams?.["injected"]).toBeUndefined();
 
     ws.close();
     ws2.close();
@@ -304,8 +334,7 @@ describe("node.invoke approval bypass", () => {
     });
     expect(invoke.ok).toBe(false);
     expect(invoke.error?.message ?? "").toContain("not valid for this device");
-    await sleep(50);
-    expect(sawInvoke).toBe(false);
+    await expectNoForwardedInvoke(() => sawInvoke);
 
     ws.close();
     wsOtherDevice.close();

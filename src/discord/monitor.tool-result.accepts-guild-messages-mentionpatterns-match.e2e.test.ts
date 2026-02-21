@@ -11,6 +11,7 @@ import {
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
+import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 const loadConfigMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -78,7 +79,7 @@ async function createHandler(cfg: LoadedConfig) {
   const { createDiscordMessageHandler } = await import("./monitor.js");
   return createDiscordMessageHandler({
     cfg,
-    discordConfig: cfg.channels.discord,
+    discordConfig: cfg.channels?.discord,
     accountId: "default",
     token: "token",
     runtime: makeRuntime(),
@@ -90,7 +91,8 @@ async function createHandler(cfg: LoadedConfig) {
     replyToMode: "off",
     dmEnabled: true,
     groupDmEnabled: false,
-    guildEntries: cfg.channels.discord.guilds,
+    guildEntries: cfg.channels?.discord?.guilds,
+    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -275,7 +277,9 @@ describe("discord tool result dispatch", () => {
           },
         },
         session: { store: "/tmp/openclaw-sessions.json" },
-        discord: { dm: { enabled: true, policy: "open" } },
+        channels: {
+          discord: { dm: { enabled: true, policy: "open" } },
+        },
       } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
       const command = createDiscordNativeCommand({
@@ -285,17 +289,17 @@ describe("discord tool result dispatch", () => {
           acceptsArgs: true,
         },
         cfg,
-        discordConfig: cfg.discord,
+        discordConfig: cfg.channels!.discord!,
         accountId: "default",
-        token: "token",
         sessionPrefix: "discord:slash",
         ephemeralDefault: true,
+        threadBindings: createNoopThreadBindingManager("default"),
       });
 
       const reply = vi.fn().mockResolvedValue(undefined);
       const followUp = vi.fn().mockResolvedValue(undefined);
 
-      await command.run({
+      const interaction = {
         user: { id: "u1", username: "Ada", globalName: "Ada" },
         channel: { type: ChannelType.DM },
         guild: null,
@@ -303,7 +307,9 @@ describe("discord tool result dispatch", () => {
         options: { getString: vi.fn().mockReturnValue("on") },
         reply,
         followUp,
-      });
+      } as unknown as Parameters<typeof command.run>[0];
+
+      await command.run(interaction);
 
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(reply).toHaveBeenCalledTimes(1);

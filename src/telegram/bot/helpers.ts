@@ -1,13 +1,14 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
-import type { TelegramStreamMode } from "./types.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import {
   firstDefined,
   normalizeAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -114,7 +115,7 @@ export function resolveTelegramThreadSpec(params: {
  * Build thread params for Telegram API calls (messages, media).
  *
  * IMPORTANT: Thread IDs behave differently based on chat type:
- * - DMs (private chats): Never send thread_id (threads don't exist)
+ * - DMs (private chats): Include message_thread_id when present (DM topics)
  * - Forum topics: Skip thread_id=1 (General topic), include others
  * - Regular groups: Thread IDs are ignored by Telegram
  *
@@ -130,9 +131,8 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   }
   const normalized = Math.trunc(thread.id);
 
-  // Never send thread_id for DMs (threads don't exist in private chats)
   if (thread.scope === "dm") {
-    return undefined;
+    return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
   // Telegram rejects message_thread_id=1 for General forum topic
@@ -155,13 +155,10 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
-  streamMode?: TelegramStreamMode;
+  streaming?: unknown;
+  streamMode?: unknown;
 }): TelegramStreamMode {
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") {
-    return raw;
-  }
-  return "partial";
+  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {

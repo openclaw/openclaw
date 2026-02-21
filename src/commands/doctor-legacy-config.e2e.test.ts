@@ -13,6 +13,15 @@ describe("normalizeLegacyConfigValues", () => {
     fs.writeFileSync(path.join(dir, "creds.json"), JSON.stringify({ me: {} }));
   };
 
+  const expectNoWhatsAppConfigForLegacyAuth = (setup?: () => void) => {
+    setup?.();
+    const res = normalizeLegacyConfigValues({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    });
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
+  };
+
   beforeEach(() => {
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
@@ -57,39 +66,24 @@ describe("normalizeLegacyConfigValues", () => {
   });
 
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    expectNoWhatsAppConfigForLegacyAuth(() => {
+      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
+      writeCreds(credsDir);
     });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
   });
 
   it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
-    const credsPath = path.join(tempOauthDir ?? "", "creds.json");
-    fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    expectNoWhatsAppConfigForLegacyAuth(() => {
+      const credsPath = path.join(tempOauthDir ?? "", "creds.json");
+      fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
     });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
   });
 
   it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    expectNoWhatsAppConfigForLegacyAuth(() => {
+      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
+      writeCreds(credsDir);
     });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
   });
 
   it("copies legacy ack reaction when authDir override exists", () => {
@@ -149,6 +143,83 @@ describe("normalizeLegacyConfigValues", () => {
     expect(res.changes).toEqual([
       "Moved channels.discord.accounts.work.dm.policy → channels.discord.accounts.work.dmPolicy.",
       "Moved channels.discord.accounts.work.dm.allowFrom → channels.discord.accounts.work.allowFrom.",
+    ]);
+  });
+
+  it("migrates Discord streaming boolean alias to streaming enum", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        discord: {
+          streaming: true,
+          accounts: {
+            work: {
+              streaming: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.discord?.streaming).toBe("partial");
+    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe("off");
+    expect(res.config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Normalized channels.discord.streaming boolean → enum (partial).",
+      "Normalized channels.discord.accounts.work.streaming boolean → enum (off).",
+    ]);
+  });
+
+  it("migrates Discord legacy streamMode into streaming enum", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        discord: {
+          streaming: false,
+          streamMode: "block",
+        },
+      },
+    });
+
+    expect(res.config.channels?.discord?.streaming).toBe("block");
+    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming (block).",
+      "Normalized channels.discord.streaming boolean → enum (block).",
+    ]);
+  });
+
+  it("migrates Telegram streamMode into streaming enum", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        telegram: {
+          streamMode: "block",
+        },
+      },
+    });
+
+    expect(res.config.channels?.telegram?.streaming).toBe("block");
+    expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+    ]);
+  });
+
+  it("migrates Slack legacy streaming keys to unified config", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        slack: {
+          streaming: false,
+          streamMode: "status_final",
+        },
+      },
+    });
+
+    expect(res.config.channels?.slack?.streaming).toBe("progress");
+    expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
+    expect(res.config.channels?.slack?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.slack.streamMode → channels.slack.streaming (progress).",
+      "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
     ]);
   });
 });

@@ -1,4 +1,3 @@
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
@@ -22,6 +21,7 @@ import {
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireApprovalsBaseHash(
@@ -77,6 +77,24 @@ function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   };
 }
 
+function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
+  return {
+    path: snapshot.path,
+    exists: snapshot.exists,
+    hash: snapshot.hash,
+    file: redactExecApprovals(snapshot.file),
+  };
+}
+
+function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | null {
+  const id = nodeId.trim();
+  if (!id) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+    return null;
+  }
+  return id;
+}
+
 export const execApprovalsHandlers: GatewayRequestHandlers = {
   "exec.approvals.get": ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
@@ -84,16 +102,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     }
     ensureExecApprovals();
     const snapshot = readExecApprovalsSnapshot();
-    respond(
-      true,
-      {
-        path: snapshot.path,
-        exists: snapshot.exists,
-        hash: snapshot.hash,
-        file: redactExecApprovals(snapshot.file),
-      },
-      undefined,
-    );
+    respond(true, toExecApprovalsPayload(snapshot), undefined);
   },
   "exec.approvals.set": ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
@@ -117,16 +126,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
     saveExecApprovals(next);
     const nextSnapshot = readExecApprovalsSnapshot();
-    respond(
-      true,
-      {
-        path: nextSnapshot.path,
-        exists: nextSnapshot.exists,
-        hash: nextSnapshot.hash,
-        file: redactExecApprovals(nextSnapshot.file),
-      },
-      undefined,
-    );
+    respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
   },
   "exec.approvals.node.get": async ({ params, respond, context }) => {
     if (
@@ -140,9 +140,8 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { nodeId } = params as { nodeId: string };
-    const id = nodeId.trim();
+    const id = resolveNodeIdOrRespond(nodeId, respond);
     if (!id) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -174,9 +173,8 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       file: ExecApprovalsFile;
       baseHash?: string;
     };
-    const id = nodeId.trim();
+    const id = resolveNodeIdOrRespond(nodeId, respond);
     if (!id) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {

@@ -28,6 +28,10 @@ describe("skills.update", () => {
         skillKey: "brave-search",
         apiKey: "abc\r\ndef",
       },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
       respond: (success, _result, err) => {
         ok = success;
         error = err;

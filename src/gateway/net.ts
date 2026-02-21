@@ -40,6 +40,10 @@ export function resolveHostName(hostHeader?: string): string {
       return host.slice(1, end);
     }
   }
+  // Unbracketed IPv6 host (e.g. "::1") has no port and should be returned as-is.
+  if (net.isIP(host) === 6) {
+    return host;
+  }
   const [name] = host.split(":");
   return name ?? "";
 }
@@ -142,20 +146,51 @@ function stripOptionalPort(ip: string): string {
   return ip;
 }
 
-export function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
-  const raw = forwardedFor?.split(",")[0]?.trim();
-  if (!raw) {
+function parseIpLiteral(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
     return undefined;
   }
-  return normalizeIp(stripOptionalPort(raw));
+  const stripped = stripOptionalPort(trimmed);
+  const normalized = normalizeIp(stripped);
+  if (!normalized || net.isIP(normalized) === 0) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function parseRealIp(realIp?: string): string | undefined {
-  const raw = realIp?.trim();
-  if (!raw) {
+  return parseIpLiteral(realIp);
+}
+
+function resolveForwardedClientIp(params: {
+  forwardedFor?: string;
+  trustedProxies?: string[];
+}): string | undefined {
+  const { forwardedFor, trustedProxies } = params;
+  if (!trustedProxies?.length) {
     return undefined;
   }
-  return normalizeIp(stripOptionalPort(raw));
+
+  const forwardedChain: string[] = [];
+  for (const entry of forwardedFor?.split(",") ?? []) {
+    const normalized = parseIpLiteral(entry);
+    if (normalized) {
+      forwardedChain.push(normalized);
+    }
+  }
+  if (forwardedChain.length === 0) {
+    return undefined;
+  }
+
+  // Walk right-to-left and return the first untrusted hop.
+  for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
+    const hop = forwardedChain[index];
+    if (!isTrustedProxyAddress(hop, trustedProxies)) {
+      return hop;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -210,20 +245,26 @@ export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: s
   }
 
   return trustedProxies.some((proxy) => {
+    const candidate = proxy.trim();
+    if (!candidate) {
+      return false;
+    }
     // Handle CIDR notation
-    if (proxy.includes("/")) {
-      return ipMatchesCIDR(normalized, proxy);
+    if (candidate.includes("/")) {
+      return ipMatchesCIDR(normalized, candidate);
     }
     // Exact IP match
-    return normalizeIp(proxy) === normalized;
+    return normalizeIp(candidate) === normalized;
   });
 }
 
-export function resolveGatewayClientIp(params: {
+export function resolveClientIp(params: {
   remoteAddr?: string;
   forwardedFor?: string;
   realIp?: string;
   trustedProxies?: string[];
+  /** Default false: only trust X-Real-IP when explicitly enabled. */
+  allowRealIpFallback?: boolean;
 }): string | undefined {
   const remote = normalizeIp(params.remoteAddr);
   if (!remote) {
@@ -232,7 +273,20 @@ export function resolveGatewayClientIp(params: {
   if (!isTrustedProxyAddress(remote, params.trustedProxies)) {
     return remote;
   }
-  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp) ?? remote;
+  // Fail closed when traffic comes from a trusted proxy but client-origin headers
+  // are missing or invalid. Falling back to the proxy's own IP can accidentally
+  // treat unrelated requests as local/trusted.
+  const forwardedIp = resolveForwardedClientIp({
+    forwardedFor: params.forwardedFor,
+    trustedProxies: params.trustedProxies,
+  });
+  if (forwardedIp) {
+    return forwardedIp;
+  }
+  if (params.allowRealIpFallback) {
+    return parseRealIp(params.realIp);
+  }
+  return undefined;
 }
 
 export function isLocalGatewayAddress(ip: string | undefined): boolean {
@@ -387,4 +441,34 @@ export function isLoopbackHost(host: string): boolean {
   // Handle bracketed IPv6 addresses like [::1]
   const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
   return isLoopbackAddress(unbracket);
+}
+
+/**
+ * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
+ *
+ * Returns true if the URL is secure for transmitting data:
+ * - wss:// (TLS) is always secure
+ * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ *
+ * All other ws:// URLs are considered insecure because both credentials
+ * AND chat/conversation data would be exposed to network interception.
+ */
+export function isSecureWebSocketUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol === "wss:") {
+    return true;
+  }
+
+  if (parsed.protocol !== "ws:") {
+    return false;
+  }
+
+  // ws:// is only secure for loopback addresses
+  return isLoopbackHost(parsed.hostname);
 }

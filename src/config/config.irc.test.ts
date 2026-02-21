@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
+function expectValidConfig(result: ReturnType<typeof validateConfigObject>) {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("expected config to be valid");
+  }
+  return result.config;
+}
+
+function expectInvalidConfig(result: ReturnType<typeof validateConfigObject>) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected config to be invalid");
+  }
+  return result.issues;
+}
+
 describe("config irc", () => {
   it("accepts basic irc config", () => {
     const res = validateConfigObject({
@@ -13,9 +29,9 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    expect(res.config.channels?.irc?.host).toBe("irc.libera.chat");
-    expect(res.config.channels?.irc?.nick).toBe("openclaw-bot");
+    const config = expectValidConfig(res);
+    expect(config.channels?.irc?.host).toBe("irc.libera.chat");
+    expect(config.channels?.irc?.nick).toBe("openclaw-bot");
   });
 
   it('rejects irc.dmPolicy="open" without allowFrom "*"', () => {
@@ -28,8 +44,8 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
-    expect(res.issues[0]?.path).toBe("channels.irc.allowFrom");
+    const issues = expectInvalidConfig(res);
+    expect(issues[0]?.path).toBe("channels.irc.allowFrom");
   });
 
   it('accepts irc.dmPolicy="open" with allowFrom "*"', () => {
@@ -42,8 +58,8 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    expect(res.config.channels?.irc?.dmPolicy).toBe("open");
+    const config = expectValidConfig(res);
+    expect(config.channels?.irc?.dmPolicy).toBe("open");
   });
 
   it("accepts mixed allowFrom value types for IRC", () => {
@@ -61,10 +77,10 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    expect(res.config.channels?.irc?.allowFrom).toEqual([12345, "alice"]);
-    expect(res.config.channels?.irc?.groupAllowFrom).toEqual([67890, "alice!ident@example.org"]);
-    expect(res.config.channels?.irc?.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
+    const config = expectValidConfig(res);
+    expect(config.channels?.irc?.allowFrom).toEqual([12345, "alice"]);
+    expect(config.channels?.irc?.groupAllowFrom).toEqual([67890, "alice!ident@example.org"]);
+    expect(config.channels?.irc?.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
   });
 
   it("rejects nickserv register without registerEmail", () => {
@@ -79,8 +95,8 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
-    expect(res.issues[0]?.path).toBe("channels.irc.nickserv.registerEmail");
+    const issues = expectInvalidConfig(res);
+    expect(issues[0]?.path).toBe("channels.irc.nickserv.registerEmail");
   });
 
   it("accepts nickserv register with password and registerEmail", () => {
@@ -96,8 +112,8 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    expect(res.config.channels?.irc?.nickserv?.register).toBe(true);
+    const config = expectValidConfig(res);
+    expect(config.channels?.irc?.nickserv?.register).toBe(true);
   });
 
   it("accepts nickserv register with registerEmail only (password may come from env)", () => {
@@ -112,6 +128,6 @@ describe("config irc", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
+    expectValidConfig(res);
   });
 });

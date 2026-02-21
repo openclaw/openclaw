@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBaseSignalEventHandlerDeps } from "./monitor/event-handler.test-harness.js";
+import {
+  createBaseSignalEventHandlerDeps,
+  createSignalReceiveEvent,
+} from "./monitor/event-handler.test-harness.js";
 
 const sendTypingMock = vi.fn();
 const sendReadReceiptMock = vi.fn();
@@ -12,15 +15,14 @@ const dispatchInboundMessageMock = vi.fn(
 
 vi.mock("./send.js", () => ({
   sendMessageSignal: vi.fn(),
-  sendTypingSignal: (...args: unknown[]) => sendTypingMock(...args),
-  sendReadReceiptSignal: (...args: unknown[]) => sendReadReceiptMock(...args),
+  sendTypingSignal: sendTypingMock,
+  sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
 vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessage: (...args: unknown[]) => dispatchInboundMessageMock(...args),
-  dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchInboundMessageMock(...args),
-  dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) =>
-    dispatchInboundMessageMock(...args),
+  dispatchInboundMessage: dispatchInboundMessageMock,
+  dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
+  dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
@@ -52,21 +54,15 @@ describe("signal event handler typing + read receipts", () => {
       }),
     );
 
-    await handler({
-      event: "receive",
-      data: JSON.stringify({
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Alice",
-          timestamp: 1700000000000,
-          dataMessage: {
-            message: "hi",
-          },
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hi",
         },
       }),
-    });
+    );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("signal:+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,

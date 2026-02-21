@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { captureEnv } from "../test-utils/env.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 
 export const noopAsync = async () => {};
 export const noop = () => {};
@@ -51,7 +52,41 @@ export async function setupAuthTestEnv(
   return { stateDir, agentDir };
 }
 
+export type AuthTestLifecycle = {
+  setStateDir: (stateDir: string) => void;
+  cleanup: () => Promise<void>;
+};
+
+export function createAuthTestLifecycle(envKeys: string[]): AuthTestLifecycle {
+  const envSnapshot = captureEnv(envKeys);
+  let stateDir: string | null = null;
+  return {
+    setStateDir(nextStateDir: string) {
+      stateDir = nextStateDir;
+    },
+    async cleanup() {
+      if (stateDir) {
+        await fs.rm(stateDir, { recursive: true, force: true });
+        stateDir = null;
+      }
+      envSnapshot.restore();
+    },
+  };
+}
+
+export function requireOpenClawAgentDir(): string {
+  const agentDir = process.env.OPENCLAW_AGENT_DIR;
+  if (!agentDir) {
+    throw new Error("OPENCLAW_AGENT_DIR not set");
+  }
+  return agentDir;
+}
+
+export function authProfilePathForAgent(agentDir: string): string {
+  return path.join(agentDir, "auth-profiles.json");
+}
+
 export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
-  const raw = await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8");
+  const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
   return JSON.parse(raw) as T;
 }

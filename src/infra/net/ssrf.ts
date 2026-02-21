@@ -24,7 +24,11 @@ export type SsrFPolicy = {
   hostnameAllowlist?: string[];
 };
 
-const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
@@ -64,16 +68,77 @@ function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolea
   return allowlist.some((pattern) => isHostnameAllowedByPattern(hostname, pattern));
 }
 
+function parseStrictIpv4Octet(part: string): number | null {
+  if (!/^[0-9]+$/.test(part)) {
+    return null;
+  }
+  const value = Number.parseInt(part, 10);
+  if (Number.isNaN(value) || value < 0 || value > 255) {
+    return null;
+  }
+  // Accept only canonical decimal octets (no leading zeros, no alternate radices).
+  if (part !== String(value)) {
+    return null;
+  }
+  return value;
+}
+
 function parseIpv4(address: string): number[] | null {
   const parts = address.split(".");
   if (parts.length !== 4) {
     return null;
   }
-  const numbers = parts.map((part) => Number.parseInt(part, 10));
-  if (numbers.some((value) => Number.isNaN(value) || value < 0 || value > 255)) {
-    return null;
+  for (const part of parts) {
+    if (parseStrictIpv4Octet(part) === null) {
+      return null;
+    }
   }
-  return numbers;
+  return parts.map((part) => Number.parseInt(part, 10));
+}
+
+function classifyIpv4Part(part: string): "decimal" | "hex" | "invalid-hex" | "non-numeric" {
+  if (/^0x[0-9a-f]+$/i.test(part)) {
+    return "hex";
+  }
+  if (/^0x/i.test(part)) {
+    return "invalid-hex";
+  }
+  if (/^[0-9]+$/.test(part)) {
+    return "decimal";
+  }
+  return "non-numeric";
+}
+
+function isUnsupportedLegacyIpv4Literal(address: string): boolean {
+  const parts = address.split(".");
+  if (parts.length === 0 || parts.length > 4) {
+    return false;
+  }
+  if (parts.some((part) => part.length === 0)) {
+    return true;
+  }
+
+  const partKinds = parts.map(classifyIpv4Part);
+  if (partKinds.some((kind) => kind === "non-numeric")) {
+    return false;
+  }
+  if (partKinds.some((kind) => kind === "invalid-hex")) {
+    return true;
+  }
+
+  if (parts.length !== 4) {
+    return true;
+  }
+  for (const part of parts) {
+    if (/^0x/i.test(part)) {
+      return true;
+    }
+    const value = Number.parseInt(part, 10);
+    if (Number.isNaN(value) || value > 255 || part !== String(value)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function stripIpv6ZoneId(address: string): string {
@@ -142,19 +207,76 @@ function parseIpv6Hextets(address: string): number[] | null {
   return hextets;
 }
 
-function extractIpv4FromEmbeddedIpv6(hextets: number[]): number[] | null {
-  // IPv4-mapped: ::ffff:a.b.c.d (and full-form variants)
-  // IPv4-compatible: ::a.b.c.d (deprecated, but still needs private-network blocking)
-  const zeroPrefix = hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0;
-  if (!zeroPrefix || hextets[4] !== 0) {
-    return null;
-  }
-  if (hextets[5] !== 0xffff && hextets[5] !== 0) {
-    return null;
-  }
-  const high = hextets[6];
-  const low = hextets[7];
+function decodeIpv4FromHextets(high: number, low: number): number[] {
   return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
+}
+
+type EmbeddedIpv4Rule = {
+  matches: (hextets: number[]) => boolean;
+  extract: (hextets: number[]) => [high: number, low: number];
+};
+
+const EMBEDDED_IPV4_RULES: EmbeddedIpv4Rule[] = [
+  {
+    // IPv4-mapped: ::ffff:a.b.c.d and IPv4-compatible ::a.b.c.d.
+    matches: (hextets) =>
+      hextets[0] === 0 &&
+      hextets[1] === 0 &&
+      hextets[2] === 0 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      (hextets[5] === 0xffff || hextets[5] === 0),
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+  {
+    // NAT64 well-known prefix: 64:ff9b::/96.
+    matches: (hextets) =>
+      hextets[0] === 0x0064 &&
+      hextets[1] === 0xff9b &&
+      hextets[2] === 0 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      hextets[5] === 0,
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+  {
+    // NAT64 local-use prefix: 64:ff9b:1::/48.
+    matches: (hextets) =>
+      hextets[0] === 0x0064 &&
+      hextets[1] === 0xff9b &&
+      hextets[2] === 0x0001 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      hextets[5] === 0,
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+  {
+    // 6to4 prefix: 2002::/16 where hextets[1..2] carry IPv4.
+    matches: (hextets) => hextets[0] === 0x2002,
+    extract: (hextets) => [hextets[1], hextets[2]],
+  },
+  {
+    // Teredo prefix: 2001:0000::/32 with client IPv4 obfuscated via XOR 0xffff.
+    matches: (hextets) => hextets[0] === 0x2001 && hextets[1] === 0x0000,
+    extract: (hextets) => [hextets[6] ^ 0xffff, hextets[7] ^ 0xffff],
+  },
+  {
+    // ISATAP IID format: 000000ug00000000:5efe:w.x.y.z (RFC 5214 section 6.1).
+    // Match only the IID marker bits to avoid over-broad :5efe: detection.
+    matches: (hextets) => (hextets[4] & 0xfcff) === 0 && hextets[5] === 0x5efe,
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+];
+
+function extractIpv4FromEmbeddedIpv6(hextets: number[]): number[] | null {
+  for (const rule of EMBEDDED_IPV4_RULES) {
+    if (!rule.matches(hextets)) {
+      continue;
+    }
+    const [high, low] = rule.extract(hextets);
+    return decodeIpv4FromHextets(high, low);
+  }
+  return null;
 }
 
 function isPrivateIpv4(parts: number[]): boolean {
@@ -195,7 +317,8 @@ export function isPrivateIpAddress(address: string): boolean {
   if (normalized.includes(":")) {
     const hextets = parseIpv6Hextets(normalized);
     if (!hextets) {
-      return false;
+      // Security-critical parse failures should fail closed.
+      return true;
     }
 
     const isUnspecified =
@@ -243,10 +366,14 @@ export function isPrivateIpAddress(address: string): boolean {
   }
 
   const ipv4 = parseIpv4(normalized);
-  if (!ipv4) {
-    return false;
+  if (ipv4) {
+    return isPrivateIpv4(ipv4);
   }
-  return isPrivateIpv4(ipv4);
+  // Reject non-canonical IPv4 literal forms (octal/hex/short/packed) by default.
+  if (isUnsupportedLegacyIpv4Literal(normalized)) {
+    return true;
+  }
+  return false;
 }
 
 export function isBlockedHostname(hostname: string): boolean {
@@ -254,6 +381,10 @@ export function isBlockedHostname(hostname: string): boolean {
   if (!normalized) {
     return false;
   }
+  return isBlockedHostnameNormalized(normalized);
+}
+
+function isBlockedHostnameNormalized(normalized: string): boolean {
   if (BLOCKED_HOSTNAMES.has(normalized)) {
     return true;
   }
@@ -262,6 +393,14 @@ export function isBlockedHostname(hostname: string): boolean {
     normalized.endsWith(".local") ||
     normalized.endsWith(".internal")
   );
+}
+
+export function isBlockedHostnameOrIp(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) {
+    return false;
+  }
+  return isBlockedHostnameNormalized(normalized) || isPrivateIpAddress(normalized);
 }
 
 export function createPinnedLookup(params: {
@@ -345,14 +484,8 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
   }
 
-  if (!allowPrivateNetwork && !isExplicitAllowed) {
-    if (isBlockedHostname(normalized)) {
-      throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
-    }
-
-    if (isPrivateIpAddress(normalized)) {
-      throw new SsrFBlockedError("Blocked: private/internal IP address");
-    }
+  if (!allowPrivateNetwork && !isExplicitAllowed && isBlockedHostnameOrIp(normalized)) {
+    throw new SsrFBlockedError("Blocked hostname or private/internal IP address");
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;

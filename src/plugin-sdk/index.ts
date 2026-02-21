@@ -1,3 +1,4 @@
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 export {
   BLUEBUBBLES_ACTIONS,
@@ -61,6 +62,16 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
+  ThreadBindingManager,
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
+} from "../discord/monitor/thread-bindings.js";
+export {
+  autoBindSpawnedDiscordSubagent,
+  listThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "../discord/monitor/thread-bindings.js";
+export type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginService,
@@ -87,8 +98,11 @@ export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTarget,
+  resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
+export type { WebhookTargetMatchResult } from "./webhook-targets.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -153,6 +167,7 @@ export { extractToolSend } from "./tool-send.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
+export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 export type { ChatType } from "../channels/chat-type.js";
 /** @deprecated Use ChatType instead */
 export type { RoutePeerKind } from "../routing/resolve-route.js";
@@ -180,7 +195,12 @@ export {
 } from "../infra/http-body.js";
 
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-export { SsrFBlockedError, isBlockedHostname, isPrivateIpAddress } from "../infra/net/ssrf.js";
+export {
+  SsrFBlockedError,
+  isBlockedHostname,
+  isBlockedHostnameOrIp,
+  isPrivateIpAddress,
+} from "../infra/net/ssrf.js";
 export type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isWSLSync, isWSL2Sync, isWSLEnv } from "../infra/wsl.js";
@@ -275,7 +295,11 @@ export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
-export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
+export {
+  addWildcardAllowFrom,
+  mergeAllowFromEntries,
+  promptAccountId,
+} from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 
 export {
@@ -286,6 +310,11 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export { formatDocsLink } from "../terminal/links.js";
+export {
+  resolveDmAllowState,
+  resolveDmGroupAccessDecision,
+  resolveEffectiveAllowFromLists,
+} from "../security/dm-policy-shared.js";
 export type { HookEntry } from "../hooks/types.js";
 export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
 export { stripAnsi } from "../terminal/ansi.js";
@@ -328,6 +357,7 @@ export { discordOnboardingAdapter } from "../channels/plugins/onboarding/discord
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
+  normalizeDiscordOutboundTarget,
 } from "../channels/plugins/normalize/discord.js";
 export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
 

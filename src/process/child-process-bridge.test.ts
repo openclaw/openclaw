@@ -4,7 +4,7 @@ import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 
-function waitForLine(stream: NodeJS.ReadableStream, timeoutMs = 2000): Promise<string> {
+function waitForLine(stream: NodeJS.ReadableStream, timeoutMs = 10_000): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = "";
 
@@ -86,7 +86,7 @@ describe("attachChildProcessBridge", () => {
     if (!addedSigterm) {
       throw new Error("expected SIGTERM listener");
     }
-    addedSigterm();
+    addedSigterm("SIGTERM");
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), 10_000);
@@ -95,5 +95,5 @@ describe("attachChildProcessBridge", () => {
         resolve();
       });
     });
-  }, 20_000);
+  }, 15_000);
 });

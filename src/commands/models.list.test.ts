@@ -1,9 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
+let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
+let toModelRow: typeof import("./models/list.registry.js").toModelRow;
 
 const loadConfig = vi.fn();
 const ensureOpenClawModelsJson = vi.fn().mockResolvedValue(undefined);
+const ensurePiAuthJsonFromAuthProfiles = vi
+  .fn()
+  .mockResolvedValue({ wrote: false, authPath: "/tmp/openclaw-agent/auth.json" });
 const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
@@ -21,7 +26,7 @@ const modelRegistryState = {
   getAllError: undefined as unknown,
   getAvailableError: undefined as unknown,
 };
-let previousExitCode: number | undefined;
+let previousExitCode: typeof process.exitCode;
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/openclaw.json",
@@ -31,6 +36,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson,
+}));
+
+vi.mock("../agents/pi-auth-json.js", () => ({
+  ensurePiAuthJsonFromAuthProfiles,
 }));
 
 vi.mock("../agents/agent-paths.js", () => ({
@@ -91,6 +100,7 @@ function makeRuntime() {
   return {
     log: vi.fn(),
     error: vi.fn(),
+    exit: vi.fn(),
   };
 }
 
@@ -100,6 +110,7 @@ beforeEach(() => {
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   listProfilesForProvider.mockReturnValue([]);
+  ensurePiAuthJsonFromAuthProfiles.mockClear();
 });
 
 afterEach(() => {
@@ -203,11 +214,8 @@ describe("models list/status", () => {
   }
 
   async function expectZaiProviderFilter(provider: string) {
-    setDefaultModel("z.ai/glm-4.7");
+    setDefaultZaiRegistry();
     const runtime = makeRuntime();
-    const models = [ZAI_MODEL, OPENAI_MODEL];
-    modelRegistryState.models = models;
-    modelRegistryState.available = models;
 
     await modelsListCommand({ all: true, provider, json: true }, runtime);
 
@@ -216,22 +224,77 @@ describe("models list/status", () => {
     expect(payload.models[0]?.key).toBe("zai/glm-4.7");
   }
 
+  function setDefaultZaiRegistry(params: { available?: boolean } = {}) {
+    const available = params.available ?? true;
+    setDefaultModel("z.ai/glm-4.7");
+    modelRegistryState.models = [ZAI_MODEL, OPENAI_MODEL];
+    modelRegistryState.available = available ? [ZAI_MODEL, OPENAI_MODEL] : [];
+  }
+
+  function setupGoogleAntigravityTemplateCase(params: {
+    configuredModelId: string;
+    templateId: string;
+    templateName: string;
+    available?: boolean;
+  }) {
+    configureGoogleAntigravityModel(params.configuredModelId);
+    const template = makeGoogleAntigravityTemplate(params.templateId, params.templateName);
+    modelRegistryState.models = [template];
+    modelRegistryState.available = params.available ? [template] : [];
+    return template;
+  }
+
+  async function runGoogleAntigravityListCase(params: {
+    configuredModelId: string;
+    templateId: string;
+    templateName: string;
+    available?: boolean;
+    withAuthProfile?: boolean;
+  }) {
+    setupGoogleAntigravityTemplateCase(params);
+    if (params.withAuthProfile) {
+      enableGoogleAntigravityAuthProfile();
+    }
+    const runtime = makeRuntime();
+    await modelsListCommand({ json: true }, runtime);
+    return parseJsonLog(runtime);
+  }
+
+  function expectAntigravityModel(
+    payload: Record<string, unknown>,
+    params: { key: string; available: boolean; includesTags?: boolean },
+  ) {
+    const model = (payload.models as Array<Record<string, unknown>>)[0] ?? {};
+    expect(model.key).toBe(params.key);
+    expect(model.missing).toBe(false);
+    expect(model.available).toBe(params.available);
+    if (params.includesTags) {
+      expect(model.tags).toContain("default");
+      expect(model.tags).toContain("configured");
+    }
+  }
+
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
+    ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
+  });
+
+  it("models list syncs auth-profiles into auth.json before availability checks", async () => {
+    setDefaultZaiRegistry();
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, json: true }, runtime);
+
+    expect(ensurePiAuthJsonFromAuthProfiles).toHaveBeenCalledWith("/tmp/openclaw-agent");
   });
 
   it("models list outputs canonical zai key for configured z.ai model", async () => {
-    loadConfig.mockReturnValue({
-      agents: { defaults: { model: "z.ai/glm-4.7" } },
-    });
+    setDefaultZaiRegistry();
     const runtime = makeRuntime();
 
-    modelRegistryState.models = [ZAI_MODEL];
-    modelRegistryState.available = [ZAI_MODEL];
     await modelsListCommand({ json: true }, runtime);
 
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    const payload = parseJsonLog(runtime);
     expect(payload.models[0]?.key).toBe("zai/glm-4.7");
   });
 
@@ -249,122 +312,96 @@ describe("models list/status", () => {
     expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
   });
 
-  it("models list provider filter normalizes z.ai alias", async () => {
-    await expectZaiProviderFilter("z.ai");
-  });
-
-  it("models list provider filter normalizes Z.AI alias casing", async () => {
-    await expectZaiProviderFilter("Z.AI");
-  });
-
-  it("models list provider filter normalizes z-ai alias", async () => {
-    await expectZaiProviderFilter("z-ai");
-  });
+  it.each(["z.ai", "Z.AI", "z-ai"] as const)(
+    "models list provider filter normalizes %s alias",
+    async (provider) => {
+      await expectZaiProviderFilter(provider);
+    },
+  );
 
   it("models list marks auth as unavailable when ZAI key is missing", async () => {
-    loadConfig.mockReturnValue({
-      agents: { defaults: { model: "z.ai/glm-4.7" } },
-    });
+    setDefaultZaiRegistry({ available: false });
     const runtime = makeRuntime();
 
-    modelRegistryState.models = [ZAI_MODEL];
-    modelRegistryState.available = [];
     await modelsListCommand({ all: true, json: true }, runtime);
 
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    const payload = parseJsonLog(runtime);
     expect(payload.models[0]?.available).toBe(false);
   });
 
-  it("models list resolves antigravity opus 4.6 thinking from 4.5 template", async () => {
-    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
-    const runtime = makeRuntime();
+  it.each([
+    {
+      name: "thinking",
+      configuredModelId: "claude-opus-4-6-thinking",
+      templateId: "claude-opus-4-5-thinking",
+      templateName: "Claude Opus 4.5 Thinking",
+      expectedKey: "google-antigravity/claude-opus-4-6-thinking",
+    },
+    {
+      name: "non-thinking",
+      configuredModelId: "claude-opus-4-6",
+      templateId: "claude-opus-4-5",
+      templateName: "Claude Opus 4.5",
+      expectedKey: "google-antigravity/claude-opus-4-6",
+    },
+  ] as const)(
+    "models list resolves antigravity opus 4.6 $name from 4.5 template",
+    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
+      const payload = await runGoogleAntigravityListCase({
+        configuredModelId,
+        templateId,
+        templateName,
+      });
+      expectAntigravityModel(payload, {
+        key: expectedKey,
+        available: false,
+        includesTags: true,
+      });
+    },
+  );
 
-    modelRegistryState.models = [
-      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
-    ];
-    modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.tags).toContain("default");
-    expect(payload.models[0]?.tags).toContain("configured");
-  });
-
-  it("models list resolves antigravity opus 4.6 (non-thinking) from 4.5 template", async () => {
-    configureGoogleAntigravityModel("claude-opus-4-6");
-    const runtime = makeRuntime();
-
-    modelRegistryState.models = [
-      makeGoogleAntigravityTemplate("claude-opus-4-5", "Claude Opus 4.5"),
-    ];
-    modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.tags).toContain("default");
-    expect(payload.models[0]?.tags).toContain("configured");
-  });
-
-  it("models list marks synthesized antigravity opus 4.6 thinking as available when template is available", async () => {
-    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
-    const runtime = makeRuntime();
-
-    const template = makeGoogleAntigravityTemplate(
-      "claude-opus-4-5-thinking",
-      "Claude Opus 4.5 Thinking",
-    );
-    modelRegistryState.models = [template];
-    modelRegistryState.available = [template];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(true);
-  });
-
-  it("models list marks synthesized antigravity opus 4.6 (non-thinking) as available when template is available", async () => {
-    configureGoogleAntigravityModel("claude-opus-4-6");
-    const runtime = makeRuntime();
-
-    const template = makeGoogleAntigravityTemplate("claude-opus-4-5", "Claude Opus 4.5");
-    modelRegistryState.models = [template];
-    modelRegistryState.available = [template];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(true);
-  });
+  it.each([
+    {
+      name: "thinking",
+      configuredModelId: "claude-opus-4-6-thinking",
+      templateId: "claude-opus-4-5-thinking",
+      templateName: "Claude Opus 4.5 Thinking",
+      expectedKey: "google-antigravity/claude-opus-4-6-thinking",
+    },
+    {
+      name: "non-thinking",
+      configuredModelId: "claude-opus-4-6",
+      templateId: "claude-opus-4-5",
+      templateName: "Claude Opus 4.5",
+      expectedKey: "google-antigravity/claude-opus-4-6",
+    },
+  ] as const)(
+    "models list marks synthesized antigravity opus 4.6 $name as available when template is available",
+    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
+      const payload = await runGoogleAntigravityListCase({
+        configuredModelId,
+        templateId,
+        templateName,
+        available: true,
+      });
+      expectAntigravityModel(payload, {
+        key: expectedKey,
+        available: true,
+      });
+    },
+  );
 
   it("models list prefers registry availability over provider auth heuristics", async () => {
-    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
-    enableGoogleAntigravityAuthProfile();
-    const runtime = makeRuntime();
-
-    const template = makeGoogleAntigravityTemplate(
-      "claude-opus-4-5-thinking",
-      "Claude Opus 4.5 Thinking",
-    );
-    modelRegistryState.models = [template];
-    modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(false);
+    const payload = await runGoogleAntigravityListCase({
+      configuredModelId: "claude-opus-4-6-thinking",
+      templateId: "claude-opus-4-5-thinking",
+      templateName: "Claude Opus 4.5 Thinking",
+      withAuthProfile: true,
+    });
+    expectAntigravityModel(payload, {
+      key: "google-antigravity/claude-opus-4-6-thinking",
+      available: false,
+    });
     listProfilesForProvider.mockReturnValue([]);
   });
 
@@ -443,26 +480,15 @@ describe("models list/status", () => {
       makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
     ];
 
-    const { loadModelRegistry } = await import("./models/list.registry.js");
     await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
-    const { toModelRow } = await import("./models/list.registry.js");
-
     const row = toModelRow({
-      model: {
-        provider: "google-antigravity",
-        id: "claude-opus-4-6-thinking",
-        name: "Claude Opus 4.6 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
+      model: makeGoogleAntigravityTemplate(
+        "claude-opus-4-6-thinking",
+        "Claude Opus 4.6 Thinking",
+      ) as never,
       key: "google-antigravity/claude-opus-4-6-thinking",
       tags: [],
       availableKeys: undefined,

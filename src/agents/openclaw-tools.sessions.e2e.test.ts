@@ -30,17 +30,15 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { sleep } from "../utils.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
-  const start = Date.now();
-  while (getCount() < count) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`timed out waiting for ${count} calls`);
-    }
-    await sleep(0);
-  }
+  await vi.waitFor(
+    () => {
+      expect(getCount()).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: timeoutMs, interval: 5 },
+  );
 };
 
 describe("sessions tools", () => {
@@ -81,6 +79,8 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
+    expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
+    expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
     expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
@@ -140,7 +140,11 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call1", { messageLimit: 1 });
     const details = result.details as {
-      sessions?: Array<Record<string, unknown>>;
+      sessions?: Array<{
+        key?: string;
+        channel?: string;
+        messages?: Array<{ role?: string }>;
+      }>;
     };
     expect(details.sessions).toHaveLength(3);
     const main = details.sessions?.find((s) => s.key === "main");
@@ -178,7 +182,7 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: unknown[] };
+    const details = result.details as { messages?: Array<{ role?: string }> };
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.role).toBe("assistant");
 
@@ -653,8 +657,12 @@ describe("sessions tools", () => {
       status: "ok",
       reply: "initial",
     });
-    await sleep(0);
-    await sleep(0);
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(4);
@@ -764,6 +772,8 @@ describe("sessions tools", () => {
       .spyOn(sessionsModule, "loadSessionStore")
       .mockImplementation(() => ({
         "agent:main:subagent:usage-active": {
+          sessionId: "session-usage-active",
+          updatedAt: now,
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
           inputTokens: 12,

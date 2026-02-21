@@ -1,16 +1,17 @@
+import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import path from "node:path";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
-import type { ProcessSession } from "./bash-process-registry.js";
-import type { ExecToolDetails } from "./bash-tools.exec.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { ProcessSession } from "./bash-process-registry.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
 import { logWarn } from "../logger.js";
+import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   addSession,
@@ -28,28 +29,6 @@ import {
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
-// Security: Blocklist of environment variables that could alter execution flow
-// or inject code when running on non-sandboxed hosts (Gateway/Node).
-const DANGEROUS_HOST_ENV_VARS = new Set([
-  "LD_PRELOAD",
-  "LD_LIBRARY_PATH",
-  "LD_AUDIT",
-  "DYLD_INSERT_LIBRARIES",
-  "DYLD_LIBRARY_PATH",
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "PYTHONPATH",
-  "PYTHONHOME",
-  "RUBYLIB",
-  "PERL5LIB",
-  "BASH_ENV",
-  "ENV",
-  "GCONV_PATH",
-  "IFS",
-  "SSLKEYLOGFILE",
-]);
-const DANGEROUS_HOST_ENV_PREFIXES = ["DYLD_", "LD_"];
-
 // Centralized sanitization helper.
 // Throws an error if dangerous variables or PATH modifications are detected on the host.
 export function validateHostEnv(env: Record<string, string>): void {
@@ -57,12 +36,7 @@ export function validateHostEnv(env: Record<string, string>): void {
     const upperKey = key.toUpperCase();
 
     // 1. Block known dangerous variables (Fail Closed)
-    if (DANGEROUS_HOST_ENV_PREFIXES.some((prefix) => upperKey.startsWith(prefix))) {
-      throw new Error(
-        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
-      );
-    }
-    if (DANGEROUS_HOST_ENV_VARS.has(upperKey)) {
+    if (isDangerousHostEnvVarName(upperKey)) {
       throw new Error(
         `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
       );
@@ -507,8 +481,9 @@ export async function runExecProcess(opts: {
     .wait()
     .then((exit): ExecProcessOutcome => {
       const durationMs = Date.now() - startedAt;
-      const status: "completed" | "failed" =
-        exit.exitCode === 0 && exit.reason === "exit" ? "completed" : "failed";
+      const isNormalExit = exit.reason === "exit";
+      const status: "completed" | "failed" = isNormalExit ? "completed" : "failed";
+
       markExited(session, exit.exitCode, exit.exitSignal, status);
       maybeNotifyOnExit(session, status);
       if (!session.child && session.stdin) {
@@ -516,12 +491,14 @@ export async function runExecProcess(opts: {
       }
       const aggregated = session.aggregated.trim();
       if (status === "completed") {
+        const exitCode = exit.exitCode ?? 0;
+        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
         return {
           status: "completed",
-          exitCode: exit.exitCode ?? 0,
+          exitCode,
           exitSignal: exit.exitSignal,
           durationMs,
-          aggregated,
+          aggregated: aggregated + exitMsg,
           timedOut: false,
         };
       }
@@ -532,9 +509,7 @@ export async function runExecProcess(opts: {
             ? "Command timed out waiting for output"
             : exit.exitSignal != null
               ? `Command aborted by signal ${exit.exitSignal}`
-              : exit.exitCode == null
-                ? "Command aborted before exit code was captured"
-                : `Command exited with code ${exit.exitCode}`;
+              : "Command aborted before exit code was captured";
       return {
         status: "failed",
         exitCode: exit.exitCode,

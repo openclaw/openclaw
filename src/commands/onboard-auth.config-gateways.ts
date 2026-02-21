@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,

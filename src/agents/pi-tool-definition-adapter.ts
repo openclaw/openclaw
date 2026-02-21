@@ -4,11 +4,11 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import type { TSchema } from "@sinclair/typebox";
-import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import { logDebug, logError } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
+import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
   consumeAdjustedParamsForToolCall,
   isToolWrappedWithBeforeToolCallHook,
@@ -17,21 +17,21 @@ import {
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
-type AnyAgentTool = AgentTool<TSchema, unknown>;
+type AnyAgentTool = AgentTool;
 
 type ToolExecuteArgsCurrent = [
   string,
   unknown,
+  AbortSignal | undefined,
   AgentToolUpdateCallback<unknown> | undefined,
   unknown,
-  AbortSignal | undefined,
 ];
 type ToolExecuteArgsLegacy = [
   string,
   unknown,
-  AbortSignal | undefined,
   AgentToolUpdateCallback<unknown> | undefined,
   unknown,
+  AbortSignal | undefined,
 ];
 type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
   ? P
@@ -44,8 +44,11 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 
 function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
   const third = args[2];
-  const fourth = args[3];
-  return isAbortSignal(third) || typeof fourth === "function";
+  const fifth = args[4];
+  if (typeof third === "function") {
+    return true;
+  }
+  return isAbortSignal(fifth);
 }
 
 function describeToolExecutionError(err: unknown): {
@@ -66,7 +69,7 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   signal: AbortSignal | undefined;
 } {
   if (isLegacyToolExecuteArgs(args)) {
-    const [toolCallId, params, signal, onUpdate] = args;
+    const [toolCallId, params, onUpdate, _ctx, signal] = args;
     return {
       toolCallId,
       params,
@@ -74,7 +77,7 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
       signal,
     };
   }
-  const [toolCallId, params, onUpdate, _ctx, signal] = args;
+  const [toolCallId, params, signal, onUpdate] = args;
   return {
     toolCallId,
     params,
@@ -249,7 +252,7 @@ export function toToolDefinitions(
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
-  hookContext?: { agentId?: string; sessionKey?: string },
+  hookContext?: HookContext,
   opts?: { recordDurationMetadata?: boolean },
 ): ToolDefinition[] {
   const recordDurationMetadata = opts?.recordDurationMetadata !== false;

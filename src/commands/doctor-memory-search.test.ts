@@ -7,6 +7,7 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
+const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -25,11 +26,28 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider,
 }));
 
+vi.mock("../memory/backend-config.js", () => ({
+  resolveMemoryBackendConfig,
+}));
+
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
+
+  async function expectNoWarningWithConfiguredRemoteApiKey(provider: string) {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider,
+      local: {},
+      remote: { apiKey: "from-config" },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  }
 
   beforeEach(() => {
     note.mockReset();
@@ -37,32 +55,32 @@ describe("noteMemorySearchHealth", () => {
     resolveAgentDir.mockClear();
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
+    resolveMemoryBackendConfig.mockReset();
+    resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
 
-  it("does not warn when remote apiKey is configured for explicit provider", async () => {
-    resolveMemorySearchConfig.mockReturnValue({
-      provider: "openai",
-      local: {},
-      remote: { apiKey: "from-config" },
+  it("does not warn when QMD backend is active", async () => {
+    resolveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
     });
-
-    await noteMemorySearchHealth(cfg);
-
-    expect(note).not.toHaveBeenCalled();
-    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
-  });
-
-  it("does not warn in auto mode when remote apiKey is configured", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
-      remote: { apiKey: "from-config" },
+      remote: {},
     });
 
     await noteMemorySearchHealth(cfg);
 
     expect(note).not.toHaveBeenCalled();
-    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when remote apiKey is configured for explicit provider", async () => {
+    await expectNoWarningWithConfiguredRemoteApiKey("openai");
+  });
+
+  it("does not warn in auto mode when remote apiKey is configured", async () => {
+    await expectNoWarningWithConfiguredRemoteApiKey("auto");
   });
 
   it("resolves provider auth from the default agent directory", async () => {

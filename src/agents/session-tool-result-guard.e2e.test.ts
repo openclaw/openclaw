@@ -40,6 +40,12 @@ function getPersistedMessages(sm: SessionManager): AgentMessage[] {
     .map((e) => (e as { message: AgentMessage }).message);
 }
 
+function expectPersistedRoles(sm: SessionManager, expectedRoles: AgentMessage["role"][]) {
+  const messages = getPersistedMessages(sm);
+  expect(messages.map((message) => message.role)).toEqual(expectedRoles);
+  return messages;
+}
+
 function getToolResultText(messages: AgentMessage[]): string {
   const toolResult = messages.find((m) => m.role === "toolResult") as {
     content: Array<{ type: string; text: string }>;
@@ -80,13 +86,8 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const entries = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(entries.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
-    const synthetic = entries[1] as {
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "assistant"]);
+    const synthetic = messages[1] as {
       toolCallId?: string;
       isError?: boolean;
       content?: Array<{ type?: string; text?: string }>;
@@ -103,12 +104,7 @@ describe("installSessionToolResultGuard", () => {
     sm.appendMessage(toolCallMessage);
     guard.flushPendingToolResults();
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("does not add synthetic toolResult when a matching one exists", () => {
@@ -125,12 +121,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {
@@ -161,12 +152,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual([
+    const messages = expectPersistedRoles(sm, [
       "assistant", // tool calls
       "toolResult", // call_a real
       "toolResult", // synthetic for call_b
@@ -209,11 +195,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("drops malformed tool calls missing input before persistence", () => {
@@ -227,11 +209,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
+    const messages = getPersistedMessages(sm);
     expect(messages).toHaveLength(0);
   });
 
@@ -253,12 +231,7 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("caps oversized tool result text during persistence", () => {
@@ -411,6 +384,63 @@ describe("installSessionToolResultGuard", () => {
     expect(persisted.details?.metadata?.durationMs).toBe(42);
   });
 
+  it("blocks persistence when before_message_write returns block=true", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: () => ({ block: true }),
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "hidden",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(getPersistedMessages(sm)).toHaveLength(0);
+  });
+
+  it("applies before_message_write message mutations before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: string }).role !== "toolResult") {
+          return undefined;
+        }
+        return {
+          message: {
+            ...(message as unknown as Record<string, unknown>),
+            content: [{ type: "text", text: "rewritten by hook" }],
+          } as unknown as AgentMessage,
+        };
+      },
+    });
+
+    appendToolResultText(sm, "original");
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text).toBe("rewritten by hook");
+  });
+
+  it("applies before_message_write to synthetic tool-result flushes", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: string }).role !== "toolResult") {
+          return undefined;
+        }
+        return { block: true };
+      },
+    });
+
+    sm.appendMessage(toolCallMessage);
+    guard.flushPendingToolResults();
+
+    const messages = getPersistedMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
   it("applies message persistence transform to user messages", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
@@ -419,7 +449,7 @@ describe("installSessionToolResultGuard", () => {
           ? ({
               ...(message as unknown as Record<string, unknown>),
               provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            } as AgentMessage)
+            } as unknown as AgentMessage)
           : message,
     });
 

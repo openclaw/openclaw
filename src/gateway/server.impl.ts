@@ -1,17 +1,14 @@
 import path from "node:path";
-import type { CanvasHostServer } from "../canvas-host/server.js";
-import type { PluginServicesHandle } from "../plugins/services.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { ControlUiRootState } from "./control-ui.js";
-import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
   isNixMode,
@@ -45,12 +42,21 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
+import type { ControlUiRootState } from "./control-ui.js";
+import {
+  GATEWAY_EVENT_UPDATE_AVAILABLE,
+  type GatewayUpdateAvailableEventPayload,
+} from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
+import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
@@ -83,6 +89,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { ensureGatewayStartupAuth } from "./startup-auth.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -226,12 +233,31 @@ export async function startGatewayServer(
     }
   }
 
-  const cfgAtStart = loadConfig();
+  let cfgAtStart = loadConfig();
+  const authBootstrap = await ensureGatewayStartupAuth({
+    cfg: cfgAtStart,
+    env: process.env,
+    authOverride: opts.auth,
+    tailscaleOverride: opts.tailscale,
+    persist: true,
+  });
+  cfgAtStart = authBootstrap.cfg;
+  if (authBootstrap.generatedToken) {
+    if (authBootstrap.persistedGeneratedToken) {
+      log.info(
+        "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
+      );
+    } else {
+      log.warn(
+        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+      );
+    }
+  }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
   }
-  setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
+  setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   setPreRestartDeferralCheck(
     () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
   );
@@ -502,6 +528,15 @@ export async function startGatewayServer(
       }
     : startHeartbeatRunner({ cfg: cfgAtStart });
 
+  const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
+  const healthCheckDisabled = healthCheckMinutes === 0;
+  const channelHealthMonitor = healthCheckDisabled
+    ? null
+    : startChannelHealthMonitor({
+        channelManager,
+        checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+      });
+
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
@@ -598,7 +633,15 @@ export async function startGatewayServer(
     isNixMode,
   });
   if (!minimalTestGateway) {
-    scheduleGatewayUpdateCheck({ cfg: cfgAtStart, log, isNixMode });
+    scheduleGatewayUpdateCheck({
+      cfg: cfgAtStart,
+      log,
+      isNixMode,
+      onUpdateAvailableChange: (updateAvailable) => {
+        const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+        broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+      },
+    });
   }
   const tailscaleCleanup = minimalTestGateway
     ? null
@@ -720,6 +763,7 @@ export async function startGatewayServer(
       }
       skillsChangeUnsub();
       authRateLimiter?.dispose();
+      channelHealthMonitor?.stop();
       await close(opts);
     },
   };

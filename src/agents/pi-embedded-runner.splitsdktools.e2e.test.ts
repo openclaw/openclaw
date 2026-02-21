@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { splitSdkTools } from "./pi-embedded-runner.js";
 
@@ -7,12 +8,12 @@ type DurationProbeResult = AgentToolResult<unknown> & {
   metadata?: { durationMs?: number };
 };
 
-function createStubTool(name: string): AgentTool<unknown, unknown> {
+function createStubTool(name: string): AgentTool {
   return {
     name,
     label: name,
     description: "",
-    parameters: {},
+    parameters: Type.Object({}),
     execute: async () => ({}) as AgentToolResult<unknown>,
   };
 }
@@ -57,7 +58,7 @@ describe("splitSdkTools", () => {
   });
 
   it("disables tool result duration injection when configured off", async () => {
-    const probeTool: AgentTool<unknown, unknown> = {
+    const probeTool: AgentTool = {
       name: "probe",
       label: "probe",
       description: "",
@@ -85,7 +86,7 @@ describe("splitSdkTools", () => {
   });
 
   it("keeps tool result duration injection enabled by default", async () => {
-    const probeTool: AgentTool<unknown, unknown> = {
+    const probeTool: AgentTool = {
       name: "probeOn",
       label: "probeOn",
       description: "",

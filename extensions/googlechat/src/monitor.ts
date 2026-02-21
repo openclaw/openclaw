@@ -5,19 +5,12 @@ import {
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk";
-import type {
-  GoogleChatAnnotation,
-  GoogleChatAttachment,
-  GoogleChatEvent,
-  GoogleChatSpace,
-  GoogleChatMessage,
-  GoogleChatUser,
-} from "./types.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -27,6 +20,14 @@ import {
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import type {
+  GoogleChatAnnotation,
+  GoogleChatAttachment,
+  GoogleChatEvent,
+  GoogleChatSpace,
+  GoogleChatMessage,
+  GoogleChatUser,
+} from "./types.js";
 
 export type GoogleChatRuntimeEnv = {
   log?: (message: string) => void;
@@ -208,8 +209,7 @@ export async function handleGoogleChatWebhookRequest(
     ? authHeaderNow.slice("bearer ".length)
     : bearer;
 
-  const matchedTargets: WebhookTarget[] = [];
-  for (const target of targets) {
+  const matchedTarget = await resolveSingleWebhookTargetAsync(targets, async (target) => {
     const audienceType = target.audienceType;
     const audience = target.audience;
     const verification = await verifyGoogleChatRequest({
@@ -217,27 +217,22 @@ export async function handleGoogleChatWebhookRequest(
       audienceType,
       audience,
     });
-    if (verification.ok) {
-      matchedTargets.push(target);
-      if (matchedTargets.length > 1) {
-        break;
-      }
-    }
-  }
+    return verification.ok;
+  });
 
-  if (matchedTargets.length === 0) {
+  if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
 
-  if (matchedTargets.length > 1) {
+  if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
     return true;
   }
 
-  const selected = matchedTargets[0];
+  const selected = matchedTarget.target;
   selected.statusSink?.({ lastInboundAt: Date.now() });
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(

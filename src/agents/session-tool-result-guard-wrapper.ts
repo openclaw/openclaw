@@ -30,6 +30,15 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
+  const beforeMessageWrite = hookRunner?.hasHooks("before_message_write")
+    ? (event: { message: import("@mariozechner/pi-agent-core").AgentMessage }) => {
+        return hookRunner.runBeforeMessageWrite(event, {
+          agentId: opts?.agentId,
+          sessionKey: opts?.sessionKey,
+        });
+      }
+    : undefined;
+
   const transform = hookRunner?.hasHooks("tool_result_persist")
     ? // oxlint-disable-next-line typescript/no-explicit-any
       (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
@@ -57,6 +66,7 @@ export function guardSessionManager(
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     normalizeToolResultDurationsForTranscript: opts?.normalizeToolResultDurationsForTranscript,
+    beforeMessageWriteHook: beforeMessageWrite,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   return sessionManager as GuardedSessionManager;

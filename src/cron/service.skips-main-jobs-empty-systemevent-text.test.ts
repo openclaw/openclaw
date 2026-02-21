@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
+import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -39,7 +39,7 @@ async function withCronService(
     log: noopLogger,
     enqueueSystemEvent,
     requestHeartbeatNow,
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 
   await cron.start();

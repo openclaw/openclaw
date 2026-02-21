@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { CronService } from "./service.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import { CronService, type CronServiceDeps } from "./service.js";
 
 const noopLogger = {
   debug: vi.fn(),
@@ -25,13 +26,13 @@ type DeliveryMode = "none" | "announce";
 
 type DeliveryOverride = {
   mode: DeliveryMode;
-  channel?: string;
+  channel?: ChannelId | "last";
   to?: string;
 };
 
 async function withCronService(
   params: {
-    runIsolatedAgentJob?: () => Promise<{ status: "ok"; summary: string; delivered?: boolean }>;
+    runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
   },
   run: (context: {
     cron: CronService;
@@ -50,7 +51,7 @@ async function withCronService(
     requestHeartbeatNow,
     runIsolatedAgentJob:
       params.runIsolatedAgentJob ??
-      (vi.fn(async () => ({ status: "ok", summary: "done" })) as never),
+      (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
   });
 
   await cron.start();
@@ -73,6 +74,7 @@ async function addIsolatedAgentTurnJob(
 ) {
   return cron.add({
     name: params.name,
+    enabled: true,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
     sessionTarget: "isolated",
     wakeMode: params.wakeMode,
@@ -80,7 +82,7 @@ async function addIsolatedAgentTurnJob(
       kind: "agentTurn",
       message: "hello",
       ...params.payload,
-    },
+    } as unknown as { kind: "agentTurn"; message: string },
     ...(params.delivery
       ? {
           delivery: params.delivery as unknown as {
@@ -129,7 +131,7 @@ describe("CronService delivery plan consistency", () => {
     await withCronService(
       {
         runIsolatedAgentJob: vi.fn(async () => ({
-          status: "ok",
+          status: "ok" as const,
           summary: "done",
           delivered: true,
         })),

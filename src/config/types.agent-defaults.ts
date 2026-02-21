@@ -136,7 +136,7 @@ export type AgentDefaultsConfig = {
   skipBootstrap?: boolean;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
-  /** Max total chars across all injected bootstrap files (default: 24000). */
+  /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
@@ -195,6 +195,11 @@ export type AgentDefaultsConfig = {
   timeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
+  /**
+   * Max image side length (pixels) when sanitizing base64 image payloads in transcripts/tool results.
+   * Default: 1200.
+   */
+  imageMaxDimensionPx?: number;
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
@@ -217,7 +222,7 @@ export type AgentDefaultsConfig = {
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */
     target?: "last" | "none" | ChannelId;
-    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
+    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
@@ -225,6 +230,8 @@ export type AgentDefaultsConfig = {
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
+    /** Suppress tool error warning payloads during heartbeat runs. */
+    suppressToolErrorWarnings?: boolean;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
@@ -287,6 +294,10 @@ export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /** Pi reserve tokens target before floor enforcement. */
+  reserveTokens?: number;
+  /** Pi keepRecentTokens budget used for cut-point selection. */
+  keepRecentTokens?: number;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
