@@ -3,6 +3,7 @@ import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 import {
   GroupChatSchema,
   InboundDebounceSchema,
@@ -161,6 +162,8 @@ export const CommandsSchema = z
     restart: z.boolean().optional().default(true),
     useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),
+    ownerDisplaySecret: z.string().optional().register(sensitive),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()
