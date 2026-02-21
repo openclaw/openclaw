@@ -360,7 +360,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "dangerous-env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["BASH_ENV"]}}}',
+      metadata: '{"openclaw":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
@@ -368,7 +368,9 @@ describe("applySkillEnvOverrides", () => {
     });
 
     const originalBashEnv = process.env.BASH_ENV;
+    const originalShell = process.env.SHELL;
     delete process.env.BASH_ENV;
+    delete process.env.SHELL;
 
     const restore = applySkillEnvOverrides({
       skills: entries,
@@ -378,6 +380,7 @@ describe("applySkillEnvOverrides", () => {
             "dangerous-env-skill": {
               env: {
                 BASH_ENV: "/tmp/pwn.sh",
+                SHELL: "/tmp/evil-shell",
               },
             },
           },
@@ -387,12 +390,18 @@ describe("applySkillEnvOverrides", () => {
 
     try {
       expect(process.env.BASH_ENV).toBeUndefined();
+      expect(process.env.SHELL).toBeUndefined();
     } finally {
       restore();
       if (originalBashEnv === undefined) {
         expect(process.env.BASH_ENV).toBeUndefined();
       } else {
         expect(process.env.BASH_ENV).toBe(originalBashEnv);
+      }
+      if (originalShell === undefined) {
+        expect(process.env.SHELL).toBeUndefined();
+      } else {
+        expect(process.env.SHELL).toBe(originalShell);
       }
     }
   });
