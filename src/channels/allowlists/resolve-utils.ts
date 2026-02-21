@@ -108,17 +108,19 @@ export function patchAllowlistUsersInConfigEntries<
     if (!Array.isArray(users) || users.length === 0) {
       continue;
     }
-    const additions = resolveAllowlistIdAdditions({
-      existing: users,
-      resolvedMap: params.resolvedMap,
-    });
     const resolvedUsers =
       params.strategy === "canonicalize"
         ? canonicalizeAllowlistWithResolvedIds({
             existing: users,
             resolvedMap: params.resolvedMap,
           })
-        : mergeAllowlist({ existing: users, additions });
+        : mergeAllowlist({
+            existing: users,
+            additions: resolveAllowlistIdAdditions({
+              existing: users,
+              resolvedMap: params.resolvedMap,
+            }),
+          });
     nextEntries[entryKey] = {
       ...entryConfig,
       users: resolvedUsers,
