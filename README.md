@@ -47,9 +47,10 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 Runtime: **Node ≥22**.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+npm install -g openclaw@latest # or: pnpm add -g openclaw@latest
+```
 
+```bash
 openclaw onboard --install-daemon
 ```
 
