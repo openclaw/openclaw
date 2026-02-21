@@ -142,7 +142,12 @@ describe("nodes camera helpers", () => {
   });
 
   it("rejects invalid url payload responses", async () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      url: string;
+      response?: Response;
+      expectedMessage: RegExp;
+    }> = [
       {
         name: "non-https url",
         url: "http://example.com/x.bin",
@@ -169,7 +174,7 @@ describe("nodes camera helpers", () => {
         response: new Response(null, { status: 200 }),
         expectedMessage: /empty response body/i,
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       if (testCase.response) {
