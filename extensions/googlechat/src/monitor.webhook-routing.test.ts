@@ -53,13 +53,14 @@ const baseAccount = (accountId: string) =>
 function registerTwoTargets() {
   const sinkA = vi.fn();
   const sinkB = vi.fn();
+  const runtimeError = vi.fn();
   const core = {} as PluginRuntime;
   const config = {} as OpenClawConfig;
 
   const unregisterA = registerGoogleChatWebhookTarget({
     account: baseAccount("A"),
     config,
-    runtime: {},
+    runtime: { error: runtimeError },
     core,
     path: "/googlechat",
     statusSink: sinkA,
@@ -68,7 +69,7 @@ function registerTwoTargets() {
   const unregisterB = registerGoogleChatWebhookTarget({
     account: baseAccount("B"),
     config,
-    runtime: {},
+    runtime: { error: runtimeError },
     core,
     path: "/googlechat",
     statusSink: sinkB,
@@ -78,6 +79,7 @@ function registerTwoTargets() {
   return {
     sinkA,
     sinkB,
+    runtimeError,
     unregister: () => {
       unregisterA();
       unregisterB();
@@ -89,7 +91,7 @@ describe("Google Chat webhook routing", () => {
   it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
 
-    const { sinkA, sinkB, unregister } = registerTwoTargets();
+    const { sinkA, sinkB, runtimeError, unregister } = registerTwoTargets();
 
     try {
       const res = createMockServerResponse();
@@ -105,6 +107,7 @@ describe("Google Chat webhook routing", () => {
       expect(res.statusCode).toBe(401);
       expect(sinkA).not.toHaveBeenCalled();
       expect(sinkB).not.toHaveBeenCalled();
+      expect(runtimeError).toHaveBeenCalledTimes(1);
     } finally {
       unregister();
     }
@@ -115,7 +118,7 @@ describe("Google Chat webhook routing", () => {
       .mockResolvedValueOnce({ ok: false, reason: "invalid" })
       .mockResolvedValueOnce({ ok: true });
 
-    const { sinkA, sinkB, unregister } = registerTwoTargets();
+    const { sinkA, sinkB, runtimeError, unregister } = registerTwoTargets();
 
     try {
       const res = createMockServerResponse();
@@ -131,8 +134,48 @@ describe("Google Chat webhook routing", () => {
       expect(res.statusCode).toBe(200);
       expect(sinkA).not.toHaveBeenCalled();
       expect(sinkB).toHaveBeenCalledTimes(1);
+      expect(runtimeError).not.toHaveBeenCalled();
     } finally {
       unregister();
+    }
+  });
+
+  it("logs and returns unauthorized when no target verifies", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: false, reason: "invalid token" });
+
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const runtimeError = vi.fn();
+    const core = {} as PluginRuntime;
+    const config = {} as OpenClawConfig;
+
+    const unregisterA = registerGoogleChatWebhookTarget({
+      account: baseAccount("A"),
+      config,
+      runtime: { error: runtimeError },
+      core,
+      path: "/googlechat",
+      statusSink: sinkA,
+      mediaMaxMb: 5,
+    });
+
+    try {
+      const res = createMockServerResponse();
+      const handled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          payload: { type: "ADDED_TO_SPACE", space: { name: "spaces/CCC" } },
+        }),
+        res,
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+      expect(sinkA).not.toHaveBeenCalled();
+      expect(sinkB).not.toHaveBeenCalled();
+      expect(runtimeError).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
     }
   });
 });

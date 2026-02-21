@@ -209,6 +209,7 @@ export async function handleGoogleChatWebhookRequest(
     : bearer;
 
   const matchedTargets: WebhookTarget[] = [];
+  const failures: Array<{ target: WebhookTarget; reason?: string }> = [];
   for (const target of targets) {
     const audienceType = target.audienceType;
     const audience = target.audience;
@@ -222,17 +223,35 @@ export async function handleGoogleChatWebhookRequest(
       if (matchedTargets.length > 1) {
         break;
       }
+    } else {
+      failures.push({ target, reason: verification.reason });
     }
   }
 
   if (matchedTargets.length === 0) {
     res.statusCode = 401;
+    const reasonSummary = failures.map((entry) => entry.reason ?? "unknown").join(", ");
+    const targetToReport = targets[0];
+    if (targetToReport) {
+      selectedTargetsError(targetToReport.runtime, "no verified webhook target", {
+        path: resolved.path,
+        auth: effectiveBearer ? "present" : "missing",
+        failureReasons: reasonSummary,
+      });
+    }
     res.end("unauthorized");
     return true;
   }
 
   if (matchedTargets.length > 1) {
     res.statusCode = 401;
+    const targetToReport = targets[0];
+    if (targetToReport) {
+      selectedTargetsError(targetToReport.runtime, "ambiguous webhook target", {
+        path: resolved.path,
+        accountIds: matchedTargets.map((target) => target.account.accountId).join(","),
+      });
+    }
     res.end("ambiguous webhook target");
     return true;
   }
@@ -249,6 +268,18 @@ export async function handleGoogleChatWebhookRequest(
   res.setHeader("Content-Type", "application/json");
   res.end("{}");
   return true;
+}
+
+function selectedTargetsError(
+  runtime: GoogleChatRuntimeEnv,
+  message: string,
+  meta: { path: string; auth?: string; failureReasons?: string; accountIds?: string },
+) {
+  const details = Object.entries(meta)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+  runtime.error?.(`Google Chat webhook rejected: ${message} (${details})`);
 }
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
