@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayAuthConfig } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { captureEnv } from "../test-utils/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import {
   createThrowingRuntime,
@@ -75,18 +76,7 @@ async function expectGatewayTokenAuth(params: {
 }
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
-  const prev = {
-    home: process.env.HOME,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    skipBrowser: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
-    token: process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: process.env.OPENCLAW_GATEWAY_PASSWORD,
-  };
+  let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string | undefined;
 
   const initStateDir = async (prefix: string) => {
@@ -110,6 +100,18 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     }
   };
   beforeAll(async () => {
+    envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_SKIP_CHANNELS",
+      "OPENCLAW_SKIP_GMAIL_WATCHER",
+      "OPENCLAW_SKIP_CRON",
+      "OPENCLAW_SKIP_CANVAS_HOST",
+      "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+    ]);
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
     process.env.OPENCLAW_SKIP_CRON = "1";
@@ -126,16 +128,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     if (tempHome) {
       await fs.rm(tempHome, { recursive: true, force: true });
     }
-    process.env.HOME = prev.home;
-    process.env.OPENCLAW_STATE_DIR = prev.stateDir;
-    process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
-    process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
-    process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
-    process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
-    process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = prev.password;
+    envSnapshot.restore();
   });
 
   it("writes gateway token auth into config and gateway enforces it", async () => {
