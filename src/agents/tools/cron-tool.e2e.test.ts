@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const callGatewayMock = vi.fn();
+const { callGatewayMock } = vi.hoisted(() => ({
+  callGatewayMock: vi.fn(),
+}));
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
@@ -39,14 +42,9 @@ describe("cron tool", () => {
     callGatewayMock.mockResolvedValue({ ok: true });
   });
 
-  it("rejects non-owner callers explicitly", async () => {
-    const tool = createCronTool({ senderIsOwner: false });
-    await expect(
-      tool.execute("call-owner-check", {
-        action: "status",
-      }),
-    ).rejects.toThrow("Tool restricted to owner senders.");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+  it("marks cron as owner-only", async () => {
+    const tool = createCronTool();
+    expect(tool.ownerOnly).toBe(true);
   });
 
   it.each([

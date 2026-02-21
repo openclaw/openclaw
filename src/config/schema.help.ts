@@ -26,6 +26,13 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
+  "agents.defaults.sandbox.browser.network":
+    "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
+  "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.defaults.sandbox.browser.cdpSourceRange":
+    "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
+  "agents.list[].sandbox.browser.cdpSourceRange":
+    "Per-agent override for CDP source CIDR allowlist.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
@@ -33,7 +40,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowedOrigins":
     "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
   "gateway.controlUi.allowInsecureAuth":
-    "Allow Control UI auth over insecure HTTP (token-only; not recommended).",
+    "Insecure-auth toggle; Control UI still enforces secure context + device identity unless dangerouslyDisableDeviceAuth is enabled.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "DANGEROUS. Disable Control UI device identity checks (token/password only).",
   "gateway.http.endpoints.chatCompletions.enabled":
@@ -215,6 +222,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Weight for BM25 text relevance when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Multiplier for candidate pool size (default: 4).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
+    "Enable MMR re-ranking to reduce near-duplicate memory hits (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
+    "MMR relevance/diversity balance (0 = max diversity, 1 = max relevance, default: 0.7).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
+    "Enable exponential recency decay for hybrid scoring (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
+    "Half-life in days for temporal decay (default: 30).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
@@ -267,8 +282,6 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
-  "plugins.runtime.allowLegacyExec":
-    "Opt-in compatibility switch to re-enable deprecated runtime.system.runCommandWithTimeout for legacy plugins (default: false).",
   "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
@@ -324,6 +337,10 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
+  "commands.ownerDisplay":
+    "Controls how owner IDs are rendered in the system prompt. Allowed values: raw, hash. Default: raw.",
+  "commands.ownerDisplaySecret":
+    "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
@@ -346,6 +363,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow iMessage to write config in response to channel events/commands (default: true).",
   "channels.msteams.configWrites":
     "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
+  "channels.modelByChannel":
+    "Map provider -> channel id -> model override (values are provider/model or aliases).",
   ...IRC_FIELD_HELP,
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
@@ -367,18 +386,28 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
+  "messages.statusReactions":
+    "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
+  "messages.statusReactions.enabled":
+    "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+  "messages.statusReactions.emojis":
+    "Override default status reaction emojis. Keys: thinking, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
+  "messages.statusReactions.timing":
+    "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
-  "channels.telegram.streamMode":
-    "Live stream preview mode for Telegram replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessageText.",
-  "channels.telegram.draftChunk.minChars":
-    'Minimum chars before emitting a Telegram stream preview update when channels.telegram.streamMode="block" (default: 200).',
-  "channels.telegram.draftChunk.maxChars":
-    'Target max size for a Telegram stream preview chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
-  "channels.telegram.draftChunk.breakPreference":
-    "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
+  "channels.telegram.streaming":
+    "Enable Telegram live stream preview via message edits (default: false; legacy streamMode auto-maps here).",
+  "channels.discord.streamMode":
+    "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
+  "channels.discord.draftChunk.minChars":
+    'Minimum chars before emitting a Discord stream preview update when channels.discord.streamMode="block" (default: 200).',
+  "channels.discord.draftChunk.maxChars":
+    'Target max size for a Discord stream preview chunk when channels.discord.streamMode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+  "channels.discord.draftChunk.breakPreference":
+    "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
   "channels.telegram.retry.minDelayMs": "Minimum retry delay in ms for Telegram outbound calls.",
@@ -412,6 +441,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
+  "channels.discord.voice.enabled":
+    "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+  "channels.discord.voice.autoJoin":
+    "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+  "channels.discord.voice.tts":
+    "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   "channels.discord.intents.presence":
     "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
   "channels.discord.intents.guildMembers":

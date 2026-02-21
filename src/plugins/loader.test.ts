@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -489,7 +490,6 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
   });
-
   it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
@@ -517,10 +517,8 @@ describe("loadOpenClawPlugins", () => {
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = makeTempDir();
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    try {
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
       const globalDir = path.join(stateDir, "extensions", "rogue");
       fs.mkdirSync(globalDir, { recursive: true });
       writePlugin({
@@ -553,12 +551,50 @@ describe("loadOpenClawPlugins", () => {
             msg.includes("rogue") && msg.includes("loaded without install/load-path provenance"),
         ),
       ).toBe(true);
-    } finally {
-      if (prevStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
+    });
+  });
+
+  it("rejects plugin entry files that escape plugin root via symlink", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const pluginDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.js");
+    const linkedEntry = path.join(pluginDir, "entry.js");
+    fs.writeFileSync(
+      outsideEntry,
+      'export default { id: "symlinked", register() { throw new Error("should not run"); } };',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "symlinked",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
     }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [linkedEntry] },
+          allow: ["symlinked"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "symlinked");
+    expect(record?.status).not.toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 });

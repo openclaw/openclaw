@@ -8,6 +8,7 @@ import {
   installBrowserControlServerHooks,
   makeResponse,
   getPwMocks,
+  restoreGatewayPortEnv,
   startBrowserControlServerFromConfig,
   stopBrowserControlServer,
 } from "./server.control-server.test-harness.js";
@@ -80,11 +81,7 @@ describe("profile CRUD endpoints", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    if (state.prevGatewayPort === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
-    } else {
-      process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
-    }
+    restoreGatewayPortEnv(state.prevGatewayPort);
     await stopBrowserControlServer();
   });
 

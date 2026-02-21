@@ -21,7 +21,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   </Card>
 </CardGroup>
 
-## Quick setup
+## Onboarding
 
 <Steps>
   <Step title="Create the bot token in BotFather">
@@ -226,21 +226,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Requirement:
 
-    - `channels.telegram.streamMode` is not `"off"` (default: `"partial"`)
-
-    Modes:
-
-    - `off`: no live preview
-    - `partial`: frequent preview updates from partial text
-    - `block`: chunked preview updates using `channels.telegram.draftChunk`
-
-    `draftChunk` defaults for `streamMode: "block"`:
-
-    - `minChars: 200`
-    - `maxChars: 800`
-    - `breakPreference: "paragraph"`
-
-    `maxChars` is clamped by `channels.telegram.textChunkLimit`.
+    - `channels.telegram.streaming` is `true` (default)
+    - legacy `channels.telegram.streamMode` values are auto-mapped to `streaming`
 
     This works in direct chats and groups/topics.
 
@@ -248,7 +235,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
-    `streamMode` is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
+    Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
     Telegram-only reasoning stream:
 
@@ -721,7 +708,7 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streamMode`: `off | partial | block` (live stream preview).
+- `channels.telegram.streaming`: `true | false` (live stream preview; default: true).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
@@ -745,7 +732,7 @@ Telegram-specific high-signal fields:
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`
 - command/menu: `commands.native`, `customCommands`
 - threading/replies: `replyToMode`
-- streaming: `streamMode` (preview), `draftChunk`, `blockStreaming`
+- streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`

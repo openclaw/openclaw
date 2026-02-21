@@ -22,11 +22,13 @@ function createOwnerPolicyTools() {
     },
     {
       name: "cron",
+      ownerOnly: true,
       // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
       name: "gateway",
+      ownerOnly: true,
       // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
@@ -88,6 +90,19 @@ describe("tool-policy", () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
     expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+  });
+
+  it("honors ownerOnly metadata for custom tool names", async () => {
+    const tools = [
+      {
+        name: "custom_admin_tool",
+        ownerOnly: true,
+        // oxlint-disable-next-line typescript/no-explicit-any
+        execute: async () => ({ content: [], details: {} }) as any,
+      },
+    ] as unknown as AnyAgentTool[];
+    expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
+    expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
   });
 });
 

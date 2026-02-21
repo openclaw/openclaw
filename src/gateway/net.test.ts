@@ -5,6 +5,7 @@ import {
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveClientIp,
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
@@ -128,6 +129,77 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.0.0.5", [" ", "\t"])).toBe(false);
       expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(true);
     });
+  });
+});
+
+describe("resolveClientIp", () => {
+  it.each([
+    {
+      name: "returns remote IP when remote is not trusted proxy",
+      remoteAddr: "203.0.113.10",
+      forwardedFor: "10.0.0.2",
+      trustedProxies: ["127.0.0.1"],
+      expected: "203.0.113.10",
+    },
+    {
+      name: "uses right-most untrusted X-Forwarded-For hop",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "198.51.100.99, 10.0.0.9, 127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+      expected: "10.0.0.9",
+    },
+    {
+      name: "fails closed when all X-Forwarded-For hops are trusted proxies",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "127.0.0.1, ::1",
+      trustedProxies: ["127.0.0.1", "::1"],
+      expected: undefined,
+    },
+    {
+      name: "fails closed when trusted proxy omits forwarding headers",
+      remoteAddr: "127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "ignores invalid X-Forwarded-For entries",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "garbage, 10.0.0.999",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "does not trust X-Real-IP by default",
+      remoteAddr: "127.0.0.1",
+      realIp: "[2001:db8::5]",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "uses X-Real-IP only when explicitly enabled",
+      remoteAddr: "127.0.0.1",
+      realIp: "[2001:db8::5]",
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      expected: "2001:db8::5",
+    },
+    {
+      name: "ignores invalid X-Real-IP even when fallback enabled",
+      remoteAddr: "127.0.0.1",
+      realIp: "not-an-ip",
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      expected: undefined,
+    },
+  ])("$name", (testCase) => {
+    const ip = resolveClientIp({
+      remoteAddr: testCase.remoteAddr,
+      forwardedFor: testCase.forwardedFor,
+      realIp: testCase.realIp,
+      trustedProxies: testCase.trustedProxies,
+      allowRealIpFallback: testCase.allowRealIpFallback,
+    });
+    expect(ip).toBe(testCase.expected);
   });
 });
 

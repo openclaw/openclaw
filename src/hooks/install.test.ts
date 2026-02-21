@@ -238,6 +238,74 @@ describe("installHooksFromPath", () => {
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "my-hook"));
     expect(fs.existsSync(path.join(result.targetDir, "HOOK.md"))).toBe(true);
   });
+
+  it("rejects hook pack entries that traverse outside package directory", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const outsideHookDir = path.join(workDir, "outside");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideHookDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["../outside"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("openclaw.hooks entry escapes package directory");
+  });
+
+  it("rejects hook pack entries that escape via symlink", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const outsideHookDir = path.join(workDir, "outside");
+    const linkedDir = path.join(pkgDir, "linked");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideHookDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+    try {
+      fs.symlinkSync(outsideHookDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return;
+    }
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["./linked"] },
+      }),
+      "utf-8",
+    );
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("openclaw.hooks entry resolves outside package directory");
+  });
 });
 
 describe("installHooksFromNpmSpec", () => {

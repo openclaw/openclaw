@@ -17,10 +17,10 @@ import {
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
-  packNpmSpecToArchive,
   resolveArchiveSourcePath,
   withTempDir,
 } from "../infra/install-source-utils.js";
+import { installFromNpmSpecArchive } from "../infra/npm-pack-install.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
@@ -442,73 +442,38 @@ export async function installPluginFromNpmSpec(params: {
     return { ok: false, error: specError };
   }
 
-  return await withTempDir("openclaw-npm-pack-", async (tmpDir) => {
-    logger.info?.(`Downloading ${spec}…`);
-    const packedResult = await packNpmSpecToArchive({
-      spec,
-      timeoutMs,
-      cwd: tmpDir,
-    });
-    if (!packedResult.ok) {
-      return packedResult;
-    }
-
-    const npmResolution: NpmSpecResolution = {
-      ...packedResult.metadata,
-      resolvedAt: new Date().toISOString(),
-    };
-
-    let integrityDrift: NpmIntegrityDrift | undefined;
-    if (
-      params.expectedIntegrity &&
-      npmResolution.integrity &&
-      params.expectedIntegrity !== npmResolution.integrity
-    ) {
-      integrityDrift = {
-        expectedIntegrity: params.expectedIntegrity,
-        actualIntegrity: npmResolution.integrity,
-      };
-      const driftPayload: PluginNpmIntegrityDriftParams = {
-        spec,
-        expectedIntegrity: integrityDrift.expectedIntegrity,
-        actualIntegrity: integrityDrift.actualIntegrity,
-        resolution: npmResolution,
-      };
-      let proceed = true;
-      if (params.onIntegrityDrift) {
-        proceed = await params.onIntegrityDrift(driftPayload);
-      } else {
-        logger.warn?.(
-          `Integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}: expected ${driftPayload.expectedIntegrity}, got ${driftPayload.actualIntegrity}`,
-        );
-      }
-      if (!proceed) {
-        return {
-          ok: false,
-          error: `aborted: npm package integrity drift detected for ${driftPayload.resolution.resolvedSpec ?? driftPayload.spec}`,
-        };
-      }
-    }
-
-    const installResult = await installPluginFromArchive({
-      archivePath: packedResult.archivePath,
-      extensionsDir: params.extensionsDir,
-      timeoutMs,
-      logger,
-      mode,
-      dryRun,
-      expectedPluginId,
-    });
-    if (!installResult.ok) {
-      return installResult;
-    }
-
-    return {
-      ...installResult,
-      npmResolution,
-      integrityDrift,
-    };
+  logger.info?.(`Downloading ${spec}…`);
+  const flowResult = await installFromNpmSpecArchive({
+    tempDirPrefix: "openclaw-npm-pack-",
+    spec,
+    timeoutMs,
+    expectedIntegrity: params.expectedIntegrity,
+    onIntegrityDrift: params.onIntegrityDrift,
+    warn: (message) => {
+      logger.warn?.(message);
+    },
+    installFromArchive: async ({ archivePath }) =>
+      await installPluginFromArchive({
+        archivePath,
+        extensionsDir: params.extensionsDir,
+        timeoutMs,
+        logger,
+        mode,
+        dryRun,
+        expectedPluginId,
+      }),
   });
+  if (!flowResult.ok) {
+    return flowResult;
+  }
+  if (!flowResult.installResult.ok) {
+    return flowResult.installResult;
+  }
+  return {
+    ...flowResult.installResult,
+    npmResolution: flowResult.npmResolution,
+    integrityDrift: flowResult.integrityDrift,
+  };
 }
 
 export async function installPluginFromPath(params: {

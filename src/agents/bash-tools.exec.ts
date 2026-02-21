@@ -42,6 +42,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -91,6 +92,11 @@ async function validateScriptFileForShellBleed(params: {
   // Best-effort: only validate if file exists and is reasonably small.
   let stat: { isFile(): boolean; size: number };
   try {
+    await assertSandboxPath({
+      filePath: absPath,
+      cwd: params.workdir,
+      root: params.workdir,
+    });
     stat = await fs.stat(absPath);
   } catch {
     return;

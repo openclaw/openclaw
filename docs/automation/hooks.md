@@ -119,6 +119,8 @@ Example `package.json`:
 
 Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
 Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
+Each `openclaw.hooks` entry must stay inside the package directory after symlink
+resolution; entries that escape are rejected.
 
 Security note: `openclaw hooks install` installs dependencies with `npm install --ignore-scripts`
 (no lifecycle scripts). Keep hook pack dependency trees "pure JS/TS" and avoid packages that rely
