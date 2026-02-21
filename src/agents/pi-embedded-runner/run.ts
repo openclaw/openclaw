@@ -742,12 +742,34 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            const contextLimit = ctxInfo.tokens ?? "unknown";
+
+            const header = isCompactionFailure
+              ? `Compaction failure (${provider}/${modelId})`
+              : `Context overflow (${provider}/${modelId}, limit: ${typeof contextLimit === "number" ? contextLimit.toLocaleString() : contextLimit} tokens)`;
+
+            const actions = isCompactionFailure
+              ? [
+                  "  \u2022 Run /reset to clear context and start fresh",
+                  "  \u2022 Session compaction failed \u2014 the summarizer could not reduce context size",
+                ]
+              : [
+                  "  \u2022 Run /reset to clear context and start fresh",
+                  "  \u2022 Or switch to a model with a larger context window",
+                  "  \u2022 Consider lowering contextTokens in config to trigger earlier compaction",
+                ];
+
+            const overflowDetails = [
+              header,
+              `  Messages: ${msgCount}`,
+              "",
+              "Actions:",
+              ...actions,
+            ].join("\n");
             return {
               payloads: [
                 {
-                  text:
-                    "Context overflow: prompt too large for the model. " +
-                    "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+                  text: overflowDetails,
                   isError: true,
                 },
               ],
