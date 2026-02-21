@@ -142,6 +142,29 @@ struct ExecCommandResolution: Sendable {
         return (false, nil)
     }
 
+    private enum ShellTokenContext {
+        case unquoted
+        case doubleQuoted
+    }
+
+    private struct ShellFailClosedRule {
+        let token: Character
+        let next: Character?
+    }
+
+    private static let shellFailClosedRules: [ShellTokenContext: [ShellFailClosedRule]] = [
+        .unquoted: [
+            ShellFailClosedRule(token: "`", next: nil),
+            ShellFailClosedRule(token: "$", next: "("),
+            ShellFailClosedRule(token: "<", next: "("),
+            ShellFailClosedRule(token: ">", next: "("),
+        ],
+        .doubleQuoted: [
+            ShellFailClosedRule(token: "`", next: nil),
+            ShellFailClosedRule(token: "$", next: "("),
+        ],
+    ]
+
     private static func splitShellCommandChain(_ command: String) -> [String]? {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -194,9 +217,9 @@ struct ExecCommandResolution: Sendable {
                 continue
             }
 
-            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: next) {
+            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: next, inDouble: inDouble) {
                 // Fail closed on command/process substitution in allowlist mode,
-                // including inside double-quoted shell strings.
+                // including command substitution inside double-quoted shell strings.
                 return nil
             }
 
@@ -218,15 +241,15 @@ struct ExecCommandResolution: Sendable {
         return segments
     }
 
-    private static func shouldFailClosedForShell(ch: Character, next: Character?) -> Bool {
-        if ch == "`" {
-            return true
+    private static func shouldFailClosedForShell(ch: Character, next: Character?, inDouble: Bool) -> Bool {
+        let context: ShellTokenContext = inDouble ? .doubleQuoted : .unquoted
+        guard let rules = self.shellFailClosedRules[context] else {
+            return false
         }
-        if ch == "$", next == "(" {
-            return true
-        }
-        if ch == "<" || ch == ">", next == "(" {
-            return true
+        for rule in rules {
+            if ch == rule.token, rule.next == nil || next == rule.next {
+                return true
+            }
         }
         return false
     }
