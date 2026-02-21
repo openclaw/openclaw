@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# bd-shim v1
+# bd-hooks-version: 0.50.3
+#
+# bd (beads) post-merge hook - thin shim
+#
+# This shim delegates to 'bd hook post-merge' which contains
+# the actual hook logic. This pattern ensures hook behavior is always
+# in sync with the installed bd version - no manual updates needed.
+#
+# The 'bd hook' command (singular) supports:
+# - Branch-then-merge pattern for Dolt (cell-level conflict resolution)
+# - Per-worktree state tracking
+# - Hook chaining configuration
+
+# Check if bd is available
+if ! command -v bd >/dev/null 2>&1; then
+    echo "Warning: bd command not found in PATH, skipping post-merge hook" >&2
+    echo "  Install bd: brew install beads" >&2
+    echo "  Or add bd to your PATH" >&2
+    exit 0
+fi
+
+exec bd hook post-merge "$@"

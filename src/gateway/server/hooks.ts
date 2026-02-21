@@ -86,11 +86,13 @@ export function createGatewayHooksRequestHandler(params: {
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-          sessionKey: mainSessionKey,
-        });
-        if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}` });
+        if (!result.delivered) {
+          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+            sessionKey: mainSessionKey,
+          });
+          if (value.wakeMode === "now") {
+            requestHeartbeatNow({ reason: `hook:${jobId}` });
+          }
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);

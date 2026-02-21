@@ -1,0 +1,36 @@
+diff --git a/src/cron/isolated-agent/run.ts b/src/cron/isolated-agent/run.ts
+index b59ba33d8..741dd65d2 100644
+--- a/src/cron/isolated-agent/run.ts
++++ b/src/cron/isolated-agent/run.ts
+@@ -723,7 +723,7 @@ export async function runCronIsolatedAgentTurn(params: {
+         return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+       }
+       if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+-        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
++        return withRunSession({ status: "ok", summary, outputText, delivered: true, ...telemetry });
+       }
+       try {
+         const didAnnounce = await runSubagentAnnounceFlow({
+diff --git a/src/gateway/server/hooks.ts b/src/gateway/server/hooks.ts
+index a20a748ef..2065bacd8 100644
+--- a/src/gateway/server/hooks.ts
++++ b/src/gateway/server/hooks.ts
+@@ -86,11 +86,13 @@ export function createGatewayHooksRequestHandler(params: {
+         const summary = result.summary?.trim() || result.error?.trim() || result.status;
+         const prefix =
+           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
+-        enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+-          sessionKey: mainSessionKey,
+-        });
+-        if (value.wakeMode === "now") {
+-          requestHeartbeatNow({ reason: `hook:${jobId}` });
++        if (!result.delivered) {
++          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
++            sessionKey: mainSessionKey,
++          });
++          if (value.wakeMode === "now") {
++            requestHeartbeatNow({ reason: `hook:${jobId}` });
++          }
+         }
+       } catch (err) {
+         logHooks.warn(`hook agent failed: ${String(err)}`);

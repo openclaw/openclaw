@@ -1,0 +1,51 @@
+# SQLite databases
+*.db
+*.db?*
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Daemon runtime files
+daemon.lock
+daemon.log
+daemon-*.log.gz
+daemon.pid
+bd.sock
+sync-state.json
+last-touched
+
+# Local version tracking (prevents upgrade notification spam after git ops)
+.local_version
+
+# Legacy database files
+db.sqlite
+bd.db
+
+# Worktree redirect file (contains relative path to main repo's .beads/)
+# Must not be committed as paths would be wrong in other clones
+redirect
+
+# Merge artifacts (temporary files from 3-way merge)
+beads.base.jsonl
+beads.base.meta.json
+beads.left.jsonl
+beads.left.meta.json
+beads.right.jsonl
+beads.right.meta.json
+
+# Sync state (local-only, per-machine)
+# These files are machine-specific and should not be shared across clones
+.sync.lock
+.jsonl.lock
+sync_base.jsonl
+export-state/
+
+# Dolt database (managed by Dolt remotes, not git)
+dolt/
+dolt-access.lock
+
+# NOTE: Do NOT add negation patterns (e.g., !issues.jsonl) here.
+# They would override fork protection in .git/info/exclude, allowing
+# contributors to accidentally commit upstream issue databases.
+# The JSONL files (issues.jsonl, interactions.jsonl) and config files
+# are tracked by git by default since no pattern above ignores them.
