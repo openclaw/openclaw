@@ -43,6 +43,9 @@ function parseTarget(raw: string): SignalTarget {
     value = value.slice("signal:".length).trim();
   }
   const normalized = value.toLowerCase();
+  if (normalized.startsWith("uuid:")) {
+    value = value.slice("uuid:".length).trim();
+  }
   if (normalized.startsWith("group:")) {
     return { type: "group", groupId: value.slice("group:".length).trim() };
   }

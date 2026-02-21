@@ -340,6 +340,12 @@ function resolveHeartbeatSenderId(params: {
     if (matched) {
       return matched;
     }
+    // Bare UUIDs won't match "uuid:<id>" allowFrom entries directly;
+    // try uuid:-prefixed variants and return the original candidate on hit.
+    const uuidMatch = candidates.find((c) => !c.includes(":") && allowList.includes(`uuid:${c}`));
+    if (uuidMatch) {
+      return uuidMatch;
+    }
   }
   if (candidates.length > 0 && allowList.length === 0) {
     return candidates[0];
