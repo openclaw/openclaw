@@ -157,6 +157,19 @@ gh pr comment <PR#> --body "<review content>"
 
 ## Claude Code
 
+### Visible Mode (Recommended)
+
+To run Claude Code (or other agents) visibly in a Terminal window on the host while maintaining background control:
+
+```bash
+# Use the helper script in the skill directory
+./launch-visible.sh <workdir> "claude 'Your task'"
+```
+
+This launches a `screen` session and automatically opens a Terminal window attached to it. You can still monitor logs via `screenlog.n`.
+
+### Headless Mode
+
 ```bash
 # With PTY for proper terminal output
 bash pty:true workdir:~/project command:"claude 'Your task'"
