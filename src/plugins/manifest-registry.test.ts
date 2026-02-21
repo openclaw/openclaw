@@ -19,6 +19,14 @@ function writeManifest(dir: string, manifest: Record<string, unknown>) {
   fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
 }
 
+function writeIndex(dir: string) {
+  fs.writeFileSync(
+    path.join(dir, "index.ts"),
+    "export default { id: 'noop', register() {} };",
+    "utf-8",
+  );
+}
+
 function createPluginCandidate(params: {
   idHint: string;
   rootDir: string;
@@ -166,5 +174,38 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins.length).toBe(1);
     expect(registry.plugins[0]?.origin).toBe("config");
+  });
+
+  it("suppresses duplicate warning when bundled discovery and config load path target the same plugin directory", () => {
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "feishu");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeManifest(pluginDir, { id: "feishu", configSchema: { type: "object" } });
+    writeIndex(pluginDir);
+
+    const previousBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    try {
+      const registry = loadPluginManifestRegistry({
+        config: {
+          plugins: {
+            load: {
+              paths: [pluginDir],
+            },
+          },
+        },
+        cache: false,
+      });
+
+      expect(countDuplicateWarnings(registry)).toBe(0);
+      expect(registry.plugins.length).toBe(1);
+      expect(registry.plugins[0]?.origin).toBe("config");
+    } finally {
+      if (previousBundledDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledDir;
+      }
+    }
   });
 });
