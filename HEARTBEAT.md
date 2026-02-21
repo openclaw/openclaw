@@ -16,12 +16,17 @@
 
 ### Active Tracking
 
-#### GitHub Issue #16688 — Discord Voice Message Bug
+#### MAISECONDBRAIN (Mnemo) — 이슈 자동 대응
 
-- **URL:** https://github.com/openclaw/openclaw/issues/16688
-- **상태:** Open, @jheeanny가 fix/workaround 작업 중
-- **할 일:** 새 댓글/PR 올라오면 지니님께 Discord로 알림
-- **완료 조건:** 이슈 Closed 또는 fix PR 머지됨
+- **Repo:** https://github.com/jini92/MAISECONDBRAIN
+- **체크:** `gh issue list -R jini92/MAISECONDBRAIN --state open --json number,title,createdAt,labels,author`
+- **할 일:**
+  1. 새 이슈 발견 시 → 내용 분석 (버그/기능요청/질문 분류)
+  2. 버그: 재현 가능하면 직접 수정 + PR/커밋 + 이슈에 코멘트
+  3. 기능요청: 타당성 분석 → Discord DM 보고 + 의견 제시
+  4. 질문: 답변 코멘트 작성
+  5. 대응 결과를 Discord DM으로 지니님께 보고
+- **기록:** 마지막 체크한 이슈 번호를 `memory/maisecondbrain.md`에 기록하여 중복 처리 방지
 
 ---
 

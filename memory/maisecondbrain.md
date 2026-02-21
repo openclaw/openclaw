@@ -128,6 +128,14 @@ Mnemo
 - [ ] Phase 2: Obsidian 플러그인 (TypeScript)
 - [ ] NotebookLM 공식 API 출시 시 Mnemo 통합
 
+## 이슈 자동 대응
+
+- **활성화:** 2026-02-21
+- **방식:** HEARTBEAT Active Tracking (매 하트비트마다 체크)
+- **대응 정책:** 버그→직접 수정, 기능요청→분석+보고, 질문→답변
+- **마지막 체크 이슈:** #0 (아직 이슈 없음)
+- **Repo visibility:** PUBLIC (2026-02-21 전환)
+
 ## 문서 목록
 
 | 문서                    | 내용                                |
