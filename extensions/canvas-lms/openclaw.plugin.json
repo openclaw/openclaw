@@ -12,6 +12,30 @@
       "token": {
         "type": "string"
       },
+      "oauth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tokenUrl": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "clientSecret": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": ["string", "number"]
+          }
+        }
+      },
       "defaultPerPage": {
         "type": "integer",
         "minimum": 1,
@@ -44,6 +68,9 @@
     "token": {
       "sensitive": true,
       "label": "Canvas API Token"
+    },
+    "oauth": {
+      "label": "Canvas OAuth2 Settings"
     },
     "baseUrl": {
       "label": "Canvas Base URL",

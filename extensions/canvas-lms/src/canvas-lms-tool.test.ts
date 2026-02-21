@@ -55,6 +55,11 @@ describe("canvas-lms-tool", () => {
     expect(__test.computeRetryAfterMs("invalid")).toBeUndefined();
   });
 
+  it("parses oauth expiresAt values", () => {
+    expect(__test.parseExpiresAtMs("1735689600")).toBe(1_735_689_600_000);
+    expect(__test.parseExpiresAtMs("2026-03-01T00:00:00Z")).toBe(1_772_323_200_000);
+  });
+
   it("fetches courses with plugin config", async () => {
     const response = new Response(
       JSON.stringify([{ id: 1, name: "Arquitectura de Software", course_code: "INF-501" }]),
@@ -138,6 +143,96 @@ describe("canvas-lms-tool", () => {
         token: "inline-token",
       }),
     ).rejects.toThrow(/Inline token is disabled/);
+  });
+
+  it("uses oauth access token when configured", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([{ id: 1, name: "OAuth Course" }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          oauth: {
+            clientId: "cid",
+            clientSecret: "csecret",
+            accessToken: "oauth-access-token",
+            expiresAt: Date.now() + 10 * 60_000,
+          },
+        },
+      }),
+    );
+
+    await tool.execute("call-oauth-1", { action: "list_courses" });
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer oauth-access-token");
+  });
+
+  it("refreshes oauth token when expired", async () => {
+    const tokenResponse = new Response(
+      JSON.stringify({
+        access_token: "new-access-token",
+        refresh_token: "new-refresh-token",
+        expires_in: 3600,
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const dataResponse = new Response(JSON.stringify([{ id: 1, name: "Refreshed Course" }]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(tokenResponse)
+      .mockResolvedValueOnce(dataResponse);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          oauth: {
+            clientId: "cid",
+            clientSecret: "csecret",
+            refreshToken: "old-refresh-token",
+            accessToken: "old-access-token",
+            expiresAt: Date.now() - 60_000,
+          },
+        },
+      }),
+    );
+
+    await tool.execute("call-oauth-2", { action: "list_courses" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/login/oauth2/token");
+    const apiHeaders = fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>;
+    expect(apiHeaders.Authorization).toBe("Bearer new-access-token");
+  });
+
+  it("enforces secure oauth token url by default", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          oauth: {
+            tokenUrl: "http://canvas.example.edu/login/oauth2/token",
+            clientId: "cid",
+            clientSecret: "csecret",
+            refreshToken: "rtok",
+          },
+        },
+      }),
+    );
+
+    await expect(tool.execute("call-oauth-3", { action: "list_courses" })).rejects.toThrow(/https/);
   });
 
   it("supports modules and submissions actions", async () => {
