@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureFullEnv } from "../test-utils/env.js";
 import { resolveSandboxContext } from "./sandbox.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 
 vi.mock("./sandbox/docker.js", () => ({
   ensureSandboxContainer: vi.fn(async () => "openclaw-sbx-test"),
@@ -17,16 +18,6 @@ vi.mock("./sandbox/browser.js", () => ({
 vi.mock("./sandbox/prune.js", () => ({
   maybePruneSandboxes: vi.fn(async () => undefined),
 }));
-
-async function writeSkill(params: { dir: string; name: string; description: string }) {
-  const { dir, name, description } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
-    "utf-8",
-  );
-}
 
 describe("sandbox skill mirroring", () => {
   let envSnapshot: ReturnType<typeof captureFullEnv>;
