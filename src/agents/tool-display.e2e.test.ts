@@ -104,6 +104,163 @@ describe("tool display details", () => {
     expect(detail).toContain(".openclaw/workspace)");
   });
 
+  it("moves cd path to context suffix and appends raw command", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd ~/my-project && npm install" },
+      }),
+    );
+
+    expect(detail).toBe(
+      "install dependencies (in ~/my-project)\n\n`cd ~/my-project && npm install`",
+    );
+  });
+
+  it("moves cd path to context suffix with multiple stages and raw command", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd ~/my-project && npm install && npm test" },
+      }),
+    );
+
+    expect(detail).toBe(
+      "install dependencies → run tests (in ~/my-project)\n\n`cd ~/my-project && npm install && npm test`",
+    );
+  });
+
+  it("moves pushd path to context suffix and appends raw command", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "pushd /tmp && git status" },
+      }),
+    );
+
+    expect(detail).toBe("check git status (in /tmp)\n\n`pushd /tmp && git status`");
+  });
+
+  it("clears inferred cwd when popd is stripped from preamble", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "pushd /tmp && popd && npm install" },
+      }),
+    );
+
+    expect(detail).toBe("install dependencies\n\n`pushd /tmp && popd && npm install`");
+  });
+
+  it("moves cd path to context suffix with || separator", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /app || npm install" },
+      }),
+    );
+
+    // || means npm install runs when cd FAILS — cd should NOT be stripped as preamble.
+    // Both stages are summarized; cd is not treated as context prefix.
+    expect(detail).toMatch(/^run cd \/app → install dependencies/);
+  });
+
+  it("explicit workdir takes priority over cd path", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /tmp && npm install", workdir: "/app" },
+      }),
+    );
+
+    expect(detail).toBe("install dependencies (in /app)\n\n`cd /tmp && npm install`");
+  });
+
+  it("summarizes all stages and appends raw command", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "git fetch && git rebase origin/main" },
+      }),
+    );
+
+    expect(detail).toBe(
+      "fetch git changes → rebase git branch\n\n`git fetch && git rebase origin/main`",
+    );
+  });
+
+  it("falls back to raw command for unknown binaries", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "jj rebase -s abc -d main" },
+      }),
+    );
+
+    expect(detail).toBe("jj rebase -s abc -d main");
+  });
+
+  it("falls back to raw command for unknown binary with cwd", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "mycli deploy --prod", workdir: "/app" },
+      }),
+    );
+
+    expect(detail).toBe("mycli deploy --prod (in /app)");
+  });
+
+  it("keeps multi-stage summary when only some stages are generic", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cargo build && npm test" },
+      }),
+    );
+
+    // "run cargo build" is generic, but "run tests" is known — keep joined summary
+    expect(detail).toMatch(/^run cargo build → run tests/);
+  });
+
+  it("handles standalone cd as raw command", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /tmp" },
+      }),
+    );
+
+    // standalone cd (no following command) — treated as raw since it's generic
+    expect(detail).toBe("cd /tmp");
+  });
+
+  it("handles chained cd commands using last path", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "cd /tmp && cd /app" },
+      }),
+    );
+
+    // both cd's are preamble; last path wins
+    expect(detail).toBe("cd /tmp && cd /app (in /app)");
+  });
+
+  it("respects quotes when splitting preamble separators", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: 'export MSG="foo && bar" && echo test' },
+      }),
+    );
+
+    // The && inside quotes must not be treated as a separator —
+    // summary line should be "print text", not "run export" (which would happen
+    // if the quoted && was mistaken for a real separator).
+    expect(detail).toMatch(/^print text/);
+  });
+
   it("recognizes heredoc/inline script exec details", () => {
     const pyDetail = formatToolDetail(
       resolveToolDisplay({
