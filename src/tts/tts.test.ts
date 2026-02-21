@@ -215,7 +215,7 @@ describe("tts", () => {
 
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true });
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input =
         "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
@@ -230,11 +230,20 @@ describe("tts", () => {
     });
 
     it("accepts edge as provider override", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true });
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("rejects provider override by default while keeping voice overrides enabled", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=edge voice=alloy]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBeUndefined();
+      expect(result.overrides.openai?.voice).toBe("alloy");
     });
 
     it("keeps text intact when overrides are disabled", () => {

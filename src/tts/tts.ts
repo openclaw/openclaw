@@ -238,11 +238,12 @@ function resolveModelOverridePolicy(
       allowSeed: false,
     };
   }
-  const allow = (value?: boolean) => value ?? true;
+  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
     enabled: true,
     allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider),
+    // Provider switching is higher-impact than voice/style tweaks; keep opt-in.
+    allowProvider: allow(overrides?.allowProvider, false),
     allowVoice: allow(overrides?.allowVoice),
     allowModelId: allow(overrides?.allowModelId),
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
