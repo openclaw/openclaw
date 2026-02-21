@@ -131,6 +131,9 @@ importers:
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
+      long:
+        specifier: ^5.3.2
+        version: 5.3.2
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
@@ -183,6 +186,12 @@ importers:
       '@grammyjs/types':
         specifier: ^3.24.0
         version: 3.24.0
+      '@lit-labs/signals':
+        specifier: ^0.1.3
+        version: 0.1.3
+      '@lit/context':
+        specifier: ^1.1.6
+        version: 1.1.6
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
@@ -204,6 +213,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.0.18
         version: 4.0.18(@vitest/browser@4.0.18(vite@7.3.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.0.18))(vitest@4.0.18)
+      lit:
+        specifier: ^3.3.2
+        version: 3.3.2
       oxfmt:
         specifier: 0.33.0
         version: 0.33.0
@@ -213,6 +225,9 @@ importers:
       oxlint-tsgolint:
         specifier: ^0.14.1
         version: 0.14.1
+      signal-utils:
+        specifier: 0.21.1
+        version: 0.21.1(signal-polyfill@0.2.2)
       tsdown:
         specifier: ^0.20.3
         version: 0.20.3(@typescript/native-preview@7.0.0-dev.20260219.1)(typescript@5.9.3)
@@ -403,12 +418,6 @@ importers:
   extensions/msteams:
     dependencies:
       '@microsoft/agents-hosting':
-        specifier: ^1.2.3
-        version: 1.2.3
-      '@microsoft/agents-hosting-express':
-        specifier: ^1.2.3
-        version: 1.2.3
-      '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.3
         version: 1.2.3
       express:
@@ -1559,14 +1568,6 @@ packages:
 
   '@microsoft/agents-activity@1.2.3':
     resolution: {integrity: sha512-XRQF+AVn6f9sGDUsfDQFiwLtmqqWNhM9JIwZRzK9XQLPTQmoWwjoWz8KMKc5fuvj5Ybly3974VrqYUbDOeMyTg==}
-    engines: {node: '>=20.0.0'}
-
-  '@microsoft/agents-hosting-express@1.2.3':
-    resolution: {integrity: sha512-aBgvyDJ+3ifeUKy/56qQuLJPAizN9UfGV3/1GVrhmyAqUKvphusK3LMxiRTpHDhAaUvuzFOr1AJ8XiRhOl9l3w==}
-    engines: {node: '>=20.0.0'}
-
-  '@microsoft/agents-hosting-extensions-teams@1.2.3':
-    resolution: {integrity: sha512-fZcn8JcU50VfjBgz6jTlCRiQReAZzj2f2Atudwa+ymxJQhfBb7NToJcY7OdLqM8hlnQhzAg71HJtGhPR/L2p1g==}
     engines: {node: '>=20.0.0'}
 
   '@microsoft/agents-hosting@1.2.3':
@@ -7400,21 +7401,6 @@ snapshots:
       uuid: 11.1.0
       zod: 3.25.75
     transitivePeerDependencies:
-      - supports-color
-
-  '@microsoft/agents-hosting-express@1.2.3':
-    dependencies:
-      '@microsoft/agents-hosting': 1.2.3
-      express: 5.2.1
-    transitivePeerDependencies:
-      - debug
-      - supports-color
-
-  '@microsoft/agents-hosting-extensions-teams@1.2.3':
-    dependencies:
-      '@microsoft/agents-hosting': 1.2.3
-    transitivePeerDependencies:
-      - debug
       - supports-color
 
   '@microsoft/agents-hosting@1.2.3':
