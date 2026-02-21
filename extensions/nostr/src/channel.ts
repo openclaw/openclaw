@@ -234,6 +234,36 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
 
           const cfg = runtime.config.loadConfig();
           const dmPolicy = account.config.dmPolicy ?? "pairing";
+          const shouldComputeCommandAuthorized =
+            runtime.channel.commands.shouldComputeCommandAuthorized(text, cfg);
+          const configuredAllowFrom = (account.config.allowFrom ?? [])
+            .map((entry) => normalizeNostrAllowEntry(String(entry)))
+            .filter(Boolean);
+          const storeAllowFrom =
+            dmPolicy !== "open" || shouldComputeCommandAuthorized
+              ? await runtime.channel.pairing
+                  .readAllowFromStore("nostr", undefined, account.accountId)
+                  .catch(() => [])
+              : [];
+          const effectiveAllowFrom = [...configuredAllowFrom, ...storeAllowFrom]
+            .map((entry) => normalizeNostrAllowEntry(String(entry)))
+            .filter(Boolean);
+          const senderAllowedForCommands = resolveAllowlistMatchSimple({
+            allowFrom: effectiveAllowFrom,
+            senderId: normalizedSenderPubkey,
+          }).allowed;
+          const commandAuthorized = shouldComputeCommandAuthorized
+            ? runtime.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+                useAccessGroups: cfg.commands?.useAccessGroups !== false,
+                authorizers: [
+                  {
+                    configured: effectiveAllowFrom.length > 0,
+                    allowed: senderAllowedForCommands,
+                  },
+                ],
+              })
+            : undefined;
+
           if (dmPolicy === "disabled") {
             ctx.log?.debug?.(
               `[${account.accountId}] drop DM sender ${normalizedSenderPubkey} (dmPolicy=disabled)`,
@@ -242,20 +272,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           }
 
           if (dmPolicy !== "open") {
-            const configuredAllowFrom = (account.config.allowFrom ?? [])
-              .map((entry) => normalizeNostrAllowEntry(String(entry)))
-              .filter(Boolean);
-            const storeAllowFrom = await runtime.channel.pairing
-              .readAllowFromStore("nostr", undefined, account.accountId)
-              .catch(() => []);
-            const effectiveAllowFrom = [...configuredAllowFrom, ...storeAllowFrom]
-              .map((entry) => normalizeNostrAllowEntry(String(entry)))
-              .filter(Boolean);
-            const senderAllowed = resolveAllowlistMatchSimple({
-              allowFrom: effectiveAllowFrom,
-              senderId: normalizedSenderPubkey,
-            }).allowed;
-            if (!senderAllowed) {
+            if (!senderAllowedForCommands) {
               if (dmPolicy === "pairing") {
                 const { code, created } = await runtime.channel.pairing.upsertPairingRequest({
                   channel: "nostr",
@@ -327,6 +344,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             Timestamp: Date.now(),
             OriginatingChannel: "nostr",
             OriginatingTo: `nostr:${account.publicKey}`,
+            CommandAuthorized: commandAuthorized,
           });
 
           await runtime.channel.session.recordInboundSession({
