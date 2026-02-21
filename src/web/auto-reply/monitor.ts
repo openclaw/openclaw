@@ -439,7 +439,12 @@ export async function monitorWebChannel(
     try {
       await sleep(delay, abortSignal);
     } catch {
-      break;
+      if (stopRequested()) {
+        break;
+      }
+      // Abort fired during backoff but not a deliberate stop — allow the
+      // reconnect loop to continue so activeWebListener is re-established.
+      continue;
     }
   }
 
