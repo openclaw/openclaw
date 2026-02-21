@@ -333,6 +333,12 @@ export async function createCanvasHostHandler(
         if (urlPath === "/" || urlPath.endsWith("/")) {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.setHeader(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          );
+          res.setHeader("X-Frame-Options", "SAMEORIGIN");
+          res.setHeader("X-Content-Type-Options", "nosniff");
           res.end(
             `<!doctype html><meta charset="utf-8" /><title>OpenClaw Canvas</title><pre>Missing file.\nCreate ${rootDir}/index.html</pre>`,
           );
@@ -362,6 +368,12 @@ export async function createCanvasHostHandler(
       if (mime === "text/html") {
         const html = data.toString("utf8");
         res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader(
+          "Content-Security-Policy",
+          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+        );
+        res.setHeader("X-Frame-Options", "SAMEORIGIN");
+        res.setHeader("X-Content-Type-Options", "nosniff");
         res.end(liveReload ? injectCanvasLiveReload(html) : html);
         return true;
       }
