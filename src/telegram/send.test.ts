@@ -604,7 +604,7 @@ describe("sendMessageTelegram", () => {
         ...("replyToMessageId" in testCase.options
           ? { replyToMessageId: testCase.options.replyToMessageId }
           : {}),
-        ...("buttons" in testCase.options
+        ...(Array.isArray(testCase.options.buttons)
           ? {
               buttons: testCase.options.buttons.map((row) => row.map((button) => ({ ...button }))),
             }
