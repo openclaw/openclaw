@@ -131,6 +131,16 @@ File-oriented options are denied for default safe bins (for example `sort -o`, `
 `grep -f/--file`).
 Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
 behavior (for example `sort -o/--output/--compress-program` and grep recursive flags).
+Denied flags by safe-bin profile:
+
+<!-- SAFE_BIN_DENIED_FLAGS:START -->
+
+- `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
+- `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
+- `sort`: `--compress-program`, `--files0-from`, `--output`, `-o`
+- `wc`: `--files0-from`
+<!-- SAFE_BIN_DENIED_FLAGS:END -->
+
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
 used to smuggle file reads.
