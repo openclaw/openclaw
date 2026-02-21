@@ -58,6 +58,7 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { buildTelegramReactionPayload } from "./send.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -519,13 +520,14 @@ export const buildTelegramMessageContext = async ({
       reactions: Array<{ type: "emoji"; emoji: string }>,
     ) => Promise<void>;
   };
+  const ackReactions = shouldAckReaction() ? buildTelegramReactionPayload(ackReaction) : [];
   const reactionApi =
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
   const ackReactionPromise =
-    shouldAckReaction() && msg.message_id && reactionApi
+    ackReactions.length > 0 && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
-          fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
+          fn: () => reactionApi(chatId, msg.message_id, ackReactions),
         }).then(
           () => true,
           (err) => {

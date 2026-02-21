@@ -1145,6 +1145,14 @@ describe("reactMessageTelegram", () => {
       remove: true,
       expected: [],
     },
+    {
+      testName: "normalizes reaction emoji whitespace",
+      target: " 123 ",
+      messageId: " 456 ",
+      emoji: " 👀 ",
+      remove: false,
+      expected: [{ type: "emoji", emoji: "👀" }],
+    },
   ] as const)("$testName", async (testCase) => {
     const setMessageReaction = vi.fn().mockResolvedValue(undefined);
     const api = { setMessageReaction } as unknown as {

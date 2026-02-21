@@ -1170,6 +1170,35 @@ describe("createTelegramBot", () => {
 
     expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [{ type: "emoji", emoji: "👀" }]);
   });
+  it("normalizes ackReaction config before sending telegram reaction", async () => {
+    resetHarnessSpies();
+
+    loadConfig.mockReturnValue({
+      messages: {
+        ackReaction: " 👀 ",
+        ackReactionScope: "group-mentions",
+        groupChat: { mentionPatterns: ["\\bbert\\b"] },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "bert hello",
+        date: 1736380800,
+        message_id: 123,
+        from: { id: 9, first_name: "Ada" },
+      },
+    });
+
+    expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [{ type: "emoji", emoji: "👀" }]);
+  });
   it("clears native commands when disabled", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({

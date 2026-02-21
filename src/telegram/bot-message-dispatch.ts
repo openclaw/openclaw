@@ -33,7 +33,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
-import { editMessageTelegram } from "./send.js";
+import { buildTelegramReactionPayload, editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -745,7 +745,9 @@ export const dispatchTelegramMessage = async ({
     removeAfterReply: removeAckAfterReply,
     ackReactionPromise,
     ackReactionValue: ackReactionPromise ? "ack" : null,
-    remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+    remove: () =>
+      reactionApi?.(chatId, msg.message_id ?? 0, buildTelegramReactionPayload("")) ??
+      Promise.resolve(),
     onError: (err) => {
       if (!msg.message_id) {
         return;

@@ -81,6 +81,15 @@ type TelegramReactionOpts = {
   retry?: RetryConfig;
 };
 
+export function normalizeTelegramReaction(emoji: string): string {
+  return emoji.trim().normalize("NFC");
+}
+
+export function buildTelegramReactionPayload(emoji: string): ReactionType[] {
+  const trimmedEmoji = normalizeTelegramReaction(emoji);
+  return trimmedEmoji ? [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }] : [];
+}
+
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
@@ -731,13 +740,10 @@ export async function reactMessageTelegram(
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
   const remove = opts.remove === true;
-  const trimmedEmoji = emoji.trim();
+  const trimmedEmoji = normalizeTelegramReaction(emoji);
   // Build the reaction array. We cast emoji to the grammY union type since
   // Telegram validates emoji server-side; invalid emojis fail gracefully.
-  const reactions: ReactionType[] =
-    remove || !trimmedEmoji
-      ? []
-      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
+  const reactions = remove ? [] : buildTelegramReactionPayload(emoji);
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
