@@ -9,6 +9,7 @@ vi.mock("node:os", () => ({
 }));
 
 const {
+  classifyFromSddl,
   createIcaclsResetCommand,
   formatIcaclsResetCommand,
   formatWindowsAclSummary,
@@ -196,10 +197,27 @@ Successfully processed 1 files`;
   });
 
   describe("inspectWindowsAcl", () => {
+    // Helper: create a mock exec that routes by command name.
+    // whoami → rejected (not on Windows), powershell → rejected (SDDL unavailable),
+    // icacls → provided output. This ensures the icacls-only fallback path is tested.
+    function mockExecForIcacls(icaclsResult: { stdout: string; stderr: string }) {
+      return vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "whoami") {
+          return Promise.reject(new Error("not Windows"));
+        }
+        if (cmd === "powershell") {
+          return Promise.reject(new Error("not Windows"));
+        }
+        if (cmd === "icacls") {
+          return Promise.resolve(icaclsResult);
+        }
+        return Promise.reject(new Error(`unexpected command: ${cmd}`));
+      });
+    }
+
     it("returns parsed ACL entries on success", async () => {
-      const mockExec = vi.fn().mockResolvedValue({
-        stdout: `C:\\test\\file.txt BUILTIN\\Administrators:(F)
-                NT AUTHORITY\\SYSTEM:(F)`,
+      const mockExec = mockExecForIcacls({
+        stdout: `C:\\test\\file.txt BUILTIN\\Administrators:(F)\n                NT AUTHORITY\\SYSTEM:(F)`,
         stderr: "",
       });
 
@@ -219,7 +237,7 @@ Successfully processed 1 files`;
     });
 
     it("combines stdout and stderr for parsing", async () => {
-      const mockExec = vi.fn().mockResolvedValue({
+      const mockExec = mockExecForIcacls({
         stdout: "C:\\test\\file.txt BUILTIN\\Administrators:(F)",
         stderr: "C:\\test\\file.txt NT AUTHORITY\\SYSTEM:(F)",
       });
@@ -227,6 +245,60 @@ Successfully processed 1 files`;
       const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
       expect(result.ok).toBe(true);
       expect(result.entries).toHaveLength(2);
+    });
+
+    it("uses SDDL fast path with currentUserSid when PowerShell available", async () => {
+      const userSid = "S-1-5-21-123-456-789-1001";
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "whoami") {
+          return Promise.resolve({ stdout: `"DOMAIN\\User","${userSid}"`, stderr: "" });
+        }
+        if (cmd === "powershell") {
+          return Promise.resolve({
+            stdout: `O:SYG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;${userSid})`,
+            stderr: "",
+          });
+        }
+        if (cmd === "icacls") {
+          return Promise.resolve({
+            stdout: `C:\\test\\file.txt NT AUTHORITY\\SYSTEM:(F)\n                BUILTIN\\Administrators:(F)\n                DOMAIN\\User:(F)`,
+            stderr: "",
+          });
+        }
+        return Promise.reject(new Error(`unexpected: ${cmd}`));
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
+      expect(result.ok).toBe(true);
+      // All three ACEs should be trusted (SY + BA + current user SID)
+      expect(result.trusted).toHaveLength(3);
+      expect(result.untrustedGroup).toHaveLength(0);
+    });
+
+    it("escapes backticks in path for PowerShell", async () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "whoami") {
+          return Promise.reject(new Error("skip"));
+        }
+        if (cmd === "powershell") {
+          return Promise.reject(new Error("skip"));
+        }
+        if (cmd === "icacls") {
+          return Promise.resolve({
+            stdout: "C:\\te`st\\file.txt BUILTIN\\Administrators:(F)",
+            stderr: "",
+          });
+        }
+        return Promise.reject(new Error(`unexpected: ${cmd}`));
+      });
+
+      await inspectWindowsAcl("C:\\te`st\\file.txt", { exec: mockExec });
+      // Verify the powershell call escaped backticks
+      const psCall = mockExec.mock.calls.find((c: unknown[]) => c[0] === "powershell");
+      if (psCall) {
+        const command = psCall[1][2] as string;
+        expect(command).toContain("``");
+      }
     });
   });
 
@@ -288,6 +360,159 @@ Successfully processed 1 files`;
       };
       const result = formatWindowsAclSummary(summary);
       expect(result).toBe("Everyone:(R), DOMAIN\\OtherUser:(M)");
+    });
+  });
+
+  describe("classifyFromSddl", () => {
+    it("classifies SDDL with trusted-only ACEs (SY + BA)", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.untrustedWorld).toHaveLength(0);
+      expect(result!.untrustedGroup).toHaveLength(0);
+      expect(result!.trusted).toHaveLength(2);
+    });
+
+    it("trusts user SID only when it matches currentUserSid", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FA;;;S-1-5-21-123-456-789-1001)";
+      // With matching currentUserSid → trusted
+      const withMatch = classifyFromSddl(sddl, undefined, "S-1-5-21-123-456-789-1001");
+      expect(withMatch).not.toBeNull();
+      expect(withMatch!.trusted).toHaveLength(2);
+      expect(withMatch!.untrustedGroup).toHaveLength(0);
+
+      // Without currentUserSid → untrustedGroup
+      const without = classifyFromSddl(sddl);
+      expect(without).not.toBeNull();
+      expect(without!.trusted).toHaveLength(1); // only SY
+      expect(without!.untrustedGroup).toHaveLength(1); // unknown user SID
+
+      // With non-matching currentUserSid → untrustedGroup
+      const noMatch = classifyFromSddl(sddl, undefined, "S-1-5-21-999-999-999-9999");
+      expect(noMatch).not.toBeNull();
+      expect(noMatch!.trusted).toHaveLength(1);
+      expect(noMatch!.untrustedGroup).toHaveLength(1);
+    });
+
+    it("detects world-readable ACEs (WD = Everyone)", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;WD)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.untrustedWorld).toHaveLength(1);
+      expect(result!.untrustedWorld[0].principal).toBe("WD");
+    });
+
+    it("detects BUILTIN\\Users via SDDL abbreviation BU", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;BU)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.untrustedWorld).toHaveLength(1);
+    });
+
+    it("skips deny ACEs", () => {
+      const sddl = "O:SYG:SYD:(D;;FA;;;WD)(A;;FA;;;SY)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      // Deny WD should be skipped, only SY remain
+      expect(result!.untrustedWorld).toHaveLength(0);
+      expect(result!.trusted).toHaveLength(1);
+    });
+
+    it("returns null for malformed SDDL without DACL", () => {
+      const result = classifyFromSddl("O:SYG:SY");
+      expect(result).toBeNull();
+    });
+
+    it("handles Creator Owner (CO) as trusted", () => {
+      const sddl = "O:SYG:SYD:(A;;FA;;;CO)";
+      const result = classifyFromSddl(sddl);
+      expect(result).not.toBeNull();
+      expect(result!.trusted).toHaveLength(1);
+    });
+  });
+
+  describe("SID-based principal classification", () => {
+    it("classifies raw SID S-1-5-18 (SYSTEM) as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-5-18",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+    });
+
+    it("classifies raw SID S-1-5-32-544 (Administrators) as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "S-1-5-32-544",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+    });
+  });
+
+  describe("localized principal names (ru-RU regression)", () => {
+    it("SDDL fast path correctly identifies localized SYSTEM as trusted", async () => {
+      // Simulate ru-RU Windows: icacls shows "NT AUTHORITY\\СИСТЕМА" (Cyrillic)
+      // but SDDL always shows "SY" regardless of locale.
+      // whoami resolves the current user's SID for precise matching.
+      const userSid = "S-1-5-21-123-456-789-1001";
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "whoami") {
+          return Promise.resolve({
+            stdout: `"BARSY\\karte","${userSid}"`,
+            stderr: "",
+          });
+        }
+        if (cmd === "powershell") {
+          return Promise.resolve({
+            stdout: `O:SYG:SYD:(A;;FA;;;SY)(A;;FA;;;${userSid})`,
+            stderr: "",
+          });
+        }
+        // icacls returns localized names
+        return Promise.resolve({
+          stdout: `C:\\test\\file.txt NT AUTHORITY\\СИСТЕМА:(F)\n                     BARSY\\karte:(F)`,
+          stderr: "",
+        });
+      });
+
+      const env = { USERNAME: "karte", USERDOMAIN: "BARSY" };
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec, env });
+
+      expect(result.ok).toBe(true);
+      // SDDL-based classification: SY=trusted, user SID matched via whoami=trusted
+      expect(result.untrustedWorld).toHaveLength(0);
+      expect(result.untrustedGroup).toHaveLength(0);
+    });
+
+    it("falls back to icacls when PowerShell unavailable", async () => {
+      const mockExec = vi.fn().mockImplementation((cmd: string) => {
+        if (cmd === "whoami") {
+          return Promise.reject(new Error("not Windows"));
+        }
+        if (cmd === "powershell") {
+          return Promise.reject(new Error("powershell not found"));
+        }
+        return Promise.resolve({
+          stdout: `C:\\test\\file.txt BUILTIN\\Administrators:(F)`,
+          stderr: "",
+        });
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
+      expect(result.ok).toBe(true);
+      expect(result.entries).toHaveLength(1);
     });
   });
 
