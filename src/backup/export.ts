@@ -9,11 +9,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import type { BackupComponent, BackupManifest, ExportOptions, StorageBackend } from "./types.js";
 import { VERSION } from "../version.js";
 import { collectFiles } from "./collector.js";
 import { encrypt } from "./crypto.js";
 import { buildManifest } from "./manifest.js";
+import type { BackupComponent, BackupManifest, ExportOptions, StorageBackend } from "./types.js";
 import { CORE_BACKUP_COMPONENTS } from "./types.js";
 
 export type ExportResult = {
@@ -83,7 +83,7 @@ export async function exportBackup(
     );
 
     // 4. Create tar.gz archive
-    const archivePath = path.join(os.tmpdir(), `openclaw-backup-${Date.now()}.tar.gz`);
+    const archivePath = path.join(os.tmpdir(), "openclaw-backup-" + Date.now() + ".tar.gz");
     await tar.c(
       {
         gzip: true,

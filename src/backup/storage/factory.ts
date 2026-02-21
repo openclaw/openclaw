@@ -4,8 +4,8 @@
  * @module backup/storage/factory
  */
 import path from "node:path";
-import type { BackupStorageConfig, StorageBackend } from "../types.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { BackupStorageConfig, StorageBackend } from "../types.js";
 import { createLocalStorage } from "./local.js";
 
 const DEFAULT_LOCAL_DIR = "backups";

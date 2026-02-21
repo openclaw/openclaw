@@ -332,7 +332,8 @@ describe("backup/import", () => {
       const encryptedPath = path.join(base, "encrypted.tar.gz");
       await fs.writeFile(encryptedPath, encryptedData);
 
-      const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
+      const { importBackup } = await setupImport(targetStateDir);
 
       await expect(
         importBackup({
@@ -375,6 +376,7 @@ describe("backup/import", () => {
       await tar.c({ gzip: true, file: archivePath, cwd: staging }, ["."]);
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
 
       const result = await importBackup({
         stateDir: targetStateDir,
@@ -443,6 +445,7 @@ describe("backup/import", () => {
       await tar.c({ gzip: true, file: archivePath, cwd: staging }, ["."]);
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
 
       await expect(
         importBackup({
@@ -474,6 +477,7 @@ describe("backup/import", () => {
       await tar.c({ gzip: true, file: archivePath, cwd: staging }, ["."]);
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
 
       await expect(
         importBackup({
@@ -545,7 +549,7 @@ describe("backup/import", () => {
       const result = await importBackup({
         stateDir: targetStateDir,
         configPath: path.join(targetStateDir, "openclaw.json"),
-        cronStorePath: path.join(targetStateDir, "cron", "jobs.json"),
+        cronStorePath,
         agentDir: path.join(targetStateDir, "agents", "default", "agent"),
         input: archivePath,
         merge: true,
@@ -673,6 +677,7 @@ describe("backup/import", () => {
       await fs.writeFile(archivePath, "this is not a valid tar.gz archive");
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
 
       await expect(
         importBackup({
@@ -721,6 +726,7 @@ describe("backup/import", () => {
       await tar.c({ gzip: true, file: archivePath, cwd: staging }, ["."]);
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
       const result = await importBackup({
         stateDir: targetStateDir,
         configPath: path.join(targetStateDir, "openclaw.json"),
@@ -759,11 +765,23 @@ describe("backup/import", () => {
 
       // First import
       const { importBackup: import1 } = await setupImport(targetStateDir);
-      const result1 = await import1({ input: archivePath });
+      const result1 = await import1({
+        stateDir: targetStateDir,
+        configPath: path.join(targetStateDir, "openclaw.json"),
+        cronStorePath: path.join(targetStateDir, "cron", "jobs.json"),
+        agentDir: path.join(targetStateDir, "agents", "default", "agent"),
+        input: archivePath,
+      });
 
       // Second import (overwrites same files)
       const { importBackup: import2 } = await setupImport(targetStateDir);
-      const result2 = await import2({ input: archivePath });
+      const result2 = await import2({
+        stateDir: targetStateDir,
+        configPath: path.join(targetStateDir, "openclaw.json"),
+        cronStorePath: path.join(targetStateDir, "cron", "jobs.json"),
+        agentDir: path.join(targetStateDir, "agents", "default", "agent"),
+        input: archivePath,
+      });
 
       // Both results should match
       expect(result1.restoredFiles.toSorted()).toEqual(result2.restoredFiles.toSorted());
@@ -904,7 +922,7 @@ describe("backup/import", () => {
       const result = await importBackup({
         stateDir: targetStateDir,
         configPath: path.join(targetStateDir, "openclaw.json"),
-        cronStorePath: path.join(targetStateDir, "cron", "jobs.json"),
+        cronStorePath,
         agentDir: path.join(targetStateDir, "agents", "default", "agent"),
         input: archivePath,
         merge: true,
@@ -955,7 +973,7 @@ describe("backup/import", () => {
       const result = await importBackup({
         stateDir: targetStateDir,
         configPath: path.join(targetStateDir, "openclaw.json"),
-        cronStorePath: path.join(targetStateDir, "cron", "jobs.json"),
+        cronStorePath,
         agentDir: path.join(targetStateDir, "agents", "default", "agent"),
         input: archivePath,
       });
@@ -989,6 +1007,7 @@ describe("backup/import", () => {
       await tar.c({ gzip: true, file: archivePath, cwd: staging }, ["."]);
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
       await expect(
         importBackup({
           stateDir: targetStateDir,
@@ -1010,6 +1029,7 @@ describe("backup/import", () => {
       await tar.c({ gzip: true, file: archivePath, cwd: staging }, ["."]);
 
       const { importBackup } = await setupImport("/nonexistent");
+      const targetStateDir = "/nonexistent";
       await expect(
         importBackup({
           stateDir: targetStateDir,

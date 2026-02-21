@@ -5,9 +5,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { BackupComponent } from "./types.js";
 import { resolveConfigPathCandidate, resolveStateDir } from "../config/paths.js";
 import { DEFAULT_CRON_STORE_PATH } from "../cron/store.js";
+import type { BackupComponent } from "./types.js";
 import { CORE_BACKUP_COMPONENTS } from "./types.js";
 
 /** Secrets / sensitive keys to strip from the config before backup. */

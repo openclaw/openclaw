@@ -85,9 +85,6 @@ describe("backup/export", () => {
 
     const { exportBackup, configPath, cronStorePath, agentDir } = await setupExport(stateDir);
 
-    const configPath = path.join(stateDir, "openclaw.json");
-    const cronStorePath = path.join(stateDir, "cron", "jobs.json");
-    const agentDir = path.join(stateDir, "agents", "default", "agent");
     const result = await exportBackup({
       stateDir,
       configPath,
@@ -153,9 +150,6 @@ describe("backup/export", () => {
 
     const { exportBackup, configPath, cronStorePath, agentDir } = await setupExport(stateDir);
 
-    const configPath = path.join(stateDir, "openclaw.json");
-    const cronStorePath = path.join(stateDir, "cron", "jobs.json");
-    const agentDir = path.join(stateDir, "agents", "default", "agent");
     const result = await exportBackup({
       stateDir,
       configPath,
@@ -193,6 +187,10 @@ describe("backup/export", () => {
 
     const result = await exportBackup(
       {
+        stateDir,
+        configPath,
+        cronStorePath,
+        agentDir,
         output: "my-backup.tar.gz",
         components: ["config"],
       },
@@ -215,11 +213,11 @@ describe("backup/export", () => {
     const emptyStateDir = path.join(base, "empty-state");
     await fs.mkdir(emptyStateDir, { recursive: true });
 
-    const { exportBackup } = await setupExport(emptyStateDir);
+    const { exportBackup, configPath, cronStorePath, agentDir } = await setupExport(emptyStateDir);
 
     await expect(
       exportBackup({
-        stateDir,
+        stateDir: emptyStateDir,
         configPath,
         cronStorePath,
         agentDir,
@@ -236,9 +234,6 @@ describe("backup/export", () => {
 
     const { exportBackup, configPath, cronStorePath, agentDir } = await setupExport(stateDir);
 
-    const configPath = path.join(stateDir, "openclaw.json");
-    const cronStorePath = path.join(stateDir, "cron", "jobs.json");
-    const agentDir = path.join(stateDir, "agents", "default", "agent");
     const result = await exportBackup({
       stateDir,
       configPath,
@@ -288,7 +283,6 @@ describe("backup/export", () => {
     const outputPath = path.join(base, "all-components.tar.gz");
     const configPath = path.join(stateDir, "openclaw.json");
     const cronStorePath = path.join(stateDir, "cron", "jobs.json");
-    const agentDir = path.join(stateDir, "agents", "default", "agent");
     const result = await exportBackup({
       stateDir,
       configPath,
@@ -368,9 +362,6 @@ describe("backup/export", () => {
 
     const { exportBackup, configPath, cronStorePath, agentDir } = await setupExport(stateDir);
 
-    const configPath = path.join(stateDir, "openclaw.json");
-    const cronStorePath = path.join(stateDir, "cron", "jobs.json");
-    const agentDir = path.join(stateDir, "agents", "default", "agent");
     const result = await exportBackup({
       stateDir,
       configPath,
@@ -428,23 +419,30 @@ describe("backup/export → import roundtrip", () => {
     vi.resetModules();
 
     const { importBackup } = await import("./import.js");
+    const targetConfigPath = path.join(targetStateDir, "openclaw.json");
+    const targetCronStorePath = path.join(targetStateDir, "cron", "jobs.json");
+    const targetAgentDir = path.join(targetStateDir, "agents", "default", "agent");
 
-    const imported = await importBackup({ input: archivePath });
+    const imported = await importBackup({
+      stateDir: targetStateDir,
+      configPath: targetConfigPath,
+      cronStorePath: targetCronStorePath,
+      agentDir: targetAgentDir,
+      input: archivePath,
+    });
 
     expect(imported.integrityErrors).toEqual([]);
     expect(imported.restoredComponents).toEqual(["config", "workspace", "skills"]);
 
     // Verify config content matches (secrets redacted in both)
-    const importedConfig = JSON.parse(await fs.readFile(configPath, "utf-8"));
+    const importedConfig = JSON.parse(await fs.readFile(targetConfigPath, "utf-8"));
     expect(importedConfig.gateway.auth.token).toBe("***REDACTED***");
     expect(importedConfig.models.primary).toBe("anthropic/claude-4");
 
     // Verify workspace files match
-    // agentDir already declared
-    // const agentDir = path.join(targetStateDir, "agents", "default", "agent");
-    const soul = await fs.readFile(path.join(agentDir, "SOUL.md"), "utf-8");
+    const soul = await fs.readFile(path.join(targetAgentDir, "SOUL.md"), "utf-8");
     expect(soul).toBe("# Soul\nI am a helpful assistant.");
-    const memory = await fs.readFile(path.join(agentDir, "MEMORY.md"), "utf-8");
+    const memory = await fs.readFile(path.join(targetAgentDir, "MEMORY.md"), "utf-8");
     expect(memory).toBe("# Memory\nUser likes dark mode.");
 
     // Verify skills match
@@ -484,17 +482,20 @@ describe("backup/export → import roundtrip", () => {
     vi.resetModules();
 
     const { importBackup } = await import("./import.js");
+    const targetAgentDir = path.join(targetStateDir, "agents", "default", "agent");
 
     const result = await importBackup({
+      stateDir: targetStateDir,
+      configPath: path.join(targetStateDir, "openclaw.json"),
+      cronStorePath: path.join(targetStateDir, "cron", "jobs.json"),
+      agentDir: targetAgentDir,
       input: archivePath,
       decrypt: passphrase,
     });
     expect(result.integrityErrors).toEqual([]);
 
     // Verify workspace content survived encrypt → decrypt
-    // agentDir already declared
-    // const agentDir = path.join(targetStateDir, "agents", "default", "agent");
-    const soul = await fs.readFile(path.join(agentDir, "SOUL.md"), "utf-8");
+    const soul = await fs.readFile(path.join(targetAgentDir, "SOUL.md"), "utf-8");
     expect(soul).toBe("# Soul\nI am a helpful assistant.");
   });
 });
