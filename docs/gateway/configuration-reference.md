@@ -992,6 +992,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
 **Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
+noVNC observer access uses VNC auth by default and the generated URL includes the password query parameter automatically.
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
 - `sandbox.browser.binds` mounts additional host directories into the sandbox browser container only. When set (including `[]`), it replaces `docker.binds` for the browser container.
