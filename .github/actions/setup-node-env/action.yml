@@ -50,7 +50,7 @@ runs:
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
       with:
         bun-version: "1.3.9+cf6cdbbba"
 

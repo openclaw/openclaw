@@ -32,13 +32,13 @@ jobs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -71,7 +71,7 @@ jobs:
 
       - name: Build and push amd64 image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64
@@ -91,13 +91,13 @@ jobs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -130,7 +130,7 @@ jobs:
 
       - name: Build and push arm64 image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/arm64
@@ -149,10 +149,10 @@ jobs:
     needs: [build-amd64, build-arm64]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}

@@ -25,8 +25,11 @@ RUN apt-get update \
 
 RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
 
+# CRITICAL-14: Download installer to disk before executing (avoid pipe-to-shell)
 RUN if [ "${INSTALL_BUN}" = "1" ]; then \
-  curl -fsSL https://bun.sh/install | bash; \
+  curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install && \
+  bash /tmp/bun-install.sh && \
+  rm -f /tmp/bun-install.sh && \
   ln -sf "${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \
 fi
 
