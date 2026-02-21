@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "rolldown";
 
@@ -16,6 +17,17 @@ const outputFile = path.resolve(
 
 const a2uiLitDist = path.resolve(repoRoot, "vendor/a2ui/renderers/lit/dist/src");
 const a2uiThemeContext = path.resolve(a2uiLitDist, "0.8/ui/context/theme.js");
+const a2uiNodeModules = path.resolve(repoRoot, "ui/node_modules");
+const rootNodeModules = path.resolve(repoRoot, "node_modules");
+
+const resolveA2uiDep = (pkg, rel = "") => {
+  const uiPath = path.resolve(a2uiNodeModules, pkg, rel);
+  if (existsSync(uiPath)) {
+    return uiPath;
+  }
+
+  return path.resolve(rootNodeModules, pkg, rel);
+};
 
 export default defineConfig({
   input: fromHere("bootstrap.js"),
@@ -28,12 +40,13 @@ export default defineConfig({
       "@a2ui/lit": path.resolve(a2uiLitDist, "index.js"),
       "@a2ui/lit/ui": path.resolve(a2uiLitDist, "0.8/ui/ui.js"),
       "@openclaw/a2ui-theme-context": a2uiThemeContext,
-      "@lit/context": path.resolve(repoRoot, "node_modules/@lit/context/index.js"),
-      "@lit/context/": path.resolve(repoRoot, "node_modules/@lit/context/"),
-      "@lit-labs/signals": path.resolve(repoRoot, "node_modules/@lit-labs/signals/index.js"),
-      "@lit-labs/signals/": path.resolve(repoRoot, "node_modules/@lit-labs/signals/"),
-      lit: path.resolve(repoRoot, "node_modules/lit/index.js"),
-      "lit/": path.resolve(repoRoot, "node_modules/lit/"),
+      "@lit/context": resolveA2uiDep("@lit/context", "index.js"),
+      "@lit/context/": resolveA2uiDep("@lit/context"),
+      "@lit-labs/signals": resolveA2uiDep("@lit-labs/signals", "index.js"),
+      "@lit-labs/signals/": resolveA2uiDep("@lit-labs/signals"),
+      lit: resolveA2uiDep("lit", "index.js"),
+      "lit/": resolveA2uiDep("lit"),
+      "signal-utils/": resolveA2uiDep("signal-utils"),
     },
   },
   output: {
