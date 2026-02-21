@@ -306,8 +306,7 @@ export async function onTimer(state: CronServiceState) {
     let cursor = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       for (;;) {
-        const index = cursor;
-        cursor += 1;
+        const index = cursor++;
         if (index >= dueJobs.length) {
           return;
         }
