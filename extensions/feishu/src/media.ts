@@ -415,24 +415,23 @@ export async function sendAudioFeishu(params: {
   return toFeishuSendResult(response, receiveId);
 }
 
-/** Audio extensions that Feishu can handle as playable audio messages. */
-const AUDIO_EXTENSIONS = new Set([".opus", ".ogg", ".mp3", ".wav", ".m4a", ".aac", ".flac"]);
-
 /**
- * Helper to detect file type from extension.
- *
- * NOTE: All audio formats map to "opus" because the Feishu file-upload API
- * accepts only a fixed set of `file_type` values and "opus" is the designated
- * type for any audio upload (regardless of the actual codec).
+ * Detect Feishu file-upload API `file_type` from extension.
+ * Audio formats all map to "opus" — the only audio type Feishu accepts.
  */
 export function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = path.extname(fileName).toLowerCase();
-  if (AUDIO_EXTENSIONS.has(ext)) {
-    return "opus";
-  }
   switch (ext) {
+    case ".opus":
+    case ".ogg":
+    case ".mp3":
+    case ".wav":
+    case ".m4a":
+    case ".aac":
+    case ".flac":
+      return "opus";
     case ".mp4":
     case ".mov":
     case ".avi":
@@ -451,10 +450,6 @@ export function detectFileType(
     default:
       return "stream";
   }
-}
-
-function isAudioFile(fileName: string): boolean {
-  return AUDIO_EXTENSIONS.has(path.extname(fileName).toLowerCase());
 }
 
 /**
@@ -519,12 +514,12 @@ export async function sendMediaFeishu(params: {
   // Determine media type based on extension
   const ext = path.extname(name).toLowerCase();
   const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const isAudio = [".opus", ".ogg", ".mp3", ".wav", ".m4a", ".aac", ".flac"].includes(ext);
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
-  } else if (isAudioFile(name)) {
-    // Audio files: upload as opus and send as playable audio message
+  } else if (isAudio) {
     const fileType = detectFileType(name);
     const durationMs = await getAudioDurationMs(buffer, name);
     const { fileKey } = await uploadFileFeishu({
@@ -545,13 +540,13 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    // Feishu uses msg_type "media" for video, "file" for documents
+    const isVideo = fileType === "mp4";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType: isVideo ? "media" : "file",
       replyToMessageId,
       accountId,
     });
