@@ -464,6 +464,32 @@ export async function runAgentTurnWithFallback(params: {
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
+      // Detect "all models timed out" as a likely session bloat issue.
+      // When every fallback model times out and the session has accumulated
+      // significant tokens, the transcript is too large for the timeout window
+      // (image processing, serialization, network round-trip all add up).
+      // Auto-reset to break the death spiral instead of returning an error
+      // that will just be retried on the next incoming message.
+      const isAllTimedOut =
+        /All models failed.*LLM request timed out/i.test(message) &&
+        !/LLM request timed out.*(?:rate.?limit|quota|throttl)/i.test(message);
+      if (
+        isAllTimedOut &&
+        !didResetAfterCompactionFailure &&
+        (await params.resetSessionAfterCompactionFailure(message))
+      ) {
+        didResetAfterCompactionFailure = true;
+        defaultRuntime.error(
+          `All models timed out — likely session bloat. Auto-resetting session.`,
+        );
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ All models timed out — conversation history was too large. I've reset the session to start fresh. Please try again!",
+          },
+        };
+      }
+
       if (
         isCompactionFailure &&
         !didResetAfterCompactionFailure &&
