@@ -150,7 +150,7 @@ OpenClaw **blocks** Control UI connections without device identity.
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (on the gateway host)
 
-**Downgrade example (token-only over HTTP):**
+**Insecure-auth toggle behavior:**
 
 ```json5
 {
@@ -162,8 +162,22 @@ OpenClaw **blocks** Control UI connections without device identity.
 }
 ```
 
-This disables device identity + pairing for the Control UI (even on HTTPS). Use
-only if you trust the network.
+`allowInsecureAuth` does not bypass Control UI device identity or pairing checks.
+
+**Break-glass only:**
+
+```json5
+{
+  gateway: {
+    controlUi: { dangerouslyDisableDeviceAuth: true },
+    bind: "tailnet",
+    auth: { mode: "token", token: "replace-me" },
+  },
+}
+```
+
+`dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a
+severe security downgrade. Revert quickly after emergency use.
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 

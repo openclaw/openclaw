@@ -127,7 +127,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `gateway.http.no_auth`                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                     | `gateway.auth.mode`, `gateway.http.endpoints.*`               | no       |
 | `gateway.tools_invoke_http.dangerous_allow`   | warn/critical | Re-enables dangerous tools over HTTP API                                | `gateway.tools.allow`                                         | no       |
 | `gateway.tailscale_funnel`                    | critical      | Public internet exposure                                                | `gateway.tailscale.mode`                                      | no       |
-| `gateway.control_ui.insecure_auth`            | critical      | Token-only over HTTP, no device identity                                | `gateway.controlUi.allowInsecureAuth`                         | no       |
+| `gateway.control_ui.insecure_auth`            | critical      | Insecure-auth toggle enabled                                            | `gateway.controlUi.allowInsecureAuth`                         | no       |
 | `gateway.control_ui.device_auth_disabled`     | critical      | Disables device identity check                                          | `gateway.controlUi.dangerouslyDisableDeviceAuth`              | no       |
 | `hooks.token_too_short`                       | warn          | Easier brute force on hook ingress                                      | `hooks.token`                                                 | no       |
 | `hooks.request_session_key_enabled`           | warn/critical | External caller can choose sessionKey                                   | `hooks.allowRequestSessionKey`                                | no       |
@@ -143,9 +143,9 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 ## Control UI over HTTP
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
-identity. If you enable `gateway.controlUi.allowInsecureAuth`, the UI falls back
-to **token-only auth** and skips device pairing when device identity is omitted. This is a security
-downgrade—prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
+identity. `gateway.controlUi.allowInsecureAuth` does **not** bypass secure-context,
+device-identity, or device-pairing checks. Prefer HTTPS (Tailscale Serve) or open
+the UI on `127.0.0.1`.
 
 For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
 disables device identity checks entirely. This is a severe security downgrade;
