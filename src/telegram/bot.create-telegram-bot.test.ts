@@ -278,9 +278,9 @@ describe("createTelegramBot", () => {
     ] as const;
 
     for (const testCase of cases) {
-      onSpy.mockReset();
-      sendMessageSpy.mockReset();
-      replySpy.mockReset();
+      onSpy.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
       loadConfig.mockReturnValue({
         channels: { telegram: { dmPolicy: "pairing" } },
       });
@@ -1448,9 +1448,9 @@ describe("createTelegramBot", () => {
       ["first", 101],
       ["all", 102],
     ] as const) {
-      onSpy.mockReset();
-      sendMessageSpy.mockReset();
-      replySpy.mockReset();
+      onSpy.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
       replySpy.mockResolvedValue({
         text: "a".repeat(4500),
         replyToId: String(messageId),
