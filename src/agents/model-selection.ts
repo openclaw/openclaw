@@ -399,6 +399,13 @@ export function buildAllowedModelSet(params: {
       // Explicitly configured providers should be allowlist-able even when
       // they don't exist in the curated model catalog.
       allowedKeys.add(key);
+    } else {
+      // Models explicitly listed in agents.defaults.models should always be
+      // allowed, even if they're not in the catalog or provider config.
+      // This fixes subagent model overrides for providers like google-antigravity
+      // that use OAuth-based auth and dynamic model discovery.
+      // See: https://github.com/openclaw/openclaw/issues/6295
+      allowedKeys.add(key);
     }
   }
 
