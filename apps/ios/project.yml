@@ -108,13 +108,8 @@ targets:
         NSBonjourServices:
           - _openclaw-gw._tcp
         NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
-        NSPhotoLibraryUsageDescription: OpenClaw can read your photo library when you ask it to share recent photos.
-        NSContactsUsageDescription: OpenClaw can read and create contacts when requested via the gateway.
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
-        NSCalendarsFullAccessUsageDescription: OpenClaw can read and add calendar events when requested via the gateway.
-        NSRemindersFullAccessUsageDescription: OpenClaw can read and add reminders when requested via the gateway.
-        NSMotionUsageDescription: OpenClaw uses Motion & Fitness data for activity and pedometer commands.
         NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         UISupportedInterfaceOrientations:
