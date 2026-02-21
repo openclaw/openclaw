@@ -150,12 +150,41 @@ function requireExecApprovalsBaseHash(
   }
 }
 
+export function validateWorkingDirectory(cwd: string | undefined): string | null {
+  if (!cwd) {
+    return null;
+  }
+  if (!fs.existsSync(cwd)) {
+    return `working directory not found: ${cwd}`;
+  }
+  try {
+    const stat = fs.statSync(cwd);
+    if (!stat.isDirectory()) {
+      return `working directory is not a directory: ${cwd}`;
+    }
+  } catch {
+    return `working directory not accessible: ${cwd}`;
+  }
+  return null;
+}
+
 async function runCommand(
   argv: string[],
   cwd: string | undefined,
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
 ): Promise<RunResult> {
+  const cwdError = validateWorkingDirectory(cwd);
+  if (cwdError) {
+    return {
+      timedOut: false,
+      success: false,
+      stdout: "",
+      stderr: "",
+      error: cwdError,
+      truncated: false,
+    };
+  }
   return await new Promise((resolve) => {
     let stdout = "";
     let stderr = "";

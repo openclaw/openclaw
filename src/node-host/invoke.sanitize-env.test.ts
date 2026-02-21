@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeEnv } from "./invoke.js";
+import { sanitizeEnv, validateWorkingDirectory } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
@@ -76,6 +76,24 @@ describe("node-host sanitizeEnv", () => {
         process.env.BASH_ENV = prevBashEnv;
       }
     }
+  });
+});
+
+describe("validateWorkingDirectory", () => {
+  it("returns null when cwd is undefined", () => {
+    expect(validateWorkingDirectory(undefined)).toBeNull();
+  });
+
+  it("returns a clear error when cwd does not exist", () => {
+    const missing = "/tmp/openclaw-test-missing-cwd-should-not-exist";
+    expect(validateWorkingDirectory(missing)).toBe(`working directory not found: ${missing}`);
+  });
+
+  it("returns a clear error when cwd points to a file", () => {
+    const filePath = new URL(import.meta.url).pathname;
+    expect(validateWorkingDirectory(filePath)).toBe(
+      `working directory is not a directory: ${filePath}`,
+    );
   });
 });
 
