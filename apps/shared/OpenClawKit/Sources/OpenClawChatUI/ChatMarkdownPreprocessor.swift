@@ -60,16 +60,48 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {
-        var output = raw
-        for header in self.inboundContextHeaders {
-            let escaped = NSRegularExpression.escapedPattern(for: header)
-            let pattern = "(?ms)^" + escaped + "\\n```json\\n.*?\\n```\\n?"
-            output = output.replacingOccurrences(
-                of: pattern,
-                with: "",
-                options: .regularExpression)
+        guard self.inboundContextHeaders.contains(where: raw.contains) else {
+            return raw
         }
-        return output
+
+        var outputLines: [String] = []
+        var inMetaBlock = false
+        var inFencedJson = false
+
+        for line in raw.split(whereSeparator: \.isNewline, omittingEmptySubsequences: false) {
+            let currentLine = String(line)
+
+            if !inMetaBlock && self.inboundContextHeaders.contains(where: currentLine.hasPrefix) {
+                inMetaBlock = true
+                inFencedJson = false
+                continue
+            }
+
+            if inMetaBlock {
+                if !inFencedJson && currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```json" {
+                    inFencedJson = true
+                    continue
+                }
+
+                if inFencedJson {
+                    if currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
+                        inMetaBlock = false
+                        inFencedJson = false
+                    }
+                    continue
+                }
+
+                if currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    continue
+                }
+
+                inMetaBlock = false
+            }
+
+            outputLines.append(currentLine)
+        }
+
+        return outputLines.joined(separator: "\n").replacingOccurrences(of: #"^\n+"#, with: "", options: .regularExpression)
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {
