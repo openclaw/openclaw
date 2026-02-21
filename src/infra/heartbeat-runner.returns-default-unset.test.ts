@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -20,6 +21,7 @@ import {
   type HeartbeatDeps,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
+  type HeartbeatDeps,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
 import {
