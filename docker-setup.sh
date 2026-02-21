@@ -93,8 +93,49 @@ export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 
+read_existing_gateway_token() {
+  local config_file="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_file" ]]; then
+    return 0
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+      const fs = require("fs");
+      const path = process.argv[1];
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+        const token = parsed?.gateway?.auth?.token;
+        if (typeof token === "string" && token.trim()) process.stdout.write(token.trim());
+      } catch {}
+    ' "$config_file" 2>/dev/null || true
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$config_file" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        parsed = json.load(f)
+    token = (((parsed or {}).get("gateway") or {}).get("auth") or {}).get("token")
+    if isinstance(token, str):
+        token = token.strip()
+        if token:
+            print(token, end="")
+except Exception:
+    pass
+PY
+  fi
+}
+
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
+  EXISTING_GATEWAY_TOKEN="$(read_existing_gateway_token)"
+  if [[ -n "$EXISTING_GATEWAY_TOKEN" ]]; then
+    OPENCLAW_GATEWAY_TOKEN="$EXISTING_GATEWAY_TOKEN"
+  elif command -v openssl >/dev/null 2>&1; then
     OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
   else
     OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
@@ -245,11 +286,23 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_DOCKER_APT_PACKAGES
 
 echo "==> Building Docker image: $IMAGE_NAME"
-docker build \
-  --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
-  -t "$IMAGE_NAME" \
-  -f "$ROOT_DIR/Dockerfile" \
+BUILD_ARGS=(
+  --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}"
+  -t "$IMAGE_NAME"
+  -f "$ROOT_DIR/Dockerfile"
   "$ROOT_DIR"
+)
+
+if docker buildx version >/dev/null 2>&1; then
+  # Buildx with the docker-container driver keeps the image in cache unless
+  # --load is used; compose run then tries to pull from a registry.
+  if ! docker buildx build --load "${BUILD_ARGS[@]}"; then
+    echo "WARN: docker buildx build --load failed; falling back to docker build." >&2
+    docker build "${BUILD_ARGS[@]}"
+  fi
+else
+  docker build "${BUILD_ARGS[@]}"
+fi
 
 echo ""
 echo "==> Onboarding (interactive)"
