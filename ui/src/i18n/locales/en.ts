@@ -112,5 +112,6 @@ export const en: TranslationMap = {
     zhCN: "简体中文 (Simplified Chinese)",
     zhTW: "繁體中文 (Traditional Chinese)",
     ptBR: "Português (Brazilian Portuguese)",
+    ko: "한국어 (Korean)",
   },
 };
