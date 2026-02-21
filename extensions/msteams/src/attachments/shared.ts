@@ -241,7 +241,7 @@ export function extractInlineImageCandidates(
 ): InlineImageCandidate[] {
   const out: InlineImageCandidate[] = [];
   let totalEstimatedInlineBytes = 0;
-  for (const att of attachments) {
+  outerLoop: for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
       continue;
@@ -261,7 +261,7 @@ export function extractInlineImageCandidates(
               typeof limits?.maxInlineTotalBytes === "number" &&
               nextTotal > limits.maxInlineTotalBytes
             ) {
-              break;
+              break outerLoop;
             }
             totalEstimatedInlineBytes = nextTotal;
             out.push(decoded);
