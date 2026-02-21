@@ -1,10 +1,20 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
+
+// Allow mocking summarizeInStages for the "summarization throws" test
+vi.mock("../compaction.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../compaction.js")>();
+  return {
+    ...original,
+    summarizeInStages: vi.fn(original.summarizeInStages),
+  };
+});
 
 const {
   collectToolFailures,
@@ -26,7 +36,7 @@ describe("compaction-safeguard tool failures", () => {
         isError: true,
         details: { status: "failed", exitCode: 1 },
         content: [{ type: "text", text: "ENOENT: missing file" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
       {
         role: "toolResult",
@@ -34,7 +44,7 @@ describe("compaction-safeguard tool failures", () => {
         toolName: "read",
         isError: false,
         content: [{ type: "text", text: "ok" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
     ];
 
@@ -55,7 +65,7 @@ describe("compaction-safeguard tool failures", () => {
         isError: true,
         details: { exitCode: 2 },
         content: [],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
       {
         role: "toolResult",
@@ -63,7 +73,7 @@ describe("compaction-safeguard tool failures", () => {
         toolName: "exec",
         isError: true,
         content: [{ type: "text", text: "ignored" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
     ];
 
@@ -81,7 +91,7 @@ describe("compaction-safeguard tool failures", () => {
       toolName: "exec",
       isError: true,
       content: [{ type: "text", text: `error ${idx}` }],
-      timestamp: Date.now(),
+      timestamp: 0,
     }));
 
     const failures = collectToolFailures(messages);
@@ -98,7 +108,7 @@ describe("compaction-safeguard tool failures", () => {
         toolName: "exec",
         isError: false,
         content: [{ type: "text", text: "ok" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
     ];
 
@@ -114,11 +124,11 @@ describe("computeAdaptiveChunkRatio", () => {
   it("returns BASE_CHUNK_RATIO for normal messages", () => {
     // Small messages: 1000 tokens each, well under 10% of context
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(1000), timestamp: 0 },
       {
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
-        timestamp: Date.now(),
+        timestamp: 0,
       } as unknown as AgentMessage,
     ];
 
@@ -129,11 +139,11 @@ describe("computeAdaptiveChunkRatio", () => {
   it("reduces ratio when average message > 10% of context", () => {
     // Large messages: ~50K tokens each (25% of context)
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(50_000 * 4), timestamp: 0 },
       {
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
-        timestamp: Date.now(),
+        timestamp: 0,
       } as unknown as AgentMessage,
     ];
 
@@ -145,7 +155,7 @@ describe("computeAdaptiveChunkRatio", () => {
   it("respects MIN_CHUNK_RATIO floor", () => {
     // Very large messages that would push ratio below minimum
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(150_000 * 4), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(150_000 * 4), timestamp: 0 },
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -160,7 +170,7 @@ describe("computeAdaptiveChunkRatio", () => {
   it("handles single huge message", () => {
     // Single massive message
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(180_000 * 4), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(180_000 * 4), timestamp: 0 },
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -176,7 +186,7 @@ describe("isOversizedForSummary", () => {
     const msg: AgentMessage = {
       role: "user",
       content: "Hello, world!",
-      timestamp: Date.now(),
+      timestamp: 0,
     };
 
     expect(isOversizedForSummary(msg, CONTEXT_WINDOW)).toBe(false);
@@ -188,7 +198,7 @@ describe("isOversizedForSummary", () => {
     const msg: AgentMessage = {
       role: "user",
       content: "x".repeat(120_000 * 4),
-      timestamp: Date.now(),
+      timestamp: 0,
     };
 
     expect(isOversizedForSummary(msg, CONTEXT_WINDOW)).toBe(true);
@@ -201,7 +211,7 @@ describe("isOversizedForSummary", () => {
     const msg: AgentMessage = {
       role: "user",
       content: "x".repeat(Math.floor(halfContextChars * 4)),
-      timestamp: Date.now(),
+      timestamp: 0,
     };
 
     // With safety margin applied, this should be at the boundary
@@ -247,5 +257,114 @@ describe("compaction-safeguard runtime registry", () => {
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+  });
+});
+
+// --- Regression tests for #10332: compaction must cancel on failure paths ---
+
+function makeMinimalPreparation() {
+  return {
+    messagesToSummarize: [] as AgentMessage[],
+    turnPrefixMessages: [] as AgentMessage[],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 5000,
+    isSplitTurn: false,
+    previousSummary: undefined,
+    settings: { reserveTokens: 500 },
+    fileOps: {
+      read: [] as string[],
+      edited: [] as string[],
+      written: [] as string[],
+    },
+  };
+}
+
+function captureHandler() {
+  let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+
+  const api = {
+    on: (name: string, fn: unknown) => {
+      if (name === "session_before_compact") {
+        handler = fn as typeof handler;
+      }
+    },
+    appendEntry: (_type: string, _data?: unknown) => {},
+  } as unknown as ExtensionAPI;
+
+  compactionSafeguardExtension(api);
+  if (!handler) {
+    throw new Error("missing session_before_compact handler");
+  }
+  return handler;
+}
+
+describe("compaction-safeguard cancels on failure (#10332)", () => {
+  it("cancels compaction when no model is available", async () => {
+    const handler = captureHandler();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await handler(
+      { preparation: makeMinimalPreparation(), customInstructions: undefined, signal: undefined },
+      {
+        model: undefined,
+        modelRegistry: { getApiKey: async () => "key" },
+        sessionManager: {},
+      },
+    );
+
+    expect(result).toEqual({ cancel: true });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("no model available"));
+    warnSpy.mockRestore();
+  });
+
+  it("cancels compaction when no API key is available", async () => {
+    const handler = captureHandler();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await handler(
+      { preparation: makeMinimalPreparation(), customInstructions: undefined, signal: undefined },
+      {
+        model: { contextWindow: 128_000 },
+        modelRegistry: { getApiKey: async () => undefined },
+        sessionManager: {},
+      },
+    );
+
+    expect(result).toEqual({ cancel: true });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("no API key available"));
+    warnSpy.mockRestore();
+  });
+
+  it("cancels compaction when summarization throws", async () => {
+    const handler = captureHandler();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Mock summarizeInStages to throw for this test
+    const { summarizeInStages } = await import("../compaction.js");
+    const mockedSummarize = vi.mocked(summarizeInStages);
+    mockedSummarize.mockRejectedValueOnce(new Error("LLM API timeout"));
+
+    const result = await handler(
+      {
+        preparation: {
+          ...makeMinimalPreparation(),
+          messagesToSummarize: [{ role: "user", content: "hello", timestamp: 0 }],
+        },
+        customInstructions: undefined,
+        signal: undefined,
+      },
+      {
+        model: { contextWindow: 128_000 },
+        modelRegistry: { getApiKey: async () => "test-key" },
+        sessionManager: {},
+      },
+    );
+
+    expect(result).toEqual({ cancel: true });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("cancelling compaction to preserve history"),
+    );
+    warnSpy.mockRestore();
+    mockedSummarize.mockRestore();
   });
 });
