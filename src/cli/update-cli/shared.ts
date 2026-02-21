@@ -11,6 +11,7 @@ import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
+  type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
@@ -236,10 +237,7 @@ export async function resolveGlobalManager(params: {
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
 }): Promise<GlobalInstallManager> {
-  const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
-    const res = await runCommandWithTimeout(argv, options);
-    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-  };
+  const runCommand = createGlobalCommandRunner();
 
   if (params.installKind === "package") {
     const detected = await detectGlobalInstallManagerForRoot(
@@ -280,4 +278,11 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     const detail = stderr ? ` (${stderr})` : "";
     defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
   }
+}
+
+export function createGlobalCommandRunner(): CommandRunner {
+  return async (argv, options) => {
+    const res = await runCommandWithTimeout(argv, options);
+    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+  };
 }
