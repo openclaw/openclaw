@@ -66,6 +66,13 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
@@ -168,4 +175,6 @@ export const CommandsSchema = z
   })
   .strict()
   .optional()
-  .default({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" });
+  .default(
+    () => ({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" }) as const,
+  );
