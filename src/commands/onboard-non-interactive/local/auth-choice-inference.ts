@@ -17,6 +17,7 @@ type AuthChoiceFlagOptions = Pick<
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
   | "kimiCodeApiKey"
+  | "stepfunApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
   | "togetherApiKey"

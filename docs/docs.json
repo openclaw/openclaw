@@ -1057,6 +1057,7 @@
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
+                  "providers/stepfun",
                   "providers/minimax",
                   "providers/opencode",
                   "providers/glm",

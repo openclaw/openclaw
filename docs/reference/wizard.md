@@ -49,6 +49,8 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **Moonshot (Kimi K2)**: config is auto-written.
     - **Kimi Coding**: config is auto-written.
     - More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+    - **StepFun (Step 3.5 Flash)**: config is auto-written.
+    - More detail: [StepFun](/providers/stepfun)
     - **Skip**: no auth configured yet.
     - Pick a default model from detected options (or enter provider/model manually).
     - Wizard runs a model check and warns if the configured model is unknown or missing auth.
@@ -180,6 +182,16 @@ Add `--json` for a machine‑readable summary.
       --mode local \
       --auth-choice moonshot-api-key \
       --moonshot-api-key "$MOONSHOT_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
+  <Accordion title="StepFun example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice stepfun-api-key \
+      --stepfun-api-key "$STEPFUN_API_KEY" \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
