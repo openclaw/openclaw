@@ -571,6 +571,40 @@ struct ExecCommandResolution: Sendable {
         return self.resolve(command: command, cwd: cwd, env: env)
     }
 
+    static func resolveForAllowlist(
+        command: [String],
+        rawCommand: String?,
+        cwd: String?,
+        env: [String: String]?) -> [ExecCommandResolution]
+    {
+        let shell = self.extractShellCommandFromArgv(command: command, rawCommand: rawCommand)
+        if shell.isWrapper {
+            guard let shellCommand = shell.command,
+                  let segments = self.splitShellCommandChain(shellCommand)
+            else {
+                // Fail closed: if we cannot safely parse a shell wrapper payload,
+                // treat this as an allowlist miss and require approval.
+                return []
+            }
+            var resolutions: [ExecCommandResolution] = []
+            resolutions.reserveCapacity(segments.count)
+            for segment in segments {
+                guard let token = self.parseFirstToken(segment),
+                      let resolution = self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
+                else {
+                    return []
+                }
+                resolutions.append(resolution)
+            }
+            return resolutions
+        }
+
+        guard let resolution = self.resolve(command: command, rawCommand: rawCommand, cwd: cwd, env: env) else {
+            return []
+        }
+        return [resolution]
+    }
+
     static func resolve(command: [String], cwd: String?, env: [String: String]?) -> ExecCommandResolution? {
         guard let raw = command.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
@@ -617,6 +651,156 @@ struct ExecCommandResolution: Sendable {
             return String(rest)
         }
         return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+    }
+
+    private static func basenameLower(_ token: String) -> String {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let normalized = trimmed.replacingOccurrences(of: "\\", with: "/")
+        return normalized.split(separator: "/").last.map { String($0).lowercased() } ?? normalized.lowercased()
+    }
+
+    private static func extractShellCommandFromArgv(
+        command: [String],
+        rawCommand: String?) -> (isWrapper: Bool, command: String?)
+    {
+        guard let token0 = command.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token0.isEmpty else {
+            return (false, nil)
+        }
+        let base0 = self.basenameLower(token0)
+        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let preferredRaw = trimmedRaw.isEmpty ? nil : trimmedRaw
+
+        if ["sh", "bash", "zsh", "dash", "ksh"].contains(base0) {
+            let flag = command.count > 1 ? command[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            guard flag == "-lc" || flag == "-c" else { return (false, nil) }
+            let payload = command.count > 2 ? command[2].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            let normalized = preferredRaw ?? (payload.isEmpty ? nil : payload)
+            return (true, normalized)
+        }
+
+        if base0 == "cmd.exe" || base0 == "cmd" {
+            guard let idx = command
+                .firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "/c" })
+            else {
+                return (false, nil)
+            }
+            let tail = command.suffix(from: command.index(after: idx)).joined(separator: " ")
+            let payload = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = preferredRaw ?? (payload.isEmpty ? nil : payload)
+            return (true, normalized)
+        }
+
+        return (false, nil)
+    }
+
+    private static func splitShellCommandChain(_ command: String) -> [String]? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        var segments: [String] = []
+        var current = ""
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+        let chars = Array(trimmed)
+        var idx = 0
+
+        func appendCurrent() -> Bool {
+            let segment = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !segment.isEmpty else { return false }
+            segments.append(segment)
+            current.removeAll(keepingCapacity: true)
+            return true
+        }
+
+        while idx < chars.count {
+            let ch = chars[idx]
+            let next: Character? = idx + 1 < chars.count ? chars[idx + 1] : nil
+
+            if escaped {
+                current.append(ch)
+                escaped = false
+                idx += 1
+                continue
+            }
+
+            if ch == "\\", !inSingle {
+                current.append(ch)
+                escaped = true
+                idx += 1
+                continue
+            }
+
+            if ch == "'", !inDouble {
+                inSingle.toggle()
+                current.append(ch)
+                idx += 1
+                continue
+            }
+
+            if ch == "\"", !inSingle {
+                inDouble.toggle()
+                current.append(ch)
+                idx += 1
+                continue
+            }
+
+            if !inSingle, !inDouble {
+                if self.shouldFailClosedForUnquotedShell(ch: ch, next: next) {
+                    // Fail closed on command/process substitution in allowlist mode.
+                    return nil
+                }
+                let prev: Character? = idx > 0 ? chars[idx - 1] : nil
+                if let delimiterStep = self.chainDelimiterStep(ch: ch, prev: prev, next: next) {
+                    guard appendCurrent() else { return nil }
+                    idx += delimiterStep
+                    continue
+                }
+            }
+
+            current.append(ch)
+            idx += 1
+        }
+
+        if escaped || inSingle || inDouble { return nil }
+        guard appendCurrent() else { return nil }
+        return segments
+    }
+
+    private static func shouldFailClosedForUnquotedShell(ch: Character, next: Character?) -> Bool {
+        if ch == "`" {
+            return true
+        }
+        if ch == "$", next == "(" {
+            return true
+        }
+        if ch == "<" || ch == ">", next == "(" {
+            return true
+        }
+        return false
+    }
+
+    private static func chainDelimiterStep(ch: Character, prev: Character?, next: Character?) -> Int? {
+        if ch == ";" || ch == "\n" {
+            return 1
+        }
+        if ch == "&" {
+            if next == "&" {
+                return 2
+            }
+            // Keep fd redirections like 2>&1 or &>file intact.
+            let prevIsRedirect = prev == ">"
+            let nextIsRedirect = next == ">"
+            return (!prevIsRedirect && !nextIsRedirect) ? 1 : nil
+        }
+        if ch == "|" {
+            if next == "|" || next == "&" {
+                return 2
+            }
+            return 1
+        }
+        return nil
     }
 
     private static func searchPaths(from env: [String: String]?) -> [String] {
@@ -690,6 +874,22 @@ enum ExecAllowlistMatcher {
             }
         }
         return nil
+    }
+
+    static func matchAll(
+        entries: [ExecAllowlistEntry],
+        resolutions: [ExecCommandResolution]) -> [ExecAllowlistEntry]
+    {
+        guard !entries.isEmpty, !resolutions.isEmpty else { return [] }
+        var matches: [ExecAllowlistEntry] = []
+        matches.reserveCapacity(resolutions.count)
+        for resolution in resolutions {
+            guard let match = self.match(entries: entries, resolution: resolution) else {
+                return []
+            }
+            matches.append(match)
+        }
+        return matches
     }
 
     private static func matches(pattern: String, target: String) -> Bool {
