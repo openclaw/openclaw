@@ -16,7 +16,7 @@ function stripEnvelopeFromContent(content: unknown[]): { content: unknown[]; cha
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadataBlocks(entry.text)));
     if (stripped === entry.text) {
       return item;
     }

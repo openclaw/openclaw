@@ -67,7 +67,6 @@ export function stripInboundMetadataBlocks(text: string): string {
     if (!match) {
       break;
     }
-    const [, _] = match;
     remaining = remaining.slice(match[0].length).replace(/^\r?\n+/, "");
   }
   return remaining.trim();
