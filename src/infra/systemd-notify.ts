@@ -1,5 +1,4 @@
 import dgram from "node:dgram";
-import fs from "node:fs";
 
 /**
  * Sends a notification to systemd via the NOTIFY_SOCKET.
@@ -16,12 +15,14 @@ export function sendNotification(state: string): void {
   const buffer = Buffer.from(state + "\n");
 
   try {
-    const client = dgram.createSocket("unix_dgram");
+    // "unix_dgram" is a valid Node.js socket type but absent from @types/node SocketType
+    const client = dgram.createSocket("unix_dgram" as unknown as dgram.SocketType);
 
     // Abstract sockets need to be prefixed with \0
     const finalPath = isAbstract ? "\0" + socketPath.slice(1) : socketPath;
 
-    client.send(buffer, 0, buffer.length, finalPath, (err) => {
+    // Unix domain socket send takes a path string where UDP expects a port number
+    client.send(buffer, 0, buffer.length, finalPath as unknown as number, (err) => {
       client.close();
       if (err) {
         // We don't want to crash the process if notification fails

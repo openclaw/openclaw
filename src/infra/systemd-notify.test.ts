@@ -2,19 +2,28 @@ import dgram from "node:dgram";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { sendNotification, notifyReady, notifyWatchdog } from "./systemd-notify.js";
 
-vi.mock("node:dgram", () => {
-  const mockSocket = {
-    send: vi.fn((buffer, offset, length, path, callback) => {
-      if (callback) callback();
-    }),
-    close: vi.fn(),
-  };
-  return {
-    default: {
-      createSocket: vi.fn(() => mockSocket),
+const { mockSend, mockClose } = vi.hoisted(() => ({
+  mockSend: vi.fn(
+    (
+      _buffer: Buffer | string | Uint8Array,
+      _offset: number,
+      _length: number,
+      _path: string | number,
+      callback?: (err: Error | null) => void,
+    ) => {
+      if (callback) {
+        callback(null);
+      }
     },
-  };
-});
+  ),
+  mockClose: vi.fn(),
+}));
+
+vi.mock("node:dgram", () => ({
+  default: {
+    createSocket: vi.fn(() => ({ send: mockSend, close: mockClose })),
+  },
+}));
 
 describe("systemd-notify", () => {
   const OLD_ENV = process.env;
@@ -40,10 +49,9 @@ describe("systemd-notify", () => {
     sendNotification("READY=1");
 
     expect(dgram.createSocket).toHaveBeenCalledWith("unix_dgram");
-    const socket = dgram.createSocket("unix_dgram");
-    expect(socket.send).toHaveBeenCalled();
-    const [buffer, offset, length, path] = (socket.send as any).mock.calls[0];
-    expect(buffer.toString()).toBe("READY=1\n");
+    expect(mockSend).toHaveBeenCalled();
+    const [buffer, _offset, _length, path] = mockSend.mock.calls[0];
+    expect(String(buffer)).toBe("READY=1\n");
     expect(path).toBe("/tmp/test.sock");
   });
 
@@ -51,24 +59,21 @@ describe("systemd-notify", () => {
     process.env.NOTIFY_SOCKET = "@/test/abstract.sock";
     sendNotification("READY=1");
 
-    const socket = dgram.createSocket("unix_dgram");
-    const [buffer, offset, length, path] = (socket.send as any).mock.calls[0];
+    const [_buffer, _offset, _length, path] = mockSend.mock.calls[0];
     expect(path).toBe("\0/test/abstract.sock");
   });
 
   it("notifyReady should send READY=1", () => {
     process.env.NOTIFY_SOCKET = "/tmp/test.sock";
     notifyReady();
-    const socket = dgram.createSocket("unix_dgram");
-    const [buffer] = (socket.send as any).mock.calls[0];
-    expect(buffer.toString()).toBe("READY=1\n");
+    const [buffer] = mockSend.mock.calls[0];
+    expect(String(buffer)).toBe("READY=1\n");
   });
 
   it("notifyWatchdog should send WATCHDOG=1", () => {
     process.env.NOTIFY_SOCKET = "/tmp/test.sock";
     notifyWatchdog();
-    const socket = dgram.createSocket("unix_dgram");
-    const [buffer] = (socket.send as any).mock.calls[0];
-    expect(buffer.toString()).toBe("WATCHDOG=1\n");
+    const [buffer] = mockSend.mock.calls[0];
+    expect(String(buffer)).toBe("WATCHDOG=1\n");
   });
 });

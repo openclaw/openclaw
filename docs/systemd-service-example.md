@@ -27,6 +27,6 @@ WantedBy=multi-user.target
 
 ## How it works
 
-1.  **Readiness**: When the gateway finishes starting up and is ready to accept connections, it sends `READY=1` to systemd.
-2.  **Watchdog**: Every time the internal maintenance timer "ticks" (configured by `TICK_INTERVAL_MS`), the gateway sends `WATCHDOG=1` to systemd to reset the watchdog timer.
-3.  **Automatic Restart**: If the gateway process hangs (e.g., event loop starvation) and fails to send the watchdog signal within the `WatchdogSec` interval, systemd will kill and restart the service.
+1. **Readiness**: When the gateway finishes starting up and is ready to accept connections, it sends `READY=1` to systemd.
+2. **Watchdog**: Every time the internal maintenance timer "ticks" (configured by `TICK_INTERVAL_MS`), the gateway sends `WATCHDOG=1` to systemd to reset the watchdog timer.
+3. **Automatic Restart**: If the gateway process hangs (e.g., event loop starvation) and fails to send the watchdog signal within the `WatchdogSec` interval, systemd will kill and restart the service.
