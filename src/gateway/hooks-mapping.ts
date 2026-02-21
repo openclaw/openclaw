@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { HookMessageChannel } from "./hooks.js";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -10,6 +10,7 @@ export type HookMappingResolved = {
   action: "wake" | "agent";
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
+  agentId?: string;
   sessionKey?: string;
   messageTemplate?: string;
   textTemplate?: string;
@@ -45,6 +46,7 @@ export type HookAction =
       kind: "agent";
       message: string;
       name?: string;
+      agentId?: string;
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       deliver?: boolean;
@@ -83,6 +85,7 @@ type HookTransformResult = Partial<{
   text: string;
   mode: "now" | "next-heartbeat";
   message: string;
+  agentId: string;
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
@@ -99,7 +102,10 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
-export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
+export function resolveHookMappings(
+  hooks?: HooksConfig,
+  opts?: { configDir?: string },
+): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -126,10 +132,13 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
     return [];
   }
 
-  const configDir = path.dirname(CONFIG_PATH);
-  const transformsDir = hooks?.transformsDir
-    ? resolvePath(configDir, hooks.transformsDir)
-    : configDir;
+  const configDir = path.resolve(opts?.configDir ?? path.dirname(CONFIG_PATH));
+  const transformsRootDir = path.join(configDir, "hooks", "transforms");
+  const transformsDir = resolveOptionalContainedPath(
+    transformsRootDir,
+    hooks?.transformsDir,
+    "Hook transformsDir",
+  );
 
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
 }
@@ -184,7 +193,7 @@ function normalizeHookMapping(
   const wakeMode = mapping.wakeMode ?? "now";
   const transform = mapping.transform
     ? {
-        modulePath: resolvePath(transformsDir, mapping.transform.module),
+        modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
         exportName: mapping.transform.export?.trim() || undefined,
       }
     : undefined;
@@ -196,6 +205,7 @@ function normalizeHookMapping(
     action,
     wakeMode,
     name: mapping.name,
+    agentId: mapping.agentId?.trim() || undefined,
     sessionKey: mapping.sessionKey,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
@@ -247,6 +257,7 @@ function buildActionFromMapping(
       kind: "agent",
       message,
       name: renderOptional(mapping.name, ctx),
+      agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       deliver: mapping.deliver,
@@ -285,6 +296,7 @@ function mergeAction(
     message,
     wakeMode,
     name: override.name ?? baseAgent?.name,
+    agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
@@ -313,14 +325,15 @@ function validateAction(action: HookAction): HookMappingResult {
 }
 
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
-  const cached = transformCache.get(transform.modulePath);
+  const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
+  const cached = transformCache.get(cacheKey);
   if (cached) {
     return cached;
   }
   const url = pathToFileURL(transform.modulePath).href;
   const mod = (await import(url)) as Record<string, unknown>;
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(transform.modulePath, fn);
+  transformCache.set(cacheKey, fn);
   return fn;
 }
 
@@ -334,12 +347,35 @@ function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): 
 
 function resolvePath(baseDir: string, target: string): string {
   if (!target) {
-    return baseDir;
+    return path.resolve(baseDir);
   }
-  if (path.isAbsolute(target)) {
-    return target;
+  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
+}
+
+function resolveContainedPath(baseDir: string, target: string, label: string): string {
+  const base = path.resolve(baseDir);
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    throw new Error(`${label} module path is required`);
   }
-  return path.join(baseDir, target);
+  const resolved = resolvePath(base, trimmed);
+  const relative = path.relative(base, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} module path must be within ${base}: ${target}`);
+  }
+  return resolved;
+}
+
+function resolveOptionalContainedPath(
+  baseDir: string,
+  target: string | undefined,
+  label: string,
+): string {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return path.resolve(baseDir);
+  }
+  return resolveContainedPath(baseDir, trimmed, label);
 }
 
 function normalizeMatchPath(raw?: string): string | undefined {

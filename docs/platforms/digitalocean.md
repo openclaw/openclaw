@@ -27,7 +27,7 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 **Picking a provider:**
 
 - DigitalOcean: simplest UX + predictable setup (this guide)
-- Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
+- Hetzner: good price/perf (see [Hetzner guide](/install/hetzner))
 - Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
 
 ---
@@ -39,6 +39,10 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 - ~20 minutes
 
 ## 1) Create a Droplet
+
+<Warning>
+Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click images unless you have reviewed their startup scripts and firewall defaults.
+</Warning>
 
 1. Log into [DigitalOcean](https://cloud.digitalocean.com/)
 2. Click **Create → Droplets**
@@ -256,7 +260,7 @@ free -h
 
 ## See Also
 
-- [Hetzner guide](/platforms/hetzner) — cheaper, more powerful
+- [Hetzner guide](/install/hetzner) — cheaper, more powerful
 - [Docker install](/install/docker) — containerized setup
 - [Tailscale](/gateway/tailscale) — secure remote access
 - [Configuration](/gateway/configuration) — full config reference

@@ -49,6 +49,39 @@ export type AudioConfig = {
   };
 };
 
+export type StatusReactionsEmojiConfig = {
+  thinking?: string;
+  tool?: string;
+  coding?: string;
+  web?: string;
+  done?: string;
+  error?: string;
+  stallSoft?: string;
+  stallHard?: string;
+};
+
+export type StatusReactionsTimingConfig = {
+  /** Debounce interval for intermediate states (ms). Default: 700. */
+  debounceMs?: number;
+  /** Soft stall warning timeout (ms). Default: 25000. */
+  stallSoftMs?: number;
+  /** Hard stall warning timeout (ms). Default: 60000. */
+  stallHardMs?: number;
+  /** How long to hold done emoji before cleanup (ms). Default: 1500. */
+  doneHoldMs?: number;
+  /** How long to hold error emoji before cleanup (ms). Default: 2500. */
+  errorHoldMs?: number;
+};
+
+export type StatusReactionsConfig = {
+  /** Enable lifecycle status reactions (default: false). */
+  enabled?: boolean;
+  /** Override default emojis. */
+  emojis?: StatusReactionsEmojiConfig;
+  /** Override default timing. */
+  timing?: StatusReactionsTimingConfig;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -59,13 +92,13 @@ export type MessagesConfig = {
    * - special value: `"auto"` derives `[{agents.list[].identity.name}]` for the routed agent (when set)
    *
    * Supported template variables (case-insensitive):
-   * - `{model}` - short model name (e.g., `claude-opus-4-5`, `gpt-4o`)
-   * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-5`)
+   * - `{model}` - short model name (e.g., `claude-opus-4-6`, `gpt-4o`)
+   * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-6`)
    * - `{provider}` - provider name (e.g., `anthropic`, `openai`)
    * - `{thinkingLevel}` or `{think}` - current thinking level (`high`, `low`, `off`)
    * - `{identity.name}` or `{identityName}` - agent identity name
    *
-   * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-5 | think:high]"`
+   * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-6 | think:high]"`
    *
    * Unresolved variables remain as literal text (e.g., `{model}` if context unavailable).
    *
@@ -82,11 +115,22 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
+  /** Lifecycle status reactions configuration. */
+  statusReactions?: StatusReactionsConfig;
+  /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
+  suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };
 
 export type NativeCommandsSetting = boolean | "auto";
+
+/**
+ * Per-provider allowlist for command authorization.
+ * Keys are channel IDs (e.g., "discord", "whatsapp") or "*" for global default.
+ * Values are arrays of sender IDs allowed to use commands on that channel.
+ */
+export type CommandAllowFrom = Record<string, Array<string | number>>;
 
 export type CommandsConfig = {
   /** Enable native command registration when supported (default: "auto"). */
@@ -103,10 +147,19 @@ export type CommandsConfig = {
   config?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
-  /** Allow restart commands/tools (default: false). */
+  /** Allow restart commands/tools (default: true). */
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
+  /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
+  ownerAllowFrom?: Array<string | number>;
+  /**
+   * Per-provider allowlist restricting who can use slash commands.
+   * If set, overrides the channel's allowFrom for command authorization.
+   * Use "*" key for global default, provider-specific keys override the global.
+   * Example: { "*": ["user1"], discord: ["user:123"] }
+   */
+  allowFrom?: CommandAllowFrom;
 };
 
 export type ProviderCommandsConfig = {

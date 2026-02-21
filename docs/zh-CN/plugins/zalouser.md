@@ -1,11 +1,11 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 Zalo Personal（非官方）支持
+  - 你想在 OpenClaw 中支持 Zalo Personal（非官方）
   - 你正在配置或开发 zalouser 插件
-summary: Zalo Personal 插件：通过 zca-cli 实现二维码登录和消息收发（插件安装 + 渠道配置 + CLI + 工具）
+summary: Zalo Personal 插件：通过 zca-cli 进行 QR 登录 + 消息（插件安装 + 渠道配置 + CLI + 工具）
 title: Zalo Personal 插件
 x-i18n:
-  generated_at: "2026-02-01T21:34:31Z"
+  generated_at: "2026-02-03T07:53:33Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: b29b788b023cd50720e24fe6719f02e9f86c8bca9c73b3638fb53c2316718672
@@ -15,42 +15,42 @@ x-i18n:
 
 # Zalo Personal（插件）
 
-通过插件为 OpenClaw 提供 Zalo Personal 支持，使用 `zca-cli` 自动化操作普通 Zalo 用户账号。
+通过插件为 OpenClaw 提供 Zalo Personal 支持，使用 `zca-cli` 自动化普通 Zalo 用户账户。
 
-> **警告：**非官方自动化可能导致账号被暂停或封禁。使用风险自负。
+> **警告：** 非官方自动化可能导致账户被暂停/封禁。使用风险自负。
 
 ## 命名
 
-渠道 id 为 `zalouser`，以明确表示这是对**个人 Zalo 用户账号**的自动化操作（非官方）。我们将 `zalo` 保留给未来可能的官方 Zalo API 集成。
+渠道 id 是 `zalouser`，以明确表示这是自动化**个人 Zalo 用户账户**（非官方）。我们保留 `zalo` 用于潜在的未来官方 Zalo API 集成。
 
 ## 运行位置
 
-此插件运行在 **Gateway网关进程内部**。
+此插件**在 Gateway 网关进程内**运行。
 
-如果你使用远程 Gateway网关，请在**运行 Gateway网关的机器上**安装和配置此插件，然后重启 Gateway网关。
+如果你使用远程 Gateway 网关，请在**运行 Gateway 网关的机器**上安装/配置它，然后重启 Gateway 网关。
 
 ## 安装
 
-### 方式 A：从 npm 安装
+### 选项 A：从 npm 安装
 
 ```bash
 openclaw plugins install @openclaw/zalouser
 ```
 
-安装后重启 Gateway网关。
+之后重启 Gateway 网关。
 
-### 方式 B：从本地文件夹安装（开发模式）
+### 选项 B：从本地文件夹安装（开发）
 
 ```bash
 openclaw plugins install ./extensions/zalouser
 cd ./extensions/zalouser && pnpm install
 ```
 
-安装后重启 Gateway网关。
+之后重启 Gateway 网关。
 
-## 前提条件：zca-cli
+## 前置条件：zca-cli
 
-Gateway网关所在机器必须将 `zca` 添加到 `PATH` 中：
+Gateway 网关机器必须在 `PATH` 中有 `zca`：
 
 ```bash
 zca --version
@@ -58,7 +58,7 @@ zca --version
 
 ## 配置
 
-渠道配置位于 `channels.zalouser` 下（而非 `plugins.entries.*`）：
+渠道配置位于 `channels.zalouser` 下（不是 `plugins.entries.*`）：
 
 ```json5
 {

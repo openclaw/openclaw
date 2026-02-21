@@ -13,6 +13,8 @@ title: "Heartbeat"
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
+Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+
 ## Quick start (beginner)
 
 1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
@@ -83,10 +85,11 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
     defaults: {
       heartbeat: {
         every: "30m", // default: 30m (0m disables)
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         target: "last", // last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
+        accountId: "ops-bot", // optional multi-account channel id
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
       },
@@ -136,6 +139,69 @@ Example: two agents, only the second agent runs heartbeats.
 }
 ```
 
+### Active hours example
+
+Restrict heartbeats to business hours in a specific timezone:
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m",
+        target: "last",
+        activeHours: {
+          start: "09:00",
+          end: "22:00",
+          timezone: "America/New_York", // optional; uses your userTimezone if set, otherwise host tz
+        },
+      },
+    },
+  },
+}
+```
+
+Outside this window (before 9am or after 10pm Eastern), heartbeats are skipped. The next scheduled tick inside the window will run normally.
+
+### 24/7 setup
+
+If you want heartbeats to run all day, use one of these patterns:
+
+- Omit `activeHours` entirely (no time-window restriction; this is the default behavior).
+- Set a full-day window: `activeHours: { start: "00:00", end: "24:00" }`.
+
+Do not set the same `start` and `end` time (for example `08:00` to `08:00`).
+That is treated as a zero-width window, so heartbeats are always skipped.
+
+### Multi account example
+
+Use `accountId` to target a specific account on multi-account channels like Telegram:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "ops",
+        heartbeat: {
+          every: "1h",
+          target: "telegram",
+          to: "12345678:topic:42", // optional: route to a specific topic/thread
+          accountId: "ops-bot",
+        },
+      },
+    ],
+  },
+  channels: {
+    telegram: {
+      accounts: {
+        "ops-bot": { botToken: "YOUR_TELEGRAM_BOT_TOKEN" },
+      },
+    },
+  },
+}
+```
+
 ### Field notes
 
 - `every`: heartbeat interval (duration string; default unit = minutes).
@@ -144,14 +210,22 @@ Example: two agents, only the second agent runs heartbeats.
 - `session`: optional session key for heartbeat runs.
   - `main` (default): agent main session.
   - Explicit session key (copy from `openclaw sessions --json` or the [sessions CLI](/cli/sessions)).
-  - Session key formats: see [Sessions](/concepts/session) and [Groups](/concepts/groups).
+  - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last` (default): deliver to the last used external channel.
   - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
   - `none`: run the heartbeat but **do not deliver** externally.
-- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id).
+- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id). For Telegram topics/threads, use `<chatId>:topic:<messageThreadId>`.
+- `accountId`: optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
+- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
+- `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
+  - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
+  - `"local"`: always uses the host system timezone.
+  - Any IANA identifier (e.g. `America/New_York`): used directly; if invalid, falls back to the `"user"` behavior above.
+  - `start` and `end` must not be equal for an active window; equal values are treated as zero-width (always outside the window).
+  - Outside the active window, heartbeats are skipped until the next tick inside the window.
 
 ## Delivery behavior
 

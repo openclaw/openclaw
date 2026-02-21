@@ -65,6 +65,8 @@ describe("cron run log", () => {
       jobId: "a",
       action: "finished",
       status: "skipped",
+      sessionId: "run-123",
+      sessionKey: "agent:main:cron:a:run:run-123",
     });
 
     const allA = await readCronRunLogEntries(logPathA, { limit: 10 });
@@ -78,6 +80,8 @@ describe("cron run log", () => {
 
     const lastOne = await readCronRunLogEntries(logPathA, { limit: 1 });
     expect(lastOne.map((e) => e.ts)).toEqual([3]);
+    expect(lastOne[0]?.sessionId).toBe("run-123");
+    expect(lastOne[0]?.sessionKey).toBe("agent:main:cron:a:run:run-123");
 
     const onlyB = await readCronRunLogEntries(logPathB, {
       limit: 10,
@@ -90,6 +94,57 @@ describe("cron run log", () => {
       jobId: "b",
     });
     expect(wrongFilter).toEqual([]);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("reads telemetry fields", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-log-telemetry-"));
+    const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+    await appendCronRunLog(logPath, {
+      ts: 1,
+      jobId: "job-1",
+      action: "finished",
+      status: "ok",
+      model: "gpt-5.2",
+      provider: "openai",
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        total_tokens: 15,
+        cache_read_tokens: 2,
+        cache_write_tokens: 1,
+      },
+    });
+
+    await fs.appendFile(
+      logPath,
+      `${JSON.stringify({
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        model: " ",
+        provider: "",
+        usage: { input_tokens: "oops" },
+      })}\n`,
+      "utf-8",
+    );
+
+    const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+    expect(entries[0]?.model).toBe("gpt-5.2");
+    expect(entries[0]?.provider).toBe("openai");
+    expect(entries[0]?.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 15,
+      cache_read_tokens: 2,
+      cache_write_tokens: 1,
+    });
+    expect(entries[1]?.model).toBeUndefined();
+    expect(entries[1]?.provider).toBeUndefined();
+    expect(entries[1]?.usage?.input_tokens).toBeUndefined();
 
     await fs.rm(dir, { recursive: true, force: true });
   });

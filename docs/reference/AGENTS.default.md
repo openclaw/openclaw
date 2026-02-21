@@ -1,4 +1,5 @@
 ---
+title: "Default AGENTS.md"
 summary: "Default OpenClaw agent instructions and skills roster for the personal assistant setup"
 read_when:
   - Starting a new OpenClaw agent session
@@ -110,7 +111,6 @@ git commit -m "Add Clawd workspace"
 - **OpenHue CLI** — Philips Hue lighting control for scenes and automations.
 - **OpenAI Whisper** — Local speech-to-text for quick dictation and voicemail transcripts.
 - **Gemini CLI** — Google Gemini models from the terminal for fast Q&A.
-- **bird** — X/Twitter CLI to tweet, reply, read threads, and search without a browser.
 - **agent-tools** — Utility toolkit for automations and helper scripts.
 
 ## Usage Notes

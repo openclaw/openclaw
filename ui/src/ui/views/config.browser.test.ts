@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderConfig } from "./config";
+import { renderConfig } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -194,7 +194,7 @@ describe("config view", () => {
     if (!input) {
       return;
     }
-    input.value = "gateway";
+    (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });

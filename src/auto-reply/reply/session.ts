@@ -1,12 +1,10 @@
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
@@ -26,10 +24,14 @@ import {
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -54,10 +56,13 @@ export type SessionInitResult = {
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
+  agentId: string;
+  sessionsDir: string;
 }): { sessionId: string; sessionFile: string } | null {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
     params.parentEntry,
+    { agentId: params.agentId, sessionsDir: params.sessionsDir },
   );
   if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
     return null;
@@ -118,7 +123,13 @@ export async function initSessionState(params: {
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
+  // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
+  // Stale cache (especially with multiple gateway processes or on Windows where
+  // mtime granularity may miss rapid writes) can cause incorrect sessionId
+  // generation, leading to orphaned transcript files. See #17971.
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
+    skipCache: true,
+  });
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -237,6 +248,17 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // When a reset trigger (/new, /reset) starts a new session, carry over
+    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
+    // so the user doesn't have to re-enable them every time.
+    if (resetTriggered && entry) {
+      persistedThinking = entry.thinkingLevel;
+      persistedVerbose = entry.verboseLevel;
+      persistedReasoning = entry.reasoningLevel;
+      persistedTtsAuto = entry.ttsAuto;
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
+    }
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -244,7 +266,10 @@ export async function initSessionState(params: {
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
-  const lastThreadIdRaw = ctx.MessageThreadId || baseEntry?.lastThreadId;
+  // Only fall back to persisted threadId for thread sessions.  Non-thread
+  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
+  // previous interaction that happened inside a topic/thread.
+  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
@@ -313,13 +338,20 @@ export async function initSessionState(params: {
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey]
   ) {
+    console.warn(
+      `[session-init] forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+        `parentTokens=${sessionStore[parentSessionKey].totalTokens ?? "?"}`,
+    );
     const forked = forkSessionFromParent({
       parentEntry: sessionStore[parentSessionKey],
+      agentId,
+      sessionsDir: path.dirname(storePath),
     });
     if (forked) {
       sessionId = forked.sessionId;
       sessionEntry.sessionId = forked.sessionId;
       sessionEntry.sessionFile = forked.sessionFile;
+      console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
     }
   }
   if (!sessionEntry.sessionFile) {
@@ -333,33 +365,100 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    // Clear stale token metrics from previous session so /status doesn't
+    // display the old session's context usage after /new or /reset.
+    sessionEntry.totalTokens = undefined;
+    sessionEntry.inputTokens = undefined;
+    sessionEntry.outputTokens = undefined;
+    sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(storePath, (store) => {
-    // Preserve per-session overrides while resetting compaction state on /new.
-    store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
-  });
+  await updateSessionStore(
+    storePath,
+    (store) => {
+      // Preserve per-session overrides while resetting compaction state on /new.
+      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+    },
+    {
+      activeSessionKey: sessionKey,
+      onWarn: (warning) =>
+        deliverSessionMaintenanceWarning({
+          cfg,
+          sessionKey,
+          entry: sessionEntry,
+          warning,
+        }),
+    },
+  );
+
+  // Archive old transcript so it doesn't accumulate on disk (#14869).
+  if (previousSessionEntry?.sessionId) {
+    archiveSessionTranscripts({
+      sessionId: previousSessionEntry.sessionId,
+      storePath,
+      sessionFile: previousSessionEntry.sessionFile,
+      agentId,
+      reason: "reset",
+    });
+  }
 
   const sessionCtx: TemplateContext = {
     ...ctx,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
-    BodyStripped: formatInboundBodyWithSenderMeta({
-      ctx,
-      body: normalizeInboundTextNewlines(
-        bodyStripped ??
-          ctx.BodyForAgent ??
-          ctx.Body ??
-          ctx.CommandBody ??
-          ctx.RawBody ??
-          ctx.BodyForCommands ??
-          "",
-      ),
-    }),
+    BodyStripped: normalizeInboundTextNewlines(
+      bodyStripped ??
+        ctx.BodyForAgent ??
+        ctx.Body ??
+        ctx.CommandBody ??
+        ctx.RawBody ??
+        ctx.BodyForCommands ??
+        "",
+    ),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };
+
+  // Run session plugin hooks (fire-and-forget)
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner && isNewSession) {
+    const effectiveSessionId = sessionId ?? "";
+
+    // If replacing an existing session, fire session_end for the old one
+    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+      if (hookRunner.hasHooks("session_end")) {
+        void hookRunner
+          .runSessionEnd(
+            {
+              sessionId: previousSessionEntry.sessionId,
+              messageCount: 0,
+            },
+            {
+              sessionId: previousSessionEntry.sessionId,
+              agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+            },
+          )
+          .catch(() => {});
+      }
+    }
+
+    // Fire session_start for the new session
+    if (hookRunner.hasHooks("session_start")) {
+      void hookRunner
+        .runSessionStart(
+          {
+            sessionId: effectiveSessionId,
+            resumedFrom: previousSessionEntry?.sessionId,
+          },
+          {
+            sessionId: effectiveSessionId,
+            agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+          },
+        )
+        .catch(() => {});
+    }
+  }
 
   return {
     sessionCtx,

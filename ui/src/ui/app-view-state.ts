@@ -1,19 +1,21 @@
-import type { EventLogEntry } from "./app-events";
-import type { DevicePairingList } from "./controllers/devices";
-import type { ExecApprovalRequest } from "./controllers/exec-approval";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
-import type { SkillMessage } from "./controllers/skills";
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
-import type { Tab } from "./navigation";
-import type { UiSettings } from "./storage";
-import type { ThemeMode } from "./theme";
-import type { ThemeTransitionContext } from "./theme-transition";
+import type { EventLogEntry } from "./app-events.ts";
+import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { DevicePairingList } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillMessage } from "./controllers/skills.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type { ThemeTransitionContext } from "./theme-transition.ts";
+import type { ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
+  ConfigUiHints,
   CronJob,
   CronRunLogEntry,
   CronStatus,
@@ -22,12 +24,16 @@ import type {
   LogLevel,
   NostrProfile,
   PresenceEntry,
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
-} from "./types";
-import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
+} from "./types.ts";
+import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -52,14 +58,22 @@ export type AppViewState = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  compactionStatus: CompactionStatus | null;
+  fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
+  chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
-  scrollToBottom: () => void;
+  sidebarOpen: boolean;
+  sidebarContent: string | null;
+  sidebarError: string | null;
+  splitRatio: number;
+  scrollToBottom: (opts?: { smooth?: boolean }) => void;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
@@ -83,13 +97,18 @@ export type AppViewState = {
   configSaving: boolean;
   configApplying: boolean;
   updateRunning: boolean;
+  applySessionKey: string;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown;
+  configSchemaVersion: string | null;
   configSchemaLoading: boolean;
-  configUiHints: Record<string, unknown>;
+  configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
+  configSearchQuery: string;
+  configActiveSection: string | null;
+  configActiveSubsection: string | null;
   channelsLoading: boolean;
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
@@ -131,6 +150,41 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  usageLoading: boolean;
+  usageResult: SessionsUsageResult | null;
+  usageCostSummary: CostUsageSummary | null;
+  usageError: string | null;
+  usageStartDate: string;
+  usageEndDate: string;
+  usageSelectedSessions: string[];
+  usageSelectedDays: string[];
+  usageSelectedHours: number[];
+  usageChartMode: "tokens" | "cost";
+  usageDailyChartMode: "total" | "by-type";
+  usageTimeSeriesMode: "cumulative" | "per-turn";
+  usageTimeSeriesBreakdownMode: "total" | "by-type";
+  usageTimeSeries: SessionUsageTimeSeries | null;
+  usageTimeSeriesLoading: boolean;
+  usageTimeSeriesCursorStart: number | null;
+  usageTimeSeriesCursorEnd: number | null;
+  usageSessionLogs: SessionLogEntry[] | null;
+  usageSessionLogsLoading: boolean;
+  usageSessionLogsExpanded: boolean;
+  usageQuery: string;
+  usageQueryDraft: string;
+  usageQueryDebounceTimer: number | null;
+  usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
+  usageSessionSortDir: "asc" | "desc";
+  usageRecentSessions: string[];
+  usageTimeZone: "local" | "utc";
+  usageContextExpanded: boolean;
+  usageHeaderPinned: boolean;
+  usageSessionsTab: "all" | "recent";
+  usageVisibleColumns: string[];
+  usageLogFilterRoles: import("./views/usage.js").SessionLogRole[];
+  usageLogFilterTools: string[];
+  usageLogFilterHasTools: boolean;
+  usageLogFilterQuery: string;
   cronLoading: boolean;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
@@ -163,7 +217,14 @@ export type AppViewState = {
   logsLevelFilters: Record<LogLevel, boolean>;
   logsAutoFollow: boolean;
   logsTruncated: boolean;
+  logsCursor: number | null;
+  logsLastFetchAt: number | null;
+  logsLimit: number;
+  logsMaxBytes: number;
+  logsAtBottom: boolean;
+  updateAvailable: import("./types.js").UpdateAvailable | null;
   client: GatewayBrowserClient | null;
+  refreshSessionsAfterChat: Set<string>;
   connect: () => void;
   setTab: (tab: Tab) => void;
   setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
@@ -214,13 +275,15 @@ export type AppViewState = {
   setPassword: (next: string) => void;
   setSessionKey: (next: string) => void;
   setChatMessage: (next: string) => void;
-  handleChatSend: () => Promise<void>;
-  handleChatAbort: () => Promise<void>;
-  handleChatSelectQueueItem: (id: string) => void;
-  handleChatDropQueueItem: (id: string) => void;
-  handleChatClearQueue: () => void;
-  handleLogsFilterChange: (next: string) => void;
-  handleLogsLevelFilterToggle: (level: LogLevel) => void;
-  handleLogsAutoFollowToggle: (next: boolean) => void;
-  handleCallDebugMethod: (method: string, params: string) => Promise<void>;
+  handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+  handleAbortChat: () => Promise<void>;
+  removeQueuedMessage: (id: string) => void;
+  handleChatScroll: (event: Event) => void;
+  resetToolStream: () => void;
+  resetChatScroll: () => void;
+  exportLogs: (lines: string[], label: string) => void;
+  handleLogsScroll: (event: Event) => void;
+  handleOpenSidebar: (content: string) => void;
+  handleCloseSidebar: () => void;
+  handleSplitRatioChange: (ratio: number) => void;
 };

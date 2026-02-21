@@ -1,7 +1,7 @@
-import type { GatewayBrowserClient } from "../gateway";
-import type { CronJob, CronRunLogEntry, CronStatus } from "../types";
-import type { CronFormState } from "../ui-types";
-import { toNumber } from "../format";
+import { toNumber } from "../format.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
+import type { CronFormState } from "../ui-types.ts";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
@@ -16,12 +16,31 @@ export type CronState = {
   cronBusy: boolean;
 };
 
+export function supportsAnnounceDelivery(
+  form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
+) {
+  return form.sessionTarget === "isolated" && form.payloadKind === "agentTurn";
+}
+
+export function normalizeCronFormState(form: CronFormState): CronFormState {
+  if (form.deliveryMode !== "announce") {
+    return form;
+  }
+  if (supportsAnnounceDelivery(form)) {
+    return form;
+  }
+  return {
+    ...form,
+    deliveryMode: "none",
+  };
+}
+
 export async function loadCronStatus(state: CronState) {
   if (!state.client || !state.connected) {
     return;
   }
   try {
-    const res = await state.client.request("cron.status", {});
+    const res = await state.client.request<CronStatus>("cron.status", {});
     state.cronStatus = res;
   } catch (err) {
     state.cronError = String(err);
@@ -38,7 +57,7 @@ export async function loadCronJobs(state: CronState) {
   state.cronLoading = true;
   state.cronError = null;
   try {
-    const res = await state.client.request("cron.list", {
+    const res = await state.client.request<{ jobs?: Array<CronJob> }>("cron.list", {
       includeDisabled: true,
     });
     state.cronJobs = Array.isArray(res.jobs) ? res.jobs : [];
@@ -55,7 +74,7 @@ export function buildCronSchedule(form: CronFormState) {
     if (!Number.isFinite(ms)) {
       throw new Error("Invalid run time.");
     }
-    return { kind: "at" as const, atMs: ms };
+    return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
     const amount = toNumber(form.everyAmount, 0);
@@ -88,20 +107,8 @@ export function buildCronPayload(form: CronFormState) {
   const payload: {
     kind: "agentTurn";
     message: string;
-    deliver?: boolean;
-    channel?: string;
-    to?: string;
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };
-  if (form.deliver) {
-    payload.deliver = true;
-  }
-  if (form.channel) {
-    payload.channel = form.channel;
-  }
-  if (form.to.trim()) {
-    payload.to = form.to.trim();
-  }
   const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
   if (timeoutSeconds > 0) {
     payload.timeoutSeconds = timeoutSeconds;
@@ -116,22 +123,36 @@ export async function addCronJob(state: CronState) {
   state.cronBusy = true;
   state.cronError = null;
   try {
-    const schedule = buildCronSchedule(state.cronForm);
-    const payload = buildCronPayload(state.cronForm);
-    const agentId = state.cronForm.agentId.trim();
+    const form = normalizeCronFormState(state.cronForm);
+    if (form !== state.cronForm) {
+      state.cronForm = form;
+    }
+
+    const schedule = buildCronSchedule(form);
+    const payload = buildCronPayload(form);
+    const selectedDeliveryMode = form.deliveryMode;
+    const delivery =
+      selectedDeliveryMode && selectedDeliveryMode !== "none"
+        ? {
+            mode: selectedDeliveryMode,
+            channel:
+              selectedDeliveryMode === "announce"
+                ? form.deliveryChannel.trim() || "last"
+                : undefined,
+            to: form.deliveryTo.trim() || undefined,
+          }
+        : undefined;
+    const agentId = form.agentId.trim();
     const job = {
-      name: state.cronForm.name.trim(),
-      description: state.cronForm.description.trim() || undefined,
+      name: form.name.trim(),
+      description: form.description.trim() || undefined,
       agentId: agentId || undefined,
-      enabled: state.cronForm.enabled,
+      enabled: form.enabled,
       schedule,
-      sessionTarget: state.cronForm.sessionTarget,
-      wakeMode: state.cronForm.wakeMode,
+      sessionTarget: form.sessionTarget,
+      wakeMode: form.wakeMode,
       payload,
-      isolation:
-        state.cronForm.postToMainPrefix.trim() && state.cronForm.sessionTarget === "isolated"
-          ? { postToMainPrefix: state.cronForm.postToMainPrefix.trim() }
-          : undefined,
+      delivery,
     };
     if (!job.name) {
       throw new Error("Name required.");
@@ -211,7 +232,7 @@ export async function loadCronRuns(state: CronState, jobId: string) {
     return;
   }
   try {
-    const res = await state.client.request("cron.runs", {
+    const res = await state.client.request<{ entries?: Array<CronRunLogEntry> }>("cron.runs", {
       id: jobId,
       limit: 50,
     });

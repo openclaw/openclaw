@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/lobster",
-  "version": "2026.2.1",
+  "version": "2026.2.20",
   "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
   "type": "module",
   "devDependencies": {

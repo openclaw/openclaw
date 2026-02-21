@@ -1,6 +1,6 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.27-beta.1",
+  "version": "2026.2.12",
   "description": "Compatibility shim that forwards to openclaw",
   "bin": {
     "clawdbot": "./bin/clawdbot.js"
@@ -9,9 +9,6 @@
   "exports": {
     ".": "./index.js",
     "./cli-entry": "./bin/clawdbot.js"
-  },
-  "scripts": {
-    "postinstall": "node ./scripts/postinstall.js"
   },
   "dependencies": {
     "openclaw": "workspace:*"

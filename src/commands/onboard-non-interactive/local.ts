@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { OnboardOptions } from "../onboard-types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { healthCommand } from "../health.js";
+import { applyOnboardingLocalWorkspaceConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -13,6 +13,8 @@ import {
   resolveControlUiLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
+import type { OnboardOptions } from "../onboard-types.js";
+import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
 import { applyNonInteractiveAuthChoice } from "./local/auth-choice.js";
 import { installGatewayDaemonNonInteractive } from "./local/daemon-install.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
@@ -34,22 +36,21 @@ export async function runNonInteractiveOnboardingLocal(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
-  let nextConfig: OpenClawConfig = {
-    ...baseConfig,
-    agents: {
-      ...baseConfig.agents,
-      defaults: {
-        ...baseConfig.agents?.defaults,
-        workspace: workspaceDir,
-      },
-    },
-    gateway: {
-      ...baseConfig.gateway,
-      mode: "local",
-    },
-  };
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
-  const authChoice = opts.authChoice ?? "skip";
+  const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
+  if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
+    runtime.error(
+      [
+        "Multiple API key flags were provided for non-interactive onboarding.",
+        "Use a single provider flag or pass --auth-choice explicitly.",
+        `Flags: ${inferredAuthChoice.matches.map((match) => match.label).join(", ")}`,
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return;
+  }
+  const authChoice = opts.authChoice ?? inferredAuthChoice.choice ?? "skip";
   const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
     nextConfig,
     authChoice,

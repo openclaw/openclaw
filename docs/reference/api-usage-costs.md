@@ -29,7 +29,7 @@ OpenClaw features that can generate provider usage or paid API calls.
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows**
   (quota snapshots, not per-message costs).
 
-See [Token use & costs](/token-use) for details and examples.
+See [Token use & costs](/reference/token-use) for details and examples.
 
 ## How keys are discovered
 
@@ -48,7 +48,7 @@ OpenClaw can pick up credentials from:
 Every reply or tool call uses the **current model provider** (OpenAI, Anthropic, etc). This is the
 primary source of usage and cost.
 
-See [Models](/providers/models) for pricing config and [Token use & costs](/token-use) for display.
+See [Models](/providers/models) for pricing config and [Token use & costs](/reference/token-use) for display.
 
 ### 2) Media understanding (audio/image/video)
 
@@ -66,7 +66,8 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 
 - `memorySearch.provider = "openai"` → OpenAI embeddings
 - `memorySearch.provider = "gemini"` → Gemini embeddings
-- Optional fallback to OpenAI if local embeddings fail
+- `memorySearch.provider = "voyage"` → Voyage embeddings
+- Optional fallback to a remote provider if local embeddings fail
 
 You can keep it local with `memorySearch.provider = "local"` (no API usage).
 
