@@ -903,7 +903,7 @@ describe("gateway server auth/connect", () => {
     }
   });
 
-  test("requires pairing for scope upgrades", async () => {
+  test("requires pairing for scope upgrades from non-local host", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -953,7 +953,9 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
 
-    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { host: "gateway.public.example" },
+    });
     await new Promise<void>((resolve) => ws2.once("open", resolve));
     const res = await connectReq(ws2, {
       token: "secret",
@@ -980,6 +982,75 @@ describe("gateway server auth/connect", () => {
     expect(paired?.scopes).toContain("operator.admin");
 
     ws3.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("allows loopback paired-device scope upgrades without interactive pairing", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-loopback-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.TEST,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    };
+    const buildDevice = (scopes: string[]) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+      };
+    };
+
+    const initial = await connectReq(ws, {
+      token: "secret",
+      scopes: ["operator.read"],
+      client,
+      device: buildDevice(["operator.read"]),
+    });
+    if (!initial.ok) {
+      await approvePendingPairingIfNeeded();
+    }
+
+    let paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.scopes).toContain("operator.read");
+
+    ws.close();
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const upgrade = await connectReq(ws2, {
+      token: "secret",
+      scopes: ["operator.admin"],
+      client,
+      device: buildDevice(["operator.admin"]),
+    });
+    expect(upgrade.ok).toBe(true);
+
+    paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.scopes).toContain("operator.admin");
+
+    ws2.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });
