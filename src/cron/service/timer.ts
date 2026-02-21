@@ -25,6 +25,21 @@ const MAX_TIMER_DELAY_MS = 60_000;
 const MIN_REFIRE_GAP_MS = 2_000;
 
 /**
+ * Default delay between missed job executions on startup to prevent
+ * overwhelming the gateway when many overdue jobs need to run.
+ * See: https://github.com/openclaw/openclaw/issues/18892
+ */
+const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
+
+/**
+ * Maximum number of missed jobs to run immediately on startup.
+ * Additional missed jobs will be picked up by the normal timer mechanism
+ * with staggered scheduling to prevent gateway overload.
+ * See: https://github.com/openclaw/openclaw/issues/18892
+ */
+const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
+
+/**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
  * from wedging the entire cron lane.
@@ -461,13 +476,57 @@ export async function runMissedJobs(
   const skipJobIds = opts?.skipJobIds;
   const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
 
-  if (missed.length > 0) {
+  if (missed.length === 0) {
+    return;
+  }
+
+  // Resolve stagger configuration from deps (allows testing and config override)
+  const staggerMs = state.deps.missedJobStaggerMs ?? DEFAULT_MISSED_JOB_STAGGER_MS;
+  const maxImmediate = state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART;
+
+  // Sort by nextRunAtMs to prioritize the most overdue jobs first
+  const sorted = missed.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+
+  // Split into immediate and deferred batches to prevent gateway overload
+  // See: https://github.com/openclaw/openclaw/issues/18892
+  const immediate = sorted.slice(0, maxImmediate);
+  const deferred = sorted.slice(maxImmediate);
+
+  if (deferred.length > 0) {
     state.deps.log.info(
-      { count: missed.length, jobIds: missed.map((j) => j.id) },
+      {
+        immediateCount: immediate.length,
+        deferredCount: deferred.length,
+        totalMissed: missed.length,
+      },
+      "cron: staggering missed jobs to prevent gateway overload",
+    );
+
+    // Reschedule deferred jobs with staggered nextRunAtMs so they fire
+    // gradually via the normal timer mechanism instead of all at once
+    let offset = staggerMs;
+    for (const job of deferred) {
+      job.state.nextRunAtMs = now + offset;
+      offset += staggerMs;
+    }
+  }
+
+  if (immediate.length > 0) {
+    state.deps.log.info(
+      { count: immediate.length, jobIds: immediate.map((j) => j.id) },
       "cron: running missed jobs after restart",
     );
-    for (const job of missed) {
-      await executeJob(state, job, now, { forced: false });
+
+    // Run immediate jobs with stagger delays between them
+    for (let i = 0; i < immediate.length; i++) {
+      const job = immediate[i];
+
+      // Add stagger delay between jobs (skip delay for the first job)
+      if (i > 0 && staggerMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, staggerMs));
+      }
+
+      await executeJob(state, job, state.deps.nowMs(), { forced: false });
     }
   }
 }
