@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
+import {
+  createWebchatThreadSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+} from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -35,6 +39,13 @@ describe("parseSessionKey", () => {
     expect(parseSessionKey("agent:main:cron:daily-briefing-uuid")).toEqual({
       prefix: "Cron:",
       fallbackName: "Cron Job:",
+    });
+  });
+
+  it("identifies webchat thread sessions", () => {
+    expect(parseSessionKey("agent:main:webchat:thread:abc123")).toEqual({
+      prefix: "",
+      fallbackName: "New Chat",
     });
   });
 
@@ -259,5 +270,17 @@ describe("resolveSessionDisplayName", () => {
         row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+describe("createWebchatThreadSessionKey", () => {
+  it("creates a webchat thread key with the current agent id", () => {
+    const key = createWebchatThreadSessionKey("agent:alice:main");
+    expect(key).toMatch(/^agent:alice:webchat:thread:[0-9a-f-]{36}$/);
+  });
+
+  it("falls back to main agent when session key has no agent prefix", () => {
+    const key = createWebchatThreadSessionKey("main");
+    expect(key).toMatch(/^agent:main:webchat:thread:[0-9a-f-]{36}$/);
   });
 });

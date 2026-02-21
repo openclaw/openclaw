@@ -4,7 +4,7 @@ import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { loadSessions, patchSession } from "./controllers/sessions.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
@@ -58,6 +58,36 @@ function isChatResetCommand(text: string) {
     return true;
   }
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+}
+
+function isWebchatThreadSessionKey(sessionKey: string): boolean {
+  return /^agent:[^:]+:webchat:thread:[^:]+$/.test(sessionKey.trim());
+}
+
+function deriveAutoTitleFromMessage(message: string): string {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.length > 60 ? `${normalized.slice(0, 57).trimEnd()}...` : normalized;
+}
+
+async function maybeAutoTitleWebchatThread(host: ChatHost, message: string) {
+  if (!isWebchatThreadSessionKey(host.sessionKey)) {
+    return;
+  }
+  const app = host as unknown as OpenClawApp;
+  const existing = app.sessionsResult?.sessions?.find((row) => row.key === host.sessionKey)?.label;
+  if (existing?.trim()) {
+    return;
+  }
+  const title = deriveAutoTitleFromMessage(message);
+  if (!title) {
+    return;
+  }
+  await patchSession(app as unknown as Parameters<typeof patchSession>[0], host.sessionKey, {
+    label: title,
+  });
 }
 
 export async function handleAbortChat(host: ChatHost) {
@@ -130,6 +160,9 @@ async function sendChatMessageNow(
   }
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
+  }
+  if (ok && message.trim()) {
+    await maybeAutoTitleWebchatThread(host, message);
   }
   return ok;
 }
