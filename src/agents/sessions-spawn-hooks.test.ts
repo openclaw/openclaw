@@ -45,6 +45,38 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   })),
 }));
 
+type GatewayRequest = { method?: string; params?: Record<string, unknown> };
+
+function getGatewayRequests(): GatewayRequest[] {
+  const callGatewayMock = getCallGatewayMock();
+  return callGatewayMock.mock.calls.map((call: [unknown]) => call[0] as GatewayRequest);
+}
+
+function getGatewayMethods(): Array<string | undefined> {
+  return getGatewayRequests().map((request) => request.method);
+}
+
+function findGatewayRequest(method: string): GatewayRequest | undefined {
+  return getGatewayRequests().find((request) => request.method === method);
+}
+
+function expectSessionsDeleteWithoutAgentStart() {
+  const methods = getGatewayMethods();
+  expect(methods).toContain("sessions.delete");
+  expect(methods).not.toContain("agent");
+}
+
+function mockAgentStartFailure() {
+  const callGatewayMock = getCallGatewayMock();
+  callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const request = opts as { method?: string };
+    if (request.method === "agent") {
+      throw new Error("spawn failed");
+    }
+    return {};
+  });
+}
+
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     hookRunnerMocks.hasSubagentEndedHook = true;
@@ -211,19 +243,39 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     const details = result.details as { error?: string; childSessionKey?: string };
     expect(details.error).toMatch(/thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    const callGatewayMock = getCallGatewayMock();
-    const calledMethods = callGatewayMock.mock.calls.map((call: [unknown]) => {
-      const request = call[0] as { method?: string };
-      return request.method;
+    expectSessionsDeleteWithoutAgentStart();
+    const deleteCall = findGatewayRequest("sessions.delete");
+    expect(deleteCall?.params).toMatchObject({
+      key: details.childSessionKey,
+      emitLifecycleHooks: false,
     });
-    expect(calledMethods).toContain("sessions.delete");
-    expect(calledMethods).not.toContain("agent");
-    const deleteCall = callGatewayMock.mock.calls
-      .map((call: [unknown]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find(
-        (request: { method?: string; params?: Record<string, unknown> }) =>
-          request.method === "sessions.delete",
-      );
+  });
+
+  it("returns error when thread binding is not marked ready", async () => {
+    hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce({
+      status: "ok",
+      threadBindingReady: false,
+    });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+    });
+
+    const result = await tool.execute("call4b", {
+      task: "do thing",
+      runTimeoutSeconds: 1,
+      thread: true,
+      mode: "session",
+    });
+
+    expect(result.details).toMatchObject({ status: "error" });
+    const details = result.details as { error?: string; childSessionKey?: string };
+    expect(details.error).toMatch(/unable to create or bind a thread/i);
+    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
+    expectSessionsDeleteWithoutAgentStart();
+    const deleteCall = findGatewayRequest("sessions.delete");
     expect(deleteCall?.params).toMatchObject({
       key: details.childSessionKey,
       emitLifecycleHooks: false,
@@ -269,24 +321,11 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expect(details.error).toMatch(/only discord/i);
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    const callGatewayMock = getCallGatewayMock();
-    const calledMethods = callGatewayMock.mock.calls.map((call: [unknown]) => {
-      const request = call[0] as { method?: string };
-      return request.method;
-    });
-    expect(calledMethods).toContain("sessions.delete");
-    expect(calledMethods).not.toContain("agent");
+    expectSessionsDeleteWithoutAgentStart();
   });
 
   it("runs subagent_ended cleanup hook when agent start fails after successful bind", async () => {
-    const callGatewayMock = getCallGatewayMock();
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "agent") {
-        throw new Error("spawn failed");
-      }
-      return {};
-    });
+    mockAgentStartFailure();
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "discord",
@@ -315,12 +354,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       outcome: "error",
       error: "Session failed to start",
     });
-    const deleteCall = callGatewayMock.mock.calls
-      .map((call: [unknown]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find(
-        (request: { method?: string; params?: Record<string, unknown> }) =>
-          request.method === "sessions.delete",
-      );
+    const deleteCall = findGatewayRequest("sessions.delete");
     expect(deleteCall?.params).toMatchObject({
       key: event.targetSessionKey,
       deleteTranscript: true,
@@ -330,14 +364,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
   it("falls back to sessions.delete cleanup when subagent_ended hook is unavailable", async () => {
     hookRunnerMocks.hasSubagentEndedHook = false;
-    const callGatewayMock = getCallGatewayMock();
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "agent") {
-        throw new Error("spawn failed");
-      }
-      return {};
-    });
+    mockAgentStartFailure();
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "discord",
@@ -354,17 +381,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
     expect(result.details).toMatchObject({ status: "error" });
     expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
-    const methods = callGatewayMock.mock.calls.map((call: [unknown]) => {
-      const request = call[0] as { method?: string };
-      return request.method;
-    });
+    const methods = getGatewayMethods();
     expect(methods).toContain("sessions.delete");
-    const deleteCall = callGatewayMock.mock.calls
-      .map((call: [unknown]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find(
-        (request: { method?: string; params?: Record<string, unknown> }) =>
-          request.method === "sessions.delete",
-      );
+    const deleteCall = findGatewayRequest("sessions.delete");
     expect(deleteCall?.params).toMatchObject({
       deleteTranscript: true,
       emitLifecycleHooks: true,
