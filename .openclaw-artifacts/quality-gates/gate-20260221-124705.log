@@ -1,0 +1,19 @@
+quality gate started: 2026-02-21T18:47:05Z
+repo: .
+[INFO] Skipping dependency install due to OPENCLAW_SKIP_INSTALL=1
+==== pnpm build ====
+
+> openclaw@2026.2.21 build /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.2.21 canvas:a2ui:bundle /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> bash scripts/bundle-a2ui.sh
+
+A2UI bundling failed. Re-run with: pnpm canvas:a2ui:bundle
+If this persists, verify pnpm deps and try again.
+ ELIFECYCLE  Command failed with exit code 254.
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+ ELIFECYCLE  Command failed with exit code 254.
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+[FAIL] pnpm build

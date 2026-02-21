@@ -333,6 +333,16 @@
   background: transparent;
 }
 
+.nav-label:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.nav-label:disabled:hover {
+  color: var(--muted);
+  background: transparent;
+}
+
 .nav-label__text {
   flex: 1;
 }
