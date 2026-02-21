@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { LastAssistantInfo } from "./types.js";
 
 export function generateTraceId(): string {
   return randomUUID();
@@ -6,6 +7,39 @@ export function generateTraceId(): string {
 
 export function generateSpanId(): string {
   return randomUUID();
+}
+
+export function parseLastAssistant(lastAssistant: unknown): LastAssistantInfo {
+  if (typeof lastAssistant !== "object" || lastAssistant === null) {
+    return {};
+  }
+
+  const obj = lastAssistant as Record<string, unknown>;
+  const result: LastAssistantInfo = {};
+
+  if (typeof obj.stopReason === "string") {
+    result.stopReason = obj.stopReason;
+  }
+  if (typeof obj.errorMessage === "string") {
+    result.errorMessage = obj.errorMessage;
+  }
+
+  const usage = obj.usage;
+  if (typeof usage === "object" && usage !== null) {
+    const cost = (usage as Record<string, unknown>).cost;
+    if (typeof cost === "object" && cost !== null) {
+      const c = cost as Record<string, unknown>;
+      if (
+        typeof c.input === "number" &&
+        typeof c.output === "number" &&
+        typeof c.total === "number"
+      ) {
+        result.cost = { input: c.input, output: c.output, total: c.total };
+      }
+    }
+  }
+
+  return result;
 }
 
 export function redactForPrivacy<T>(value: T, privacyMode: boolean): T | null {

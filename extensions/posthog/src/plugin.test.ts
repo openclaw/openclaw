@@ -60,8 +60,8 @@ function defaultConfig(overrides: Partial<PostHogPluginConfig> = {}): PostHogPlu
     host: "https://us.i.posthog.com",
     privacyMode: false,
     enabled: true,
-    traceBy: "message",
-    traceTimeout: 60,
+    traceGrouping: "message",
+    sessionWindowMinutes: 60,
     ...overrides,
   };
 }
@@ -144,13 +144,15 @@ describe("registerPostHogHooks", () => {
     expect(captureMock).toHaveBeenCalledTimes(1);
     const captured = captureMock.mock.calls[0]![0];
     expect(captured.event).toBe("$ai_generation");
-    expect(captured.distinctId).toBe("telegram:123");
+    // distinctId is windowed session ID
+    expect(captured.distinctId).toMatch(/^telegram:123:[a-z0-9-]{8}$/);
     expect(captured.properties.$ai_model).toBe("gpt-4o");
     expect(captured.properties.$ai_input_tokens).toBe(10);
     expect(captured.properties.$ai_output_tokens).toBe(5);
     expect(captured.properties.$ai_input).toEqual([{ role: "user", content: "What is 2+2?" }]);
     expect(captured.properties.$ai_output_choices).toEqual([{ role: "assistant", content: "4" }]);
-    expect(captured.properties.$ai_session_id).toBe("telegram:123");
+    // Session ID is windowed: "sessionKey:windowId"
+    expect(captured.properties.$ai_session_id).toMatch(/^telegram:123:[a-z0-9-]{8}$/);
   });
 
   test("separate messages (different runIds) get distinct trace IDs", async () => {
@@ -218,9 +220,11 @@ describe("registerPostHogHooks", () => {
     expect(traceId2).toBeTruthy();
     expect(traceId1).not.toBe(traceId2);
 
-    // Both should have the same session ID
-    expect(captureMock.mock.calls[0]![0].properties.$ai_session_id).toBe("agent:main:main");
-    expect(captureMock.mock.calls[1]![0].properties.$ai_session_id).toBe("agent:main:main");
+    // Both should have the same windowed session ID (within same window)
+    const session1 = captureMock.mock.calls[0]![0].properties.$ai_session_id;
+    const session2 = captureMock.mock.calls[1]![0].properties.$ai_session_id;
+    expect(session1).toMatch(/^agent:main:main:[a-z0-9-]{8}$/);
+    expect(session1).toBe(session2);
   });
 
   test("tool-use cycle (same runId) reuses the same trace ID", async () => {
@@ -440,7 +444,185 @@ describe("registerPostHogHooks", () => {
     expect(captured.event).toBe("$ai_trace");
     expect(captured.properties.$ai_latency).toBeCloseTo(3.0, 2);
     expect(captured.properties.$ai_is_error).toBe(false);
-    expect(captured.properties.$ai_session_id).toBe("telegram:trace-test");
+    // Session ID is windowed
+    expect(captured.properties.$ai_session_id).toMatch(/^telegram:trace-test:[a-z0-9-]{8}$/);
+  });
+
+  test("generation event includes cost from lastAssistant", async () => {
+    const { api, hooks, services } = createMockApi();
+    registerPostHogHooks(api, defaultConfig());
+    await services[0]!.start();
+
+    const llmInputHandlers = hooks.get("llm_input")!;
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-cost",
+        sessionId: "sess-cost",
+        provider: "anthropic",
+        model: "claude-3",
+        prompt: "Hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:cost-test" },
+    );
+
+    const llmOutputHandlers = hooks.get("llm_output")!;
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-cost",
+        sessionId: "sess-cost",
+        provider: "anthropic",
+        model: "claude-3",
+        assistantTexts: ["Hi!"],
+        usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, total: 150 },
+        lastAssistant: {
+          stopReason: "stop",
+          usage: {
+            input: 100,
+            output: 50,
+            totalTokens: 150,
+            cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+          },
+        },
+      },
+      { sessionKey: "telegram:cost-test" },
+    );
+
+    expect(captureMock).toHaveBeenCalledTimes(1);
+    const captured = captureMock.mock.calls[0]![0];
+    expect(captured.properties.$ai_total_cost_usd).toBe(0.003);
+    expect(captured.properties.$ai_input_cost_usd).toBe(0.001);
+    expect(captured.properties.$ai_output_cost_usd).toBe(0.002);
+    expect(captured.properties.$ai_stop_reason).toBe("stop");
+    expect(captured.properties.$ai_is_error).toBe(false);
+  });
+
+  test("generation event shows error state when lastAssistant.stopReason is error", async () => {
+    const { api, hooks, services } = createMockApi();
+    registerPostHogHooks(api, defaultConfig());
+    await services[0]!.start();
+
+    const llmInputHandlers = hooks.get("llm_input")!;
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-err",
+        sessionId: "sess-err",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "Hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:err-test" },
+    );
+
+    const llmOutputHandlers = hooks.get("llm_output")!;
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-err",
+        sessionId: "sess-err",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: [],
+        usage: { input: 10, output: 0 },
+        lastAssistant: {
+          stopReason: "error",
+          errorMessage: "Context window exceeded",
+        },
+      },
+      { sessionKey: "telegram:err-test" },
+    );
+
+    expect(captureMock).toHaveBeenCalledTimes(1);
+    const captured = captureMock.mock.calls[0]![0];
+    expect(captured.properties.$ai_is_error).toBe(true);
+    expect(captured.properties.$ai_error).toBe("Context window exceeded");
+    expect(captured.properties.$ai_stop_reason).toBe("error");
+  });
+
+  test("trace token totals accumulate across multiple generations", async () => {
+    const { api, hooks, services } = createMockApi();
+    let diagnosticListener: (evt: unknown) => void = () => {};
+    onDiagnosticEventMock.mockImplementation((fn: (evt: unknown) => void) => {
+      diagnosticListener = fn;
+      return vi.fn();
+    });
+
+    registerPostHogHooks(api, defaultConfig());
+    await services[0]!.start();
+
+    const llmInputHandlers = hooks.get("llm_input")!;
+    const llmOutputHandlers = hooks.get("llm_output")!;
+
+    // First generation (same runId = same trace)
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-tokens",
+        sessionId: "sess-tokens",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "search weather",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:token-test" },
+    );
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-tokens",
+        sessionId: "sess-tokens",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["Let me check..."],
+        usage: { input: 100, output: 50 },
+      },
+      { sessionKey: "telegram:token-test" },
+    );
+
+    // Second generation (same runId = same trace, tokens accumulate)
+    await llmInputHandlers[0]!(
+      {
+        runId: "run-tokens",
+        sessionId: "sess-tokens",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt: "Tool result: sunny",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { sessionKey: "telegram:token-test" },
+    );
+    await llmOutputHandlers[0]!(
+      {
+        runId: "run-tokens",
+        sessionId: "sess-tokens",
+        provider: "openai",
+        model: "gpt-4o",
+        assistantTexts: ["It's sunny!"],
+        usage: { input: 200, output: 75 },
+      },
+      { sessionKey: "telegram:token-test" },
+    );
+
+    captureMock.mockClear();
+
+    // Trigger trace event
+    diagnosticListener({
+      type: "message.processed",
+      ts: Date.now(),
+      seq: 1,
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 5000,
+      sessionKey: "telegram:token-test",
+    });
+
+    expect(captureMock).toHaveBeenCalledTimes(1);
+    const captured = captureMock.mock.calls[0]![0];
+    expect(captured.event).toBe("$ai_trace");
+    expect(captured.properties.$ai_total_input_tokens).toBe(300);
+    expect(captured.properties.$ai_total_output_tokens).toBe(125);
   });
 
   test("llm_output without matching llm_input is ignored", async () => {
@@ -463,10 +645,13 @@ describe("registerPostHogHooks", () => {
     expect(captureMock).not.toHaveBeenCalled();
   });
 
-  describe("traceBy: session", () => {
+  describe("traceGrouping: session", () => {
     test("different runIds within timeout share the same trace", async () => {
       const { api, hooks, services } = createMockApi();
-      registerPostHogHooks(api, defaultConfig({ traceBy: "session", traceTimeout: 60 }));
+      registerPostHogHooks(
+        api,
+        defaultConfig({ traceGrouping: "session", sessionWindowMinutes: 60 }),
+      );
       await services[0]!.start();
 
       const llmInputHandlers = hooks.get("llm_input")!;
@@ -532,7 +717,10 @@ describe("registerPostHogHooks", () => {
 
     test("message after timeout gets a new trace", async () => {
       const { api, hooks, services } = createMockApi();
-      registerPostHogHooks(api, defaultConfig({ traceBy: "session", traceTimeout: 30 }));
+      registerPostHogHooks(
+        api,
+        defaultConfig({ traceGrouping: "session", sessionWindowMinutes: 30 }),
+      );
       await services[0]!.start();
 
       const llmInputHandlers = hooks.get("llm_input")!;
@@ -601,9 +789,12 @@ describe("registerPostHogHooks", () => {
       vi.restoreAllMocks();
     });
 
-    test("both traces share the same $ai_session_id", async () => {
+    test("session window rotates after timeout", async () => {
       const { api, hooks, services } = createMockApi();
-      registerPostHogHooks(api, defaultConfig({ traceBy: "session", traceTimeout: 1 }));
+      registerPostHogHooks(
+        api,
+        defaultConfig({ traceGrouping: "session", sessionWindowMinutes: 1 }),
+      );
       await services[0]!.start();
 
       const llmInputHandlers = hooks.get("llm_input")!;
@@ -662,15 +853,158 @@ describe("registerPostHogHooks", () => {
         { sessionKey: "telegram:session-id-test" },
       );
 
-      // Different traces but same session ID
+      // Different traces AND different session windows after timeout
       const session1 = captureMock.mock.calls[0]![0].properties.$ai_session_id;
       const session2 = captureMock.mock.calls[1]![0].properties.$ai_session_id;
-      expect(session1).toBe("telegram:session-id-test");
-      expect(session2).toBe("telegram:session-id-test");
+      expect(session1).toMatch(/^telegram:session-id-test:[a-z0-9-]{8}$/);
+      expect(session2).toMatch(/^telegram:session-id-test:[a-z0-9-]{8}$/);
+      expect(session1).not.toBe(session2);
 
       const traceId1 = captureMock.mock.calls[0]![0].properties.$ai_trace_id;
       const traceId2 = captureMock.mock.calls[1]![0].properties.$ai_trace_id;
       expect(traceId1).not.toBe(traceId2);
+
+      vi.restoreAllMocks();
+    });
+  });
+
+  describe("session windowing in message mode", () => {
+    test("messages within window share the same session ID", async () => {
+      const { api, hooks, services } = createMockApi();
+      registerPostHogHooks(api, defaultConfig({ sessionWindowMinutes: 60 }));
+      await services[0]!.start();
+
+      const llmInputHandlers = hooks.get("llm_input")!;
+      const llmOutputHandlers = hooks.get("llm_output")!;
+
+      // First message
+      await llmInputHandlers[0]!(
+        {
+          runId: "run-a",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          prompt: "Hello",
+          historyMessages: [],
+          imagesCount: 0,
+        },
+        { sessionKey: "agent:main:main" },
+      );
+      await llmOutputHandlers[0]!(
+        {
+          runId: "run-a",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          assistantTexts: ["Hi!"],
+          usage: { input: 5, output: 2 },
+        },
+        { sessionKey: "agent:main:main" },
+      );
+
+      // Second message — different runId, within window
+      await llmInputHandlers[0]!(
+        {
+          runId: "run-b",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          prompt: "How are you?",
+          historyMessages: [],
+          imagesCount: 0,
+        },
+        { sessionKey: "agent:main:main" },
+      );
+      await llmOutputHandlers[0]!(
+        {
+          runId: "run-b",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          assistantTexts: ["Good!"],
+          usage: { input: 5, output: 2 },
+        },
+        { sessionKey: "agent:main:main" },
+      );
+
+      const session1 = captureMock.mock.calls[0]![0].properties.$ai_session_id;
+      const session2 = captureMock.mock.calls[1]![0].properties.$ai_session_id;
+      expect(session1).toMatch(/^agent:main:main:[a-z0-9-]{8}$/);
+      expect(session1).toBe(session2);
+
+      // But different trace IDs (message mode splits on runId)
+      const traceId1 = captureMock.mock.calls[0]![0].properties.$ai_trace_id;
+      const traceId2 = captureMock.mock.calls[1]![0].properties.$ai_trace_id;
+      expect(traceId1).not.toBe(traceId2);
+    });
+
+    test("message after window timeout gets a new session ID", async () => {
+      const { api, hooks, services } = createMockApi();
+      registerPostHogHooks(api, defaultConfig({ sessionWindowMinutes: 30 }));
+      await services[0]!.start();
+
+      const llmInputHandlers = hooks.get("llm_input")!;
+      const llmOutputHandlers = hooks.get("llm_output")!;
+
+      // First message
+      await llmInputHandlers[0]!(
+        {
+          runId: "run-a",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          prompt: "Hello",
+          historyMessages: [],
+          imagesCount: 0,
+        },
+        { sessionKey: "agent:main:main" },
+      );
+      await llmOutputHandlers[0]!(
+        {
+          runId: "run-a",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          assistantTexts: ["Hi!"],
+          usage: { input: 5, output: 2 },
+        },
+        { sessionKey: "agent:main:main" },
+      );
+
+      const session1 = captureMock.mock.calls[0]![0].properties.$ai_session_id;
+
+      // Advance past 30-minute window
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60_000);
+
+      // Second message — after window timeout
+      await llmInputHandlers[0]!(
+        {
+          runId: "run-b",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          prompt: "I'm back",
+          historyMessages: [],
+          imagesCount: 0,
+        },
+        { sessionKey: "agent:main:main" },
+      );
+      await llmOutputHandlers[0]!(
+        {
+          runId: "run-b",
+          sessionId: "sess-1",
+          provider: "openai",
+          model: "gpt-4o",
+          assistantTexts: ["Welcome back!"],
+          usage: { input: 5, output: 2 },
+        },
+        { sessionKey: "agent:main:main" },
+      );
+
+      const session2 = captureMock.mock.calls[1]![0].properties.$ai_session_id;
+      expect(session1).toMatch(/^agent:main:main:[a-z0-9-]{8}$/);
+      expect(session2).toMatch(/^agent:main:main:[a-z0-9-]{8}$/);
+      expect(session1).not.toBe(session2);
 
       vi.restoreAllMocks();
     });

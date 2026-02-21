@@ -17,16 +17,16 @@
         "default": true,
         "description": "When enabled, LLM input/output content is not sent to PostHog"
       },
-      "traceBy": {
+      "traceGrouping": {
         "type": "string",
         "enum": ["message", "session"],
         "default": "message",
         "description": "Trace grouping mode. 'message': one trace per runId (default). 'session': group all generations in a session into one trace, splitting on timeout."
       },
-      "traceTimeout": {
+      "sessionWindowMinutes": {
         "type": "number",
         "default": 60,
-        "description": "Minutes of inactivity before starting a new trace (only used when traceBy is 'session')"
+        "description": "Minutes of inactivity before starting a new session window. Applies to both trace grouping modes."
       },
       "enabled": { "type": "boolean", "default": true }
     },
@@ -46,13 +46,13 @@
       "label": "Privacy Mode",
       "help": "When enabled, LLM input/output content is not sent to PostHog"
     },
-    "traceBy": {
+    "traceGrouping": {
       "label": "Trace Grouping",
       "help": "How to group LLM generations into traces. 'message' creates a new trace per message, 'session' groups an entire conversation into one trace."
     },
-    "traceTimeout": {
-      "label": "Trace Timeout (minutes)",
-      "help": "Minutes of inactivity before starting a new trace in session mode"
+    "sessionWindowMinutes": {
+      "label": "Session Window (minutes)",
+      "help": "Minutes of inactivity before starting a new session window. Applies to both trace grouping modes."
     }
   }
 }

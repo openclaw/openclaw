@@ -4,7 +4,7 @@ import type {
   PluginHookLlmOutputEvent,
   PluginHookToolContext,
 } from "openclaw/plugin-sdk";
-import type { RunState } from "./types.js";
+import type { LastAssistantInfo, RunState } from "./types.js";
 import {
   formatInputMessages,
   formatOutputChoices,
@@ -31,20 +31,34 @@ export type AiTraceEvent = {
   properties: Record<string, unknown>;
 };
 
+const STOP_REASON_MAP: Record<string, string> = {
+  stop: "stop",
+  length: "length",
+  toolUse: "tool_calls",
+  error: "error",
+  aborted: "stop",
+};
+
+export function mapStopReason(stopReason: string | undefined): string | null {
+  if (!stopReason) return null;
+  return STOP_REASON_MAP[stopReason] ?? stopReason;
+}
+
 export function buildAiGeneration(
   runState: RunState,
   output: PluginHookLlmOutputEvent,
   privacyMode: boolean,
+  lastAssistant: LastAssistantInfo = {},
 ): AiGenerationEvent {
   const latency = (Date.now() - runState.startTime) / 1000;
-  const distinctId = runState.sessionKey ?? output.runId;
+  const distinctId = runState.sessionId ?? runState.sessionKey ?? output.runId;
 
   return {
     event: "$ai_generation",
     distinctId,
     properties: {
       $ai_trace_id: runState.traceId,
-      $ai_session_id: runState.sessionKey ?? null,
+      $ai_session_id: runState.sessionId ?? runState.sessionKey ?? null,
       $ai_span_id: runState.spanId,
       $ai_model: output.model,
       $ai_provider: output.provider,
@@ -53,8 +67,12 @@ export function buildAiGeneration(
       $ai_input_tokens: output.usage?.input ?? null,
       $ai_output_tokens: output.usage?.output ?? null,
       $ai_latency: latency,
-      $ai_is_error: false,
-      $ai_error: null,
+      $ai_total_cost_usd: lastAssistant.cost?.total ?? null,
+      $ai_input_cost_usd: lastAssistant.cost?.input ?? null,
+      $ai_output_cost_usd: lastAssistant.cost?.output ?? null,
+      $ai_stop_reason: mapStopReason(lastAssistant.stopReason),
+      $ai_is_error: lastAssistant.stopReason === "error",
+      $ai_error: lastAssistant.errorMessage ?? null,
       $ai_lib: "posthog-openclaw",
       $ai_framework: "openclaw",
       cache_read_input_tokens: output.usage?.cacheRead ?? null,
@@ -71,8 +89,10 @@ export function buildAiSpan(
   event: PluginHookAfterToolCallEvent,
   ctx: PluginHookToolContext,
   privacyMode: boolean,
+  sessionId?: string,
 ): AiSpanEvent {
-  const distinctId = ctx.sessionKey ?? "unknown";
+  const resolvedSessionId = sessionId ?? ctx.sessionKey ?? null;
+  const distinctId = resolvedSessionId ?? "unknown";
   const spanId = generateSpanId();
   const latency = typeof event.durationMs === "number" ? event.durationMs / 1000 : null;
 
@@ -81,7 +101,7 @@ export function buildAiSpan(
     distinctId,
     properties: {
       $ai_trace_id: traceId,
-      $ai_session_id: ctx.sessionKey ?? null,
+      $ai_session_id: resolvedSessionId,
       $ai_span_id: spanId,
       $ai_parent_id: parentSpanId ?? null,
       $ai_span_name: event.toolName,
@@ -101,8 +121,11 @@ export function buildAiSpan(
 export function buildAiTrace(
   traceId: string,
   event: DiagnosticMessageProcessedEvent,
+  tokenTotals?: { input: number; output: number },
+  sessionId?: string,
 ): AiTraceEvent {
-  const distinctId = event.sessionKey ?? "unknown";
+  const resolvedSessionId = sessionId ?? event.sessionKey ?? null;
+  const distinctId = resolvedSessionId ?? "unknown";
   const latency = typeof event.durationMs === "number" ? event.durationMs / 1000 : null;
 
   return {
@@ -110,8 +133,10 @@ export function buildAiTrace(
     distinctId,
     properties: {
       $ai_trace_id: traceId,
-      $ai_session_id: event.sessionKey ?? null,
+      $ai_session_id: resolvedSessionId,
       $ai_latency: latency,
+      $ai_total_input_tokens: tokenTotals?.input ?? null,
+      $ai_total_output_tokens: tokenTotals?.output ?? null,
       $ai_is_error: event.outcome === "error",
       $ai_error: event.error ?? null,
       $ai_lib: "posthog-openclaw",

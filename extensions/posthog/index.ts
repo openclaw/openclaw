@@ -11,17 +11,19 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     const raw = api.pluginConfig ?? {};
 
-    const traceBy = raw.traceBy === "session" ? "session" : "message";
-    const traceTimeout =
-      typeof raw.traceTimeout === "number" && raw.traceTimeout > 0 ? raw.traceTimeout : 60;
+    const traceGrouping = raw.traceGrouping === "session" ? "session" : "message";
+    const sessionWindowMinutes =
+      typeof raw.sessionWindowMinutes === "number" && raw.sessionWindowMinutes > 0
+        ? raw.sessionWindowMinutes
+        : 60;
 
     const config: PostHogPluginConfig = {
       apiKey: raw.apiKey as string,
       host: (raw.host as string) || DEFAULT_HOST,
       privacyMode: raw.privacyMode !== false,
       enabled: raw.enabled !== false,
-      traceBy,
-      traceTimeout,
+      traceGrouping,
+      sessionWindowMinutes,
     };
 
     if (!config.enabled) {

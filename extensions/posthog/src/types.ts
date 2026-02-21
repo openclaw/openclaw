@@ -3,8 +3,18 @@ export type PostHogPluginConfig = {
   host: string;
   privacyMode: boolean;
   enabled: boolean;
-  traceBy: "message" | "session";
-  traceTimeout: number;
+  traceGrouping: "message" | "session";
+  sessionWindowMinutes: number;
+};
+
+export type LastAssistantInfo = {
+  stopReason?: string;
+  errorMessage?: string;
+  cost?: {
+    input: number;
+    output: number;
+    total: number;
+  };
 };
 
 export type RunState = {
@@ -15,6 +25,7 @@ export type RunState = {
   provider: string;
   input: unknown[] | null;
   sessionKey?: string;
+  sessionId?: string;
   channel?: string;
   agentId?: string;
 };

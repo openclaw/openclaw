@@ -2,7 +2,7 @@ import type { DiagnosticEventPayload, OpenClawPluginApi } from "openclaw/plugin-
 import { onDiagnosticEvent } from "openclaw/plugin-sdk";
 import type { PostHogPluginConfig, RunState } from "./types.js";
 import { buildAiGeneration, buildAiSpan, buildAiTrace } from "./events.js";
-import { generateSpanId, generateTraceId } from "./utils.js";
+import { generateSpanId, generateTraceId, parseLastAssistant } from "./utils.js";
 
 const DEFAULT_HOST = "https://us.i.posthog.com";
 const STALE_RUN_MS = 5 * 60 * 1000;
@@ -16,21 +16,40 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
   const generationSpans = new Map<string, string>();
   /** Last runId seen per sessionKey — a new runId means a new message cycle */
   const lastRunId = new Map<string, string>();
-  /** Timestamp of last llm_output per sessionKey — used for session-mode timeout */
+  /** Timestamp of last llm_output per sessionKey — used for session window timeout */
   const lastOutputAt = new Map<string, number>();
+  /** Accumulated token totals per traceId for $ai_trace */
+  const traceTokens = new Map<string, { input: number; output: number }>();
+  /** Session window IDs keyed by sessionKey — windowed $ai_session_id */
+  const sessionWindows = new Map<string, { sessionId: string; lastOutputAt: number }>();
 
   let client: import("posthog-node").PostHog | null = null;
   let unsubscribe: (() => void) | null = null;
+
+  function getOrCreateSessionId(sessionKey: string): string {
+    const existing = sessionWindows.get(sessionKey);
+    const timeoutMs = config.sessionWindowMinutes * 60_000;
+
+    if (existing && Date.now() - existing.lastOutputAt < timeoutMs) {
+      return existing.sessionId;
+    }
+
+    // New window — generate windowed session ID
+    const windowId = generateSpanId().slice(0, 8);
+    const sessionId = `${sessionKey}:${windowId}`;
+    sessionWindows.set(sessionKey, { sessionId, lastOutputAt: Date.now() });
+    return sessionId;
+  }
 
   function getOrCreateTraceId(sessionKey: string | undefined, runId: string): string {
     if (!sessionKey) {
       return generateTraceId();
     }
 
-    if (config.traceBy === "session") {
+    if (config.traceGrouping === "session") {
       const existing = traces.get(sessionKey);
       const lastOutput = lastOutputAt.get(sessionKey);
-      const timeoutMs = config.traceTimeout * 60_000;
+      const timeoutMs = config.sessionWindowMinutes * 60_000;
 
       // Reuse trace if it exists and hasn't timed out
       if (existing && lastOutput && Date.now() - lastOutput < timeoutMs) {
@@ -83,7 +102,11 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
         if (evt.type === "message.processed") {
           const traceId = evt.sessionKey ? traces.get(evt.sessionKey) : undefined;
           if (traceId) {
-            const traceEvent = buildAiTrace(traceId, evt);
+            const tokenTotals = traceTokens.get(traceId);
+            const sessionId = evt.sessionKey
+              ? sessionWindows.get(evt.sessionKey)?.sessionId
+              : undefined;
+            const traceEvent = buildAiTrace(traceId, evt, tokenTotals, sessionId);
             client.capture({
               distinctId: traceEvent.distinctId,
               event: traceEvent.event,
@@ -91,9 +114,10 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
             });
             // In message mode, clean up trace state after completion.
             // In session mode, keep the trace alive for reuse across messages.
-            if (evt.sessionKey && config.traceBy !== "session") {
+            if (evt.sessionKey && config.traceGrouping !== "session") {
               traces.delete(evt.sessionKey);
               generationSpans.delete(evt.sessionKey);
+              traceTokens.delete(traceId);
             }
           }
         }
@@ -111,6 +135,8 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
       generationSpans.clear();
       lastRunId.clear();
       lastOutputAt.clear();
+      traceTokens.clear();
+      sessionWindows.clear();
     },
   });
 
@@ -121,6 +147,7 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
 
     const traceId = getOrCreateTraceId(ctx.sessionKey, event.runId);
     const spanId = generateSpanId();
+    const sessionId = ctx.sessionKey ? getOrCreateSessionId(ctx.sessionKey) : undefined;
 
     // Build the input message array: system prompt + history + current prompt
     let input: unknown[] | null = null;
@@ -140,6 +167,7 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
       provider: event.provider,
       input,
       sessionKey: ctx.sessionKey,
+      sessionId,
       channel: ctx.messageProvider,
       agentId: ctx.agentId,
     });
@@ -156,12 +184,31 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
     const sessionKey = ctx.sessionKey;
     if (sessionKey) {
       generationSpans.set(sessionKey, runState.spanId);
-      if (config.traceBy === "session") {
-        lastOutputAt.set(sessionKey, Date.now());
+      // Track lastOutputAt in both modes for session windowing and trace timeout
+      const now = Date.now();
+      lastOutputAt.set(sessionKey, now);
+      const window = sessionWindows.get(sessionKey);
+      if (window) {
+        window.lastOutputAt = now;
       }
     }
 
-    const generation = buildAiGeneration(runState, event, config.privacyMode);
+    const lastAssistant = parseLastAssistant((event as Record<string, unknown>).lastAssistant);
+
+    // Accumulate token totals for the trace
+    const inputTokens = event.usage?.input ?? 0;
+    const outputTokens = event.usage?.output ?? 0;
+    if (inputTokens > 0 || outputTokens > 0) {
+      const existing = traceTokens.get(runState.traceId);
+      if (existing) {
+        existing.input += inputTokens;
+        existing.output += outputTokens;
+      } else {
+        traceTokens.set(runState.traceId, { input: inputTokens, output: outputTokens });
+      }
+    }
+
+    const generation = buildAiGeneration(runState, event, config.privacyMode, lastAssistant);
     client.capture({
       distinctId: generation.distinctId,
       event: generation.event,
@@ -176,8 +223,9 @@ export function registerPostHogHooks(api: OpenClawPluginApi, config: PostHogPlug
     if (!traceId) return;
 
     const parentSpanId = ctx.sessionKey ? generationSpans.get(ctx.sessionKey) : undefined;
+    const sessionId = ctx.sessionKey ? sessionWindows.get(ctx.sessionKey)?.sessionId : undefined;
 
-    const span = buildAiSpan(traceId, parentSpanId, event, ctx, config.privacyMode);
+    const span = buildAiSpan(traceId, parentSpanId, event, ctx, config.privacyMode, sessionId);
     client.capture({
       distinctId: span.distinctId,
       event: span.event,

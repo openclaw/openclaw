@@ -10,8 +10,8 @@ import type {
   PluginHookLlmOutputEvent,
   PluginHookToolContext,
 } from "openclaw/plugin-sdk";
-import type { RunState } from "./types.js";
-import { buildAiGeneration, buildAiSpan, buildAiTrace } from "./events.js";
+import type { LastAssistantInfo, RunState } from "./types.js";
+import { buildAiGeneration, buildAiSpan, buildAiTrace, mapStopReason } from "./events.js";
 
 describe("buildAiGeneration", () => {
   const baseRunState: RunState = {
@@ -22,6 +22,7 @@ describe("buildAiGeneration", () => {
     provider: "openai",
     input: [{ role: "user", content: "hello" }],
     sessionKey: "telegram:123",
+    sessionId: "telegram:123:abc12345",
     channel: "telegram",
     agentId: "agent-1",
   };
@@ -45,7 +46,7 @@ describe("buildAiGeneration", () => {
     const result = buildAiGeneration(baseRunState, baseOutput, false);
 
     expect(result.event).toBe("$ai_generation");
-    expect(result.distinctId).toBe("telegram:123");
+    expect(result.distinctId).toBe("telegram:123:abc12345");
     expect(result.properties.$ai_trace_id).toBe("trace-1");
     expect(result.properties.$ai_span_id).toBe("span-1");
     expect(result.properties.$ai_model).toBe("gpt-4o");
@@ -235,7 +236,7 @@ describe("buildAiGeneration", () => {
   });
 
   test("uses runId as distinctId when sessionKey missing", () => {
-    const runState = { ...baseRunState, sessionKey: undefined };
+    const runState = { ...baseRunState, sessionKey: undefined, sessionId: undefined };
     const result = buildAiGeneration(runState, baseOutput, false);
     expect(result.distinctId).toBe("run-1");
   });
@@ -247,6 +248,72 @@ describe("buildAiGeneration", () => {
     expect(result.properties.$ai_output_tokens).toBeNull();
     expect(result.properties.cache_read_input_tokens).toBeNull();
     expect(result.properties.cache_creation_input_tokens).toBeNull();
+  });
+
+  test("includes cost properties when lastAssistant has cost data", () => {
+    const lastAssistant: LastAssistantInfo = {
+      stopReason: "stop",
+      cost: { input: 0.001, output: 0.002, total: 0.003 },
+    };
+    const result = buildAiGeneration(baseRunState, baseOutput, false, lastAssistant);
+
+    expect(result.properties.$ai_total_cost_usd).toBe(0.003);
+    expect(result.properties.$ai_input_cost_usd).toBe(0.001);
+    expect(result.properties.$ai_output_cost_usd).toBe(0.002);
+  });
+
+  test("includes null cost when no cost data", () => {
+    const result = buildAiGeneration(baseRunState, baseOutput, false, {});
+
+    expect(result.properties.$ai_total_cost_usd).toBeNull();
+    expect(result.properties.$ai_input_cost_usd).toBeNull();
+    expect(result.properties.$ai_output_cost_usd).toBeNull();
+  });
+
+  test("sets $ai_is_error true and $ai_error when stopReason is error", () => {
+    const lastAssistant: LastAssistantInfo = {
+      stopReason: "error",
+      errorMessage: "Rate limit exceeded",
+    };
+    const result = buildAiGeneration(baseRunState, baseOutput, false, lastAssistant);
+
+    expect(result.properties.$ai_is_error).toBe(true);
+    expect(result.properties.$ai_error).toBe("Rate limit exceeded");
+    expect(result.properties.$ai_stop_reason).toBe("error");
+  });
+
+  test("sets $ai_is_error false for non-error stopReasons", () => {
+    const lastAssistant: LastAssistantInfo = { stopReason: "stop" };
+    const result = buildAiGeneration(baseRunState, baseOutput, false, lastAssistant);
+
+    expect(result.properties.$ai_is_error).toBe(false);
+    expect(result.properties.$ai_error).toBeNull();
+  });
+
+  test("maps stop reason correctly with defaults", () => {
+    // No lastAssistant → null stop reason
+    const result = buildAiGeneration(baseRunState, baseOutput, false);
+    expect(result.properties.$ai_stop_reason).toBeNull();
+  });
+});
+
+describe("mapStopReason", () => {
+  test.each([
+    ["stop", "stop"],
+    ["length", "length"],
+    ["toolUse", "tool_calls"],
+    ["error", "error"],
+    ["aborted", "stop"],
+  ] as const)("maps %s to %s", (input, expected) => {
+    expect(mapStopReason(input)).toBe(expected);
+  });
+
+  test("returns null for undefined", () => {
+    expect(mapStopReason(undefined)).toBeNull();
+  });
+
+  test("passes through unknown values", () => {
+    expect(mapStopReason("custom_reason")).toBe("custom_reason");
   });
 });
 
@@ -357,5 +424,38 @@ describe("buildAiTrace", () => {
 
     const result = buildAiTrace("trace-3", diagnosticEvent);
     expect(result.properties.$ai_latency).toBeNull();
+  });
+
+  test("includes token totals when provided", () => {
+    const diagnosticEvent = {
+      type: "message.processed" as const,
+      ts: Date.now(),
+      seq: 1,
+      channel: "telegram",
+      outcome: "completed" as const,
+      durationMs: 2000,
+      sessionKey: "telegram:123",
+    } satisfies DiagnosticMessageProcessedEvent;
+
+    const result = buildAiTrace("trace-1", diagnosticEvent, { input: 500, output: 150 });
+
+    expect(result.properties.$ai_total_input_tokens).toBe(500);
+    expect(result.properties.$ai_total_output_tokens).toBe(150);
+  });
+
+  test("has null token totals when not provided", () => {
+    const diagnosticEvent = {
+      type: "message.processed" as const,
+      ts: Date.now(),
+      seq: 1,
+      channel: "telegram",
+      outcome: "completed" as const,
+      sessionKey: "telegram:123",
+    } satisfies DiagnosticMessageProcessedEvent;
+
+    const result = buildAiTrace("trace-1", diagnosticEvent);
+
+    expect(result.properties.$ai_total_input_tokens).toBeNull();
+    expect(result.properties.$ai_total_output_tokens).toBeNull();
   });
 });
