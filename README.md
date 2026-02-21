@@ -30,6 +30,26 @@ The wizard guides you step by step through setting up the gateway, workspace, ch
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+## Sponsors
+
+<!-- markdownlint-disable MD033 -->
+<table align="center">
+  <tr>
+    <td align="center" valign="middle" bgcolor="#111827" width="240" height="72">
+      <a href="https://openai.com/" target="_blank" rel="noopener">
+        <img src="docs/assets/sponsors/openai.svg" alt="OpenAI" height="34" />
+      </a>
+    </td>
+    <td width="16"></td>
+    <td align="center" valign="middle" bgcolor="#111827" width="240" height="72">
+      <a href="https://blacksmith.sh/" target="_blank" rel="noopener">
+        <img src="docs/assets/sponsors/blacksmith.svg" alt="Blacksmith" height="34" />
+      </a>
+    </td>
+  </tr>
+</table>
+<!-- markdownlint-enable MD033 -->
+
 **Subscriptions (OAuth):**
 
 - **[Anthropic](https://www.anthropic.com/)** (Claude Pro/Max)
