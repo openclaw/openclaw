@@ -147,7 +147,7 @@ describe("buildInlineKeyboard", () => {
       },
     ];
     for (const testCase of cases) {
-      const input = testCase.input.map((row) => row.map((button) => ({ ...button })));
+      const input = testCase.input?.map((row) => row.map((button) => ({ ...button })));
       expect(buildInlineKeyboard(input), testCase.name).toEqual(testCase.expected);
     }
   });
