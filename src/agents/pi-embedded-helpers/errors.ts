@@ -1,8 +1,8 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
-import type { FailoverReason } from "./types.js";
 
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();

@@ -1,5 +1,5 @@
-import { listSystemPresence } from "../../infra/system-presence.js";
 import type { GatewayBroadcastFn } from "../server-broadcast.js";
+import { listSystemPresence } from "../../infra/system-presence.js";
 
 export function broadcastPresenceSnapshot(params: {
   broadcast: GatewayBroadcastFn;

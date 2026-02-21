@@ -1,10 +1,6 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import { createRequire } from "node:module";
-import path from "node:path";
+import type { VoicePlugin } from "@buape/carbon/voice";
 import type { Readable } from "node:stream";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
-import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   AudioPlayerStatus,
   EndBehaviorType,
@@ -16,11 +12,16 @@ import {
   type AudioPlayer,
   type VoiceConnection,
 } from "@discordjs/voice";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { agentCommand } from "../../commands/agent.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordAccountConfig, TtsConfig } from "../../config/types.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { agentCommand } from "../../commands/agent.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -32,7 +33,6 @@ import {
   runCapability,
 } from "../../media-understanding/runner.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { parseTtsDirectives } from "../../tts/tts-core.js";
 import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tts/tts.js";
 

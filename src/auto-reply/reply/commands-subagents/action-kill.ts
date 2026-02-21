@@ -1,3 +1,4 @@
+import type { CommandHandlerResult } from "../commands-types.js";
 import { abortEmbeddedPiRun } from "../../../agents/pi-embedded.js";
 import { markSubagentRunTerminated } from "../../../agents/subagent-registry.js";
 import {
@@ -7,7 +8,6 @@ import {
 } from "../../../config/sessions.js";
 import { logVerbose } from "../../../globals.js";
 import { stopSubagentsForRequester } from "../abort.js";
-import type { CommandHandlerResult } from "../commands-types.js";
 import { clearSessionQueues } from "../queue.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {

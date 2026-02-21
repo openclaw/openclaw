@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { applyAuthChoiceBytePlus } from "./auth-choice.apply.byteplus.js";
@@ -15,7 +16,6 @@ import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
 import { applyAuthChoiceVllm } from "./auth-choice.apply.vllm.js";
 import { applyAuthChoiceVolcengine } from "./auth-choice.apply.volcengine.js";
 import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
-import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;

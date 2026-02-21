@@ -1,6 +1,6 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());

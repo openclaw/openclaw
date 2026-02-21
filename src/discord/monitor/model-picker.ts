@@ -1,3 +1,4 @@
+import type { APISelectMenuOption } from "discord-api-types/v10";
 import {
   Button,
   Container,
@@ -9,14 +10,13 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "@buape/carbon";
-import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
+import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   buildModelsProviderData,
   type ModelsProviderData,
 } from "../../auto-reply/reply/commands-models.js";
-import type { OpenClawConfig } from "../../config/config.js";
 
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";
 export const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
