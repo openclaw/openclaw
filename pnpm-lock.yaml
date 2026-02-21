@@ -439,13 +439,12 @@ importers:
       nostr-tools:
         specifier: ^2.23.1
         version: 2.23.1(typescript@5.9.3)
+      openclaw:
+        specifier: '>=2026.1.0'
+        version: 2026.2.17(@napi-rs/canvas@0.1.93)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.9)(node-llama-cpp@3.15.1(typescript@5.9.3))(signal-polyfill@0.2.2)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/open-prose: {}
 
@@ -4793,6 +4792,14 @@ packages:
       zod:
         optional: true
 
+  openclaw@2026.2.17:
+    resolution: {integrity: sha512-OgblBbjR9aRxlRUa5DS9K02IxnMY+1GDDznKEcm8/N2FhakAItKEg5uv9ulI6Lr/rtIbublRhuk4a7ntYDxqIw==}
+    engines: {node: '>=22.12.0'}
+    hasBin: true
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.89
+      node-llama-cpp: 3.15.1
+
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
 
@@ -7517,7 +7524,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.93
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.93
       '@napi-rs/canvas-win32-x64-msvc': 0.1.93
-    optional: true
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
@@ -10797,6 +10803,82 @@ snapshots:
     optionalDependencies:
       ws: 8.19.0
       zod: 4.3.6
+
+  openclaw@2026.2.17(@napi-rs/canvas@0.1.93)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.9)(node-llama-cpp@3.15.1(typescript@5.9.3))(signal-polyfill@0.2.2):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.992.0
+      '@buape/carbon': 0.14.0(hono@4.11.9)
+      '@clack/prompts': 1.0.1
+      '@grammyjs/runner': 2.0.3(grammy@1.40.0)
+      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.40.0)
+      '@homebridge/ciao': 1.3.5
+      '@larksuiteoapi/node-sdk': 1.59.0
+      '@line/bot-sdk': 10.6.0
+      '@lydell/node-pty': 1.2.0-beta.3
+      '@mariozechner/pi-agent-core': 0.53.0(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.53.0(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.53.0(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.53.0
+      '@mozilla/readability': 0.6.0
+      '@napi-rs/canvas': 0.1.93
+      '@sinclair/typebox': 0.34.48
+      '@slack/bolt': 4.6.0(@types/express@5.0.6)
+      '@slack/web-api': 7.14.1
+      '@whiskeysockets/baileys': 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
+      ajv: 8.18.0
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      cli-highlight: 2.1.11
+      commander: 14.0.3
+      croner: 10.0.1
+      discord-api-types: 0.38.39
+      dotenv: 17.3.1
+      express: 5.2.1
+      file-type: 21.3.0
+      grammy: 1.40.0
+      https-proxy-agent: 7.0.6
+      jiti: 2.6.1
+      json5: 2.2.3
+      jszip: 3.10.1
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.1
+      node-edge-tts: 1.2.10
+      node-llama-cpp: 3.15.1(typescript@5.9.3)
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.4.624
+      playwright-core: 1.58.2
+      proper-lockfile: 4.1.2
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      signal-utils: 0.21.1(signal-polyfill@0.2.2)
+      sqlite-vec: 0.1.7-alpha.2
+      tar: 7.5.9
+      tslog: 4.10.2
+      undici: 7.22.0
+      ws: 8.19.0
+      yaml: 2.8.2
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@discordjs/opus'
+      - '@modelcontextprotocol/sdk'
+      - '@types/express'
+      - audio-decode
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - ffmpeg-static
+      - hono
+      - jimp
+      - link-preview-js
+      - node-opus
+      - opusscript
+      - signal-polyfill
+      - supports-color
+      - utf-8-validate
 
   opus-decoder@0.7.11:
     dependencies:
