@@ -130,6 +130,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
       if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
+        logger.debug(
+          `Skipping pre-startup event in ${roomId} (ts=${eventTs}, startup=${startupMs}, grace=${startupGraceMs})`,
+        );
         return;
       }
       if (
@@ -137,6 +140,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         typeof eventAge === "number" &&
         eventAge > startupGraceMs
       ) {
+        logger.debug(
+          `Skipping stale event in ${roomId} (age=${eventAge}ms, grace=${startupGraceMs}ms)`,
+        );
         return;
       }
 
