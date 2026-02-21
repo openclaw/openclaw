@@ -11,6 +11,36 @@ type OpenAIReasoningSignature = {
   type: string;
 };
 
+export type OpenAIResponseChoice = {
+  index?: number;
+  message?: {
+    role?: string;
+    content?: string | null;
+    reasoning_content?: string | null;
+    tool_calls?: unknown[];
+  };
+  finish_reason?: string;
+};
+
+export type OpenAIResponse = {
+  id?: string;
+  object?: string;
+  created?: number;
+  model?: string;
+  choices?: OpenAIResponseChoice[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+    };
+    completion_tokens_details?: {
+      reasoning_tokens?: number;
+    };
+  };
+};
+
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
@@ -127,4 +157,62 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
   }
 
   return out;
+}
+
+/**
+ * Maps non-standard `reasoning_content` field (used by iflow/GLM-4.6)
+ * to OpenClaw's structured thinking blocks.
+ */
+export function mapOpenAIReasoningContent(choice: OpenAIResponseChoice): Array<{
+  type: "thinking" | "text";
+  thinking?: string;
+  text?: string;
+}> {
+  const message = choice.message;
+  if (!message) {
+    return [];
+  }
+
+  const blocks: Array<{ type: "thinking" | "text"; thinking?: string; text?: string }> = [];
+
+  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
+    blocks.push({
+      type: "thinking",
+      thinking: message.reasoning_content.trim(),
+    });
+  }
+
+  if (typeof message.content === "string" && message.content.trim()) {
+    blocks.push({
+      type: "text",
+      text: message.content.trim(),
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Maps OpenAI-compatible usage to OpenClaw's internal usage representation,
+ * including reasoning tokens if present.
+ */
+export function mapOpenAIUsage(usage?: OpenAIResponse["usage"]): {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  reasoning_tokens?: number;
+} | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  const reasoning_tokens =
+    usage.completion_tokens_details?.reasoning_tokens ?? (usage as any).reasoning_tokens;
+
+  return {
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    total_tokens: usage.total_tokens,
+    reasoning_tokens: typeof reasoning_tokens === "number" ? reasoning_tokens : undefined,
+  };
 }
