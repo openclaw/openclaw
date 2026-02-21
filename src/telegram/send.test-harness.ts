@@ -5,6 +5,8 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
     deleteMessage: vi.fn(),
     editMessageText: vi.fn(),
+    editMessageCaption: vi.fn(),
+    editMessageReplyMarkup: vi.fn(),
     sendMessage: vi.fn(),
     sendPoll: vi.fn(),
     sendPhoto: vi.fn(),
