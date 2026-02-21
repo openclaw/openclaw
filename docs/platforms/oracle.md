@@ -30,6 +30,26 @@ Oracle’s free tier can be a great fit for OpenClaw (especially if you already 
 
 ---
 
+## One-click deploy (Terraform)
+
+You can provision an Always Free OCI instance and optionally install OpenClaw at first boot using the **[openclaw-oci-free](https://github.com/statickidz/openclaw-oci-free)** repo. It provides Terraform and an OCI Resource Manager stack so you can deploy with a single click.
+
+1. Click the button below (or use the link in the repo):
+
+   <a href="https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/statickidz/openclaw-oci-free/archive/refs/heads/main.zip">
+     <img src="https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg" alt="Deploy OpenClaw to Oracle Cloud (OCI Always Free)" width="200"/>
+   </a>
+
+2. Sign in to Oracle Cloud, pick a compartment, set **Terraform working directory** to `terraform` if prompted, and add your **SSH public key**.
+3. Create the stack and run **Apply** (or leave "Run apply" enabled when creating).
+4. After apply, SSH to the instance using the stack output (e.g. `ssh ubuntu@<public-ip>` or `ssh root@<public-ip>`). If cloud-init installed OpenClaw, run:
+
+   ```bash
+   openclaw onboard
+   ```
+
+For details, shapes (E2.1.Micro or A1.Flex), and local Terraform usage, see the [openclaw-oci-free README](https://github.com/statickidz/openclaw-oci-free). The rest of this page describes a **manual** OCI setup (create instance in the console, then install Tailscale and OpenClaw yourself).
+
 ## Prerequisites
 
 - Oracle Cloud account ([signup](https://www.oracle.com/cloud/free/)) — see [community signup guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) if you hit issues
