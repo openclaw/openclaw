@@ -2,6 +2,7 @@ import { format } from "node:util";
 import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import { ensureMatrixSdkInstalled } from "../deps.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { resolveMatrixAccount } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
@@ -52,6 +53,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       throw new Error(`exit ${code}`);
     },
   };
+  await ensureMatrixSdkInstalled({ runtime });
+
   const logVerboseMessage = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
       return;
