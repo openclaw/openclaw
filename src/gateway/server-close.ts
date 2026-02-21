@@ -5,10 +5,12 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { setCloudflareAccessVerifier } from "./auth.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;
+  cloudflareCleanup: (() => Promise<void>) | null;
   canvasHost: CanvasHostHandler | null;
   canvasHostServer: CanvasHostServer | null;
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
@@ -47,6 +49,14 @@ export function createGatewayCloseHandler(params: {
     if (params.tailscaleCleanup) {
       await params.tailscaleCleanup();
     }
+    if (params.cloudflareCleanup) {
+      try {
+        await params.cloudflareCleanup();
+      } catch {
+        /* ignore */
+      }
+    }
+    setCloudflareAccessVerifier(null);
     if (params.canvasHost) {
       try {
         await params.canvasHost.close();

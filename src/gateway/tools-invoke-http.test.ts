@@ -125,7 +125,12 @@ beforeAll(async () => {
   sharedServer = createServer((req, res) => {
     void (async () => {
       const handled = await handleToolsInvokeHttpRequest(req, res, {
-        auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+        auth: {
+          mode: "token",
+          token: TEST_GATEWAY_TOKEN,
+          allowTailscale: false,
+          allowCloudflareAccess: false,
+        },
       });
       if (handled) {
         return;

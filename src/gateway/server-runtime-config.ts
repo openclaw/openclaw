@@ -1,6 +1,7 @@
 import type {
   GatewayAuthConfig,
   GatewayBindMode,
+  GatewayCloudflareConfig,
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
@@ -31,6 +32,8 @@ export type GatewayRuntimeConfig = {
   authMode: ResolvedGatewayAuth["mode"];
   tailscaleConfig: GatewayTailscaleConfig;
   tailscaleMode: "off" | "serve" | "funnel";
+  cloudflareConfig: GatewayCloudflareConfig;
+  cloudflareMode: "off" | "managed" | "access-only";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   canvasHostEnabled: boolean;
 };
@@ -45,6 +48,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   openResponsesEnabled?: boolean;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
+  cloudflare?: GatewayCloudflareConfig;
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
@@ -88,11 +92,19 @@ export async function resolveGatewayRuntimeConfig(params: {
   const tailscaleOverrides = params.tailscale ?? {};
   const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
   const tailscaleMode = tailscaleConfig.mode ?? "off";
+  const cloudflareBase = params.cfg.gateway?.cloudflare ?? {};
+  const cloudflareOverrides = params.cloudflare ?? {};
+  const cloudflareConfig: GatewayCloudflareConfig = {
+    ...cloudflareBase,
+    ...cloudflareOverrides,
+  };
+  const cloudflareMode = cloudflareConfig.mode ?? "off";
   const resolvedAuth = resolveGatewayAuth({
     authConfig: params.cfg.gateway?.auth,
     authOverride: params.auth,
     env: process.env,
     tailscaleMode,
+    cloudflareMode,
   });
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
   const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
@@ -115,7 +127,12 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
-  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+  if (
+    !isLoopbackHost(bindHost) &&
+    !hasSharedSecret &&
+    authMode !== "trusted-proxy" &&
+    !resolvedAuth.allowCloudflareAccess
+  ) {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );
@@ -139,6 +156,33 @@ export async function resolveGatewayRuntimeConfig(params: {
     }
   }
 
+  if (cloudflareMode === "managed") {
+    const tunnelToken =
+      cloudflareConfig.tunnelToken ?? process.env.OPENCLAW_CLOUDFLARE_TUNNEL_TOKEN;
+    if (!tunnelToken) {
+      throw new Error(
+        "cloudflare managed mode requires a tunnel token (set gateway.cloudflare.tunnelToken or OPENCLAW_CLOUDFLARE_TUNNEL_TOKEN)",
+      );
+    }
+    if (!cloudflareConfig.teamDomain) {
+      throw new Error(
+        "cloudflare managed mode requires a team domain for JWT verification (set gateway.cloudflare.teamDomain)",
+      );
+    }
+    if (!isLoopbackHost(bindHost)) {
+      throw new Error(
+        "cloudflare managed mode requires gateway bind=loopback (cloudflared proxies to localhost)",
+      );
+    }
+  }
+  if (cloudflareMode === "access-only") {
+    if (!cloudflareConfig.teamDomain) {
+      throw new Error(
+        "cloudflare access-only mode requires a team domain for JWT verification (set gateway.cloudflare.teamDomain)",
+      );
+    }
+  }
+
   return {
     bindHost,
     controlUiEnabled,
@@ -153,6 +197,8 @@ export async function resolveGatewayRuntimeConfig(params: {
     authMode,
     tailscaleConfig,
     tailscaleMode,
+    cloudflareConfig,
+    cloudflareMode,
     hooksConfig,
     canvasHostEnabled,
   };

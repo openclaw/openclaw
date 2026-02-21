@@ -429,6 +429,7 @@ export const OpenClawSchema = z
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
+            allowCloudflareAccess: z.boolean().optional(),
             rateLimit: z
               .object({
                 maxAttempts: z.number().optional(),
@@ -462,6 +463,17 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        cloudflare: z
+          .object({
+            mode: z
+              .union([z.literal("off"), z.literal("managed"), z.literal("access-only")])
+              .optional(),
+            tunnelToken: z.string().optional().register(sensitive),
+            teamDomain: z.string().optional(),
+            audience: z.string().optional(),
           })
           .strict()
           .optional(),

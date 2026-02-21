@@ -112,6 +112,8 @@ export type GatewayAuthConfig = {
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Allow Cloudflare Access JWT identity when cloudflare mode is active. */
+  allowCloudflareAccess?: boolean;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**
@@ -139,6 +141,19 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+};
+
+export type GatewayCloudflareMode = "off" | "managed" | "access-only";
+
+export type GatewayCloudflareConfig = {
+  /** Cloudflare tunnel/access mode. */
+  mode?: GatewayCloudflareMode;
+  /** Tunnel token from Cloudflare Zero Trust dashboard (managed mode). */
+  tunnelToken?: string;
+  /** Cloudflare Access team domain (e.g. "myteam" for myteam.cloudflareaccess.com). Required for JWT verification. */
+  teamDomain?: string;
+  /** Optional Cloudflare Access Application Audience (AUD) tag for stricter JWT validation. */
+  audience?: string;
 };
 
 export type GatewayRemoteConfig = {
@@ -299,6 +314,7 @@ export type GatewayConfig = {
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
+  cloudflare?: GatewayCloudflareConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;

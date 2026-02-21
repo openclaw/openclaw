@@ -40,6 +40,10 @@ type GatewayRunOpts = {
   password?: unknown;
   tailscale?: unknown;
   tailscaleResetOnExit?: boolean;
+  cloudflare?: unknown;
+  cloudflareTunnelToken?: unknown;
+  cloudflareTeamDomain?: unknown;
+  cloudflareAudience?: unknown;
   allowUnconfigured?: boolean;
   force?: boolean;
   verbose?: boolean;
@@ -61,6 +65,10 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "auth",
   "password",
   "tailscale",
+  "cloudflare",
+  "cloudflareTunnelToken",
+  "cloudflareTeamDomain",
+  "cloudflareAudience",
   "wsLog",
   "rawStreamPath",
 ] as const;
@@ -202,6 +210,22 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  const cloudflareRaw = toOptionString(opts.cloudflare);
+  const cloudflareMode =
+    cloudflareRaw === "off" || cloudflareRaw === "managed" || cloudflareRaw === "access-only"
+      ? cloudflareRaw
+      : null;
+  if (cloudflareRaw && !cloudflareMode) {
+    defaultRuntime.error('Invalid --cloudflare (use "off", "managed", or "access-only")');
+    defaultRuntime.exit(1);
+    return;
+  }
+  const cloudflareTunnelToken = toOptionString(opts.cloudflareTunnelToken);
+  const cloudflareTeamDomain = toOptionString(opts.cloudflareTeamDomain);
+  const cloudflareAudience = toOptionString(opts.cloudflareAudience);
+  if (cloudflareTunnelToken) {
+    process.env.OPENCLAW_CLOUDFLARE_TUNNEL_TOKEN = cloudflareTunnelToken;
+  }
   const passwordRaw = toOptionString(opts.password);
   const tokenRaw = toOptionString(opts.token);
 
@@ -252,6 +276,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     authOverride,
     env: process.env,
     tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+    cloudflareMode: cloudflareMode ?? cfg.gateway?.cloudflare?.mode ?? "off",
   });
   const resolvedAuthMode = resolvedAuth.mode;
   const tokenValue = resolvedAuth.token;
@@ -292,7 +317,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     bind !== "loopback" &&
     !hasSharedSecret &&
     !canBootstrapToken &&
-    resolvedAuthMode !== "trusted-proxy"
+    resolvedAuthMode !== "trusted-proxy" &&
+    !resolvedAuth.allowCloudflareAccess
   ) {
     defaultRuntime.error(
       [
@@ -322,6 +348,15 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
+          cloudflare:
+            cloudflareMode || cloudflareTunnelToken || cloudflareTeamDomain || cloudflareAudience
+              ? {
+                  mode: cloudflareMode ?? undefined,
+                  tunnelToken: cloudflareTunnelToken,
+                  teamDomain: cloudflareTeamDomain,
+                  audience: cloudflareAudience,
+                }
+              : undefined,
         }),
     });
   } catch (err) {
@@ -371,6 +406,13 @@ export function addGatewayRunCommand(cmd: Command): Command {
       "Reset Tailscale serve/funnel configuration on shutdown",
       false,
     )
+    .option("--cloudflare <mode>", 'Cloudflare mode ("off"|"managed"|"access-only")')
+    .option(
+      "--cloudflare-tunnel-token <token>",
+      "Tunnel token for managed mode (default: OPENCLAW_CLOUDFLARE_TUNNEL_TOKEN)",
+    )
+    .option("--cloudflare-team-domain <domain>", "Cloudflare Access team domain")
+    .option("--cloudflare-audience <aud>", "Cloudflare Access Application Audience (AUD) tag")
     .option(
       "--allow-unconfigured",
       "Allow gateway start without gateway.mode=local in config",
