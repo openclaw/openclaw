@@ -314,7 +314,12 @@ export async function runPreparedReply(
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
+          const entry = store[sessionKey] ?? sessionEntry;
+          store[sessionKey] = {
+            ...entry,
+            thinkingLevel: sessionEntry.thinkingLevel,
+            updatedAt: sessionEntry.updatedAt,
+          };
         });
       }
     }

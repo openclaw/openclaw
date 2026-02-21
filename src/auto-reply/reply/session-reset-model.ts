@@ -57,13 +57,13 @@ function buildSelectionFromExplicit(params: {
   };
 }
 
-function applySelectionToSession(params: {
+async function applySelectionToSession(params: {
   selection: ModelDirectiveSelection;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
-}) {
+}): Promise<void> {
   const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return;
@@ -77,10 +77,16 @@ function applySelectionToSession(params: {
   }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
-    }).catch(() => {
-      // Ignore persistence errors; session still proceeds.
+    await updateSessionStore(storePath, (store) => {
+      const entry = store[sessionKey] ?? sessionEntry;
+      const persisted = applyModelOverrideToSessionEntry({
+        entry,
+        selection,
+      });
+      if (!persisted.updated) {
+        return;
+      }
+      store[sessionKey] = entry;
     });
   }
 }
@@ -186,7 +192,7 @@ export async function applyResetModelOverride(params: {
   params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 
-  applySelectionToSession({
+  await applySelectionToSession({
     selection,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,

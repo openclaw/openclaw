@@ -56,8 +56,16 @@ async function applyAbortTarget(params: {
     abortTarget.entry.updatedAt = Date.now();
     params.sessionStore[abortTarget.key] = abortTarget.entry;
     if (params.storePath) {
+      const persistedPatch: Partial<SessionEntry> = {
+        abortedLastRun: abortTarget.entry.abortedLastRun,
+        updatedAt: abortTarget.entry.updatedAt,
+      };
       await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry;
+        const entry = store[abortTarget.key] ?? abortTarget.entry;
+        store[abortTarget.key] = {
+          ...entry,
+          ...persistedPatch,
+        };
       });
     }
   } else if (params.abortKey) {
@@ -65,15 +73,28 @@ async function applyAbortTarget(params: {
   }
 }
 
-async function persistSessionEntry(params: Parameters<CommandHandler>[0]): Promise<boolean> {
+async function persistSessionEntry(
+  params: Parameters<CommandHandler>[0],
+  patchFields: ReadonlyArray<keyof SessionEntry>,
+): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return false;
   }
   params.sessionEntry.updatedAt = Date.now();
   params.sessionStore[params.sessionKey] = params.sessionEntry;
   if (params.storePath) {
+    const persistedPatch: Partial<SessionEntry> = {
+      updatedAt: params.sessionEntry.updatedAt,
+    };
+    for (const field of patchFields) {
+      persistedPatch[field] = params.sessionEntry[field] as never;
+    }
     await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.sessionEntry as SessionEntry;
+      const entry = store[params.sessionKey] ?? (params.sessionEntry as SessionEntry);
+      store[params.sessionKey] = {
+        ...entry,
+        ...persistedPatch,
+      };
     });
   }
   return true;
@@ -108,7 +129,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
-    await persistSessionEntry(params);
+    await persistSessionEntry(params, ["groupActivation", "groupActivationNeedsSystemIntro"]);
   }
   return {
     shouldContinue: false,
@@ -144,7 +165,7 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     } else {
       params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
     }
-    await persistSessionEntry(params);
+    await persistSessionEntry(params, ["sendPolicy"]);
   }
   const label =
     sendPolicyCommand.mode === "inherit"
@@ -233,7 +254,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     } else {
       params.sessionEntry.responseUsage = next;
     }
-    await persistSessionEntry(params);
+    await persistSessionEntry(params, ["responseUsage"]);
   }
 
   return {

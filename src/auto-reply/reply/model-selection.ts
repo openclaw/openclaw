@@ -331,7 +331,15 @@ export async function createModelSelectionState(params: {
           sessionStore[sessionKey] = sessionEntry;
           if (storePath) {
             await updateSessionStore(storePath, (store) => {
-              store[sessionKey] = sessionEntry;
+              const entry = store[sessionKey] ?? sessionEntry;
+              const persisted = applyModelOverrideToSessionEntry({
+                entry,
+                selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+              });
+              if (!persisted.updated) {
+                return;
+              }
+              store[sessionKey] = entry;
             });
           }
         }

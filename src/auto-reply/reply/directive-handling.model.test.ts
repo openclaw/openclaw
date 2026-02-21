@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 import {
@@ -207,5 +207,35 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("merges directive persistence with fresh store entry fields", async () => {
+    const directives = parseInlineDirectives("/think high");
+    const sessionEntry = createSessionEntry({ thinkingLevel: "off" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    vi.mocked(updateSessionStore).mockImplementationOnce(async (_path, mutator) => {
+      const store: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId: "s1",
+          updatedAt: Date.now() - 1_000,
+          thinkingLevel: "off",
+          lastTo: "fresh-recipient",
+        },
+      };
+      await mutator(store);
+      expect(store[sessionKey]?.thinkingLevel).toBe("high");
+      expect(store[sessionKey]?.lastTo).toBe("fresh-recipient");
+    });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text ?? "").toContain("Thinking level set to high.");
+    expect(vi.mocked(updateSessionStore)).toHaveBeenCalled();
   });
 });

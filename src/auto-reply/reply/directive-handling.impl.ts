@@ -348,10 +348,70 @@ export async function handleDirectiveOnly(
     }
   }
   sessionEntry.updatedAt = Date.now();
+  const persistedPatch: Partial<SessionEntry> = {
+    updatedAt: sessionEntry.updatedAt,
+  };
+  if ((directives.hasThinkDirective && directives.thinkLevel) || shouldDowngradeXHigh) {
+    persistedPatch.thinkingLevel = sessionEntry.thinkingLevel;
+  }
+  if (directives.hasVerboseDirective && directives.verboseLevel) {
+    persistedPatch.verboseLevel = sessionEntry.verboseLevel;
+  }
+  if (directives.hasReasoningDirective && directives.reasoningLevel) {
+    persistedPatch.reasoningLevel = sessionEntry.reasoningLevel;
+  }
+  if (directives.hasElevatedDirective && directives.elevatedLevel) {
+    persistedPatch.elevatedLevel = sessionEntry.elevatedLevel;
+  }
+  if (directives.hasExecDirective && directives.hasExecOptions) {
+    if (directives.execHost) {
+      persistedPatch.execHost = sessionEntry.execHost;
+    }
+    if (directives.execSecurity) {
+      persistedPatch.execSecurity = sessionEntry.execSecurity;
+    }
+    if (directives.execAsk) {
+      persistedPatch.execAsk = sessionEntry.execAsk;
+    }
+    if (directives.execNode) {
+      persistedPatch.execNode = sessionEntry.execNode;
+    }
+  }
+  if (modelSelection) {
+    persistedPatch.providerOverride = sessionEntry.providerOverride;
+    persistedPatch.modelOverride = sessionEntry.modelOverride;
+    persistedPatch.authProfileOverride = sessionEntry.authProfileOverride;
+    persistedPatch.authProfileOverrideSource = sessionEntry.authProfileOverrideSource;
+    persistedPatch.authProfileOverrideCompactionCount =
+      sessionEntry.authProfileOverrideCompactionCount;
+  }
+  if (directives.hasQueueDirective && directives.queueReset) {
+    persistedPatch.queueMode = sessionEntry.queueMode;
+    persistedPatch.queueDebounceMs = sessionEntry.queueDebounceMs;
+    persistedPatch.queueCap = sessionEntry.queueCap;
+    persistedPatch.queueDrop = sessionEntry.queueDrop;
+  } else if (directives.hasQueueDirective) {
+    if (directives.queueMode) {
+      persistedPatch.queueMode = sessionEntry.queueMode;
+    }
+    if (typeof directives.debounceMs === "number") {
+      persistedPatch.queueDebounceMs = sessionEntry.queueDebounceMs;
+    }
+    if (typeof directives.cap === "number") {
+      persistedPatch.queueCap = sessionEntry.queueCap;
+    }
+    if (directives.dropPolicy) {
+      persistedPatch.queueDrop = sessionEntry.queueDrop;
+    }
+  }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
+      const entry = store[sessionKey] ?? sessionEntry;
+      store[sessionKey] = {
+        ...entry,
+        ...persistedPatch,
+      };
     });
   }
   if (modelSelection) {
