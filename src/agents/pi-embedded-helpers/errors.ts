@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agent-scope.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
 import type { FailoverReason } from "./types.js";
@@ -391,7 +392,12 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   };
 }
 
-export function formatRawAssistantErrorForUi(raw?: string): string {
+export type AgentErrorContext = {
+  agentId?: string;
+  workspacePath?: string;
+};
+
+export function formatRawAssistantErrorForUi(raw?: string, agentCtx?: AgentErrorContext): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
     return "LLM request failed with an unknown error.";
@@ -414,11 +420,39 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   if (info?.message) {
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
     const type = info.type ? ` ${info.type}` : "";
+    // Append agent/workspace context for 401 auth errors to help identify which config failed
+    // when running multiple agents. Format: [agent: <id>, workspace: <path>]
+    const isAuthError = info.httpCode === "401";
+    const agentContext =
+      isAuthError && agentCtx?.agentId
+        ? ` [agent: ${agentCtx.agentId}${agentCtx.workspacePath ? `, workspace: ${agentCtx.workspacePath}` : ""}]`
+        : "";
     const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return `${prefix}${type}: ${info.message}${requestId}`;
+    return `${prefix}${type}: ${info.message}${agentContext}${requestId}`;
   }
 
   return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+}
+
+function resolveAgentErrorContext(opts?: {
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+}): AgentErrorContext | undefined {
+  if (!opts?.cfg) {
+    return undefined;
+  }
+  try {
+    const agentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: opts.cfg });
+    // Skip context for single-agent setups — it adds noise without diagnostic value
+    if (!agentId || agentId === "main") {
+      return undefined;
+    }
+    const workspacePath = resolveAgentWorkspaceDir(opts.cfg, agentId);
+    return { agentId, workspacePath };
+  } catch {
+    // Don't let context resolution failures mask the original error
+    return undefined;
+  }
 }
 
 export function formatAssistantErrorText(
@@ -494,7 +528,7 @@ export function formatAssistantErrorText(
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
-    return formatRawAssistantErrorForUi(raw);
+    return formatRawAssistantErrorForUi(raw, resolveAgentErrorContext(opts));
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
