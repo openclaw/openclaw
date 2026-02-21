@@ -17,13 +17,19 @@ function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
+  onBlockReplyHold: ReturnType<typeof vi.fn>;
+  onBlockReplyResume: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
+  const onBlockReplyHold = vi.fn();
+  const onBlockReplyResume = vi.fn();
   const warn = vi.fn();
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
       onBlockReplyFlush,
+      onBlockReplyHold,
+      onBlockReplyResume,
       onAgentEvent: undefined,
       onToolResult: undefined,
     },
@@ -53,12 +59,12 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush };
+  return { ctx, warn, onBlockReplyFlush, onBlockReplyHold, onBlockReplyResume };
 }
 
 describe("handleToolExecutionStart read path checks", () => {
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, onBlockReplyFlush } = createTestContext();
+    const { ctx, warn, onBlockReplyHold } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -69,7 +75,7 @@ describe("handleToolExecutionStart read path checks", () => {
 
     await handleToolExecutionStart(ctx, evt);
 
-    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyHold).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -92,7 +98,7 @@ describe("handleToolExecutionStart read path checks", () => {
 
 describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
-    const { ctx } = createTestContext();
+    const { ctx, onBlockReplyResume } = createTestContext();
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -114,6 +120,7 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
       } as never,
     );
 
+    expect(onBlockReplyResume).toHaveBeenCalledTimes(1);
     expect(ctx.state.successfulCronAdds).toBe(1);
   });
 

@@ -814,6 +814,8 @@ export async function runEmbeddedAttempt(
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
         onBlockReplyFlush: params.onBlockReplyFlush,
+        onBlockReplyHold: params.onBlockReplyHold,
+        onBlockReplyResume: params.onBlockReplyResume,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply,
