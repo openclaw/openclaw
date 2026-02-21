@@ -43,6 +43,8 @@ export function loadConstitution(config?: SecurityAlignmentConfig): Constitution
     try {
       const customData = JSON.parse(fs.readFileSync(config.constitutionPath, "utf-8"));
       if (Array.isArray(customData.principles)) {
+        // Keep only immutable defaults; file principles replace the rest
+        basePrinciples = basePrinciples.filter((p) => p.immutable);
         for (const p of customData.principles) {
           basePrinciples.push({
             ...p,
@@ -50,8 +52,8 @@ export function loadConstitution(config?: SecurityAlignmentConfig): Constitution
           });
         }
       }
-    } catch {
-      // Invalid path or malformed JSON — fall back to defaults
+    } catch (err) {
+      console.error("Failed to load constitution file:", err);
     }
   }
 
