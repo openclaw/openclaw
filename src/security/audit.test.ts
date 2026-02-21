@@ -92,6 +92,14 @@ function hasFinding(res: SecurityAuditReport, checkId: string, severity?: string
   );
 }
 
+function expectFinding(res: SecurityAuditReport, checkId: string, severity?: string): void {
+  expect(hasFinding(res, checkId, severity)).toBe(true);
+}
+
+function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
+  expect(hasFinding(res, checkId)).toBe(false);
+}
+
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -298,14 +306,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.trusted_proxies_missing",
-          severity: "warn",
-        }),
-      ]),
-    );
+    expectFinding(res, "gateway.trusted_proxies_missing", "warn");
   });
 
   it("flags loopback control UI without auth as critical", async () => {
@@ -319,14 +320,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg, { env: {} });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.loopback_no_auth",
-          severity: "critical",
-        }),
-      ]),
-    );
+    expectFinding(res, "gateway.loopback_no_auth", "critical");
   });
 
   it("flags logging.redactSensitive=off", async () => {
@@ -336,11 +330,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "logging.redact_off", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "logging.redact_off", "warn");
   });
 
   it("treats Windows ACL-only perms as secure", async () => {
@@ -794,14 +784,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "tools.profile_minimal_overridden",
-          severity: "warn",
-        }),
-      ]),
-    );
+    expectFinding(res, "tools.profile_minimal_overridden", "warn");
   });
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
@@ -815,14 +798,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "tools.elevated.allowFrom.whatsapp.wildcard",
-          severity: "critical",
-        }),
-      ]),
-    );
+    expectFinding(res, "tools.elevated.allowFrom.whatsapp.wildcard", "critical");
   });
 
   it("flags browser control without auth when browser is enabled", async () => {
@@ -838,11 +814,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg, { env: {} });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "browser.control_no_auth", severity: "critical" }),
-      ]),
-    );
+    expectFinding(res, "browser.control_no_auth", "critical");
   });
 
   it("does not flag browser control auth when gateway token is configured", async () => {
@@ -858,7 +830,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg, { env: {} });
 
-    expect(hasFinding(res, "browser.control_no_auth")).toBe(false);
+    expectNoFinding(res, "browser.control_no_auth");
   });
 
   it("warns when remote CDP uses HTTP", async () => {
@@ -872,11 +844,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "browser.remote_cdp_http", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "browser.remote_cdp_http", "warn");
   });
 
   it("warns when control UI allows insecure auth", async () => {
@@ -1508,11 +1476,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "hooks.token_too_short", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "hooks.token_too_short", "warn");
   });
 
   it("flags hooks token reuse of the gateway env token as critical", async () => {
@@ -1524,15 +1488,7 @@ describe("security audit", () => {
 
     try {
       const res = await audit(cfg);
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "hooks.token_reuse_gateway_token",
-            severity: "critical",
-          }),
-        ]),
-      );
+      expectFinding(res, "hooks.token_reuse_gateway_token", "critical");
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -1549,11 +1505,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "hooks.default_session_key_unset", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "hooks.default_session_key_unset", "warn");
   });
 
   it("scores hooks request sessionKey override by gateway exposure", async () => {
@@ -1626,16 +1578,8 @@ describe("security audit", () => {
     ];
 
     for (const testCase of cases) {
-      const res = await runSecurityAudit({
-        config: testCase.cfg,
-        env: {},
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
-      expect(
-        hasFinding(res, "gateway.http.no_auth", testCase.expectedSeverity),
-        testCase.name,
-      ).toBe(true);
+      const res = await audit(testCase.cfg, { env: {} });
+      expectFinding(res, "gateway.http.no_auth", testCase.expectedSeverity);
       if (testCase.detailIncludes) {
         const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
         for (const text of testCase.detailIncludes) {
@@ -1659,14 +1603,8 @@ describe("security audit", () => {
       },
     };
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(res.findings.some((entry) => entry.checkId === "gateway.http.no_auth")).toBe(false);
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "gateway.http.no_auth");
   });
 
   it("reports HTTP API session-key override surfaces when enabled", async () => {
@@ -1683,14 +1621,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.http.session_key_override_enabled",
-          severity: "info",
-        }),
-      ]),
-    );
+    expectFinding(res, "gateway.http.session_key_override_enabled", "info");
   });
 
   it("warns when state/config look like a synced folder", async () => {
@@ -1701,11 +1632,7 @@ describe("security audit", () => {
       configPath: "/Users/test/Dropbox/.openclaw/openclaw.json",
     });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "fs.synced_dir", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "fs.synced_dir", "warn");
   });
 
   it("flags group/world-readable config include files", async () => {
