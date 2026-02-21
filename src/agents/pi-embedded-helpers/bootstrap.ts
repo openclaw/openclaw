@@ -199,6 +199,12 @@ export function buildBootstrapContextFiles(
     if (remainingTotalChars <= 0) {
       break;
     }
+    if (!file.path) {
+      opts?.warn?.(
+        `skipping bootstrap file "${file.name}" — missing required "path" field (hook may have used "filePath" instead)`,
+      );
+      continue;
+    }
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${file.path}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);

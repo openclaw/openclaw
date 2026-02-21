@@ -116,6 +116,21 @@ describe("buildBootstrapContextFiles", () => {
     expect(result[0]?.content.length).toBeLessThanOrEqual(20);
     expect(result[0]?.content.startsWith("[MISSING]")).toBe(true);
   });
+
+  it("skips files with undefined path and emits a warning", () => {
+    // Hooks can push objects without a `path` field (e.g. using `filePath` instead).
+    // A missing path must not crash with TypeError — it should be skipped with a warning.
+    const malformed = { name: "SKILL-SECURITY.md", missing: false, content: "secret" } as unknown as WorkspaceBootstrapFile;
+    const good = makeFile({ content: "hello" });
+    const warnings: string[] = [];
+    const result = buildBootstrapContextFiles([malformed, good], {
+      warn: (msg) => warnings.push(msg),
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.path).toBe("/tmp/AGENTS.md");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/missing required "path" field/);
+  });
 });
 
 type BootstrapLimitResolverCase = {
