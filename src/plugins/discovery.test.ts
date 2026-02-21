@@ -14,6 +14,22 @@ function makeTempDir() {
   return dir;
 }
 
+function symlinkDir(target: string, linkPath: string) {
+  fs.symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+}
+
+function symlinkFile(target: string, linkPath: string): boolean {
+  try {
+    fs.symlinkSync(target, linkPath, "file");
+    return true;
+  } catch (err) {
+    if (process.platform === "win32") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
   const prev = process.env.OPENCLAW_STATE_DIR;
   const prevBundled = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -65,6 +81,89 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("alpha");
     expect(ids).toContain("beta");
+  });
+
+  it("discovers bundled plugins from symlinked directories", async () => {
+    const stateDir = makeTempDir();
+    const bundledTarget = makeTempDir();
+
+    for (const id of ["discord", "memory-core"]) {
+      const pluginDir = path.join(bundledTarget, id);
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, "index.js"),
+        "module.exports = { default: { id: 'test', register() {} } };",
+        "utf-8",
+      );
+    }
+
+    const bundledOverlay = makeTempDir();
+    symlinkDir(path.join(bundledTarget, "discord"), path.join(bundledOverlay, "discord"));
+    symlinkDir(path.join(bundledTarget, "memory-core"), path.join(bundledOverlay, "memory-core"));
+
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledOverlay;
+    try {
+      const { candidates } = discoverOpenClawPlugins({});
+      const ids = candidates.map((c) => c.idHint);
+      expect(ids).toContain("discord");
+      expect(ids).toContain("memory-core");
+    } finally {
+      if (prevStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+      if (prevBundledDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+      }
+    }
+  });
+
+  it("discovers plugin files exposed via symlink entries", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    const targetDir = makeTempDir();
+    fs.mkdirSync(globalExt, { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "actual.ts"), "export default function () {}", "utf-8");
+    const created = symlinkFile(
+      path.join(targetDir, "actual.ts"),
+      path.join(globalExt, "gamma.ts"),
+    );
+    if (!created) {
+      return;
+    }
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("gamma");
+  });
+
+  it("ignores broken symlink entries during discovery", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+    const created = symlinkFile(
+      path.join(globalExt, "missing.ts"),
+      path.join(globalExt, "broken.ts"),
+    );
+    if (!created) {
+      return;
+    }
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).not.toContain("broken");
   });
 
   it("loads package extension packs", async () => {

@@ -295,6 +295,29 @@ function addCandidate(params: {
   });
 }
 
+function resolveDirentKind(
+  entry: fs.Dirent,
+  fullPath: string,
+): {
+  isFile: boolean;
+  isDirectory: boolean;
+} {
+  let isFile = entry.isFile();
+  let isDirectory = entry.isDirectory();
+
+  if (!isFile && !isDirectory) {
+    try {
+      const stats = fs.statSync(fullPath);
+      isFile = stats.isFile();
+      isDirectory = stats.isDirectory();
+    } catch {
+      // Broken symlink, inaccessible target, or unknown dirent type.
+    }
+  }
+
+  return { isFile, isDirectory };
+}
+
 function resolvePackageEntrySource(params: {
   packageDir: string;
   entryPath: string;
@@ -343,23 +366,26 @@ function discoverInDirectory(params: {
 
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
-    if (entry.isFile()) {
+    const kind = resolveDirentKind(entry, fullPath);
+
+    if (kind.isFile) {
       if (!isExtensionFile(fullPath)) {
         continue;
       }
+      const candidateRootDir = entry.isSymbolicLink() ? fullPath : path.dirname(fullPath);
       addCandidate({
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
         idHint: path.basename(entry.name, path.extname(entry.name)),
         source: fullPath,
-        rootDir: path.dirname(fullPath),
+        rootDir: candidateRootDir,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) {
+    if (!kind.isDirectory) {
       continue;
     }
 
