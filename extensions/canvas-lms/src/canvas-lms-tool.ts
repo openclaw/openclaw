@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { optionalStringEnum, stringEnum } from "../../../src/agents/schema/typebox.js";
+import { callGateway, randomIdempotencyKey } from "../../../src/gateway/call.js";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 const CANVAS_LMS_ACTIONS = [
@@ -11,8 +12,10 @@ const CANVAS_LMS_ACTIONS = [
   "list_calendar_events",
   "list_grades",
   "list_course_files",
+  "sync_academic_digest",
 ] as const;
 const ASSIGNMENT_BUCKETS = ["all", "upcoming", "undated", "past"] as const;
+const DIGEST_WINDOWS = ["today", "week"] as const;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_MAX_PAGES = 5;
@@ -163,6 +166,75 @@ function parseExpiresAtMs(value: unknown): number | undefined {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveDigestDateRange(params: { window: "today" | "week"; now: Date }): {
+  start: Date;
+  end: Date;
+} {
+  const start = new Date(params.now);
+  if (params.window === "today") {
+    return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+  }
+  return { start, end: new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000) };
+}
+
+function formatDateInTimeZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function formatDueLabel(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function buildAcademicDigest(params: {
+  items: Array<{
+    courseId: string;
+    courseName: string;
+    assignmentId: string;
+    assignmentName: string;
+    dueAt: string;
+    htmlUrl?: string;
+  }>;
+  window: "today" | "week";
+  now: Date;
+  timeZone: string;
+}): string {
+  const label = params.window === "today" ? "today" : "next 7 days";
+  if (params.items.length === 0) {
+    return `Academic sync (${label}): no assignments due.`;
+  }
+
+  const lines: string[] = [`Academic sync (${label})`, `Total due: ${params.items.length}`];
+  const byDay = new Map<string, typeof params.items>();
+  for (const item of params.items) {
+    const dayKey = formatDateInTimeZone(new Date(item.dueAt), params.timeZone);
+    byDay.set(dayKey, [...(byDay.get(dayKey) ?? []), item]);
+  }
+  const sortedDays = Array.from(byDay.keys()).sort();
+  for (const day of sortedDays) {
+    lines.push(`- ${day}`);
+    const dayItems = (byDay.get(day) ?? []).sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+    for (const item of dayItems) {
+      const dueLabel = formatDueLabel(new Date(item.dueAt), params.timeZone);
+      const urlPart = item.htmlUrl ? ` (${item.htmlUrl})` : "";
+      lines.push(`  - ${dueLabel} | ${item.courseName} | ${item.assignmentName}${urlPart}`);
+    }
+  }
+  lines.push(`Generated at: ${params.now.toISOString()}`);
+  return lines.join("\n");
 }
 
 function resolveOAuthConfig(params: {
@@ -478,6 +550,26 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
           description: "Canvas student identifier for list_submissions (default: self).",
         }),
       ),
+      digestWindow: optionalStringEnum(DIGEST_WINDOWS, {
+        description: "Digest range for sync_academic_digest: today or week (default week).",
+      }),
+      publish: Type.Optional(
+        Type.Boolean({
+          description:
+            "When true (sync_academic_digest), publish the generated summary via chat.send.",
+        }),
+      ),
+      publishSessionKey: Type.Optional(
+        Type.String({
+          description: "Target session key for publication (Discord/Teams/etc) when publish=true.",
+        }),
+      ),
+      timeZone: Type.Optional(
+        Type.String({
+          description:
+            "IANA timezone for digest grouping/formatting (e.g. America/Santiago). Defaults UTC.",
+        }),
+      ),
       startDate: Type.Optional(
         Type.String({
           description: "ISO date or datetime for calendar filters (used by list_calendar_events).",
@@ -670,6 +762,124 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
           timeoutMs,
           maxRetries,
         });
+      } else if (action === "sync_academic_digest") {
+        const digestWindow =
+          (readString(args, "digestWindow") as "today" | "week" | undefined) ?? "week";
+        const publish = args.publish === true;
+        const publishSessionKey = readString(args, "publishSessionKey");
+        if (publish && !publishSessionKey) {
+          throw new Error("publishSessionKey is required when publish=true");
+        }
+        const timeZone = readString(args, "timeZone") ?? "UTC";
+        try {
+          void formatDateInTimeZone(new Date(), timeZone);
+        } catch {
+          throw new Error(`Invalid timeZone: ${timeZone}`);
+        }
+
+        const now = new Date();
+        const range = resolveDigestDateRange({ window: digestWindow, now });
+        const explicitCourseId = readString(args, "courseId");
+
+        const courses = explicitCourseId
+          ? [{ id: explicitCourseId, name: `Course ${explicitCourseId}` }]
+          : (
+              await fetchPaginatedArray({
+                fetchImpl: fetch,
+                apiBase,
+                token,
+                firstPath: `/courses?per_page=${Math.min(perPage, 30)}&enrollment_state=active`,
+                maxPages: 1,
+                timeoutMs,
+                maxRetries,
+              })
+            )
+              .map((row) => row as Record<string, unknown>)
+              .map((course) => ({
+                id: String(course.id ?? ""),
+                name: String(course.name ?? course.course_code ?? "Untitled course"),
+              }))
+              .filter((course) => course.id);
+
+        const dueItems: Array<{
+          courseId: string;
+          courseName: string;
+          assignmentId: string;
+          assignmentName: string;
+          dueAt: string;
+          htmlUrl?: string;
+        }> = [];
+        for (const course of courses) {
+          const assignments = await fetchPaginatedArray({
+            fetchImpl: fetch,
+            apiBase,
+            token,
+            firstPath: `/courses/${encodeURIComponent(course.id)}/assignments?per_page=${perPage}&bucket=upcoming`,
+            maxPages: 1,
+            timeoutMs,
+            maxRetries,
+          });
+          for (const row of assignments) {
+            const item = row as Record<string, unknown>;
+            const dueAt = readConfigString(item.due_at);
+            if (!dueAt) {
+              continue;
+            }
+            const dueDate = new Date(dueAt);
+            if (Number.isNaN(dueDate.getTime())) {
+              continue;
+            }
+            if (dueDate < range.start || dueDate >= range.end) {
+              continue;
+            }
+            dueItems.push({
+              courseId: course.id,
+              courseName: course.name,
+              assignmentId: String(item.id ?? ""),
+              assignmentName: String(item.name ?? "Untitled assignment"),
+              dueAt,
+              htmlUrl: readConfigString(item.html_url),
+            });
+          }
+        }
+
+        dueItems.sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+        const summary = buildAcademicDigest({
+          items: dueItems,
+          window: digestWindow,
+          now,
+          timeZone,
+        });
+
+        let published = false;
+        if (publish && publishSessionKey) {
+          const publishResult = (await callGateway({
+            config: api.config,
+            method: "chat.send",
+            params: {
+              sessionKey: publishSessionKey,
+              message: summary,
+              idempotencyKey: randomIdempotencyKey(),
+            },
+          })) as { ok?: boolean };
+          if (publishResult && publishResult.ok === false) {
+            throw new Error("Failed to publish digest to target session.");
+          }
+          published = true;
+        }
+
+        return {
+          content: [{ type: "text", text: summary }],
+          details: {
+            action,
+            window: digestWindow,
+            timeZone,
+            totalDue: dueItems.length,
+            coursesScanned: courses.length,
+            published,
+            publishSessionKey: published ? publishSessionKey : undefined,
+          },
+        };
       } else {
         throw new Error(`Unsupported action: ${action}`);
       }
