@@ -6,6 +6,7 @@ const DYNAMIC_TMPDIR_JOIN_RE = /path\.join\(os\.tmpdir\(\),\s*`[^`]*\$\{[^`]*`/;
 const RUNTIME_ROOTS = ["src", "extensions"];
 const SKIP_PATTERNS = [
   /\.test\.tsx?$/,
+  /\.test-utils\.tsx?$/,
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
   /[\\/](?:__tests__|tests)[\\/]/,
