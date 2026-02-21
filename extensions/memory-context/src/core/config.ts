@@ -39,7 +39,7 @@ export type MemoryContextConfig = {
 };
 
 const DEFAULT_EMBEDDING_DIM = 384;
-const DEFAULT_EMBEDDING_MODEL: EmbeddingModelType = "transformer";
+const DEFAULT_EMBEDDING_MODEL: EmbeddingModelType = "auto";
 const DEFAULT_EMBEDDING_MODEL_NAME = "EmbeddingGemma-300M";
 const DEFAULT_INDEX_TYPE: IndexType = "hnsw";
 
