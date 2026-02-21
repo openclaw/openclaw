@@ -1,8 +1,8 @@
 import Foundation
 
 enum HostEnvSanitizer {
-    // Keep in sync with src/infra/host-env-security-policy.json.
-    // Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
+    /// Keep in sync with src/infra/host-env-security-policy.json.
+    /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
     private static let blockedKeys: Set<String> = [
         "NODE_OPTIONS",
         "NODE_PATH",
