@@ -231,6 +231,12 @@ function removeDebouncer(target: WebhookTarget): void {
 }
 
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
+  const webhookPassword = target.account.config.password?.trim() ?? "";
+  if (!webhookPassword) {
+    target.runtime.error?.(
+      `[${target.account.accountId}] BlueBubbles webhook auth requires channels.bluebubbles.password. Configure a password and include it in the webhook URL.`,
+    );
+  }
   const registered = registerWebhookTarget(webhookTargets, target);
   return () => {
     registered.unregister();
@@ -337,46 +343,24 @@ function safeEqualSecret(aRaw: string, bRaw: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-function getHostName(hostHeader?: string | string[]): string {
-  const host = (Array.isArray(hostHeader) ? hostHeader[0] : (hostHeader ?? ""))
-    .trim()
-    .toLowerCase();
-  if (!host) {
-    return "";
-  }
-  // Bracketed IPv6: [::1]:18789
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
+function resolveAuthenticatedWebhookTargets(
+  targets: WebhookTarget[],
+  presentedToken: string,
+): WebhookTarget[] {
+  const matches: WebhookTarget[] = [];
+  for (const target of targets) {
+    const token = target.account.config.password?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (safeEqualSecret(presentedToken, token)) {
+      matches.push(target);
+      if (matches.length > 1) {
+        break;
+      }
     }
   }
-  const [name] = host.split(":");
-  return name ?? "";
-}
-
-function isDirectLocalLoopbackRequest(req: IncomingMessage): boolean {
-  const remote = (req.socket?.remoteAddress ?? "").trim().toLowerCase();
-  const remoteIsLoopback =
-    remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-  if (!remoteIsLoopback) {
-    return false;
-  }
-
-  const host = getHostName(req.headers?.host);
-  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  if (!hostIsLocal) {
-    return false;
-  }
-
-  // If a reverse proxy is in front, it will usually inject forwarding headers.
-  // Passwordless webhooks must never be accepted through a proxy.
-  const hasForwarded = Boolean(
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
-  );
-  return !hasForwarded;
+  return matches;
 }
 
 export async function handleBlueBubblesWebhookRequest(
@@ -466,29 +450,7 @@ export async function handleBlueBubblesWebhookRequest(
     req.headers["x-bluebubbles-guid"] ??
     req.headers["authorization"];
   const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-
-  const strictMatches: WebhookTarget[] = [];
-  const passwordlessTargets: WebhookTarget[] = [];
-  for (const target of targets) {
-    const token = target.account.config.password?.trim() ?? "";
-    if (!token) {
-      passwordlessTargets.push(target);
-      continue;
-    }
-    if (safeEqualSecret(guid, token)) {
-      strictMatches.push(target);
-      if (strictMatches.length > 1) {
-        break;
-      }
-    }
-  }
-
-  const matching =
-    strictMatches.length > 0
-      ? strictMatches
-      : isDirectLocalLoopbackRequest(req)
-        ? passwordlessTargets
-        : [];
+  const matching = resolveAuthenticatedWebhookTargets(targets, guid);
 
   if (matching.length === 0) {
     res.statusCode = 401;
