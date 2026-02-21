@@ -13,6 +13,15 @@ describe("normalizeLegacyConfigValues", () => {
     fs.writeFileSync(path.join(dir, "creds.json"), JSON.stringify({ me: {} }));
   };
 
+  const expectNoWhatsAppConfigForLegacyAuth = (setup?: () => void) => {
+    setup?.();
+    const res = normalizeLegacyConfigValues({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    });
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
+  };
+
   beforeEach(() => {
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
@@ -57,39 +66,24 @@ describe("normalizeLegacyConfigValues", () => {
   });
 
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    expectNoWhatsAppConfigForLegacyAuth(() => {
+      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
+      writeCreds(credsDir);
     });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
   });
 
   it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
-    const credsPath = path.join(tempOauthDir ?? "", "creds.json");
-    fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    expectNoWhatsAppConfigForLegacyAuth(() => {
+      const credsPath = path.join(tempOauthDir ?? "", "creds.json");
+      fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
     });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
   });
 
   it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    expectNoWhatsAppConfigForLegacyAuth(() => {
+      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
+      writeCreds(credsDir);
     });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
   });
 
   it("copies legacy ack reaction when authDir override exists", () => {
@@ -110,5 +104,45 @@ describe("normalizeLegacyConfigValues", () => {
     } finally {
       fs.rmSync(customDir, { recursive: true, force: true });
     }
+  });
+
+  it("migrates Slack dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    });
+
+    expect(res.config.channels?.slack?.dmPolicy).toBe("open");
+    expect(res.config.channels?.slack?.allowFrom).toEqual(["*"]);
+    expect(res.config.channels?.slack?.dm).toEqual({ enabled: true });
+    expect(res.changes).toEqual([
+      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
+      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
+    ]);
+  });
+
+  it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              dm: { policy: "allowlist", allowFrom: ["123"], groupEnabled: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.discord?.accounts?.work?.dmPolicy).toBe("allowlist");
+    expect(res.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["123"]);
+    expect(res.config.channels?.discord?.accounts?.work?.dm).toEqual({ groupEnabled: true });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.dm.policy → channels.discord.accounts.work.dmPolicy.",
+      "Moved channels.discord.accounts.work.dm.allowFrom → channels.discord.accounts.work.allowFrom.",
+    ]);
   });
 });

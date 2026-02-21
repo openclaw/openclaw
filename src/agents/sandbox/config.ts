@@ -1,11 +1,4 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type {
-  SandboxBrowserConfig,
-  SandboxConfig,
-  SandboxDockerConfig,
-  SandboxPruneConfig,
-  SandboxScope,
-} from "./types.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -22,6 +15,28 @@ import {
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+import type {
+  SandboxBrowserConfig,
+  SandboxConfig,
+  SandboxDockerConfig,
+  SandboxPruneConfig,
+  SandboxScope,
+} from "./types.js";
+
+export function resolveSandboxBrowserDockerCreateConfig(params: {
+  docker: SandboxDockerConfig;
+  browser: SandboxBrowserConfig;
+}): SandboxDockerConfig {
+  const base: SandboxDockerConfig = {
+    ...params.docker,
+    // Browser container needs network access for Chrome, downloads, etc.
+    network: "bridge",
+    // For hashing and consistency, treat browser image as the docker image even though we
+    // pass it separately as the final `docker create` argument.
+    image: params.browser.image,
+  };
+  return params.browser.binds !== undefined ? { ...base, binds: params.browser.binds } : base;
+}
 
 export function resolveSandboxScope(params: {
   scope?: SandboxScope;
@@ -88,6 +103,9 @@ export function resolveSandboxBrowserConfig(params: {
 }): SandboxBrowserConfig {
   const agentBrowser = params.scope === "shared" ? undefined : params.agentBrowser;
   const globalBrowser = params.globalBrowser;
+  const binds = [...(globalBrowser?.binds ?? []), ...(agentBrowser?.binds ?? [])];
+  // Treat `binds: []` as an explicit override, so it can disable `docker.binds` for the browser container.
+  const bindsConfigured = globalBrowser?.binds !== undefined || agentBrowser?.binds !== undefined;
   return {
     enabled: agentBrowser?.enabled ?? globalBrowser?.enabled ?? false,
     image: agentBrowser?.image ?? globalBrowser?.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE,
@@ -107,6 +125,7 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.autoStartTimeoutMs ??
       globalBrowser?.autoStartTimeoutMs ??
       DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
+    binds: bindsConfigured ? binds : undefined,
   };
 }
 

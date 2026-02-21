@@ -1,15 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  GatewayAgentRow,
-  GatewaySessionRow,
-  GatewaySessionsDefaults,
-  SessionsListResult,
-} from "./session-utils.types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
@@ -33,10 +28,13 @@ import {
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
-import {
-  readFirstUserMessageFromTranscript,
-  readLastMessagePreviewFromTranscript,
-} from "./session-utils.fs.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
+import type {
+  GatewayAgentRow,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  SessionsListResult,
+} from "./session-utils.types.js";
 
 export {
   archiveFileOnDisk,
@@ -44,6 +42,7 @@ export {
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
@@ -394,7 +393,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   let agentIds = listConfiguredAgentIds(cfg).filter((id) =>
     allowedIds ? allowedIds.has(id) : true,
   );
-  if (mainKey && !agentIds.includes(mainKey)) {
+  if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     agentIds = [...agentIds, mainKey];
   }
   const agents = agentIds.map((id) => {
@@ -645,7 +644,9 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
 
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
-  entry?: SessionEntry,
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
 ): { provider: string; model: string } {
   const resolved = agentId
@@ -655,12 +656,41 @@ export function resolveSessionModelRef(
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
+
+  // Prefer the last runtime model recorded on the session entry.
+  // This is the actual model used by the latest run and must win over defaults.
   let provider = resolved.provider;
   let model = resolved.model;
+  const runtimeModel = entry?.model?.trim();
+  const runtimeProvider = entry?.modelProvider?.trim();
+  if (runtimeModel) {
+    const parsedRuntime = parseModelRef(
+      runtimeModel,
+      runtimeProvider || provider || DEFAULT_PROVIDER,
+    );
+    if (parsedRuntime) {
+      provider = parsedRuntime.provider;
+      model = parsedRuntime.model;
+    } else {
+      provider = runtimeProvider || provider;
+      model = runtimeModel;
+    }
+    return { provider, model };
+  }
+
+  // Fall back to explicit per-session override (set at spawn/model-patch time),
+  // then finally to configured defaults.
   const storedModelOverride = entry?.modelOverride?.trim();
   if (storedModelOverride) {
-    provider = entry?.providerOverride?.trim() || provider;
-    model = storedModelOverride;
+    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+    if (parsedOverride) {
+      provider = parsedOverride.provider;
+      model = parsedOverride.model;
+    } else {
+      provider = overrideProvider;
+      model = storedModelOverride;
+    }
   }
   return { provider, model };
 }
@@ -817,22 +847,21 @@ export function listSessionsFromStore(params: {
     let derivedTitle: string | undefined;
     let lastMessagePreview: string | undefined;
     if (entry?.sessionId) {
-      if (includeDerivedTitles) {
-        const firstUserMsg = readFirstUserMessageFromTranscript(
+      if (includeDerivedTitles || includeLastMessage) {
+        const parsed = parseAgentSessionKey(s.key);
+        const agentId =
+          parsed && parsed.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
+        const fields = readSessionTitleFieldsFromTranscript(
           entry.sessionId,
           storePath,
           entry.sessionFile,
+          agentId,
         );
-        derivedTitle = deriveSessionTitle(entry, firstUserMsg);
-      }
-      if (includeLastMessage) {
-        const lastMsg = readLastMessagePreviewFromTranscript(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
-        );
-        if (lastMsg) {
-          lastMessagePreview = lastMsg;
+        if (includeDerivedTitles) {
+          derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          lastMessagePreview = fields.lastMessagePreview;
         }
       }
     }

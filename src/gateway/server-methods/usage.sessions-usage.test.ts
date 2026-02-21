@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -81,6 +82,33 @@ import {
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
+async function runSessionsUsage(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await usageHandlers["sessions.usage"]({
+    respond,
+    params,
+  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+  return respond;
+}
+
+async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await usageHandlers["sessions.usage.timeseries"]({
+    respond,
+    params,
+  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
+  return respond;
+}
+
+async function runSessionsUsageLogs(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await usageHandlers["sessions.usage.logs"]({
+    respond,
+    params,
+  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
+  return respond;
+}
+
 describe("sessions.usage", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -88,16 +116,11 @@ describe("sessions.usage", () => {
   });
 
   it("discovers sessions across configured agents and keeps agentId in key", async () => {
-    const respond = vi.fn();
-
-    await usageHandlers["sessions.usage"]({
-      respond,
-      params: {
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        limit: 10,
-      },
-    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+    const respond = await runSessionsUsage({
+      startDate: "2026-02-01",
+      endDate: "2026-02-02",
+      limit: 10,
+    });
 
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
@@ -105,7 +128,9 @@ describe("sessions.usage", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<unknown> };
+    const result = respond.mock.calls[0]?.[1] as unknown as {
+      sessions: Array<{ key: string; agentId: string }>;
+    };
     expect(result.sessions).toHaveLength(2);
 
     // Sorted by most recent first (mtime=200 -> opus first).
@@ -118,7 +143,7 @@ describe("sessions.usage", () => {
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
@@ -126,7 +151,6 @@ describe("sessions.usage", () => {
       fs.mkdirSync(agentSessionsDir, { recursive: true });
       const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
       fs.writeFileSync(sessionFile, "", "utf-8");
-      const respond = vi.fn();
 
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
@@ -143,15 +167,12 @@ describe("sessions.usage", () => {
       });
 
       // Query via discovered key: agent:<id>:<sessionId>
-      await usageHandlers["sessions.usage"]({
-        respond,
-        params: {
-          startDate: "2026-02-01",
-          endDate: "2026-02-02",
-          key: "agent:opus:s-opus",
-          limit: 10,
-        },
-      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+      const respond = await runSessionsUsage({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        key: "agent:opus:s-opus",
+        limit: 10,
+      });
 
       expect(respond).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -163,27 +184,18 @@ describe("sessions.usage", () => {
         vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
       ).toBe(true);
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
+      envSnapshot.restore();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
   it("rejects traversal-style keys in specific session usage lookups", async () => {
-    const respond = vi.fn();
-
-    await usageHandlers["sessions.usage"]({
-      respond,
-      params: {
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        key: "agent:opus:../../etc/passwd",
-        limit: 10,
-      },
-    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+    const respond = await runSessionsUsage({
+      startDate: "2026-02-01",
+      endDate: "2026-02-02",
+      key: "agent:opus:../../etc/passwd",
+      limit: 10,
+    });
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -192,30 +204,44 @@ describe("sessions.usage", () => {
   });
 
   it("passes parsed agentId into sessions.usage.timeseries", async () => {
-    const respond = vi.fn();
-
-    await usageHandlers["sessions.usage.timeseries"]({
-      respond,
-      params: {
-        key: "agent:opus:s-opus",
-      },
-    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
+    await runSessionsUsageTimeseries({
+      key: "agent:opus:s-opus",
+    });
 
     expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalled();
     expect(vi.mocked(loadSessionUsageTimeSeries).mock.calls[0]?.[0]?.agentId).toBe("opus");
   });
 
   it("passes parsed agentId into sessions.usage.logs", async () => {
-    const respond = vi.fn();
-
-    await usageHandlers["sessions.usage.logs"]({
-      respond,
-      params: {
-        key: "agent:opus:s-opus",
-      },
-    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
+    await runSessionsUsageLogs({
+      key: "agent:opus:s-opus",
+    });
 
     expect(vi.mocked(loadSessionLogs)).toHaveBeenCalled();
     expect(vi.mocked(loadSessionLogs).mock.calls[0]?.[0]?.agentId).toBe("opus");
+  });
+
+  it("rejects traversal-style keys in timeseries/log lookups", async () => {
+    const timeseriesRespond = await runSessionsUsageTimeseries({
+      key: "agent:opus:../../etc/passwd",
+    });
+    expect(timeseriesRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Invalid session key"),
+      }),
+    );
+
+    const logsRespond = await runSessionsUsageLogs({
+      key: "agent:opus:../../etc/passwd",
+    });
+    expect(logsRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Invalid session key"),
+      }),
+    );
   });
 });

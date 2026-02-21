@@ -18,6 +18,9 @@ ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
 
+# Mise configuration files
+mise.toml
+
 # Android build artifacts
 apps/android/.gradle/
 apps/android/app/build/
@@ -27,6 +30,8 @@ apps/android/.cxx/
 *.bun-build
 apps/macos/.build/
 apps/shared/MoltbotKit/.build/
+apps/shared/OpenClawKit/.build/
+apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/
 bin/clawdbot-mac
@@ -34,10 +39,13 @@ bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
+apps/shared/OpenClawKit/.swiftpm/
 Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
+apps/ios/.derivedData/
+apps/ios/.local-signing.xcconfig
 vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
@@ -82,4 +90,12 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
-local/
+/local/
+package-lock.json
+.claude/settings.local.json
+.agents/
+.agents
+.agent/
+
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig

@@ -24,18 +24,42 @@ function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
   return firstCall?.payloads?.[0]?.text ?? "";
 }
 
+const TARGETS_CFG = {
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "targets",
+      targets: [{ channel: "telegram", to: "123" }],
+    },
+  },
+} as OpenClawConfig;
+
+function createForwarder(params: {
+  cfg: OpenClawConfig;
+  deliver?: ReturnType<typeof vi.fn>;
+  resolveSessionTarget?: () => { channel: string; to: string } | null;
+}) {
+  const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
+  const forwarder = createExecApprovalForwarder({
+    getConfig: () => params.cfg,
+    deliver: deliver as unknown as NonNullable<
+      NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
+    >,
+    nowMs: () => 1000,
+    resolveSessionTarget: params.resolveSessionTarget ?? (() => null),
+  });
+  return { deliver, forwarder };
+}
+
 describe("exec approval forwarder", () => {
   it("forwards to session target and resolves", async () => {
     vi.useFakeTimers();
-    const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
     } as OpenClawConfig;
 
-    const forwarder = createExecApprovalForwarder({
-      getConfig: () => cfg,
-      deliver,
-      nowMs: () => 1000,
+    const { deliver, forwarder } = createForwarder({
+      cfg,
       resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
     });
 
@@ -56,23 +80,7 @@ describe("exec approval forwarder", () => {
 
   it("forwards to explicit targets and expires", async () => {
     vi.useFakeTimers();
-    const deliver = vi.fn().mockResolvedValue([]);
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
-        },
-      },
-    } as OpenClawConfig;
-
-    const forwarder = createExecApprovalForwarder({
-      getConfig: () => cfg,
-      deliver,
-      nowMs: () => 1000,
-      resolveSessionTarget: () => null,
-    });
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await forwarder.handleRequested(baseRequest);
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -83,23 +91,7 @@ describe("exec approval forwarder", () => {
 
   it("formats single-line commands as inline code", async () => {
     vi.useFakeTimers();
-    const deliver = vi.fn().mockResolvedValue([]);
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
-        },
-      },
-    } as OpenClawConfig;
-
-    const forwarder = createExecApprovalForwarder({
-      getConfig: () => cfg,
-      deliver,
-      nowMs: () => 1000,
-      resolveSessionTarget: () => null,
-    });
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await forwarder.handleRequested(baseRequest);
 
@@ -108,23 +100,7 @@ describe("exec approval forwarder", () => {
 
   it("formats complex commands as fenced code blocks", async () => {
     vi.useFakeTimers();
-    const deliver = vi.fn().mockResolvedValue([]);
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
-        },
-      },
-    } as OpenClawConfig;
-
-    const forwarder = createExecApprovalForwarder({
-      getConfig: () => cfg,
-      deliver,
-      nowMs: () => 1000,
-      resolveSessionTarget: () => null,
-    });
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await forwarder.handleRequested({
       ...baseRequest,
@@ -137,25 +113,25 @@ describe("exec approval forwarder", () => {
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
   });
 
-  it("uses a longer fence when command already contains triple backticks", async () => {
+  it("skips discord forwarding targets", async () => {
     vi.useFakeTimers();
-    const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
-        },
-      },
+      approvals: { exec: { enabled: true, mode: "session" } },
     } as OpenClawConfig;
 
-    const forwarder = createExecApprovalForwarder({
-      getConfig: () => cfg,
-      deliver,
-      nowMs: () => 1000,
-      resolveSessionTarget: () => null,
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
     });
+
+    await forwarder.handleRequested(baseRequest);
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("uses a longer fence when command already contains triple backticks", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await forwarder.handleRequested({
       ...baseRequest,

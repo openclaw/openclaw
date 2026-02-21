@@ -1,6 +1,6 @@
+import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
-import { extractText } from "../chat/message-extract.ts";
 import { generateUUID } from "../uuid.ts";
 
 export type ChatState = {
@@ -56,6 +56,20 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
     return null;
   }
   return { mimeType: match[1], content: match[2] };
+}
+
+function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const candidate = message as Record<string, unknown>;
+  if (candidate.role !== "assistant") {
+    return null;
+  }
+  if (!("content" in candidate) || !Array.isArray(candidate.content)) {
+    return null;
+  }
+  return candidate;
 }
 
 export async function sendChatMessage(
@@ -198,6 +212,22 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
+    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
+    if (normalizedMessage) {
+      state.chatMessages = [...state.chatMessages, normalizedMessage];
+    } else {
+      const streamedText = state.chatStream ?? "";
+      if (streamedText.trim()) {
+        state.chatMessages = [
+          ...state.chatMessages,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: streamedText }],
+            timestamp: Date.now(),
+          },
+        ];
+      }
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

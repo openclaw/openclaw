@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HealthSummary } from "./health.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { HealthSummary } from "./health.js";
 import { getHealthSnapshot } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
@@ -35,13 +35,83 @@ vi.mock("../web/auth-store.js", () => ({
   logoutWeb: vi.fn(),
 }));
 
+function stubTelegramFetchOk(calls: string[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url.includes("/getMe")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            result: { id: 1, username: "bot" },
+          }),
+        } as unknown as Response;
+      }
+      if (url.includes("/getWebhookInfo")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            result: {
+              url: "https://example.com/h",
+              has_custom_certificate: false,
+            },
+          }),
+        } as unknown as Response;
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ ok: false, description: "nope" }),
+      } as unknown as Response;
+    }),
+  );
+}
+
+async function runSuccessfulTelegramProbe(
+  config: Record<string, unknown>,
+  options?: { clearTokenEnv?: boolean },
+) {
+  testConfig = config;
+  testStore = {};
+  vi.stubEnv("DISCORD_BOT_TOKEN", "");
+  if (options?.clearTokenEnv) {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+  }
+
+  const calls: string[] = [];
+  stubTelegramFetchOk(calls);
+
+  const snap = await getHealthSnapshot({ timeoutMs: 25 });
+  const telegram = snap.channels.telegram as {
+    configured?: boolean;
+    probe?: {
+      ok?: boolean;
+      bot?: { username?: string };
+      webhook?: { url?: string };
+    };
+  };
+
+  return { calls, telegram };
+}
+
+let createPluginRuntime: typeof import("../plugins/runtime/index.js").createPluginRuntime;
+let setTelegramRuntime: typeof import("../../extensions/telegram/src/runtime.js").setTelegramRuntime;
+
 describe("getHealthSnapshot", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ createPluginRuntime } = await import("../plugins/runtime/index.js"));
+    ({ setTelegramRuntime } = await import("../../extensions/telegram/src/runtime.js"));
+  });
+
+  beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
     );
-    const { createPluginRuntime } = await import("../plugins/runtime/index.js");
-    const { setTelegramRuntime } = await import("../../extensions/telegram/src/runtime.js");
     setTelegramRuntime(createPluginRuntime());
   });
 
@@ -75,55 +145,9 @@ describe("getHealthSnapshot", () => {
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {
-    testConfig = { channels: { telegram: { botToken: "t-1" } } };
-    testStore = {};
-    vi.stubEnv("DISCORD_BOT_TOKEN", "");
-
-    const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        calls.push(url);
-        if (url.includes("/getMe")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: { id: 1, username: "bot" },
-            }),
-          } as unknown as Response;
-        }
-        if (url.includes("/getWebhookInfo")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: {
-                url: "https://example.com/h",
-                has_custom_certificate: false,
-              },
-            }),
-          } as unknown as Response;
-        }
-        return {
-          ok: false,
-          status: 404,
-          json: async () => ({ ok: false, description: "nope" }),
-        } as unknown as Response;
-      }),
-    );
-
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
-      configured?: boolean;
-      probe?: {
-        ok?: boolean;
-        bot?: { username?: string };
-        webhook?: { url?: string };
-      };
-    };
+    const { calls, telegram } = await runSuccessfulTelegramProbe({
+      channels: { telegram: { botToken: "t-1" } },
+    });
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
@@ -136,51 +160,10 @@ describe("getHealthSnapshot", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
     fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
-    testConfig = { channels: { telegram: { tokenFile } } };
-    testStore = {};
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-
-    const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        calls.push(url);
-        if (url.includes("/getMe")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: { id: 1, username: "bot" },
-            }),
-          } as unknown as Response;
-        }
-        if (url.includes("/getWebhookInfo")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: {
-                url: "https://example.com/h",
-                has_custom_certificate: false,
-              },
-            }),
-          } as unknown as Response;
-        }
-        return {
-          ok: false,
-          status: 404,
-          json: async () => ({ ok: false, description: "nope" }),
-        } as unknown as Response;
-      }),
+    const { calls, telegram } = await runSuccessfulTelegramProbe(
+      { channels: { telegram: { tokenFile } } },
+      { clearTokenEnv: true },
     );
-
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
-      configured?: boolean;
-      probe?: { ok?: boolean };
-    };
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(true);
     expect(calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);

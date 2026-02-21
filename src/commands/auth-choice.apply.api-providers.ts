@@ -1,4 +1,3 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
@@ -6,7 +5,9 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
+import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -74,15 +75,7 @@ export async function applyAuthChoiceApiProviders(
 ): Promise<ApplyAuthChoiceResult | null> {
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
-  const noteAgentModel = async (model: string) => {
-    if (!params.agentId) {
-      return;
-    }
-    await params.prompter.note(
-      `Default model set to ${model} for agent "${params.agentId}".`,
-      "Model configured",
-    );
-  };
+  const noteAgentModel = createAuthChoiceAgentModelNoter(params);
 
   let authChoice = params.authChoice;
   if (
@@ -124,6 +117,35 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "opencode-zen";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
+    }
+  }
+
+  async function ensureMoonshotApiKeyCredential(promptMessage: string): Promise<void> {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "moonshot") {
+      await setMoonshotApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("moonshot");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: promptMessage,
+        validate: validateApiKeyInput,
+      });
+      await setMoonshotApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
   }
 
@@ -346,31 +368,7 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "moonshot-api-key") {
-    let hasCredential = false;
-
-    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "moonshot") {
-      await setMoonshotApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
-      hasCredential = true;
-    }
-
-    const envKey = resolveEnvApiKey("moonshot");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Moonshot API key",
-        validate: validateApiKeyInput,
-      });
-      await setMoonshotApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
-    }
+    await ensureMoonshotApiKeyCredential("Enter Moonshot API key");
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",
       provider: "moonshot",
@@ -393,31 +391,7 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "moonshot-api-key-cn") {
-    let hasCredential = false;
-
-    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "moonshot") {
-      await setMoonshotApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
-      hasCredential = true;
-    }
-
-    const envKey = resolveEnvApiKey("moonshot");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Moonshot API key (.cn)",
-        validate: validateApiKeyInput,
-      });
-      await setMoonshotApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
-    }
+    await ensureMoonshotApiKeyCredential("Enter Moonshot API key (.cn)");
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",
       provider: "moonshot",
