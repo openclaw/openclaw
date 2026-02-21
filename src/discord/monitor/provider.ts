@@ -685,10 +685,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
   // Timeout to detect zombie connections where HELLO is never received.
+  // Includes a circuit breaker: after MAX_STALL_RETRIES consecutive stalls without
+  // a successful HELLO, invalidate the session and do a full re-identify instead of
+  // resuming with a stale session token forever. See openclaw/openclaw#13180.
   const HELLO_TIMEOUT_MS = 30000;
+  const MAX_STALL_RETRIES = 5;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let consecutiveStalls = 0;
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
+    // Reset stall counter on successful HELLO (dispatched as "Received HELLO" or opcode 10).
+    if (message.includes("heartbeat_interval") || message.includes("Received HELLO")) {
+      consecutiveStalls = 0;
+      if (helloTimeoutId) {
+        clearTimeout(helloTimeoutId);
+        helloTimeoutId = undefined;
+      }
+      return;
+    }
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
@@ -697,13 +711,41 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
     helloTimeoutId = setTimeout(() => {
       if (!gateway?.isConnected) {
-        runtime.log?.(
-          danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
-          ),
-        );
-        gateway?.disconnect();
-        gateway?.connect(false);
+        consecutiveStalls++;
+        if (consecutiveStalls >= MAX_STALL_RETRIES) {
+          runtime.log?.(
+            danger(
+              `connection stalled ${consecutiveStalls} consecutive times — circuit breaker tripped, forcing fresh identify (see #13180)`,
+            ),
+          );
+          // Invalidate the stale session so the library does a fresh IDENTIFY
+          // instead of trying to resume with a dead session token.
+          if (gateway) {
+            (
+              gateway as unknown as {
+                state: {
+                  sessionId: string | null;
+                  resumeGatewayUrl: string | null;
+                  sequence: number | null;
+                };
+              }
+            ).state.sessionId = null;
+            (
+              gateway as unknown as { state: { resumeGatewayUrl: string | null } }
+            ).state.resumeGatewayUrl = null;
+          }
+          consecutiveStalls = 0;
+          gateway?.disconnect();
+          gateway?.connect(false);
+        } else {
+          runtime.log?.(
+            danger(
+              `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect (${consecutiveStalls}/${MAX_STALL_RETRIES} before circuit breaker)`,
+            ),
+          );
+          gateway?.disconnect();
+          gateway?.connect(false);
+        }
       }
       helloTimeoutId = undefined;
     }, HELLO_TIMEOUT_MS);
