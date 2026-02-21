@@ -18,6 +18,7 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  delivered?: boolean;
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;

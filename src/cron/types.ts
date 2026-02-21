@@ -93,6 +93,8 @@ export type CronJobState = {
   consecutiveErrors?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Whether the last run's output was delivered to the target channel. */
+  lastDelivered?: boolean;
 };
 
 export type CronJob = {
