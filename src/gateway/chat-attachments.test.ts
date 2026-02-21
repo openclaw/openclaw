@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMessageWithAttachments,
@@ -217,5 +220,63 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
     expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+  });
+
+  it("persists images to disk when enabled", async () => {
+    const uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-upload-"));
+    try {
+      const parsed = await parseMessageWithAttachments(
+        "see this",
+        [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: `data:image/png;base64,${PNG_1x1}`,
+          },
+        ],
+        { log: { warn: () => {} }, persistImagesToDisk: true, uploadDir },
+      );
+      expect(parsed.images).toHaveLength(1);
+      expect(parsed.mediaPaths).toHaveLength(1);
+      expect(parsed.mediaTypes).toEqual(["image/png"]);
+      expect(parsed.mediaPaths[0]?.startsWith(uploadDir)).toBe(true);
+      const persistedPath = parsed.mediaPaths[0];
+      expect(persistedPath).toBeDefined();
+      const persisted = await fs.readFile(persistedPath ?? "");
+      expect(persisted.equals(Buffer.from(PNG_1x1, "base64"))).toBe(true);
+    } finally {
+      await fs.rm(uploadDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes stale persisted uploads while keeping the new file", async () => {
+    const uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-upload-gc-"));
+    try {
+      const stalePath = path.join(uploadDir, "old-upload.png");
+      await fs.writeFile(stalePath, Buffer.from(PNG_1x1, "base64"), { mode: 0o600 });
+      const staleDate = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      await fs.utimes(stalePath, staleDate, staleDate);
+
+      const parsed = await parseMessageWithAttachments(
+        "see this",
+        [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: `data:image/png;base64,${PNG_1x1}`,
+          },
+        ],
+        { log: { warn: () => {} }, persistImagesToDisk: true, uploadDir },
+      );
+
+      expect(parsed.mediaPaths).toHaveLength(1);
+      const newPath = parsed.mediaPaths[0] ?? "";
+      await expect(fs.stat(newPath)).resolves.toBeTruthy();
+      await expect(fs.stat(stalePath)).rejects.toThrow();
+    } finally {
+      await fs.rm(uploadDir, { recursive: true, force: true });
+    }
   });
 });
