@@ -69,3 +69,13 @@ enum class OpenClawLocationCommand(val rawValue: String) {
     const val NamespacePrefix: String = "location."
   }
 }
+
+enum class OpenClawFlashlightCommand(val rawValue: String) {
+  On("flashlight.on"),
+  Off("flashlight.off"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "flashlight."
+  }
+}

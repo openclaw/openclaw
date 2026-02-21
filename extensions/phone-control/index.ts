@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
 
-type ArmGroup = "camera" | "screen" | "writes" | "all";
+type ArmGroup = "camera" | "screen" | "writes" | "flashlight" | "all";
 
 type ArmStateFileV1 = {
   version: 1;
@@ -30,6 +30,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   camera: ["camera.snap", "camera.clip"],
   screen: ["screen.record"],
   writes: ["calendar.add", "contacts.add", "reminders.add"],
+  flashlight: ["flashlight.on", "flashlight.off"],
 };
 
 function uniqSorted(values: string[]): string[] {
@@ -44,7 +45,7 @@ function resolveCommandsForGroup(group: ArmGroup): string[] {
 }
 
 function formatGroupList(): string {
-  return ["camera", "screen", "writes", "all"].join(", ");
+  return ["camera", "screen", "writes", "flashlight", "all"].join(", ");
 }
 
 function parseDurationMs(input: string | undefined): number | null {
@@ -114,10 +115,10 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
       return parsed as unknown as ArmStateFile;
     }
 
-    const group = typeof parsed.group === "string" ? parsed.group : "";
-    if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "all") {
-      return null;
-    }
+  const group = typeof parsed.group === "string" ? parsed.group : "";
+  if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "flashlight" && group !== "all") {
+    return null;
+  }
     if (
       !Array.isArray(parsed.armedCommands) ||
       !parsed.armedCommands.every((v: unknown) => typeof v === "string")
@@ -258,7 +259,7 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   if (!value) {
     return null;
   }
-  if (value === "camera" || value === "screen" || value === "writes" || value === "all") {
+  if (value === "camera" || value === "screen" || value === "writes" || value === "flashlight" || value === "all") {
     return value;
   }
   return null;
