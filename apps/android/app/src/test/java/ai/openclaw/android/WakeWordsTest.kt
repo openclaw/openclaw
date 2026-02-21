@@ -6,15 +6,18 @@ import org.junit.Test
 
 class WakeWordsTest {
   @Test
-  fun parseCommaSeparatedTrimsAndDropsEmpty() {
-    assertEquals(listOf("openclaw", "claude"), WakeWords.parseCommaSeparated("  openclaw , claude, ,  "))
+  fun parseCommaSeparatedSplitsOnlyOnCommas() {
+    assertEquals(
+      listOf("openclaw", "claude; omi\nfriend"),
+      WakeWords.parseCommaSeparated(" openclaw, claude; omi\nfriend "),
+    )
   }
 
   @Test
-  fun sanitizeTrimsCapsAndFallsBack() {
+  fun sanitizeTrimsDedupesCapsAndFallsBack() {
     val defaults = listOf("openclaw", "claude")
     val long = "x".repeat(WakeWords.maxWordLength + 10)
-    val words = listOf(" ", "  hello  ", long)
+    val words = listOf(" ", "  hello  ", "HELLO", long)
 
     val sanitized = WakeWords.sanitize(words, defaults)
     assertEquals(2, sanitized.size)
@@ -46,5 +49,19 @@ class WakeWordsTest {
     val current = listOf("openclaw")
     val parsed = WakeWords.parseIfChanged(" openclaw , jarvis ", current)
     assertEquals(listOf("openclaw", "jarvis"), parsed)
+  }
+
+  @Test
+  fun mergePresetsAddsPresetWordsWithoutDuplicates() {
+    val current = listOf("openclaw", "omi")
+    val merged = WakeWords.mergePresets(current, listOf(WakeWords.omiPresets.first()))
+
+    assertEquals(listOf("openclaw", "omi", "hey omi"), merged)
+  }
+
+  @Test
+  fun presetByIdFindsKnownPreset() {
+    val preset = WakeWords.presetById("limitless")
+    assertEquals("Limitless", preset?.label)
   }
 }

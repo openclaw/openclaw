@@ -1,0 +1,76 @@
+name: Build Android APK
+
+on:
+  push:
+    paths:
+      - 'android/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+          channel: 'stable'
+          cache: true
+
+      - name: Create Flutter project scaffold
+        run: |
+          flutter create --org com.openclaw --project-name zeke_ai --platforms android /tmp/build
+          
+      - name: Overlay our source code
+        run: |
+          # Copy our Dart source (replace scaffold's lib/ and remove test/)
+          rm -rf /tmp/build/lib
+          rm -rf /tmp/build/test
+          cp -r android/lib /tmp/build/
+          cp android/pubspec.yaml /tmp/build/
+          
+          # Add BLE/audio/location permissions to scaffold's manifest
+          sed -i '/<\/manifest>/i \
+              <uses-permission android:name="android.permission.BLUETOOTH" \/>\
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" \/>\
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" \/>\
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" \/>\
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\
+              <uses-permission android:name="android.permission.RECORD_AUDIO" \/>\
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" \/>\
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" \/>\
+              <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" \/>' \
+            /tmp/build/android/app/src/main/AndroidManifest.xml
+          
+          # Set app label
+          sed -i 's/android:label="[^"]*"/android:label="ZEKE AI"/' /tmp/build/android/app/src/main/AndroidManifest.xml
+          
+          # Bump minSdk to 21 in scaffold's build.gradle (BLE requires it)
+          sed -i 's/minSdk =.*/minSdk = 21/' /tmp/build/android/app/build.gradle
+          sed -i 's/minSdkVersion.*/minSdkVersion 21/' /tmp/build/android/app/build.gradle
+          
+          # Ensure AndroidX + no Jetifier
+          echo "android.enableJetifier=false" >> /tmp/build/android/gradle.properties
+          
+          echo "Overlay complete"
+
+      - name: Install dependencies
+        working-directory: /tmp/build
+        run: flutter pub get
+
+      - name: Build APK (debug)
+        working-directory: /tmp/build
+        run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeke-ai-debug
+          path: /tmp/build/build/app/outputs/flutter-apk/app-debug.apk

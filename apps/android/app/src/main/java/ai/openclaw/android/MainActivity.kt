@@ -2,8 +2,12 @@ package ai.openclaw.android
 
 import android.Manifest
 import android.content.pm.ApplicationInfo
+import android.app.ForegroundServiceStartNotAllowedException
 import android.os.Bundle
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.WindowManager
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
@@ -26,6 +30,8 @@ class MainActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
   private lateinit var screenCaptureRequester: ScreenCaptureRequester
+  private val foregroundServiceRetryHandler = Handler(Looper.getMainLooper())
+  private var foregroundServiceRetryCount = 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -34,7 +40,7 @@ class MainActivity : ComponentActivity() {
     applyImmersiveMode()
     requestDiscoveryPermissionsIfNeeded()
     requestNotificationPermissionIfNeeded()
-    NodeForegroundService.start(this)
+    startNodeForegroundServiceSafely()
     permissionRequester = PermissionRequester(this)
     screenCaptureRequester = ScreenCaptureRequester(this)
     viewModel.camera.attachLifecycleOwner(this)
@@ -78,12 +84,46 @@ class MainActivity : ComponentActivity() {
 
   override fun onStart() {
     super.onStart()
+    // Retry startup when returning to foreground in case the OS rejected a prior attempt.
+    if (!NodeForegroundService.isRunning) {
+      startNodeForegroundServiceSafely()
+    }
     viewModel.setForeground(true)
   }
 
   override fun onStop() {
     viewModel.setForeground(false)
     super.onStop()
+  }
+
+  override fun onDestroy() {
+    foregroundServiceRetryHandler.removeCallbacksAndMessages(null)
+    super.onDestroy()
+  }
+
+  private fun startNodeForegroundServiceSafely() {
+    try {
+      NodeForegroundService.start(this)
+      foregroundServiceRetryCount = 0
+    } catch (e: ForegroundServiceStartNotAllowedException) {
+      Log.w(TAG, "Foreground service start blocked by OS policy", e)
+      scheduleForegroundServiceRetry()
+    } catch (e: IllegalStateException) {
+      Log.w(TAG, "Foreground service start failed due to app state", e)
+      scheduleForegroundServiceRetry()
+    } catch (e: RuntimeException) {
+      // Defensive catch: keep app UI available even if OEM builds throw an unexpected runtime error.
+      Log.e(TAG, "Foreground service start failed unexpectedly", e)
+    }
+  }
+
+  private fun scheduleForegroundServiceRetry() {
+    if (foregroundServiceRetryCount >= MAX_FOREGROUND_SERVICE_RETRIES) return
+    foregroundServiceRetryCount += 1
+    foregroundServiceRetryHandler.postDelayed(
+      { startNodeForegroundServiceSafely() },
+      FOREGROUND_SERVICE_RETRY_DELAY_MS,
+    )
   }
 
   private fun applyImmersiveMode() {
@@ -126,5 +166,11 @@ class MainActivity : ComponentActivity() {
     if (!ok) {
       requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 102)
     }
+  }
+
+  companion object {
+    private const val TAG = "MainActivity"
+    private const val MAX_FOREGROUND_SERVICE_RETRIES = 3
+    private const val FOREGROUND_SERVICE_RETRY_DELAY_MS = 1_000L
   }
 }

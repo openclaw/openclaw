@@ -1,0 +1,7 @@
+# aOa Whitelist - URLs allowed for this project
+# Add one domain per line (HTTPS only)
+#
+# Examples:
+# github.com/your-org/repo
+# docs.your-company.com
+# internal-git.example.com

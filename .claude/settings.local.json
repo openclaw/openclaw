@@ -1,0 +1,46 @@
+{
+  "_aoa_display": {
+    "_comment": "Choose display mode: 'statusLine', 'inline', 'both', or 'none'",
+    "mode": "both"
+  },
+
+  "statusLine": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/aoa-status.sh\"",
+
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/intent-summary.py\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/intent-prefetch.py\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Edit|Write|Bash|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/intent-capture.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

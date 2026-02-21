@@ -28,6 +28,7 @@ class NodeForegroundService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    isRunning = true
     ensureChannel()
     val initial = buildNotification(title = "OpenClaw Node", text = "Starting…")
     startForegroundWithTypes(notification = initial, requiresMic = false)
@@ -78,6 +79,7 @@ class NodeForegroundService : Service() {
   override fun onDestroy() {
     notificationJob?.cancel()
     scope.cancel()
+    isRunning = false
     super.onDestroy()
   }
 
@@ -160,6 +162,9 @@ class NodeForegroundService : Service() {
   }
 
   companion object {
+    @Volatile var isRunning: Boolean = false
+      private set
+
     private const val CHANNEL_ID = "connection"
     private const val NOTIFICATION_ID = 1
 

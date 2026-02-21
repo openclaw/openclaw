@@ -1,0 +1,37 @@
+name: zeke_ai
+description: OpenClaw Android Node with Limitless Pendant Support
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # BLE
+  flutter_blue_plus: ^1.32.0
+  
+  # WebSocket
+  web_socket_channel: ^2.4.0
+  
+  # Audio — mic recording disabled in v1, pendant is primary source
+  # record: ^5.2.0  # Disabled: record_linux 0.7.2 has breaking API changes
+  
+  # Storage
+  sqflite: ^2.3.0
+  path: ^1.8.0
+  
+  # Location
+  geolocator: ^11.0.0
+  
+  # UI
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
