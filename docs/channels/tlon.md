@@ -11,8 +11,8 @@ Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbi
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.
 
-Status: supported via plugin. DMs, group mentions, thread replies, and text-only media fallback
-(URL appended to caption). Reactions, polls, and native media uploads are not supported.
+Status: supported via plugin. DMs, group mentions, thread replies, rich text formatting, and
+image uploads are supported. Reactions and polls are not yet supported.
 
 ## Plugin required
 
@@ -134,6 +134,52 @@ Group authorization (restricted by default):
 }
 ```
 
+## Owner and approval system
+
+Set an owner ship to receive approval requests when unauthorized users try to interact:
+
+```json5
+{
+  channels: {
+    tlon: {
+      ownerShip: "~your-main-ship",
+    },
+  },
+}
+```
+
+When set, the owner receives DM notifications for:
+
+- DM requests from ships not in the allowlist
+- Mentions in channels without authorization
+- Group invite requests
+
+## Auto-accept settings
+
+Auto-accept DM invites (for ships in dmAllowlist):
+
+```json5
+{
+  channels: {
+    tlon: {
+      autoAcceptDmInvites: true,
+    },
+  },
+}
+```
+
+Auto-accept group invites:
+
+```json5
+{
+  channels: {
+    tlon: {
+      autoAcceptGroupInvites: true,
+    },
+  },
+}
+```
+
 ## Delivery targets (CLI/cron)
 
 Use these with `openclaw message send` or cron delivery:
@@ -141,8 +187,15 @@ Use these with `openclaw message send` or cron delivery:
 - DM: `~sampel-palnet` or `dm/~sampel-palnet`
 - Group: `chat/~host-ship/channel` or `group:~host-ship/channel`
 
+## Bundled skill
+
+The Tlon plugin includes a bundled skill (`@tloncorp/tlon-skill`) that provides CLI access to
+Tlon operations: managing groups, creating channels, updating profiles, sending DMs, and more.
+The skill is automatically available when the plugin is installed.
+
 ## Notes
 
 - Group replies require a mention (e.g. `~your-bot-ship`) to respond.
 - Thread replies: if the inbound message is in a thread, OpenClaw replies in-thread.
-- Media: `sendMedia` falls back to text + URL (no native upload).
+- Rich text: Markdown formatting (bold, italic, code, headers, lists) is converted to Tlon's native format.
+- Images: URLs are uploaded to Tlon storage and embedded as image blocks.
