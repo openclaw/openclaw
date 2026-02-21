@@ -86,7 +86,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     if (memoryFlushSettings) {
       const flushResult = await runPreResetMemoryFlush({
         cfg: params.cfg,
-        sessionEntry: params.sessionEntry,
+        sessionEntry: params.previousSessionEntry ?? params.sessionEntry,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         agentId: params.agentId,
