@@ -130,6 +130,42 @@ OpenClaw 附带 pi-ai 目录。这些提供商**不需要** `models.providers` �
 
 使用 `models.providers`（或 `models.json`）添加**自定义**提供商或 OpenAI/Anthropic 兼容的代理。
 
+### `apiKeyHelper` — 动态 API 密钥解析
+
+除了使用静态 `apiKey`，您还可以使用 `apiKeyHelper` 运行一个在运行时返回 API 密钥的
+Shell 命令。适用场景包括：
+
+- **AI 网关代理**（如 Tailscale Aperture）— 只需一个占位密钥
+- **密钥管理器**（1Password CLI、HashiCorp Vault、AWS Secrets Manager）
+- **动态密钥轮换** — 任何需要在运行时获取密钥的场景
+
+命令通过系统 Shell 执行（Unix 上为 `/bin/sh`，Windows 上为 `cmd.exe`），超时时间为 10 秒。如果命令失败，将回退到内联 `apiKey`。
+
+**优先级顺序：** 认证配置文件 → 环境变量 → `apiKeyHelper` → 内联 `apiKey`
+
+```json5
+{
+  models: {
+    providers: {
+      // Tailscale Aperture — 代理处理认证，只需一个占位密钥
+      anthropic: {
+        baseUrl: "http://ai-proxy.example.ts.net",
+        apiKeyHelper: "echo '-'",
+        api: "anthropic-messages",
+        models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+      // 1Password — 从保险库获取 API 密钥
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKeyHelper: "op read 'op://Vault/OpenAI/api-key'",
+        api: "openai-completions",
+        models: [{ id: "gpt-5.1", name: "GPT 5.1" }],
+      },
+    },
+  },
+}
+```
+
 ### Moonshot AI (Kimi)
 
 Moonshot 使用 OpenAI 兼容端点，因此将其配置为自定义提供商：

@@ -5,7 +5,11 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "./model-auth.js";
+import {
+  getCustomProviderApiKey,
+  getCustomProviderApiKeyHelper,
+  resolveEnvApiKey,
+} from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 function formatApiKeySnippet(apiKey: string): string {
@@ -68,6 +72,10 @@ export function resolveModelAuthLabel(params: {
       return `oauth (${envKey.source})`;
     }
     return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
+  }
+
+  if (getCustomProviderApiKeyHelper(params.cfg, providerKey)) {
+    return "api-key (apiKeyHelper)";
   }
 
   const customKey = getCustomProviderApiKey(params.cfg, providerKey);

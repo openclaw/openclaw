@@ -9,7 +9,11 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  getCustomProviderApiKeyHelper,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderValue,
@@ -43,7 +47,7 @@ export type AuthProbeResult = {
   model?: string;
   profileId?: string;
   label: string;
-  source: "profile" | "env" | "models.json";
+  source: "profile" | "env" | "apiKeyHelper" | "models.json";
   mode?: string;
   status: AuthProbeStatus;
   error?: string;
@@ -55,7 +59,7 @@ type AuthProbeTarget = {
   model?: { provider: string; model: string } | null;
   profileId?: string;
   label: string;
-  source: "profile" | "env" | "models.json";
+  source: "profile" | "env" | "apiKeyHelper" | "models.json";
   mode?: string;
 };
 
@@ -242,13 +246,18 @@ function buildProbeTargets(params: {
       }
 
       const envKey = resolveEnvApiKey(providerKey);
+      const helperCmd = getCustomProviderApiKeyHelper(cfg, providerKey);
       const customKey = getCustomProviderApiKey(cfg, providerKey);
-      if (!envKey && !customKey) {
+      if (!envKey && !helperCmd && !customKey) {
         continue;
       }
 
-      const label = envKey ? "env" : "models.json";
-      const source = envKey ? "env" : "models.json";
+      const label = envKey ? "env" : helperCmd ? "apiKeyHelper" : "models.json";
+      const source: "env" | "apiKeyHelper" | "models.json" = envKey
+        ? "env"
+        : helperCmd
+          ? "apiKeyHelper"
+          : "models.json";
       const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
       if (!model) {

@@ -6,7 +6,11 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  getCustomProviderApiKeyHelper,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
@@ -60,6 +64,7 @@ export function resolveProviderAuthOverview(params: {
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
 
   const envKey = resolveEnvApiKey(provider);
+  const helperCmd = getCustomProviderApiKeyHelper(cfg, provider);
   const customKey = getCustomProviderApiKey(cfg, provider);
 
   const effective: ProviderAuthOverview["effective"] = (() => {
@@ -76,6 +81,9 @@ export function resolveProviderAuthOverview(params: {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
       };
+    }
+    if (helperCmd) {
+      return { kind: "apiKeyHelper", detail: "apiKeyHelper" };
     }
     if (customKey) {
       return { kind: "models.json", detail: maskApiKey(customKey) };
@@ -104,6 +112,7 @@ export function resolveProviderAuthOverview(params: {
           },
         }
       : {}),
+    ...(helperCmd ? { apiKeyHelper: { source: "apiKeyHelper" } } : {}),
     ...(customKey
       ? {
           modelsJson: {

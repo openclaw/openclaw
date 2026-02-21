@@ -144,6 +144,43 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 Use `models.providers` (or `models.json`) to add **custom** providers or
 OpenAI/Anthropic‑compatible proxies.
 
+### `apiKeyHelper` — dynamic API key resolution
+
+Instead of a static `apiKey`, you can use `apiKeyHelper` to run a shell command
+that returns the API key at runtime. This is useful for:
+
+- **AI gateway proxies** (e.g. Tailscale Aperture) where a dummy key suffices
+- **Secret managers** (1Password CLI, HashiCorp Vault, AWS Secrets Manager)
+- **Dynamic key rotation** — any scenario where the key should be fetched fresh
+
+The command runs via the system shell (`/bin/sh` on Unix, `cmd.exe` on Windows)
+with a 10-second timeout. If it fails, resolution falls through to inline `apiKey`.
+
+**Priority order:** auth profiles → env vars → `apiKeyHelper` → inline `apiKey`
+
+```json5
+{
+  models: {
+    providers: {
+      // Tailscale Aperture — proxy handles auth, just needs a dummy key
+      anthropic: {
+        baseUrl: "http://ai-proxy.example.ts.net",
+        apiKeyHelper: "echo '-'",
+        api: "anthropic-messages",
+        models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+      // 1Password — fetch API key from vault
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKeyHelper: "op read 'op://Vault/OpenAI/api-key'",
+        api: "openai-completions",
+        models: [{ id: "gpt-5.1", name: "GPT 5.1" }],
+      },
+    },
+  },
+}
+```
+
 ### Moonshot AI (Kimi)
 
 Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:

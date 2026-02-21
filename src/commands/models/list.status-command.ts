@@ -187,7 +187,11 @@ export async function modelsStatusCommand(
   const providerAuth = providers
     .map((provider) => resolveProviderAuthOverview({ provider, cfg, store, modelsPath }))
     .filter((entry) => {
-      const hasAny = entry.profiles.count > 0 || Boolean(entry.env) || Boolean(entry.modelsJson);
+      const hasAny =
+        entry.profiles.count > 0 ||
+        Boolean(entry.env) ||
+        Boolean(entry.apiKeyHelper) ||
+        Boolean(entry.modelsJson);
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));

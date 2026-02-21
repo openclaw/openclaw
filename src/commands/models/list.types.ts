@@ -19,7 +19,7 @@ export type ModelRow = {
 export type ProviderAuthOverview = {
   provider: string;
   effective: {
-    kind: "profiles" | "env" | "models.json" | "missing";
+    kind: "profiles" | "env" | "apiKeyHelper" | "models.json" | "missing";
     detail: string;
   };
   profiles: {
@@ -30,5 +30,6 @@ export type ProviderAuthOverview = {
     labels: string[];
   };
   env?: { value: string; source: string };
+  apiKeyHelper?: { source: string };
   modelsJson?: { value: string; source: string };
 };

@@ -1698,6 +1698,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 ```
 
 - Use `authHeader: true` + `headers` for custom auth needs.
+- Use `apiKeyHelper` instead of `apiKey` to run a shell command that returns the API key at runtime (e.g. `"echo '-'"` for gateway proxies, or `"op read 'op://Vault/Key'"` for secret managers). The command runs via the system shell (`/bin/sh` on Unix, `cmd.exe` on Windows) with a 10-second timeout. Falls through to `apiKey` on failure.
 - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
 
 ### Provider examples

@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -53,6 +55,40 @@ export function getCustomProviderApiKey(
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   return normalizeOptionalSecretInput(entry?.apiKey);
+}
+
+export function getCustomProviderApiKeyHelper(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  const entry = resolveProviderConfig(cfg, provider);
+  return entry?.apiKeyHelper?.trim() || undefined;
+}
+
+/**
+ * Resolve an API key by running the user-configured `apiKeyHelper` shell command.
+ * The command string comes from the user's own config file (not untrusted input),
+ * so shell execution is intentional and required (e.g. `echo '-'`, `op read ...`).
+ */
+export function resolveApiKeyHelper(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): Promise<string | null> {
+  const helper = getCustomProviderApiKeyHelper(cfg, provider);
+  if (!helper) {
+    return Promise.resolve(null);
+  }
+  const [shell, ...args] = buildNodeShellCommand(helper, process.platform);
+  return new Promise((resolve) => {
+    execFile(shell, args, { timeout: 10_000 }, (err, stdout) => {
+      if (err) {
+        resolve(null);
+        return;
+      }
+      const key = String(stdout).trim();
+      resolve(key || null);
+    });
+  });
 }
 
 function resolveProviderAuthOverride(
@@ -200,6 +236,11 @@ export async function resolveApiKeyForProvider(params: {
       source: envResolved.source,
       mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     };
+  }
+
+  const helperKey = await resolveApiKeyHelper(cfg, provider);
+  if (helperKey) {
+    return { apiKey: helperKey, source: "apiKeyHelper", mode: "api-key" };
   }
 
   const customKey = getCustomProviderApiKey(cfg, provider);
@@ -377,6 +418,10 @@ export function resolveModelAuthMode(
   const envKey = resolveEnvApiKey(resolved);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+  }
+
+  if (getCustomProviderApiKeyHelper(cfg, resolved)) {
+    return "api-key";
   }
 
   if (getCustomProviderApiKey(cfg, resolved)) {
