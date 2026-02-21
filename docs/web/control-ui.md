@@ -124,6 +124,8 @@ verifies the identity by resolving the `x-forwarded-for` address with
 request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
 `gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
 if you want to require a token/password even for Serve traffic.
+Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
+code may run on that host, require token/password auth.
 
 ### Bind to tailnet + token
 

@@ -104,7 +104,8 @@ Open:
 - With Serve, Tailscale identity headers can satisfy auth when
   `gateway.auth.allowTailscale` is `true` (no token/password required). Set
   `gateway.auth.allowTailscale: false` to require explicit credentials. See
-  [Tailscale](/gateway/tailscale) and [Security](/gateway/security).
+  [Tailscale](/gateway/tailscale) and [Security](/gateway/security). This
+  tokenless flow assumes the gateway host is trusted.
 - `gateway.tailscale.mode: "funnel"` requires `gateway.auth.mode: "password"` (shared password).
 
 ## Building the UI
