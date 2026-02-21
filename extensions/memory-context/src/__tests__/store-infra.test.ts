@@ -34,7 +34,7 @@ describe("store dedup", () => {
 
     expect(store.stats().count).toBe(1);
     // Should return the existing segment
-    expect(s2.id).toBe(s1.id);
+    expect(s2!.id).toBe(s1!.id);
   });
 
   it("same content but different role is stored as separate segments", async () => {

@@ -9,16 +9,15 @@ import { withEmbeddingCache, type EmbeddingProvider } from "../core/embedding.js
 
 /** Create a simple mock embedding provider. */
 function mockProvider(dim = 3): EmbeddingProvider & { callCount: number } {
-  let callCount = 0;
+  let count = 0;
   return {
     dim,
     name: "mock",
-    callCount: 0,
-    get callCountValue() {
-      return callCount;
+    get callCount() {
+      return count;
     },
     async embed(text: string): Promise<number[]> {
-      callCount++;
+      count++;
       // Return deterministic vector based on text length
       const v = Array.from({ length: dim }, (_, i) => (text.length + i) * 0.1);
       return v;
