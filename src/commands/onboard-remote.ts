@@ -36,7 +36,7 @@ function validateGatewayWebSocketUrl(value: string): string | undefined {
     return "URL must start with ws:// or wss://";
   }
   if (!isSecureWebSocketUrl(trimmed)) {
-    return "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel.";
+    return "Use wss:// for public hosts. ws:// is only allowed for private/loopback addresses.";
   }
   return undefined;
 }

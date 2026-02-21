@@ -348,11 +348,49 @@ export function isLocalishHost(hostHeader?: string): boolean {
 }
 
 /**
+ * Check if a hostname or IP refers to a private or loopback address.
+ * Handles the same hostname formats as isLoopbackHost, but also accepts
+ * RFC 1918, link-local, CGNAT, and IPv6 ULA/link-local addresses.
+ */
+export function isPrivateOrLoopbackHost(host: string): boolean {
+  if (!host) {
+    return false;
+  }
+  const h = host.trim().toLowerCase();
+  if (h === "localhost") {
+    return true;
+  }
+  // Handle bracketed IPv6 addresses like [::1]
+  const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (!isPrivateOrLoopbackAddress(unbracket)) {
+    return false;
+  }
+  // isPrivateOrLoopbackAddress reuses SSRF-blocking ranges for IPv6, which
+  // include unspecified (::) and multicast (ff00::/8). Exclude these —
+  // they are not private/loopback unicast endpoints. (Multicast is UDP-only
+  // so TCP/WebSocket connections would fail regardless.)
+  if (net.isIP(unbracket) === 6) {
+    if (/^ff/i.test(unbracket)) {
+      return false;
+    }
+    if (unbracket === "::" || /^0{1,4}(:0{1,4}){7}$/.test(unbracket)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - ws:// is secure for loopback and private network addresses
+ *
+ * Private networks (RFC 1918, link-local, CGNAT, ULA) are not subject
+ * to the same plaintext interception risks as the public internet,
+ * and blocking them breaks internal pod-to-pod communication in
+ * container orchestrators like Kubernetes.
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -373,6 +411,6 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  // ws:// is secure for loopback and private network addresses
+  return isPrivateOrLoopbackHost(parsed.hostname);
 }

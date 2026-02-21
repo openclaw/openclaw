@@ -88,10 +88,13 @@ describe("promptRemoteGatewayConfig", () => {
     );
   });
 
-  it("validates insecure ws:// remote URLs and allows loopback ws://", async () => {
+  it("validates insecure ws:// remote URLs and allows private/loopback ws://", async () => {
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
-        expect(params.validate?.("ws://10.0.0.8:18789")).toContain("Use wss://");
+        // ws:// to public IPs is rejected
+        expect(params.validate?.("ws://203.0.113.10:18789")).toContain("Use wss://");
+        // ws:// to private/loopback IPs is allowed
+        expect(params.validate?.("ws://10.0.0.8:18789")).toBeUndefined();
         expect(params.validate?.("ws://127.0.0.1:18789")).toBeUndefined();
         expect(params.validate?.("wss://remote.example.com:18789")).toBeUndefined();
         return "wss://remote.example.com:18789";
