@@ -243,7 +243,22 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const lines = fs.readFileSync(logPath, "utf-8").split(/\n+/);
+    // Read from the tail of the file for efficiency — we only need the last
+    // usage entry. Read the final 8KB which is enough for several entries.
+    const TAIL_BYTES = 8192;
+    const stat = fs.statSync(logPath);
+    const offset = Math.max(0, stat.size - TAIL_BYTES);
+    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
+    const fd = fs.openSync(logPath, "r");
+    try {
+      fs.readSync(fd, buf, 0, buf.length, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const tail = buf.toString("utf-8");
+    // If we read from the middle of the file, skip the first (potentially partial) line
+    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
+
     let input = 0;
     let output = 0;
     let promptTokens = 0;
@@ -270,7 +285,7 @@ const readUsageFromSessionLog = (
         }
         model = parsed.message?.model ?? parsed.model ?? model;
       } catch {
-        // ignore bad lines
+        // ignore bad lines (including partial first line from mid-file read)
       }
     }
 
