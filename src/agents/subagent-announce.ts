@@ -577,6 +577,7 @@ async function resolveSubagentCompletionOrigin(params: {
 async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
+  const announceDeliver = cfg.session?.announceDeliver !== false;
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
   const origin = item.origin;
@@ -600,7 +601,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
       threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      deliver: !requesterIsSubagent && announceDeliver,
       idempotencyKey,
     },
     timeoutMs: announceTimeoutMs,
@@ -832,6 +833,7 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    const announceDeliver = loadConfig().session?.announceDeliver !== false;
     await runAnnounceDeliveryWithRetry({
       operation: "direct announce agent call",
       signal: params.signal,
@@ -841,7 +843,7 @@ async function sendSubagentAnnounceDirectly(params: {
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
+            deliver: shouldDeliverExternally && announceDeliver,
             bestEffortDeliver: params.bestEffortDeliver,
             channel: shouldDeliverExternally ? directChannel : undefined,
             accountId: shouldDeliverExternally ? directOrigin?.accountId : undefined,
@@ -1041,6 +1043,7 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  announceDeliver?: boolean;
 }): string {
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
@@ -1048,6 +1051,9 @@ function buildAnnounceReplyInstruction(params: {
   }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
+  if (params.announceDeliver === false) {
+    return `A completed ${params.announceType} result is above. Auto-delivery is disabled for this session — use your own tools to deliver a user-facing update if needed. After handling, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
     return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
@@ -1267,11 +1273,13 @@ export async function runSubagentAnnounceFlow(params: {
     } catch {
       // Best-effort only; fall back to default announce instructions when unavailable.
     }
+    const announceDeliver = loadConfig().session?.announceDeliver;
     const replyInstruction = buildAnnounceReplyInstruction({
       remainingActiveSubagentRuns,
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      announceDeliver,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
