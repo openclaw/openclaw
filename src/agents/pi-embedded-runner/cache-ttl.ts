@@ -14,7 +14,10 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
   if (normalizedProvider === "anthropic") {
     return true;
   }
-  if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/")) {
+  if (
+    (normalizedProvider === "openrouter" || normalizedProvider === "openrouter-passthrough") &&
+    normalizedModelId.startsWith("anthropic/")
+  ) {
     return true;
   }
   return false;
