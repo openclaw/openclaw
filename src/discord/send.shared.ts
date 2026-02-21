@@ -8,7 +8,7 @@ import {
 } from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
-import { Routes, type APIEmbed } from "discord-api-types/v10";
+import { MessageFlags, Routes, type APIEmbed } from "discord-api-types/v10";
 import type { ChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import type { RetryRunner } from "../infra/retry-policy.js";
@@ -316,8 +316,10 @@ export function buildDiscordMessagePayload(params: {
   if (!hasV2 && params.embeds?.length) {
     payload.embeds = params.embeds;
   }
-  if (params.flags !== undefined) {
-    payload.flags = params.flags;
+  const v2Flag = hasV2 ? MessageFlags.IsComponentsV2 : 0;
+  const mergedFlags = (params.flags ?? 0) | v2Flag;
+  if (mergedFlags) {
+    payload.flags = mergedFlags;
   }
   if (params.files?.length) {
     payload.files = params.files;
