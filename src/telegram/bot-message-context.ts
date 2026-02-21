@@ -62,6 +62,11 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import {
+  buildTelegramStatusReactionVariants,
+  resolveTelegramReactionVariant,
+  resolveTelegramStatusReactionEmojis,
+} from "./status-reaction-variants.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -530,6 +535,13 @@ export const buildTelegramMessageContext = async ({
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
     statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+  const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
+    initialEmoji: ackReaction,
+    overrides: statusReactionsConfig?.emojis,
+  });
+  const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
+    resolvedStatusReactionEmojis,
+  );
   const statusReactionController: StatusReactionController | null =
     statusReactionsEnabled && msg.message_id
       ? createStatusReactionController({
@@ -537,13 +549,22 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
-                await reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji }]);
+                const resolvedEmoji = resolveTelegramReactionVariant({
+                  requestedEmoji: emoji,
+                  variantsByRequestedEmoji: statusReactionVariantsByEmoji,
+                });
+                if (!resolvedEmoji) {
+                  return;
+                }
+                await reactionApi(chatId, msg.message_id, [
+                  { type: "emoji", emoji: resolvedEmoji },
+                ]);
               }
             },
             // Telegram replaces atomically — no removeReaction needed
           },
           initialEmoji: ackReaction,
-          emojis: statusReactionsConfig?.emojis,
+          emojis: resolvedStatusReactionEmojis,
           timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
