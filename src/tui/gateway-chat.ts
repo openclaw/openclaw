@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import type { GatewayRemoteConfig } from "../config/types.gateway.js";
 import {
   buildGatewayConnectionDetails,
   ensureExplicitGatewayAuth,
@@ -14,6 +15,7 @@ import {
   type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 
@@ -96,10 +98,11 @@ export type GatewayModelChoice = {
 };
 
 export class GatewayChatClient {
-  private client: GatewayClient;
+  private client!: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
-  readonly connection: { url: string; token?: string; password?: string };
+  private _initPromise: Promise<void>;
+  readonly connection: { url: string; token?: string; password?: string; tlsFingerprint?: string };
   hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
@@ -108,53 +111,58 @@ export class GatewayChatClient {
   onGap?: (info: { expected: number; received: number }) => void;
 
   constructor(opts: GatewayConnectionOptions) {
-    const resolved = resolveGatewayConnection(opts);
+    const resolved = resolveGatewayConnectionSync(opts);
     this.connection = resolved;
 
     this.readyPromise = new Promise((resolve) => {
       this.resolveReady = resolve;
     });
 
-    this.client = new GatewayClient({
-      url: resolved.url,
-      token: resolved.token,
-      password: resolved.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: "openclaw-tui",
-      clientVersion: VERSION,
-      platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.UI,
-      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
-      instanceId: randomUUID(),
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      onHelloOk: (hello) => {
-        this.hello = hello;
-        this.resolveReady?.();
-        this.onConnected?.();
-      },
-      onEvent: (evt) => {
-        this.onEvent?.({
-          event: evt.event,
-          payload: evt.payload,
-          seq: evt.seq,
-        });
-      },
-      onClose: (_code, reason) => {
-        this.onDisconnected?.(reason);
-      },
-      onGap: (info) => {
-        this.onGap?.(info);
-      },
+    this._initPromise = resolveGatewayTlsOnly(resolved).then((tlsFingerprint) => {
+      this.connection.tlsFingerprint = tlsFingerprint;
+      this.client = new GatewayClient({
+        url: resolved.url,
+        token: resolved.token,
+        password: resolved.password,
+        tlsFingerprint,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientDisplayName: "openclaw-tui",
+        clientVersion: VERSION,
+        platform: process.platform,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+        instanceId: randomUUID(),
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        onHelloOk: (hello) => {
+          this.hello = hello;
+          this.resolveReady?.();
+          this.onConnected?.();
+        },
+        onEvent: (evt) => {
+          this.onEvent?.({
+            event: evt.event,
+            payload: evt.payload,
+            seq: evt.seq,
+          });
+        },
+        onClose: (_code, reason) => {
+          this.onDisconnected?.(reason);
+        },
+        onGap: (info) => {
+          this.onGap?.(info);
+        },
+      });
     });
   }
 
-  start() {
+  async start() {
+    await this._initPromise;
     this.client.start();
   }
 
   stop() {
-    this.client.stop();
+    this.client?.stop();
   }
 
   async waitForReady() {
@@ -225,7 +233,22 @@ export class GatewayChatClient {
   }
 }
 
-export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
+type SyncConnectionResult = {
+  url: string;
+  token?: string;
+  password?: string;
+  _config: ReturnType<typeof loadConfig>;
+  _isRemoteMode: boolean;
+  _remote: GatewayRemoteConfig | undefined;
+  _urlOverride?: string;
+};
+
+/**
+ * Synchronous portion of gateway connection resolution.
+ * Returns url/token/password immediately so `this.connection.url` is available
+ * for the TUI header before the async TLS fingerprint lookup completes.
+ */
+function resolveGatewayConnectionSync(opts: GatewayConnectionOptions): SyncConnectionResult {
   const config = loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
@@ -266,5 +289,53 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
           : undefined)
       : undefined);
 
+  return {
+    url,
+    token,
+    password,
+    _config: config,
+    _isRemoteMode: isRemoteMode,
+    _remote: remote,
+    _urlOverride: urlOverride,
+  };
+}
+
+/**
+ * Resolve TLS fingerprint for self-signed certs (local mode) or remote
+ * gateway configs.  This mirrors the logic in `resolveGatewayTlsFingerprint`
+ * from `src/gateway/call.ts` but operates on the already-resolved sync state.
+ */
+async function resolveGatewayTlsOnly(resolved: SyncConnectionResult): Promise<string | undefined> {
+  const {
+    url,
+    _config: config,
+    _isRemoteMode: isRemoteMode,
+    _remote: remote,
+    _urlOverride: urlOverride,
+  } = resolved;
+
+  const remoteUrl =
+    isRemoteMode && typeof remote?.url === "string" && remote.url.trim().length > 0
+      ? remote.url.trim()
+      : undefined;
+
+  const tlsRuntime =
+    config.gateway?.tls?.enabled === true && !urlOverride && !remoteUrl && url.startsWith("wss://")
+      ? await loadGatewayTlsRuntime(config.gateway?.tls)
+      : undefined;
+
+  const remoteTlsFingerprint =
+    isRemoteMode && !urlOverride && remoteUrl
+      ? typeof remote?.tlsFingerprint === "string" && remote.tlsFingerprint.trim().length > 0
+        ? remote.tlsFingerprint.trim()
+        : undefined
+      : undefined;
+
+  return remoteTlsFingerprint || (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined);
+}
+
+/** @deprecated Use resolveGatewayConnectionSync + resolveGatewayTlsOnly instead. */
+export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
+  const { url, token, password } = resolveGatewayConnectionSync(opts);
   return { url, token, password };
 }
