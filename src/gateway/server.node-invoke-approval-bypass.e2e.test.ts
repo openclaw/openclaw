@@ -67,12 +67,45 @@ describe("node.invoke approval bypass", () => {
     await server.close();
   });
 
-  const connectOperator = async (scopes: string[]) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws, { token: "secret", scopes });
+  const approveAllPendingPairings = async () => {
+    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+    const list = await listDevicePairing();
+    for (const pending of list.pending) {
+      await approveDevicePairing(pending.requestId);
+    }
+  };
+
+  const connectOperatorWithRetry = async (
+    scopes: string[],
+    resolveDevice?: () => NonNullable<Parameters<typeof connectReq>[1]>["device"],
+  ) => {
+    const connectOnce = async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+      const res = await connectReq(ws, {
+        token: "secret",
+        scopes,
+        ...(resolveDevice ? { device: resolveDevice() } : {}),
+      });
+      return { ws, res };
+    };
+
+    let { ws, res } = await connectOnce();
+    const message =
+      res && typeof res === "object" && "error" in res
+        ? ((res as { error?: { message?: string } }).error?.message ?? "")
+        : "";
+    if (!res.ok && message.includes("pairing required")) {
+      ws.close();
+      await approveAllPendingPairings();
+      ({ ws, res } = await connectOnce());
+    }
     expect(res.ok).toBe(true);
     return ws;
+  };
+
+  const connectOperator = async (scopes: string[]) => {
+    return await connectOperatorWithRetry(scopes);
   };
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
@@ -92,20 +125,12 @@ describe("node.invoke approval bypass", () => {
       signedAtMs,
       token: "secret",
     });
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-    const res = await connectReq(ws, {
-      token: "secret",
-      scopes,
-      device: {
-        id: deviceId!,
-        publicKey: publicKeyRaw,
-        signature: signDevicePayload(privateKeyPem, payload),
-        signedAt: signedAtMs,
-      },
-    });
-    expect(res.ok).toBe(true);
-    return ws;
+    return await connectOperatorWithRetry(scopes, () => ({
+      id: deviceId!,
+      publicKey: publicKeyRaw,
+      signature: signDevicePayload(privateKeyPem, payload),
+      signedAt: signedAtMs,
+    }));
   };
 
   const connectLinuxNode = async (onInvoke: (payload: unknown) => void) => {

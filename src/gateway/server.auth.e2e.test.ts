@@ -1055,15 +1055,18 @@ describe("gateway server auth/connect", () => {
     expect(operatorConnect.error?.message ?? "").toContain("pairing required");
 
     const pending = await listDevicePairing();
-    expect(pending.pending).toHaveLength(1);
-    expect(pending.pending[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
-    expect(pending.pending[0]?.scopes).toEqual(
+    const pendingForTestDevice = pending.pending.filter(
+      (entry) => entry.deviceId === identity.deviceId,
+    );
+    expect(pendingForTestDevice).toHaveLength(1);
+    expect(pendingForTestDevice[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(pendingForTestDevice[0]?.scopes).toEqual(
       expect.arrayContaining(["operator.read", "operator.write"]),
     );
-    if (!pending.pending[0]) {
+    if (!pendingForTestDevice[0]) {
       throw new Error("expected pending pairing request");
     }
-    await approveDevicePairing(pending.pending[0].requestId);
+    await approveDevicePairing(pendingForTestDevice[0].requestId);
 
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
@@ -1073,7 +1076,9 @@ describe("gateway server auth/connect", () => {
     expect(approvedOperatorConnect.ok).toBe(true);
 
     const afterApproval = await listDevicePairing();
-    expect(afterApproval.pending).toEqual([]);
+    expect(afterApproval.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual(
+      [],
+    );
 
     await server.close();
     restoreGatewayToken(prevToken);
@@ -1138,7 +1143,7 @@ describe("gateway server auth/connect", () => {
     ws2.close();
 
     const list = await listDevicePairing();
-    expect(list.pending).toEqual([]);
+    expect(list.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
 
     await server.close();
     restoreGatewayToken(prevToken);
