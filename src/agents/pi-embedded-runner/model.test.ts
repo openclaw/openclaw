@@ -75,12 +75,14 @@ describe("buildInlineProviderModels", () => {
         provider: "alpha",
         baseUrl: "http://alpha.local",
         api: undefined,
+        headers: undefined,
       },
       {
         ...makeModel("beta-model"),
         provider: "beta",
         baseUrl: "http://beta.local",
         api: undefined,
+        headers: undefined,
       },
     ]);
   });
@@ -127,6 +129,40 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].api).toBe("anthropic-messages");
+  });
+
+  it("inherits headers from provider config", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        api: "anthropic-messages",
+        headers: { "User-Agent": "claude-code/2.1.0", "X-Custom": "value" },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "User-Agent": "claude-code/2.1.0", "X-Custom": "value" });
+  });
+
+  it("model-level headers take precedence over provider-level headers", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        headers: { "User-Agent": "provider-default", "X-Provider": "keep" },
+        models: [{ ...makeModel("custom-model"), headers: { "User-Agent": "model-override" } }],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      "User-Agent": "model-override",
+      "X-Provider": "keep",
+    });
   });
 
   it("inherits both baseUrl and api from provider config", () => {
