@@ -39,6 +39,7 @@ type MessageSendParams = {
   gifPlayback?: boolean;
   accountId?: string;
   replyToId?: string;
+  replyToAuthor?: string;
   threadId?: string | number;
   dryRun?: boolean;
   bestEffort?: boolean;
@@ -216,6 +217,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,
+      replyToAuthor: params.replyToAuthor,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       deps: params.deps,

@@ -17,6 +17,8 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -25,6 +27,14 @@ export type SignalSendResult = {
 };
 
 export type SignalRpcOpts = Pick<SignalSendOpts, "baseUrl" | "account" | "accountId" | "timeoutMs">;
+
+export function parseQuoteTimestamp(replyToId?: string | null): number | undefined {
+  if (!replyToId) {
+    return undefined;
+  }
+  const ts = Number.parseInt(replyToId, 10);
+  return Number.isFinite(ts) && ts > 0 ? ts : undefined;
+}
 
 export type SignalReceiptType = "read" | "viewed";
 
@@ -179,6 +189,12 @@ export async function sendMessageSignal(
     throw new Error("Signal recipient is required");
   }
   Object.assign(params, targetParams);
+
+  const quoteAuthor = opts.quoteAuthor?.trim();
+  if (opts.quoteTimestamp && opts.quoteTimestamp > 0 && quoteAuthor) {
+    params.quoteTimestamp = opts.quoteTimestamp;
+    params.quoteAuthor = quoteAuthor;
+  }
 
   const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
     baseUrl,

@@ -23,7 +23,7 @@ import type { sendMessageIMessage } from "../../imessage/send.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
-import { sendMessageSignal } from "../../signal/send.js";
+import { parseQuoteTimestamp, sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
@@ -108,6 +108,7 @@ type ChannelHandlerParams = {
   to: string;
   accountId?: string;
   replyToId?: string | null;
+  replyToAuthor?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
@@ -181,6 +182,7 @@ function createChannelOutboundContextBase(
     to: params.to,
     accountId: params.accountId,
     replyToId: params.replyToId,
+    replyToAuthor: params.replyToAuthor,
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
@@ -199,6 +201,7 @@ type DeliverOutboundPayloadsCoreParams = {
   accountId?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
+  replyToAuthor?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
@@ -238,6 +241,7 @@ export async function deliverOutboundPayloads(
         payloads,
         threadId: params.threadId,
         replyToId: params.replyToId,
+        replyToAuthor: params.replyToAuthor,
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         silent: params.silent,
@@ -304,6 +308,7 @@ async function deliverOutboundPayloadsCore(
     deps,
     accountId,
     replyToId: params.replyToId,
+    replyToAuthor: params.replyToAuthor,
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
@@ -368,7 +373,13 @@ async function deliverOutboundPayloadsCore(
     }
   };
 
-  const sendSignalText = async (text: string, styles: SignalTextStyleRange[]) => {
+  type SignalQuoteOpts = { quoteTimestamp?: number; quoteAuthor?: string };
+
+  const sendSignalText = async (
+    text: string,
+    styles: SignalTextStyleRange[],
+    quote?: SignalQuoteOpts,
+  ) => {
     throwIfAborted(abortSignal);
     return {
       channel: "signal" as const,
@@ -377,11 +388,13 @@ async function deliverOutboundPayloadsCore(
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: styles,
+        quoteTimestamp: quote?.quoteTimestamp,
+        quoteAuthor: quote?.quoteAuthor,
       })),
     };
   };
 
-  const sendSignalTextChunks = async (text: string) => {
+  const sendSignalTextChunks = async (text: string, quote?: SignalQuoteOpts) => {
     throwIfAborted(abortSignal);
     let signalChunks =
       textLimit === undefined
@@ -392,13 +405,15 @@ async function deliverOutboundPayloadsCore(
     if (signalChunks.length === 0 && text) {
       signalChunks = [{ text, styles: [] }];
     }
+    let isFirst = true;
     for (const chunk of signalChunks) {
       throwIfAborted(abortSignal);
-      results.push(await sendSignalText(chunk.text, chunk.styles));
+      results.push(await sendSignalText(chunk.text, chunk.styles, isFirst ? quote : undefined));
+      isFirst = false;
     }
   };
 
-  const sendSignalMedia = async (caption: string, mediaUrl: string) => {
+  const sendSignalMedia = async (caption: string, mediaUrl: string, quote?: SignalQuoteOpts) => {
     throwIfAborted(abortSignal);
     const formatted = markdownToSignalTextChunks(caption, Number.POSITIVE_INFINITY, {
       tableMode: signalTableMode,
@@ -415,6 +430,8 @@ async function deliverOutboundPayloadsCore(
         textMode: "plain",
         textStyles: formatted.styles,
         mediaLocalRoots,
+        quoteTimestamp: quote?.quoteTimestamp,
+        quoteAuthor: quote?.quoteAuthor,
       })),
     };
   };
@@ -525,6 +542,20 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
       };
+      const signalQuote: SignalQuoteOpts | undefined = (() => {
+        if (!isSignalChannel) {
+          return undefined;
+        }
+        const quoteAuthor = params.replyToAuthor?.trim();
+        if (!quoteAuthor) {
+          return undefined;
+        }
+        const quoteTimestamp = parseQuoteTimestamp(sendOverrides.replyToId);
+        if (!quoteTimestamp) {
+          return undefined;
+        }
+        return { quoteTimestamp, quoteAuthor };
+      })();
       if (handler.sendPayload && effectivePayload.channelData) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
@@ -538,7 +569,7 @@ async function deliverOutboundPayloadsCore(
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
         if (isSignalChannel) {
-          await sendSignalTextChunks(payloadSummary.text);
+          await sendSignalTextChunks(payloadSummary.text, signalQuote);
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
@@ -556,9 +587,14 @@ async function deliverOutboundPayloadsCore(
       for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
+        const isFirstMedia = first;
         first = false;
         if (isSignalChannel) {
-          const delivery = await sendSignalMedia(caption, url);
+          const delivery = await sendSignalMedia(
+            caption,
+            url,
+            isFirstMedia ? signalQuote : undefined,
+          );
           results.push(delivery);
           lastMessageId = delivery.messageId;
         } else {

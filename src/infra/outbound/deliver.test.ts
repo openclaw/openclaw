@@ -681,6 +681,89 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ channelId: "whatsapp" }),
     );
   });
+
+  it("forwards replyToId and replyToAuthor as quoteTimestamp/quoteAuthor for Signal", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 100 });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "exactly" }],
+      replyToId: "1771479242643",
+      replyToAuthor: "6545fc21-4b79-40b7-9b4e-c8fc6f570e59",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "+1555",
+      "exactly",
+      expect.objectContaining({
+        quoteTimestamp: 1771479242643,
+        quoteAuthor: "6545fc21-4b79-40b7-9b4e-c8fc6f570e59",
+      }),
+    );
+  });
+
+  it("omits quote params when replyToAuthor is missing", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 100 });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "reply" }],
+      replyToId: "1771479242643",
+      deps: { sendSignal },
+    });
+
+    const opts = sendSignal.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.quoteTimestamp).toBeUndefined();
+    expect(opts.quoteAuthor).toBeUndefined();
+  });
+
+  it("omits quoteTimestamp when replyToId is not a valid timestamp", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 100 });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "reply" }],
+      replyToId: "not-a-number",
+      deps: { sendSignal },
+    });
+
+    const opts = sendSignal.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.quoteTimestamp).toBeUndefined();
+    expect(opts.quoteAuthor).toBeUndefined();
+  });
+
+  it("attaches Signal quote only to first chunk when text is chunked", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 100 });
+    const cfg: OpenClawConfig = { channels: { signal: { textChunkLimit: 20 } } };
+    const text = "A".repeat(30) + "\n\n" + "B".repeat(30);
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text }],
+      replyToId: "1771479242643",
+      replyToAuthor: "6545fc21-4b79-40b7-9b4e-c8fc6f570e59",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal.mock.calls.length).toBeGreaterThan(1);
+    const firstOpts = sendSignal.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(firstOpts.quoteTimestamp).toBe(1771479242643);
+    expect(firstOpts.quoteAuthor).toBe("6545fc21-4b79-40b7-9b4e-c8fc6f570e59");
+    for (let i = 1; i < sendSignal.mock.calls.length; i++) {
+      const opts = sendSignal.mock.calls[i]?.[2] as Record<string, unknown>;
+      expect(opts.quoteTimestamp).toBeUndefined();
+      expect(opts.quoteAuthor).toBeUndefined();
+    }
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

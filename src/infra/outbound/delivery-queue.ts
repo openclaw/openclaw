@@ -39,6 +39,7 @@ export interface QueuedDelivery {
   payloads: ReplyPayload[];
   threadId?: string | number | null;
   replyToId?: string | null;
+  replyToAuthor?: string | null;
   bestEffort?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
@@ -72,6 +73,7 @@ type QueuedDeliveryParams = {
   payloads: ReplyPayload[];
   threadId?: string | number | null;
   replyToId?: string | null;
+  replyToAuthor?: string | null;
   bestEffort?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
@@ -93,6 +95,7 @@ export async function enqueueDelivery(
     payloads: params.payloads,
     threadId: params.threadId,
     replyToId: params.replyToId,
+    replyToAuthor: params.replyToAuthor,
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
@@ -280,6 +283,7 @@ export async function recoverPendingDeliveries(opts: {
         payloads: entry.payloads,
         threadId: entry.threadId,
         replyToId: entry.replyToId,
+        replyToAuthor: entry.replyToAuthor,
         bestEffort: entry.bestEffort,
         gifPlayback: entry.gifPlayback,
         silent: entry.silent,
