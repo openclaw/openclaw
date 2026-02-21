@@ -215,6 +215,27 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("thread-2");
   });
 
+  it("strips session-derived threadId when stripSessionThreadId is true", async () => {
+    setMainSessionEntry({
+      sessionId: "sess-strip-1",
+      updatedAt: 1000,
+      lastChannel: "telegram",
+      lastTo: "123456",
+      lastThreadId: "thread-stale",
+    });
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "telegram",
+      to: "123456",
+      stripSessionThreadId: true,
+    });
+
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBe("123456");
+    expect(result.threadId).toBeUndefined();
+  });
+
   it("falls back to default channel when selection probe fails", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(new Error("no selection"));

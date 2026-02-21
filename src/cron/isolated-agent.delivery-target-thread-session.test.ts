@@ -128,4 +128,48 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
   });
+
+  it("strips session-derived threadId when stripSessionThreadId is true", async () => {
+    mockStore["/mock/store.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100111",
+        lastThreadId: 5555,
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+      stripSessionThreadId: true,
+    });
+
+    expect(result.to).toBe("-100111");
+    expect(result.channel).toBe("telegram");
+    // Session-derived threadId should be stripped for cron announce deliveries
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("preserves explicit :topic: threadId even when stripSessionThreadId is true", async () => {
+    mockStore["/mock/store.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100111",
+        lastThreadId: 5555,
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+      stripSessionThreadId: true,
+    });
+
+    expect(result.to).toBe("63448508");
+    // Explicit :topic: threadId should be preserved even with stripSessionThreadId
+    expect(result.threadId).toBe(1008013);
+  });
 });

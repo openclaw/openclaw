@@ -364,6 +364,11 @@ export async function runCronIsolatedAgentTurn(params: {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
     sessionKey: params.job.sessionKey,
+    // Cron announce deliveries should post as standalone channel messages,
+    // never threading into whatever conversation was last active in the
+    // agent's main session. Only explicitly-configured threadIds (e.g.
+    // Telegram :topic: syntax in delivery.to) are preserved.
+    stripSessionThreadId: deliveryRequested,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);

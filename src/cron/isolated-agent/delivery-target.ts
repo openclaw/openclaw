@@ -25,6 +25,13 @@ export async function resolveDeliveryTarget(
     channel?: "last" | ChannelId;
     to?: string;
     sessionKey?: string;
+    /**
+     * When true, session-derived threadIds are stripped from the result.
+     * Only explicitly-set threadIds (from :topic: parsing or config) are preserved.
+     * Use this for cron announce deliveries that should always post as standalone
+     * channel messages rather than threading into an active conversation.
+     */
+    stripSessionThreadId?: boolean;
   },
 ): Promise<{
   channel: Exclude<OutboundChannel, "none">;
@@ -99,11 +106,26 @@ export async function resolveDeliveryTarget(
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
-  const threadId =
-    resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
-      ? resolved.threadId
-      : undefined;
+  //
+  // When stripSessionThreadId is set, only explicitly-set threadIds are preserved.
+  // This prevents cron announce deliveries from threading into whatever Slack/Discord
+  // thread was last active in the main agent session — cron output should always
+  // post as a standalone channel message unless the job explicitly targets a thread.
+  const threadId = (() => {
+    if (!resolved.threadId) {
+      return undefined;
+    }
+    if (resolved.threadIdExplicit) {
+      return resolved.threadId;
+    }
+    if (jobPayload.stripSessionThreadId) {
+      return undefined;
+    }
+    if (resolved.to && resolved.to === resolved.lastTo) {
+      return resolved.threadId;
+    }
+    return undefined;
+  })();
 
   if (!toCandidate) {
     return {
