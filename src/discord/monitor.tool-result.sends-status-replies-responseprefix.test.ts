@@ -10,6 +10,7 @@ import {
 } from "./monitor.tool-result.test-harness.js";
 import { createDiscordMessageHandler } from "./monitor/message-handler.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
+import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 
 type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
 
@@ -71,6 +72,7 @@ async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown
     replyToMode: "off",
     dmEnabled: true,
     groupDmEnabled: false,
+    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -107,6 +109,7 @@ async function createCategoryGuildHandler() {
     guildEntries: {
       "*": { requireMention: false, channels: { c1: { allow: true } } },
     },
+    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 

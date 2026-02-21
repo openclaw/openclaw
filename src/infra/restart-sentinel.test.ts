@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   consumeRestartSentinel,
   formatRestartSentinelMessage,
@@ -12,21 +13,17 @@ import {
 } from "./restart-sentinel.js";
 
 describe("restart sentinel", () => {
-  let prevStateDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
   let tempDir: string;
 
   beforeEach(async () => {
-    prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sentinel-"));
     process.env.OPENCLAW_STATE_DIR = tempDir;
   });
 
   afterEach(async () => {
-    if (prevStateDir) {
-      process.env.OPENCLAW_STATE_DIR = prevStateDir;
-    } else {
-      delete process.env.OPENCLAW_STATE_DIR;
-    }
+    envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 

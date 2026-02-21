@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
-const defaultTools = createOpenClawCodingTools();
+const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
 
 describe("createOpenClawCodingTools", () => {
   it("preserves action enums in normalized schemas", () => {

@@ -6,6 +6,7 @@ import {
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTarget,
   resolveSenderCommandAuthorization,
   resolveWebhookPath,
   resolveWebhookTargets,
@@ -195,20 +196,22 @@ export async function handleZaloWebhookRequest(
   }
 
   const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matching = targets.filter((entry) => timingSafeEquals(entry.secret, headerToken));
-  if (matching.length === 0) {
+  const matchedTarget = resolveSingleWebhookTarget(targets, (entry) =>
+    timingSafeEquals(entry.secret, headerToken),
+  );
+  if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
     recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
     return true;
   }
-  if (matching.length > 1) {
+  if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
     recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
     return true;
   }
-  const target = matching[0];
+  const target = matchedTarget.target;
   const path = req.url ?? "<unknown>";
   const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
   const nowMs = Date.now();
