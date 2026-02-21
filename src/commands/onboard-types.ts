@@ -46,6 +46,7 @@ export type AuthChoice =
   | "qwen-portal"
   | "xai-api-key"
   | "qianfan-api-key"
+  | "groq-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -70,6 +71,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "groq"
   | "xai"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
@@ -120,6 +122,7 @@ export type OnboardOptions = {
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;
+  groqApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

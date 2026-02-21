@@ -10,6 +10,7 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { GROQ_BASE_URL, GROQ_MODEL_CATALOG, buildGroqModelDefinition } from "./groq-models.js";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
@@ -581,6 +582,14 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+export function buildGroqProvider(): ProviderConfig {
+  return {
+    baseUrl: GROQ_BASE_URL,
+    api: "openai-completions",
+    models: GROQ_MODEL_CATALOG.map(buildGroqModelDefinition),
+  };
+}
+
 async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
@@ -779,6 +788,16 @@ export async function resolveImplicitProviders(params: {
     providers.together = {
       ...buildTogetherProvider(),
       apiKey: togetherKey,
+    };
+  }
+
+  const groqKey =
+    resolveEnvApiKeyVarName("groq") ??
+    resolveApiKeyFromProfiles({ provider: "groq", store: authStore });
+  if (groqKey) {
+    providers.groq = {
+      ...buildGroqProvider(),
+      apiKey: groqKey,
     };
   }
 

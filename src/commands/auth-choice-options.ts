@@ -95,6 +95,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "groq",
+    label: "Groq",
+    hint: "API key",
+    choices: ["groq-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -221,6 +227,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "together-api-key",
     label: "Together AI API key",
     hint: "Access to Llama, DeepSeek, Qwen, and more open models",
+  },
+  {
+    value: "groq-api-key",
+    label: "Groq API key",
+    hint: "Fast inference (Llama, Mixtral, DeepSeek)",
   },
   {
     value: "huggingface-api-key",

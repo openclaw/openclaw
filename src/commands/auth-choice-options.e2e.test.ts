@@ -43,6 +43,7 @@ describe("buildAuthChoiceOptions", () => {
     ["Chutes OAuth auth choice", ["chutes"]],
     ["Qwen auth choice", ["qwen-portal"]],
     ["xAI auth choice", ["xai-api-key"]],
+    ["Groq auth choice", ["groq-api-key"]],
     ["vLLM auth choice", ["vllm"]],
   ])("includes %s", (_label, expectedValues) => {
     const options = getOptions();

@@ -32,6 +32,8 @@ import {
   applyOpencodeZenProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyGroqConfig,
+  applyGroqProviderConfig,
   applyTogetherConfig,
   applyTogetherProviderConfig,
   applyVeniceConfig,
@@ -44,6 +46,7 @@ import {
   applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
+  GROQ_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
@@ -60,6 +63,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setSyntheticApiKey,
+  setGroqApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
@@ -117,6 +121,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "opencode-zen";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
+    } else if (params.opts.tokenProvider === "groq") {
+      authChoice = "groq-api-key";
     }
   }
 
@@ -944,6 +950,64 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyQianfanConfig,
         applyProviderConfig: applyQianfanProviderConfig,
         noteDefault: QIANFAN_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "groq-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "groq") {
+      await setGroqApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Groq provides fast inference with competitive pricing via an OpenAI-compatible API.",
+          "Get your API key at: https://console.groq.com/keys",
+        ].join("\n"),
+        "Groq",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("groq");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing GROQ_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setGroqApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Groq API key",
+        validate: validateApiKeyInput,
+      });
+      await setGroqApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "groq:default",
+      provider: "groq",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: GROQ_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyGroqConfig,
+        applyProviderConfig: applyGroqProviderConfig,
+        noteDefault: GROQ_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

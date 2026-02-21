@@ -1,4 +1,9 @@
 import {
+  buildGroqModelDefinition,
+  GROQ_BASE_URL,
+  GROQ_MODEL_CATALOG,
+} from "../agents/groq-models.js";
+import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -29,6 +34,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import {
+  GROQ_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -346,6 +352,36 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyTogetherProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, TOGETHER_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Groq provider configuration without changing the default model.
+ * Registers Groq models and sets up the provider, but preserves existing model selection.
+ */
+export function applyGroqProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[GROQ_DEFAULT_MODEL_REF] = {
+    ...models[GROQ_DEFAULT_MODEL_REF],
+    alias: models[GROQ_DEFAULT_MODEL_REF]?.alias ?? "Groq",
+  };
+
+  const groqModels = GROQ_MODEL_CATALOG.map(buildGroqModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "groq",
+    api: "openai-completions",
+    baseUrl: GROQ_BASE_URL,
+    catalogModels: groqModels,
+  });
+}
+
+/**
+ * Apply Groq provider configuration AND set Groq as the default model.
+ * Use this when Groq is the primary provider choice during onboarding.
+ */
+export function applyGroqConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyGroqProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, GROQ_DEFAULT_MODEL_REF);
 }
 
 /**

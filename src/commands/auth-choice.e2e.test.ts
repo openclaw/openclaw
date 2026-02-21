@@ -349,6 +349,30 @@ describe("applyAuthChoice", () => {
 
     expect((await readAuthProfile("huggingface:default"))?.key).toBe("hf-token-provider-test");
   });
+  it("prompts and writes Groq API key when selecting groq-api-key", async () => {
+    await setupTempState();
+
+    const text = vi.fn().mockResolvedValue("gsk_groq-test");
+    const { prompter, runtime } = createApiKeyPromptHarness({ text });
+
+    const result = await applyAuthChoice({
+      authChoice: "groq-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: "Enter Groq API key" }));
+    expect(result.config.auth?.profiles?.["groq:default"]).toMatchObject({
+      provider: "groq",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toMatch(/^groq\/.+/);
+
+    expect((await readAuthProfile("groq:default"))?.key).toBe("gsk_groq-test");
+  });
+
   it("does not override the global default model when selecting xai-api-key without setDefaultModel", async () => {
     await setupTempState();
 

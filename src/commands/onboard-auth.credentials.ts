@@ -325,6 +325,20 @@ export async function setTogetherApiKey(key: string, agentDir?: string) {
   });
 }
 
+export const GROQ_DEFAULT_MODEL_REF = "groq/llama-3.3-70b-versatile";
+
+export async function setGroqApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "groq:default",
+    credential: {
+      type: "api_key",
+      provider: "groq",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setHuggingfaceApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "huggingface:default",
