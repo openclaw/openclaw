@@ -21,6 +21,19 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
   applyDefaults: false,
 };
 
+/**
+ * Detect if a timestamp is in seconds (10 digits) or milliseconds (13 digits).
+ * JavaScript Date expects milliseconds, so convert seconds to ms.
+ */
+function normalizeTimestampToMs(ts: number): number {
+  // 10 digits = seconds (Unix timestamp), 13 digits = milliseconds
+  if (ts < 1_000_000_000_000) {
+    // Likely seconds, convert to milliseconds
+    return ts * 1000;
+  }
+  return ts;
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
@@ -28,14 +41,18 @@ function coerceSchedule(schedule: UnknownRecord) {
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
   const atString = typeof atRaw === "string" ? atRaw.trim() : "";
+  // Handle numeric at (seconds or milliseconds) - see #15729
+  const atNumber = typeof atRaw === "number" ? normalizeTimestampToMs(atRaw) : null;
   const parsedAtMs =
     typeof atMsRaw === "number"
-      ? atMsRaw
+      ? normalizeTimestampToMs(atMsRaw)
       : typeof atMsRaw === "string"
         ? parseAbsoluteTimeMs(atMsRaw)
-        : atString
-          ? parseAbsoluteTimeMs(atString)
-          : null;
+        : atNumber !== null
+          ? atNumber
+          : atString
+            ? parseAbsoluteTimeMs(atString)
+            : null;
 
   if (kind) {
     next.kind = kind;
