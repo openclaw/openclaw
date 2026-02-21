@@ -245,7 +245,10 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+    const shouldLoadSkillEntries =
+      !params.skillsSnapshot ||
+      (!params.skillsSnapshot.resolvedSkills &&
+        (!params.skillsSnapshot.skills || params.skillsSnapshot.skills.length === 0));
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];

@@ -115,6 +115,15 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
     if (normalized !== entry) {
       store[key] = normalized;
     }
+    // Strip resolvedSkills from the snapshot before persisting — it contains
+    // full Skill objects (name, description, filePath, …) for every loaded
+    // skill and can bloat sessions.json by several MB per entry when many
+    // built-in skills are present.  The field is only needed at runtime; the
+    // lightweight `skills` array (name + primaryEnv) is sufficient on disk.
+    if (store[key]?.skillsSnapshot?.resolvedSkills) {
+      const { resolvedSkills: _, ...rest } = store[key].skillsSnapshot;
+      store[key] = { ...store[key], skillsSnapshot: rest };
+    }
   }
 }
 
