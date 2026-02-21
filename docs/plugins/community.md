@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Plugins
+
+- **Manifest** — Observability plugin for OpenClaw — traces, metrics, and cost tracking for your AI agent
+  npm: `manifest`
+  repo: `https://github.com/mnfst/manifest`
+  install: `openclaw plugins install manifest`
