@@ -86,11 +86,16 @@ export function createGatewayHooksRequestHandler(params: {
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-          sessionKey: mainSessionKey,
-        });
-        if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}` });
+        // Skip system event + heartbeat wake when the isolated run already delivered
+        // to its target channel (via announce flow) — this prevents duplicate messages.
+        // See #15692 for the same fix applied to the cron service path.
+        if (!result.delivered) {
+          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+            sessionKey: mainSessionKey,
+          });
+          if (value.wakeMode === "now") {
+            requestHeartbeatNow({ reason: `hook:${jobId}` });
+          }
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
