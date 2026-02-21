@@ -1154,78 +1154,94 @@ describe("sendStickerTelegram", () => {
 
 describe("shared send behaviors", () => {
   it("includes reply_to_message_id for threaded replies", async () => {
-    {
-      const chatId = "123";
-      const sendMessage = vi.fn().mockResolvedValue({
-        message_id: 56,
-        chat: { id: chatId },
-      });
-      const api = { sendMessage } as unknown as {
-        sendMessage: typeof sendMessage;
-      };
+    const cases = [
+      {
+        name: "message send",
+        run: async () => {
+          const chatId = "123";
+          const sendMessage = vi.fn().mockResolvedValue({
+            message_id: 56,
+            chat: { id: chatId },
+          });
+          const api = { sendMessage } as unknown as {
+            sendMessage: typeof sendMessage;
+          };
+          await sendMessageTelegram(chatId, "reply text", {
+            token: "tok",
+            api,
+            replyToMessageId: 100,
+          });
+          expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+            parse_mode: "HTML",
+            reply_to_message_id: 100,
+          });
+        },
+      },
+      {
+        name: "sticker send",
+        run: async () => {
+          const chatId = "123";
+          const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
+          const sendSticker = vi.fn().mockResolvedValue({
+            message_id: 102,
+            chat: { id: chatId },
+          });
+          const api = { sendSticker } as unknown as {
+            sendSticker: typeof sendSticker;
+          };
+          await sendStickerTelegram(chatId, fileId, {
+            token: "tok",
+            api,
+            replyToMessageId: 500,
+          });
+          expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
+            reply_to_message_id: 500,
+          });
+        },
+      },
+    ] as const;
 
-      await sendMessageTelegram(chatId, "reply text", {
-        token: "tok",
-        api,
-        replyToMessageId: 100,
-      });
-
-      expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
-        parse_mode: "HTML",
-        reply_to_message_id: 100,
-      });
-    }
-
-    {
-      const chatId = "123";
-      const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
-      const sendSticker = vi.fn().mockResolvedValue({
-        message_id: 102,
-        chat: { id: chatId },
-      });
-      const api = { sendSticker } as unknown as {
-        sendSticker: typeof sendSticker;
-      };
-
-      await sendStickerTelegram(chatId, fileId, {
-        token: "tok",
-        api,
-        replyToMessageId: 500,
-      });
-
-      expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
-        reply_to_message_id: 500,
-      });
+    for (const testCase of cases) {
+      await testCase.run();
     }
   });
 
   it("wraps chat-not-found with actionable context", async () => {
-    {
-      const chatId = "123";
-      const err = new Error("400: Bad Request: chat not found");
-      const sendMessage = vi.fn().mockRejectedValue(err);
-      const api = { sendMessage } as unknown as {
-        sendMessage: typeof sendMessage;
-      };
+    const cases = [
+      {
+        name: "message send",
+        run: async () => {
+          const chatId = "123";
+          const err = new Error("400: Bad Request: chat not found");
+          const sendMessage = vi.fn().mockRejectedValue(err);
+          const api = { sendMessage } as unknown as {
+            sendMessage: typeof sendMessage;
+          };
+          await expectChatNotFoundWithChatId(
+            sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+            chatId,
+          );
+        },
+      },
+      {
+        name: "sticker send",
+        run: async () => {
+          const chatId = "123";
+          const err = new Error("400: Bad Request: chat not found");
+          const sendSticker = vi.fn().mockRejectedValue(err);
+          const api = { sendSticker } as unknown as {
+            sendSticker: typeof sendSticker;
+          };
+          await expectChatNotFoundWithChatId(
+            sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+            chatId,
+          );
+        },
+      },
+    ] as const;
 
-      await expectChatNotFoundWithChatId(
-        sendMessageTelegram(chatId, "hi", { token: "tok", api }),
-        chatId,
-      );
-    }
-
-    {
-      const chatId = "123";
-      const err = new Error("400: Bad Request: chat not found");
-      const sendSticker = vi.fn().mockRejectedValue(err);
-      const api = { sendSticker } as unknown as {
-        sendSticker: typeof sendSticker;
-      };
-
-      await expectChatNotFoundWithChatId(
-        sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
-        chatId,
-      );
+    for (const testCase of cases) {
+      await testCase.run();
     }
   });
 });
