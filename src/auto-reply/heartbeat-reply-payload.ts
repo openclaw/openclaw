@@ -14,6 +14,12 @@ export function resolveHeartbeatReplyPayload(
     if (!payload) {
       continue;
     }
+    // Skip error payloads (e.g. tool error summaries appended by
+    // buildEmbeddedRunPayloads) so they never shadow a valid HEARTBEAT_OK
+    // response during heartbeat runs.  See #19302.
+    if (payload.isError) {
+      continue;
+    }
     if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
       return payload;
     }
