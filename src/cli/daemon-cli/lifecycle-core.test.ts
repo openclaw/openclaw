@@ -23,6 +23,7 @@ const service = {
   notLoadedText: "not loaded",
   install: vi.fn(),
   uninstall: vi.fn(),
+  start: vi.fn(),
   stop: vi.fn(),
   isLoaded: vi.fn(),
   readCommand: vi.fn(),
@@ -39,10 +40,11 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
@@ -50,6 +52,7 @@ describe("runServiceRestart token drift", () => {
     loadConfig.mockClear();
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
+    service.start.mockClear();
     service.restart.mockClear();
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
@@ -89,5 +92,57 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
+  });
+});
+
+describe("runServiceStart", () => {
+  beforeAll(async () => {
+    if (!runServiceStart) {
+      ({ runServiceStart } = await import("./lifecycle-core.js"));
+    }
+  });
+
+  beforeEach(() => {
+    runtimeLogs.length = 0;
+    service.isLoaded.mockClear();
+    service.start.mockClear();
+    service.restart.mockClear();
+    vi.unstubAllEnvs();
+  });
+
+  it("invokes start when service is not loaded", async () => {
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    service.start.mockResolvedValue(undefined);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["hint-1"],
+      opts: { json: true },
+    });
+
+    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { ok?: boolean; result?: string };
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("started");
+  });
+
+  it("falls back to hints when start throws", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.start.mockRejectedValue(new Error("boom"));
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["hint-1"],
+      opts: { json: true },
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; hints?: string[] };
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.hints?.[0]).toBe("hint-1");
   });
 });

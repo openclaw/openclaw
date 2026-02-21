@@ -155,14 +155,29 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
+    try {
+      await params.service.start({ env: process.env, stdout });
+      let started = true;
+      try {
+        started = await params.service.isLoaded({ env: process.env });
+      } catch {
+        started = true;
+      }
+      emit({
+        ok: true,
+        result: "started",
+        service: buildDaemonServiceSnapshot(params.service, started),
+      });
+    } catch {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+    }
     return;
   }
   try {
