@@ -14,6 +14,7 @@ import {
   reactMessageTelegram,
   sendMessageTelegram,
   sendStickerTelegram,
+  setMyProfilePhotoTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
@@ -210,6 +211,25 @@ export async function handleTelegramAction(
       messageId: result.messageId,
       chatId: result.chatId,
     });
+  }
+
+  if (action === "setBotAvatar") {
+    if (!isActionEnabled("setBotAvatar")) {
+      throw new Error("Telegram setBotAvatar is disabled.");
+    }
+    const mediaUrl = readStringParam(params, "mediaUrl", { required: true, trim: false });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await setMyProfilePhotoTelegram({
+      token,
+      accountId: accountId ?? undefined,
+      mediaUrl,
+    });
+    return jsonResult(result);
   }
 
   if (action === "deleteMessage") {

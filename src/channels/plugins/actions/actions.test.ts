@@ -528,6 +528,38 @@ describe("telegramMessageActions", () => {
     expect(actions).not.toContain("sticker-search");
   });
 
+  it("lists set-bot-avatar when enabled and forwards to handleTelegramAction", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            media: { botToken: "tok", actions: { setBotAvatar: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("set-bot-avatar");
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "set-bot-avatar",
+      params: { media: "/tmp/avatar.png" },
+      cfg,
+      accountId: "media",
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      {
+        action: "setBotAvatar",
+        mediaUrl: "/tmp/avatar.png",
+        accountId: "media",
+      },
+      cfg,
+    );
+  });
+
   it("inherits top-level reaction gate when account overrides sticker only", () => {
     const cfg = {
       channels: {
