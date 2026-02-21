@@ -2,6 +2,9 @@ import { isPlainObject } from "../utils.js";
 
 type PlainObject = Record<string, unknown>;
 
+/** Keys that must never be merged to prevent prototype-pollution attacks. */
+const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 type MergePatchOptions = {
   mergeObjectArraysById?: boolean;
 };
@@ -70,6 +73,9 @@ export function applyMergePatch(
   const result: PlainObject = isPlainObject(base) ? { ...base } : {};
 
   for (const [key, value] of Object.entries(patch)) {
+    if (BLOCKED_KEYS.has(key)) {
+      continue;
+    }
     if (value === null) {
       delete result[key];
       continue;
