@@ -76,6 +76,9 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
+    // Start as true so Talk Mode doesn't attempt audio session activation before the scene
+    // becomes .active. resumeAfterBackground() clears this when the scene first becomes active.
+    private var isBackgrounded = true
     private let silenceWindow: TimeInterval = 0.9
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
@@ -113,8 +116,10 @@ final class TalkModeManager: NSObject {
         self.gatewayConnected = connected
         if connected {
             // If talk mode is enabled before the gateway connects (common on cold start),
-            // kick recognition once we're online so the UI doesn’t stay “Offline”.
-            if self.isEnabled, !self.isListening, self.captureMode != .pushToTalk {
+            // kick recognition once we’re online so the UI doesn’t stay “Offline”.
+            // Skip in background: AVAudioSession.setActive(true) fails there.
+            // resumeAfterBackground() will retry when the app foregrounds.
+            if self.isEnabled, !self.isListening, self.captureMode != .pushToTalk, !self.isBackgrounded {
                 Task { await self.start() }
             }
         } else {
@@ -187,7 +192,8 @@ final class TalkModeManager: NSObject {
         } catch {
             self.isListening = false
             self.statusText = "Start failed: \(error.localizedDescription)"
-            self.logger.error("start failed: \(error.localizedDescription, privacy: .public)")
+            let nsErr = error as NSError
+            self.logger.error("start failed: \(error.localizedDescription, privacy: .public) [domain=\(nsErr.domain, privacy: .public) code=\(nsErr.code)]")
         }
     }
 
@@ -230,6 +236,7 @@ final class TalkModeManager: NSObject {
     /// Suspends microphone usage without disabling Talk Mode.
     /// Used when the app backgrounds (or when we need to temporarily release the mic).
     func suspendForBackground(keepActive: Bool = false) -> Bool {
+        self.isBackgrounded = true
         guard self.isEnabled else { return false }
         if keepActive {
             self.statusText = self.isListening ? "Listening" : self.statusText
@@ -262,9 +269,12 @@ final class TalkModeManager: NSObject {
     }
 
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
+        self.isBackgrounded = false
         if wasKeptActive { return }
-        guard wasSuspended else { return }
         guard self.isEnabled else { return }
+        // Restart if we were suspended, or if the gateway connected while we were backgrounded
+        // (start() would have been skipped then, so we need to kick it now).
+        guard wasSuspended || (self.gatewayConnected && !self.isListening) else { return }
         await self.start()
     }
 
@@ -1813,7 +1823,8 @@ extension TalkModeManager {
                 self.ttsBaseUrl = httpBase
                 self.ttsAuthToken = authToken
                 self.ttsTLSParams = await gateway.currentTLSParams()
-                GatewayDiagnostics.log("talk reloadConfig: ttsBaseUrl=\(httpBase.absoluteString) (gateway proxy)")
+                let tlsDebug = self.ttsTLSParams.map { "fp=\($0.expectedFingerprint ?? "nil") tofu=\($0.allowTOFU)" } ?? "nil"
+                GatewayDiagnostics.log("talk reloadConfig: ttsBaseUrl=\(httpBase.absoluteString) (gateway proxy) tls=\(tlsDebug)")
             } else {
                 self.ttsBaseUrl = nil
                 self.ttsAuthToken = nil
@@ -1834,13 +1845,25 @@ extension TalkModeManager {
     static func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
-        try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [
-            .allowBluetoothHFP,
-            .defaultToSpeaker,
-        ])
+        do {
+            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [
+                .allowBluetoothHFP,
+                .defaultToSpeaker,
+            ])
+        } catch {
+            let e = error as NSError
+            throw NSError(domain: "TalkMode", code: e.code,
+                userInfo: [NSLocalizedDescriptionKey: "setCategory failed (code=\(e.code)): \(error.localizedDescription)"])
+        }
         try? session.setPreferredSampleRate(48_000)
         try? session.setPreferredIOBufferDuration(0.02)
-        try session.setActive(true, options: [])
+        do {
+            try session.setActive(true, options: [])
+        } catch {
+            let e = error as NSError
+            throw NSError(domain: "TalkMode", code: e.code,
+                userInfo: [NSLocalizedDescriptionKey: "setActive failed (code=\(e.code)): \(error.localizedDescription)"])
+        }
     }
 
     private static func describeAudioSession() -> String {
@@ -1995,17 +2018,25 @@ extension TalkModeManager {
                         req.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
                     }
                     req.setValue("audio/pcm", forHTTPHeaderField: "Accept")
+                    if let tlsParams {
+                        // NWConnection path: bypasses URLSession TLS delegate limitation on iOS 17/18.
+                        var nwHeaders: [(String, String)] = [
+                            ("Content-Type", "application/json"),
+                            ("Accept", "audio/pcm"),
+                        ]
+                        if let authToken { nwHeaders.append(("Authorization", "Bearer \(authToken)")) }
+                        let nwPost = NWStreamingHTTPPost(url: url, tlsParams: tlsParams)
+                        for try await chunk in nwPost.post(headers: nwHeaders, body: body) {
+                            continuation.yield(chunk)
+                        }
+                        continuation.finish()
+                        return
+                    }
                     let sessionConfig = URLSessionConfiguration.ephemeral
                     sessionConfig.timeoutIntervalForRequest = timeoutSeconds
                     sessionConfig.timeoutIntervalForResource = timeoutSeconds + 30
                     sessionConfig.waitsForConnectivity = false
-                    let session: URLSession
-                    if let tlsParams {
-                        let pinning = GatewayTLSPinningSession(params: tlsParams)
-                        session = URLSession(configuration: sessionConfig, delegate: pinning, delegateQueue: nil)
-                    } else {
-                        session = URLSession(configuration: sessionConfig)
-                    }
+                    let session = URLSession(configuration: sessionConfig)
                     let (bytes, response) = try await session.bytes(for: req)
                     guard let http = response as? HTTPURLResponse else {
                         throw NSError(domain: "OpenAITTS", code: 1, userInfo: [

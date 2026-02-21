@@ -168,24 +168,11 @@ final class GatewayConnectionController {
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-        if resolvedUseTLS, stored == nil {
-            guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
-            guard let fp = await self.probeTLSFingerprint(url: url) else { return }
-            self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
-            self.pendingTrustPrompt = TrustPrompt(
-                stableID: stableID,
-                gatewayName: "\(host):\(resolvedPort)",
-                host: host,
-                port: resolvedPort,
-                fingerprintSha256: fp,
-                isManual: true)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
-            return
-        }
-
-        let tlsParams = stored.map { fp in
-            GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
-        }
+        let tlsParams: GatewayTLSParams? = resolvedUseTLS ? GatewayTLSParams(
+            required: true,
+            expectedFingerprint: stored,
+            allowTOFU: stored == nil,
+            storeKey: stableID) : nil
         guard let url = self.buildGatewayURL(
             host: host,
             port: resolvedPort,
@@ -505,7 +492,7 @@ final class GatewayConnectionController {
             return GatewayTLSParams(
                 required: true,
                 expectedFingerprint: stored,
-                allowTOFU: false,
+                allowTOFU: stored == nil,
                 storeKey: stableID)
         }
 
@@ -1024,13 +1011,13 @@ extension GatewayConnectionController {
 }
 #endif
 
-private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
+private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     private let url: URL
     private let timeoutSeconds: Double
     private let onComplete: (String?) -> Void
     private var didFinish = false
     private var session: URLSession?
-    private var task: URLSessionWebSocketTask?
+    private var task: URLSessionTask?
 
     init(url: URL, timeoutSeconds: Double, onComplete: @escaping (String?) -> Void) {
         self.url = url
@@ -1044,7 +1031,14 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
         config.timeoutIntervalForResource = self.timeoutSeconds
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         self.session = session
-        let task = session.webSocketTask(with: self.url)
+
+        // Use HTTPS data task instead of WebSocket task: URLSessionDataTask reliably
+        // delivers server-trust challenges to both session-level and task-level delegates.
+        // URLSessionWebSocketTask on some iOS versions only calls the task-level delegate.
+        var components = URLComponents(url: self.url, resolvingAgainstBaseURL: false) ?? URLComponents()
+        components.scheme = (self.url.scheme ?? "").lowercased() == "wss" ? "https" : "http"
+        let probeURL = components.url ?? self.url
+        let task = session.dataTask(with: probeURL) { [weak self] _, _, _ in self?.finish(nil) }
         self.task = task
         task.resume()
 
@@ -1053,9 +1047,27 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
         }
     }
 
+    // Task-level delegate — preferred for URLSessionWebSocketTask (iOS 13+).
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        self.handleChallenge(challenge, completionHandler: completionHandler)
+    }
+
+    // Session-level delegate — fallback.
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        self.handleChallenge(challenge, completionHandler: completionHandler)
+    }
+
+    private func handleChallenge(
+        _ challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
@@ -1075,7 +1087,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
         defer { objc_sync_exit(self) }
         guard !self.didFinish else { return }
         self.didFinish = true
-        self.task?.cancel(with: .goingAway, reason: nil)
+        self.task?.cancel()
         self.session?.invalidateAndCancel()
         self.onComplete(fingerprint)
     }

@@ -37,7 +37,7 @@ public enum GatewayTLSStore {
     }
 }
 
-public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, @unchecked Sendable {
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
     private let params: GatewayTLSParams
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -56,9 +56,27 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
+    // Task-level delegate — preferred for URLSessionWebSocketTask (iOS 13+).
+    public func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        self.handleServerTrust(challenge: challenge, completionHandler: completionHandler)
+    }
+
+    // Session-level delegate — fallback for non-WebSocket tasks.
     public func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        self.handleServerTrust(challenge: challenge, completionHandler: completionHandler)
+    }
+
+    private func handleServerTrust(
+        challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
@@ -105,12 +123,12 @@ private func certificateFingerprint(_ trust: SecTrust) -> String? {
     return sha256Hex(SecCertificateCopyData(cert) as Data)
 }
 
-private func sha256Hex(_ data: Data) -> String {
+func sha256Hex(_ data: Data) -> String {
     let digest = SHA256.hash(data: data)
     return digest.map { String(format: "%02x", $0) }.joined()
 }
 
-private func normalizeFingerprint(_ raw: String) -> String {
+func normalizeFingerprint(_ raw: String) -> String {
     let stripped = raw.replacingOccurrences(
         of: #"(?i)^sha-?256\s*:?\s*"#,
         with: "",

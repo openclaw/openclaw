@@ -1746,10 +1746,14 @@ extension NodeAppModel {
     {
         let stableID = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
-        let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let sessionBox = tls.map { WebSocketSessionBox(session: NWWebSocketSession(params: $0)) }
 
-        // Expose TLS params on the node session so TTS proxy HTTP requests can use the same pinning.
-        Task { await self.nodeGateway.setActiveTLSParams(tls) }
+        // Expose TLS params so TTS proxy HTTP requests can use the same pinning.
+        // TalkModeManager uses operatorGateway (via attachGateway), so set params on both.
+        Task {
+            await self.operatorGateway.setActiveTLSParams(tls)
+            await self.nodeGateway.setActiveTLSParams(tls)
+        }
 
         self.activeGatewayConnectConfig = GatewayConnectConfig(
             url: url,
