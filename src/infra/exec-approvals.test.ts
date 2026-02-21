@@ -565,6 +565,22 @@ describe("exec approvals safe bins", () => {
       executableName: "sort",
     },
     {
+      name: "blocks sort external program flag via --compress-program=<prog>",
+      argv: ["sort", "--compress-program=sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "blocks sort external program flag via --compress-program <prog>",
+      argv: ["sort", "--compress-program", "sh"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
       name: "blocks grep recursive flags that read cwd",
       argv: ["grep", "-R", "needle"],
       resolvedPath: "/usr/bin/grep",

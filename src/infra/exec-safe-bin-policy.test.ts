@@ -20,3 +20,17 @@ describe("exec safe bin policy grep", () => {
     expect(validateSafeBinArgv(["-e", "KEY", "--", ".env"], grepProfile)).toBe(false);
   });
 });
+
+describe("exec safe bin policy sort", () => {
+  const sortProfile = SAFE_BIN_PROFILES.sort;
+
+  it("allows stdin-only sort flags", () => {
+    expect(validateSafeBinArgv(["-S", "1M"], sortProfile)).toBe(true);
+    expect(validateSafeBinArgv(["--key=1,1"], sortProfile)).toBe(true);
+  });
+
+  it("blocks sort --compress-program in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
+  });
+});
