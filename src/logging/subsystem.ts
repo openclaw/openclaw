@@ -281,7 +281,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
-    logToFile(getFileLogger(), level, message, fileMeta);
+    if (isFileLogLevelEnabled(level)) {
+      logToFile(getFileLogger(), level, message, fileMeta);
+    }
     if (!shouldLogToConsole(level, { level: consoleSettings.level })) {
       return;
     }
