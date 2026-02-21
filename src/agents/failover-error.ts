@@ -179,10 +179,19 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const message = getErrorMessage(err);
-  if (!message) {
-    return null;
+  // Check message-based classification first
+  const messageReason = message ? classifyFailoverReason(message) : null;
+  if (messageReason) {
+    return messageReason;
   }
-  return classifyFailoverReason(message);
+
+  // Treat unhandled 4xx client errors as failover-worthy so fallback models can be tried.
+  // This ensures errors like 404 (model not found), 400 (bad request), etc. trigger fallback.
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return "unknown";
+  }
+
+  return null;
 }
 
 export function describeFailoverError(err: unknown): {
