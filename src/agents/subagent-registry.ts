@@ -919,19 +919,8 @@ async function finalizeSubagentCleanup(
     return;
   }
 
-  if (cleanup === "delete") {
-    completeCleanupBookkeeping({
-      runId,
-      entry,
-      cleanup,
-      completedAt: now,
-    });
-    return;
-  }
-
-  // Allow retry on the next wake if announce was deferred or failed.
-  // Applies to both keep/delete cleanup modes so delete-runs are only removed
-  // after a successful announce (or terminal give-up).
+  // Keep both cleanup modes retryable after deferred/failed announce.
+  // Delete-mode is finalized only after announce succeeds or give-up triggers.
   entry.cleanupHandled = false;
   // Clear the in-flight resume marker so the scheduled retry can run again.
   resumedRuns.delete(runId);
