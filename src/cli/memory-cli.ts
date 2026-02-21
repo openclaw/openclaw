@@ -545,7 +545,7 @@ export function registerMemoryCli(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw memory status", "Show index and provider status."],
           ["openclaw memory index --force", "Force a full reindex."],
-          ['openclaw memory search --query "deployment notes"', "Search indexed memory entries."],
+          ['openclaw memory search "deployment notes"', "Search indexed memory entries."],
           ["openclaw memory status --json", "Output machine-readable JSON."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
