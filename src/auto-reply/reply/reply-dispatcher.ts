@@ -1,10 +1,10 @@
 import type { HumanDelayConfig } from "../../config/types.js";
-import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { registerDispatcher } from "./dispatcher-registry.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { sleep } from "../../utils.js";
+import { registerDispatcher } from "./dispatcher-registry.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -116,10 +116,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: 0,
   };
 
+  // Separate chains for block replies vs tool/final to allow parallel delivery
+  let blockChain: Promise<void> = Promise.resolve();
+
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
     pending: () => pending,
-    waitForIdle: () => sendChain,
+    waitForIdle: () => Promise.all([sendChain, blockChain]).then(() => {}),
   });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
@@ -142,6 +145,35 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       sentFirstBlock = true;
     }
 
+    // Block replies get their own parallel chain to allow streaming while tools execute
+    if (kind === "block") {
+      blockChain = blockChain
+        .then(async () => {
+          if (shouldDelay) {
+            const delayMs = getHumanDelay(options.humanDelay);
+            if (delayMs > 0) {
+              await sleep(delayMs);
+            }
+          }
+          await options.deliver(normalized, { kind });
+        })
+        .catch((err) => {
+          options.onError?.(err, { kind });
+        })
+        .finally(() => {
+          pending -= 1;
+          if (pending === 1 && completeCalled) {
+            pending -= 1;
+          }
+          if (pending === 0) {
+            unregister();
+            options.onIdle?.();
+          }
+        });
+      return true;
+    }
+
+    // Tool and final replies use the main chain (preserves order)
     sendChain = sendChain
       .then(async () => {
         // Add human-like delay between block replies for natural rhythm.
@@ -200,7 +232,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
-    waitForIdle: () => sendChain,
+    waitForIdle: () => Promise.all([sendChain, blockChain]).then(() => {}),
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,
   };
