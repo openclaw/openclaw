@@ -492,7 +492,7 @@ export async function sendMessageTelegram(
         // still reaches the user.
         if (!htmlText.trim() && rawText.trim()) {
           if (opts.verbose) {
-            console.warn("telegram formatter returned empty HTML, retrying as plain text");
+            diagLogger.warn("telegram formatter returned empty HTML, retrying as plain text");
           }
           const fallback = fallbackText ?? rawText;
           const plainParams = hasBaseParams
