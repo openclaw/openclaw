@@ -215,6 +215,18 @@ export async function refreshChutesTokens(params: {
     throw new Error("Chutes token refresh returned no access_token");
   }
 
+  // RFC 6749 §10.4: servers SHOULD rotate refresh tokens on each use to prevent
+  // indefinite reuse of a stolen token. If the server omits a new refresh_token,
+  // retain the existing one but log a warning — do NOT silently swallow the
+  // absence, as that would mask a misconfigured or compromised token endpoint.
+  // See also: GHSA-7w99-47vx-hm6q
+  if (!newRefresh) {
+    console.warn(
+      "[security] Chutes OAuth: server did not rotate refresh token (RFC 6749 §10.4). " +
+        "Retaining existing refresh token. If this persists, re-authenticate.",
+    );
+  }
+
   return {
     ...params.credential,
     access,

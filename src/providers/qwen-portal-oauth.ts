@@ -45,6 +45,18 @@ export async function refreshQwenPortalCredentials(
     throw new Error("Qwen OAuth refresh response missing access token.");
   }
 
+  // RFC 6749 §10.4: servers SHOULD rotate refresh tokens on each use to prevent
+  // indefinite reuse of a stolen token. If the server omits a new refresh_token,
+  // retain the existing one but log a warning — do NOT silently swallow the
+  // absence, as that would mask a misconfigured or compromised token endpoint.
+  // See also: GHSA-7w99-47vx-hm6q
+  if (!payload.refresh_token) {
+    console.warn(
+      "[security] Qwen OAuth: server did not rotate refresh token (RFC 6749 §10.4). " +
+        "Retaining existing refresh token. If this persists, re-authenticate.",
+    );
+  }
+
   return {
     ...credentials,
     access: payload.access_token,
