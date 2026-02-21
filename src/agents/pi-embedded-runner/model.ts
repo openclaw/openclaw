@@ -55,8 +55,18 @@ export function resolveModel(
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+  const providers = cfg?.models?.providers ?? {};
+  const providerCfg = (() => {
+    const direct = providers[provider];
+    if (direct) {
+      return direct;
+    }
+    const normalizedProvider = normalizeProviderId(provider);
+    return Object.entries(providers).find(
+      ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
+    )?.[1];
+  })();
   if (!model) {
-    const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
     const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
@@ -76,7 +86,6 @@ export function resolveModel(
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
     }
-    const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
@@ -98,7 +107,12 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  const normalizedModel = normalizeModelCompat(model);
+  const hydratedModel =
+    !normalizedModel.api && providerCfg?.api
+      ? normalizeModelCompat({ ...normalizedModel, api: providerCfg.api } as Model<Api>)
+      : normalizedModel;
+  return { model: hydratedModel, authStorage, modelRegistry };
 }
 
 /**
