@@ -158,6 +158,9 @@ export class GatewayClient {
         return undefined;
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
+    } else if (url.startsWith("wss://") && !this.opts.tlsFingerprint) {
+      // No fingerprint configured — accept self-signed cert (default gateway TLS install)
+      wsOptions.rejectUnauthorized = false;
     }
     this.ws = new WebSocket(url, wsOptions);
 
