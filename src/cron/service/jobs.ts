@@ -591,7 +591,24 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (opts.forced) {
     return true;
   }
-  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
+  if (!job.enabled) {
+    return false;
+  }
+  // Standard check: nextRunAtMs is set and we've reached it
+  if (typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs) {
+    return true;
+  }
+  // Handle past-due one-shot "at" jobs that haven't run yet:
+  // When atMs <= nowMs, computeNextRunAtMs returns undefined, so nextRunAtMs is never set.
+  // But these jobs should still fire immediately if they've never run.
+  if (
+    job.schedule.kind === "at" &&
+    !job.state.lastRunAtMs &&
+    nowMs >= job.schedule.atMs
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
