@@ -16,6 +16,27 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 100
+      },
+      "maxPages": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 120000
+      },
+      "maxRetries": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5
+      },
+      "allowInlineToken": {
+        "type": "boolean"
+      },
+      "allowInsecureHttp": {
+        "type": "boolean"
       }
     }
   },
@@ -30,6 +51,21 @@
     },
     "defaultPerPage": {
       "label": "Default Page Size"
+    },
+    "maxPages": {
+      "label": "Max Pages"
+    },
+    "requestTimeoutMs": {
+      "label": "Request Timeout (ms)"
+    },
+    "maxRetries": {
+      "label": "Max Retries"
+    },
+    "allowInlineToken": {
+      "label": "Allow Inline Token"
+    },
+    "allowInsecureHttp": {
+      "label": "Allow Insecure HTTP"
     }
   }
 }
