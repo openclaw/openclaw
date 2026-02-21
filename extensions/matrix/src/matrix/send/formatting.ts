@@ -28,11 +28,75 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
   return content;
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function extractMath(markdown: string): { text: string; blocks: string[]; inlines: string[] } {
+  const blocks: string[] = [];
+  const inlines: string[] = [];
+  let text = markdown;
+
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_m, latex) => {
+    const id = blocks.length;
+    blocks.push(String(latex));
+    return `OC_MATH_BLOCK_${id}`;
+  });
+
+  text = text.replace(/(?<!\w)\$([^\n$]+?)\$(?!\w)/g, (_m, latex) => {
+    const id = inlines.length;
+    inlines.push(String(latex));
+    return `OC_MATH_INLINE_${id}`;
+  });
+
+  return { text, blocks, inlines };
+}
+
+function injectMath(html: string, blocks: string[], inlines: string[]): string {
+  let out = html;
+
+  blocks.forEach((raw, i) => {
+    const latex = raw.trim().replace(/\s+/g, " ");
+    const attr = escapeHtml(latex);
+    const code = escapeHtml(latex);
+
+    out = out.replace(
+      new RegExp(`<p>\\s*OC_MATH_BLOCK_${i}\\s*<\\/p>`, "g"),
+      `<div data-mx-maths="${attr}"><code>${code}</code></div>`,
+    );
+
+    out = out.replaceAll(
+      `OC_MATH_BLOCK_${i}`,
+      `<span data-mx-maths="${attr}"><code>${code}</code></span>`,
+    );
+  });
+
+  inlines.forEach((raw, i) => {
+    const latex = raw.trim().replace(/\s+/g, " ");
+    const attr = escapeHtml(latex);
+    const code = escapeHtml(latex);
+
+    out = out.replaceAll(
+      `OC_MATH_INLINE_${i}`,
+      `<span data-mx-maths="${attr}"><code>${code}</code></span>`,
+    );
+  });
+
+  return out;
+}
+
 export function applyMatrixFormatting(content: MatrixFormattedContent, body: string): void {
-  const formatted = markdownToMatrixHtml(body ?? "");
+  const { text, blocks, inlines } = extractMath(body ?? "");
+  let formatted = markdownToMatrixHtml(text);
   if (!formatted) {
     return;
   }
+  formatted = injectMath(formatted, blocks, inlines);
   content.format = "org.matrix.custom.html";
   content.formatted_body = formatted;
 }
