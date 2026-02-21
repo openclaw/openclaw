@@ -480,7 +480,14 @@ describe("buildOutboundResultEnvelope", () => {
       },
     ];
     for (const testCase of cases) {
-      expect(buildOutboundResultEnvelope(testCase.input), testCase.name).toEqual(testCase.expected);
+      const input: Parameters<typeof buildOutboundResultEnvelope>[0] =
+        "payloads" in testCase.input
+          ? {
+              ...testCase.input,
+              payloads: testCase.input.payloads?.map((payload) => ({ ...payload })),
+            }
+          : testCase.input;
+      expect(buildOutboundResultEnvelope(input), testCase.name).toEqual(testCase.expected);
     }
   });
 });

@@ -147,7 +147,8 @@ describe("buildInlineKeyboard", () => {
       },
     ];
     for (const testCase of cases) {
-      expect(buildInlineKeyboard(testCase.input), testCase.name).toEqual(testCase.expected);
+      const input = testCase.input.map((row) => row.map((button) => ({ ...button })));
+      expect(buildInlineKeyboard(input), testCase.name).toEqual(testCase.expected);
     }
   });
 });
@@ -788,13 +789,9 @@ describe("sendMessageTelegram", () => {
         token: "tok",
         api,
         mediaUrl: testCase.mediaUrl,
-        ...(testCase.asVoice ? { asVoice: true } : {}),
-        ...(testCase.messageThreadId !== undefined
-          ? { messageThreadId: testCase.messageThreadId }
-          : {}),
-        ...(testCase.replyToMessageId !== undefined
-          ? { replyToMessageId: testCase.replyToMessageId }
-          : {}),
+        ...("asVoice" in testCase && testCase.asVoice ? { asVoice: true } : {}),
+        ...("messageThreadId" in testCase ? { messageThreadId: testCase.messageThreadId } : {}),
+        ...("replyToMessageId" in testCase ? { replyToMessageId: testCase.replyToMessageId } : {}),
       });
 
       const called = testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
@@ -1291,7 +1288,7 @@ describe("editMessageTelegram", () => {
       await editMessageTelegram("123", 1, input.text, {
         token: "tok",
         cfg: {},
-        buttons: input.buttons,
+        buttons: input.buttons ? input.buttons.map((row) => [...row]) : input.buttons,
       });
 
       expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
@@ -1303,16 +1300,16 @@ describe("editMessageTelegram", () => {
         unknown
       >;
       expect(firstParams, testCase.name).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
-      if (testCase.firstExpectNoReplyMarkup) {
+      if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
         expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
       }
-      if (testCase.firstExpectReplyMarkup) {
+      if ("firstExpectReplyMarkup" in testCase) {
         expect(firstParams, testCase.name).toEqual(
           expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
         );
       }
 
-      if (testCase.secondExpectReplyMarkup) {
+      if ("secondExpectReplyMarkup" in testCase) {
         const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
           string,
           unknown

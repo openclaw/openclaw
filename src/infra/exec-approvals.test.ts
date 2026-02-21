@@ -23,6 +23,7 @@ import {
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
   resolveSafeBins,
+  type ExecApprovalsAgent,
   type ExecAllowlistEntry,
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
