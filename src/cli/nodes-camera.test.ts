@@ -22,6 +22,13 @@ async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>):
 }
 
 describe("nodes camera helpers", () => {
+  function stubFetchResponse(response: Response) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
+  }
+
   it("parses camera.snap payload", () => {
     expect(
       parseCameraSnapPayload({
@@ -97,10 +104,7 @@ describe("nodes camera helpers", () => {
   });
 
   it("writes url payload to file", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("url-content", { status: 200 })),
-    );
+    stubFetchResponse(new Response("url-content", { status: 200 }));
     await withTempDir("openclaw-test-", async (dir) => {
       const out = path.join(dir, "x.bin");
       await writeUrlToFile(out, "https://example.com/clip.mp4");
@@ -115,15 +119,11 @@ describe("nodes camera helpers", () => {
   });
 
   it("rejects oversized content-length for url payload", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("tiny", {
-            status: 200,
-            headers: { "content-length": String(999_999_999) },
-          }),
-      ),
+    stubFetchResponse(
+      new Response("tiny", {
+        status: 200,
+        headers: { "content-length": String(999_999_999) },
+      }),
     );
     await expect(writeUrlToFile("/tmp/ignored", "https://example.com/huge.bin")).rejects.toThrow(
       /exceeds max/i,
@@ -131,12 +131,16 @@ describe("nodes camera helpers", () => {
   });
 
   it("rejects non-ok https url payload responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("down", { status: 503, statusText: "Service Unavailable" })),
-    );
+    stubFetchResponse(new Response("down", { status: 503, statusText: "Service Unavailable" }));
     await expect(writeUrlToFile("/tmp/ignored", "https://example.com/down.bin")).rejects.toThrow(
       /503/i,
+    );
+  });
+
+  it("rejects empty https response body", async () => {
+    stubFetchResponse(new Response(null, { status: 200 }));
+    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/empty.bin")).rejects.toThrow(
+      /empty response body/i,
     );
   });
 });
