@@ -14,6 +14,14 @@ import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
+const SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+// Graph requires chunks to be multiples of 320 KiB (except final chunk). 5 MiB = 16 * 320 KiB.
+const RESUMABLE_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_INITIAL_DELAY_MS = 1000;
+const RETRYABLE_STATUS_CODES = new Set([429, 503, 504]);
+
+type DriveUploadScope = { kind: "onedrive" } | { kind: "sharepoint"; siteId: string };
 
 export interface OneDriveUploadResult {
   id: string;
@@ -21,9 +29,292 @@ export interface OneDriveUploadResult {
   name: string;
 }
 
+function buildUploadPath(filename: string): string {
+  return `/OpenClawShared/${encodeURIComponent(filename)}`;
+}
+
+function resolveDriveRoot(scope: DriveUploadScope): string {
+  if (scope.kind === "onedrive") {
+    return `${GRAPH_ROOT}/me/drive`;
+  }
+  return `${GRAPH_ROOT}/sites/${scope.siteId}/drive`;
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) {
+    return null;
+  }
+
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+
+  const at = Date.parse(headerValue);
+  if (!Number.isNaN(at)) {
+    return Math.max(at - Date.now(), 0);
+  }
+  return null;
+}
+
+function resolveRetryDelayMs(params: { attempt: number; retryAfterHeader: string | null }): number {
+  const fromHeader = parseRetryAfterMs(params.retryAfterHeader);
+  if (fromHeader !== null) {
+    return fromHeader;
+  }
+  return RETRY_INITIAL_DELAY_MS * 2 ** params.attempt;
+}
+
+function shouldRetryFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  // AbortError usually means caller cancellation, so avoid retry loops.
+  if (error.name === "AbortError") {
+    return false;
+  }
+  return true;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(params: {
+  fetchFn: typeof fetch;
+  url: string;
+  requestName: string;
+  init?: RequestInit;
+}): Promise<Response> {
+  let attempt = 0;
+  while (true) {
+    try {
+      const response = await params.fetchFn(params.url, params.init);
+      if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt >= MAX_RETRY_ATTEMPTS) {
+        return response;
+      }
+
+      const waitMs = resolveRetryDelayMs({
+        attempt,
+        retryAfterHeader: response.headers.get("retry-after"),
+      });
+      console.warn(
+        `[msteams] ${params.requestName} retry ${attempt + 1}/${MAX_RETRY_ATTEMPTS} in ${waitMs}ms (status ${response.status})`,
+      );
+      attempt += 1;
+      await sleep(waitMs);
+    } catch (error) {
+      if (!shouldRetryFetchError(error) || attempt >= MAX_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      const waitMs = RETRY_INITIAL_DELAY_MS * 2 ** attempt;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[msteams] ${params.requestName} retry ${attempt + 1}/${MAX_RETRY_ATTEMPTS} in ${waitMs}ms (error: ${message})`,
+      );
+      attempt += 1;
+      await sleep(waitMs);
+    }
+  }
+}
+
+async function readResponseBody(response: Response): Promise<string> {
+  return await response.text().catch(() => "");
+}
+
+function parseDriveItemUploadResult(
+  data: { id?: string; webUrl?: string; name?: string },
+  context: string,
+): OneDriveUploadResult {
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error(`${context} response missing required fields`);
+  }
+
+  return {
+    id: data.id,
+    webUrl: data.webUrl,
+    name: data.name,
+  };
+}
+
+async function uploadWithSimpleEndpoint(params: {
+  buffer: Buffer;
+  uploadPath: string;
+  contentType?: string;
+  token: string;
+  fetchFn: typeof fetch;
+  driveRoot: string;
+  requestName: string;
+}): Promise<OneDriveUploadResult> {
+  const response = await fetchWithRetry({
+    fetchFn: params.fetchFn,
+    url: `${params.driveRoot}/root:${params.uploadPath}:/content`,
+    requestName: `${params.requestName} (simple upload)`,
+    init: {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        "Content-Type": params.contentType ?? "application/octet-stream",
+      },
+      body: new Uint8Array(params.buffer),
+    },
+  });
+
+  if (!response.ok) {
+    const body = await readResponseBody(response);
+    throw new Error(
+      `${params.requestName} failed: ${response.status} ${response.statusText} - ${body}`,
+    );
+  }
+
+  const data = (await response.json()) as {
+    id?: string;
+    webUrl?: string;
+    name?: string;
+  };
+  return parseDriveItemUploadResult(data, params.requestName);
+}
+
+async function createUploadSession(params: {
+  uploadPath: string;
+  token: string;
+  fetchFn: typeof fetch;
+  driveRoot: string;
+  requestName: string;
+}): Promise<string> {
+  const response = await fetchWithRetry({
+    fetchFn: params.fetchFn,
+    url: `${params.driveRoot}/root:${params.uploadPath}:/createUploadSession`,
+    requestName: `${params.requestName} (create upload session)`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        item: {
+          "@microsoft.graph.conflictBehavior": "replace",
+        },
+      }),
+    },
+  });
+
+  if (!response.ok) {
+    const body = await readResponseBody(response);
+    throw new Error(
+      `${params.requestName} create upload session failed: ${response.status} ${response.statusText} - ${body}`,
+    );
+  }
+
+  const data = (await response.json()) as { uploadUrl?: string };
+  if (!data.uploadUrl) {
+    throw new Error(`${params.requestName} upload session response missing uploadUrl`);
+  }
+  return data.uploadUrl;
+}
+
+async function uploadWithResumableSession(params: {
+  buffer: Buffer;
+  contentType?: string;
+  uploadUrl: string;
+  fetchFn: typeof fetch;
+  requestName: string;
+}): Promise<OneDriveUploadResult> {
+  const bytes = new Uint8Array(params.buffer);
+  let start = 0;
+
+  while (start < bytes.byteLength) {
+    const endExclusive = Math.min(start + RESUMABLE_UPLOAD_CHUNK_BYTES, bytes.byteLength);
+    const chunk = bytes.subarray(start, endExclusive);
+    const endInclusive = endExclusive - 1;
+    const response = await fetchWithRetry({
+      fetchFn: params.fetchFn,
+      url: params.uploadUrl,
+      requestName: `${params.requestName} (chunk ${start}-${endInclusive})`,
+      init: {
+        method: "PUT",
+        headers: {
+          "Content-Type": params.contentType ?? "application/octet-stream",
+          "Content-Length": String(chunk.byteLength),
+          "Content-Range": `bytes ${start}-${endInclusive}/${bytes.byteLength}`,
+        },
+        body: chunk,
+      },
+    });
+
+    if (response.status === 202) {
+      start = endExclusive;
+      continue;
+    }
+
+    if (!response.ok) {
+      const body = await readResponseBody(response);
+      throw new Error(
+        `${params.requestName} resumable upload failed: ${response.status} ${response.statusText} - ${body}`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      id?: string;
+      webUrl?: string;
+      name?: string;
+    };
+    return parseDriveItemUploadResult(data, params.requestName);
+  }
+
+  throw new Error(`${params.requestName} resumable upload did not produce a final response`);
+}
+
+async function uploadToDrive(params: {
+  buffer: Buffer;
+  filename: string;
+  contentType?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  scope: DriveUploadScope;
+  fetchFn?: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  const fetchFn = params.fetchFn ?? fetch;
+  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+  const uploadPath = buildUploadPath(params.filename);
+  const driveRoot = resolveDriveRoot(params.scope);
+  const requestName =
+    params.scope.kind === "onedrive"
+      ? "OneDrive upload"
+      : `SharePoint upload (${params.scope.siteId})`;
+
+  if (params.buffer.byteLength <= SIMPLE_UPLOAD_MAX_BYTES) {
+    return await uploadWithSimpleEndpoint({
+      buffer: params.buffer,
+      uploadPath,
+      contentType: params.contentType,
+      token,
+      fetchFn,
+      driveRoot,
+      requestName,
+    });
+  }
+
+  const uploadUrl = await createUploadSession({
+    uploadPath,
+    token,
+    fetchFn,
+    driveRoot,
+    requestName,
+  });
+
+  return await uploadWithResumableSession({
+    buffer: params.buffer,
+    contentType: params.contentType,
+    uploadUrl,
+    fetchFn,
+    requestName,
+  });
+}
+
 /**
  * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
+ * Uses simple upload for <=4MB and resumable upload session for larger files.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -32,41 +323,14 @@ export async function uploadToOneDrive(params: {
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
-  // Use "OpenClawShared" folder to organize bot-uploaded files
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": params.contentType ?? "application/octet-stream",
-    },
-    body: new Uint8Array(params.buffer),
+  return await uploadToDrive({
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
+    tokenProvider: params.tokenProvider,
+    scope: { kind: "onedrive" },
+    fetchFn: params.fetchFn,
   });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("OneDrive upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
 }
 
 export interface OneDriveSharingLink {
@@ -175,44 +439,14 @@ export async function uploadToSharePoint(params: {
   siteId: string;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
-  // Use "OpenClawShared" folder to organize bot-uploaded files
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": params.contentType ?? "application/octet-stream",
-      },
-      body: new Uint8Array(params.buffer),
-    },
-  );
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("SharePoint upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+  return await uploadToDrive({
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
+    tokenProvider: params.tokenProvider,
+    scope: { kind: "sharepoint", siteId: params.siteId },
+    fetchFn: params.fetchFn,
+  });
 }
 
 export interface ChatMember {
