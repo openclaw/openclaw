@@ -193,7 +193,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a higher initial debounce threshold in block stream mode", async () => {
+  it("uses immediate preview updates for legacy block stream mode", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -209,7 +209,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(createTelegramDraftStream).toHaveBeenCalledWith(
       expect.objectContaining({
-        minInitialChars: 30,
+        minInitialChars: 1,
       }),
     );
   });
@@ -445,7 +445,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("forces new message when new assistant message starts after previous output", async () => {
+  it("does not force new message for legacy block stream mode", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -464,8 +464,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
-    // Should force new message when assistant message starts after previous output
-    expect(draftStream.forceNewMessage).toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
   it("does not force new message in partial mode when assistant message restarts", async () => {

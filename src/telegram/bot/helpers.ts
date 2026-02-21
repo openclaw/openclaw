@@ -154,11 +154,18 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
+  streaming?: boolean;
   streamMode?: TelegramStreamMode;
 }): TelegramStreamMode {
+  if (typeof telegramCfg?.streaming === "boolean") {
+    return telegramCfg.streaming ? "partial" : "off";
+  }
   const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") {
-    return raw;
+  if (raw === "off") {
+    return "off";
+  }
+  if (raw === "partial" || raw === "block") {
+    return "partial";
   }
   return "partial";
 }
