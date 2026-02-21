@@ -1,8 +1,8 @@
+import { Type } from "@sinclair/typebox";
+import Ajv from "ajv";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
-import Ajv from "ajv";
 // NOTE: This extension is intended to be bundled with OpenClaw.
 // When running from source (tests/dev), OpenClaw internals live under src/.
 // When running from a built install, internals live under dist/ (no src/ tree).
@@ -24,12 +24,23 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
     // ignore
   }
 
-  // Bundled install (built)
-  const mod = await import("../../../src/agents/pi-embedded-runner.js");
-  if (typeof mod.runEmbeddedPiAgent !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
+  // Bundled install (built) — src/ tree doesn't exist, try dist/.
+  let distError: unknown;
+  try {
+    // @ts-expect-error — dist/ path only exists at runtime in packaged installs
+    const mod = await import("../../../dist/agents/pi-embedded-runner.js");
+    // oxlint-disable-next-line typescript/no-explicit-any
+    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      return (mod as any).runEmbeddedPiAgent;
+    }
+  } catch (err) {
+    distError = err;
   }
-  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
+
+  throw new Error("Internal error: runEmbeddedPiAgent not available (tried src/ and dist/)", {
+    cause: distError,
+  });
 }
 
 function stripCodeFences(s: string): string {
