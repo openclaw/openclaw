@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
@@ -102,19 +103,9 @@ describe("security audit", () => {
   };
 
   const withStateDir = async (label: string, fn: (tmp: string) => Promise<void>) => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
     const tmp = await makeTmpDir(label);
-    process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      await fn(tmp);
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => await fn(tmp));
   };
 
   beforeAll(async () => {
@@ -1166,6 +1157,99 @@ describe("security audit", () => {
     });
   });
 
+  it("warns when Discord allowlists contain name-based entries", async () => {
+    await withStateDir("discord-name-based-allowlist", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "credentials", "discord-allowFrom.json"),
+        JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
+      );
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: ["Alice#1234", "<@123456789012345678>"],
+            guilds: {
+              "123": {
+                users: ["trusted.operator"],
+                channels: {
+                  general: {
+                    users: ["987654321098765432", "security-team"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
+      expect(finding?.detail).toContain("channels.discord.guilds.123.users:trusted.operator");
+      expect(finding?.detail).toContain(
+        "channels.discord.guilds.123.channels.general.users:security-team",
+      );
+      expect(finding?.detail).toContain(
+        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+      );
+      expect(finding?.detail).not.toContain("<@123456789012345678>");
+    });
+  });
+
+  it("does not warn when Discord allowlists use ID-style entries only", async () => {
+    await withStateDir("discord-id-only-allowlist", async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: [
+              "123456789012345678",
+              "<@223456789012345678>",
+              "user:323456789012345678",
+              "discord:423456789012345678",
+              "pk:member-123",
+            ],
+            guilds: {
+              "123": {
+                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+                channels: {
+                  general: {
+                    users: ["723456789012345678", "user:823456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "channels.discord.allowFrom.name_based_entries" }),
+        ]),
+      );
+    });
+  });
+
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
     await withStateDir("discord-open", async () => {
       const cfg: OpenClawConfig = {
@@ -2156,25 +2240,16 @@ description: test skill
   });
 
   describe("maybeProbeGateway auth selection", () => {
-    const originalEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const originalEnvPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    let envSnapshot: ReturnType<typeof captureEnv>;
 
     beforeEach(() => {
+      envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     });
 
     afterEach(() => {
-      if (originalEnvToken == null) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = originalEnvToken;
-      }
-      if (originalEnvPassword == null) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = originalEnvPassword;
-      }
+      envSnapshot.restore();
     });
 
     const makeProbeCapture = () => {

@@ -85,6 +85,13 @@ const CONTROL_UI_CLIENT = {
   mode: GATEWAY_CLIENT_MODES.WEBCHAT,
 };
 
+const NODE_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+  version: "1.0.0",
+  platform: "test",
+  mode: GATEWAY_CLIENT_MODES.NODE,
+};
+
 async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
   const ws = await openWs(port);
   try {
@@ -359,8 +366,57 @@ describe("gateway server auth/connect", () => {
       await expectMissingScopeAfterConnect(port, { scopes: [] });
     });
 
-    test("ignores requested scopes when device identity is omitted", async () => {
-      await expectMissingScopeAfterConnect(port, { device: null });
+    test("device-less auth matrix", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const matrix: Array<{
+        name: string;
+        opts: Parameters<typeof connectReq>[1];
+        expectConnectOk: boolean;
+        expectConnectError?: string;
+        expectStatusError?: string;
+      }> = [
+        {
+          name: "operator + valid shared token => connected with zero scopes",
+          opts: { role: "operator", token, device: null },
+          expectConnectOk: true,
+          expectStatusError: "missing scope",
+        },
+        {
+          name: "node + valid shared token => rejected without device",
+          opts: { role: "node", token, device: null, client: NODE_CLIENT },
+          expectConnectOk: false,
+          expectConnectError: "device identity required",
+        },
+        {
+          name: "operator + invalid shared token => unauthorized",
+          opts: { role: "operator", token: "wrong", device: null },
+          expectConnectOk: false,
+          expectConnectError: "unauthorized",
+        },
+      ];
+
+      for (const scenario of matrix) {
+        const ws = await openWs(port);
+        try {
+          const res = await connectReq(ws, scenario.opts);
+          expect(res.ok, scenario.name).toBe(scenario.expectConnectOk);
+          if (!scenario.expectConnectOk) {
+            expect(res.error?.message ?? "", scenario.name).toContain(
+              String(scenario.expectConnectError ?? ""),
+            );
+            continue;
+          }
+          if (scenario.expectStatusError) {
+            const status = await rpcReq(ws, "status");
+            expect(status.ok, scenario.name).toBe(false);
+            expect(status.error?.message ?? "", scenario.name).toContain(
+              scenario.expectStatusError,
+            );
+          }
+        } finally {
+          ws.close();
+        }
+      }
     });
 
     test("allows health when scopes are empty", async () => {

@@ -379,8 +379,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
+  "channels.slack.streaming":
+    'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.slack.nativeStreaming":
+    "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
   "channels.slack.streamMode":
-    "Live stream preview mode for Slack replies (replace | status_final | append).",
+    "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
@@ -403,13 +407,15 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    "Enable Telegram live stream preview via message edits (default: false; legacy streamMode auto-maps here).",
+    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.discord.streaming":
+    'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
-    "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
+    "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
   "channels.discord.draftChunk.minChars":
-    'Minimum chars before emitting a Discord stream preview update when channels.discord.streamMode="block" (default: 200).',
+    'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
   "channels.discord.draftChunk.maxChars":
-    'Target max size for a Discord stream preview chunk when channels.discord.streamMode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+    'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
   "channels.discord.draftChunk.breakPreference":
     "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":

@@ -1,5 +1,6 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import {
@@ -154,20 +155,10 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
-  streaming?: boolean;
-  streamMode?: TelegramStreamMode;
+  streaming?: unknown;
+  streamMode?: unknown;
 }): TelegramStreamMode {
-  if (typeof telegramCfg?.streaming === "boolean") {
-    return telegramCfg.streaming ? "partial" : "off";
-  }
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off") {
-    return "off";
-  }
-  if (raw === "partial" || raw === "block") {
-    return "partial";
-  }
-  return "off";
+  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {

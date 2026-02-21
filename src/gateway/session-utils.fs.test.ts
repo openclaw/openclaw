@@ -375,6 +375,23 @@ describe("readLastMessagePreviewFromTranscript", () => {
     const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
     expect(result).toBe("Valid UTF-8: 你好世界 🌍");
   });
+
+  test("strips inline directives from last preview text", () => {
+    const sessionId = "test-last-strip-inline-directives";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "Hello [[reply_to_current]] world [[audio_as_voice]]",
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+    expect(result).toBe("Hello  world");
+  });
 });
 
 describe("readSessionTitleFieldsFromTranscript cache", () => {
@@ -605,6 +622,23 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.text.length).toBe(24);
     expect(result[0]?.text.endsWith("...")).toBe(true);
+  });
+
+  test("strips inline directives from preview items", () => {
+    const sessionId = "preview-strip-inline-directives";
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "A [[reply_to:abc-123]] B [[audio_as_voice]]",
+        },
+      }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId, 1, 120);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("A  B");
   });
 });
 
