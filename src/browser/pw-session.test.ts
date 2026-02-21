@@ -1,6 +1,7 @@
 import type { Page } from "playwright-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  clearRoleRefsCache,
   ensurePageState,
   refLocator,
   rememberRoleRefsForTarget,
@@ -74,6 +75,27 @@ describe("pw-session refLocator", () => {
 });
 
 describe("pw-session role refs cache", () => {
+  it("clearRoleRefsCache prevents stale refs from being restored after failover", () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = "t1";
+
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e144: { role: "button", name: "Submit" } },
+    });
+
+    // Simulate failover: connection torn down, cache cleared
+    clearRoleRefsCache();
+
+    const { page } = fakePage();
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    // Refs should NOT be restored — the new model must take a fresh snapshot
+    const state = ensurePageState(page);
+    expect(state.roleRefs).toBeUndefined();
+  });
+
   it("restores refs for a different Page instance (same CDP targetId)", () => {
     const cdpUrl = "http://127.0.0.1:9222";
     const targetId = "t1";

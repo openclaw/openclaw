@@ -123,6 +123,15 @@ function roleRefsKey(cdpUrl: string, targetId: string) {
   return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
 }
 
+/**
+ * Clear the role-refs-by-target cache.  Called when the Playwright connection
+ * is force-disconnected (e.g. after a timeout) so that a subsequent model run
+ * does not inherit stale element refs from the previous run.
+ */
+export function clearRoleRefsCache(): void {
+  roleRefsByTarget.clear();
+}
+
 export function rememberRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId: string;
@@ -517,6 +526,7 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
   const cur = cached;
   cached = null;
   connecting = null;
+  clearRoleRefsCache();
   if (!cur) {
     return;
   }
@@ -659,6 +669,11 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   // Also clear `connecting` so the next call does a fresh connectOverCDP
   // rather than awaiting a stale promise.
   connecting = null;
+  // Invalidate cached element refs — the old Page objects are about to be
+  // destroyed, so any refs (e.g. "e144") from a previous snapshot are stale.
+  // Without this, a fallback model may inherit refs from the timed-out run
+  // via restoreRoleRefsForTarget() and hit "Unknown ref" errors.
+  clearRoleRefsCache();
   if (cur) {
     // Remove the "disconnected" listener to prevent the old browser's teardown
     // from racing with a fresh connection and nulling the new `cached`.
