@@ -139,6 +139,17 @@ async function runMainAgent(message: string, idempotencyKey: string) {
   return respond;
 }
 
+function readLastAgentCommandCall():
+  | {
+      message?: string;
+      sessionId?: string;
+    }
+  | undefined {
+  return mocks.agentCommand.mock.calls.at(-1)?.[0] as
+    | { message?: string; sessionId?: string }
+    | undefined;
+}
+
 async function invokeAgent(
   params: AgentParams,
   options?: {
@@ -338,9 +349,7 @@ describe("gateway agent handler", () => {
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
-    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
-      | { message?: string; sessionId?: string }
-      | undefined;
+    const call = readLastAgentCommandCall();
     expect(call?.message).toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.message).toContain("Execute your Session Startup sequence now");
     expect(call?.sessionId).toBe("reset-session-id");
@@ -388,9 +397,7 @@ describe("gateway agent handler", () => {
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
-    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
-      | { message?: string; sessionId?: string }
-      | undefined;
+    const call = readLastAgentCommandCall();
     expect(call?.message).toBe("[Wed 2026-01-28 20:30 EST] check status");
     expect(call?.sessionId).toBe("reset-session-id");
 
