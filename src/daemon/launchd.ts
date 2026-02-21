@@ -348,9 +348,10 @@ function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: n
 }
 
 export async function startLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  const plistPath = resolveLaunchAgentPlistPath(env);
+  const label = resolveLaunchAgentLabel({ env: resolvedEnv });
+  const plistPath = resolveLaunchAgentPlistPath(resolvedEnv);
   try {
     await fs.access(plistPath);
   } catch {
