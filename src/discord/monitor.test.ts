@@ -424,45 +424,27 @@ describe("discord mention gating", () => {
     ).toBe(true);
   });
 
-  it("does not require mention inside autoThread threads", () => {
-    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
-    expect(
-      resolveDiscordShouldRequireMention({
-        isGuildMessage: true,
-        isThread: true,
-        botId: "bot123",
-        threadOwnerId: "bot123",
-        channelConfig,
-        guildInfo,
-      }),
-    ).toBe(false);
-  });
+  it("applies autoThread mention rules based on thread ownership", () => {
+    const cases = [
+      { name: "bot-owned thread", threadOwnerId: "bot123", expected: false },
+      { name: "user-owned thread", threadOwnerId: "user456", expected: true },
+      { name: "unknown thread owner", threadOwnerId: undefined, expected: true },
+    ] as const;
 
-  it("requires mention inside user-created threads with autoThread enabled", () => {
-    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
-    expect(
-      resolveDiscordShouldRequireMention({
-        isGuildMessage: true,
-        isThread: true,
-        botId: "bot123",
-        threadOwnerId: "user456",
-        channelConfig,
-        guildInfo,
-      }),
-    ).toBe(true);
-  });
-
-  it("requires mention when thread owner is unknown", () => {
-    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
-    expect(
-      resolveDiscordShouldRequireMention({
-        isGuildMessage: true,
-        isThread: true,
-        botId: "bot123",
-        channelConfig,
-        guildInfo,
-      }),
-    ).toBe(true);
+    for (const testCase of cases) {
+      const { guildInfo, channelConfig } = createAutoThreadMentionContext();
+      expect(
+        resolveDiscordShouldRequireMention({
+          isGuildMessage: true,
+          isThread: true,
+          botId: "bot123",
+          threadOwnerId: testCase.threadOwnerId,
+          channelConfig,
+          guildInfo,
+        }),
+        testCase.name,
+      ).toBe(testCase.expected);
+    }
   });
 
   it("inherits parent channel mention rules for threads", () => {
@@ -496,70 +478,73 @@ describe("discord mention gating", () => {
 });
 
 describe("discord groupPolicy gating", () => {
-  it("allows when policy is open", () => {
-    expect(
-      isDiscordGroupAllowedByPolicy({
-        groupPolicy: "open",
-        guildAllowlisted: false,
-        channelAllowlistConfigured: false,
-        channelAllowed: false,
-      }),
-    ).toBe(true);
-  });
+  it("applies open/disabled/allowlist policy rules", () => {
+    const cases = [
+      {
+        name: "open policy always allows",
+        input: {
+          groupPolicy: "open" as const,
+          guildAllowlisted: false,
+          channelAllowlistConfigured: false,
+          channelAllowed: false,
+        },
+        expected: true,
+      },
+      {
+        name: "disabled policy always blocks",
+        input: {
+          groupPolicy: "disabled" as const,
+          guildAllowlisted: true,
+          channelAllowlistConfigured: true,
+          channelAllowed: true,
+        },
+        expected: false,
+      },
+      {
+        name: "allowlist blocks when guild not allowlisted",
+        input: {
+          groupPolicy: "allowlist" as const,
+          guildAllowlisted: false,
+          channelAllowlistConfigured: false,
+          channelAllowed: true,
+        },
+        expected: false,
+      },
+      {
+        name: "allowlist allows when guild allowlisted and no channel allowlist",
+        input: {
+          groupPolicy: "allowlist" as const,
+          guildAllowlisted: true,
+          channelAllowlistConfigured: false,
+          channelAllowed: true,
+        },
+        expected: true,
+      },
+      {
+        name: "allowlist allows when channel is allowed",
+        input: {
+          groupPolicy: "allowlist" as const,
+          guildAllowlisted: true,
+          channelAllowlistConfigured: true,
+          channelAllowed: true,
+        },
+        expected: true,
+      },
+      {
+        name: "allowlist blocks when channel is not allowed",
+        input: {
+          groupPolicy: "allowlist" as const,
+          guildAllowlisted: true,
+          channelAllowlistConfigured: true,
+          channelAllowed: false,
+        },
+        expected: false,
+      },
+    ] as const;
 
-  it("blocks when policy is disabled", () => {
-    expect(
-      isDiscordGroupAllowedByPolicy({
-        groupPolicy: "disabled",
-        guildAllowlisted: true,
-        channelAllowlistConfigured: true,
-        channelAllowed: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("blocks allowlist when guild is not allowlisted", () => {
-    expect(
-      isDiscordGroupAllowedByPolicy({
-        groupPolicy: "allowlist",
-        guildAllowlisted: false,
-        channelAllowlistConfigured: false,
-        channelAllowed: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("allows allowlist when guild allowlisted but no channel allowlist", () => {
-    expect(
-      isDiscordGroupAllowedByPolicy({
-        groupPolicy: "allowlist",
-        guildAllowlisted: true,
-        channelAllowlistConfigured: false,
-        channelAllowed: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("allows allowlist when channel is allowed", () => {
-    expect(
-      isDiscordGroupAllowedByPolicy({
-        groupPolicy: "allowlist",
-        guildAllowlisted: true,
-        channelAllowlistConfigured: true,
-        channelAllowed: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks allowlist when channel is not allowed", () => {
-    expect(
-      isDiscordGroupAllowedByPolicy({
-        groupPolicy: "allowlist",
-        guildAllowlisted: true,
-        channelAllowlistConfigured: true,
-        channelAllowed: false,
-      }),
-    ).toBe(false);
+    for (const testCase of cases) {
+      expect(isDiscordGroupAllowedByPolicy(testCase.input), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -596,48 +581,45 @@ describe("discord group DM gating", () => {
 });
 
 describe("discord reply target selection", () => {
-  it("skips replies when mode is off", () => {
-    expect(
-      resolveDiscordReplyTarget({
-        replyToMode: "off",
-        replyToId: "123",
+  it("handles off/first/all reply modes", () => {
+    const cases = [
+      { name: "off mode", replyToMode: "off" as const, hasReplied: false, expected: undefined },
+      {
+        name: "first mode before reply",
+        replyToMode: "first" as const,
         hasReplied: false,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("replies only once when mode is first", () => {
-    expect(
-      resolveDiscordReplyTarget({
-        replyToMode: "first",
-        replyToId: "123",
-        hasReplied: false,
-      }),
-    ).toBe("123");
-    expect(
-      resolveDiscordReplyTarget({
-        replyToMode: "first",
-        replyToId: "123",
+        expected: "123",
+      },
+      {
+        name: "first mode after reply",
+        replyToMode: "first" as const,
         hasReplied: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("replies on every message when mode is all", () => {
-    expect(
-      resolveDiscordReplyTarget({
-        replyToMode: "all",
-        replyToId: "123",
+        expected: undefined,
+      },
+      {
+        name: "all mode before reply",
+        replyToMode: "all" as const,
         hasReplied: false,
-      }),
-    ).toBe("123");
-    expect(
-      resolveDiscordReplyTarget({
-        replyToMode: "all",
-        replyToId: "123",
+        expected: "123",
+      },
+      {
+        name: "all mode after reply",
+        replyToMode: "all" as const,
         hasReplied: true,
-      }),
-    ).toBe("123");
+        expected: "123",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(
+        resolveDiscordReplyTarget({
+          replyToMode: testCase.replyToMode,
+          replyToId: "123",
+          hasReplied: testCase.hasReplied,
+        }),
+        testCase.name,
+      ).toBe(testCase.expected);
+    }
   });
 });
 
@@ -654,86 +636,98 @@ describe("discord autoThread name sanitization", () => {
 });
 
 describe("discord reaction notification gating", () => {
-  it("defaults to own when mode is unset", () => {
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: undefined,
-        botId: "bot-1",
-        messageAuthorId: "bot-1",
-        userId: "user-1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: undefined,
-        botId: "bot-1",
-        messageAuthorId: "user-1",
-        userId: "user-2",
-      }),
-    ).toBe(false);
-  });
+  it("applies mode-specific reaction notification rules", () => {
+    const cases = [
+      {
+        name: "unset defaults to own (author is bot)",
+        input: {
+          mode: undefined,
+          botId: "bot-1",
+          messageAuthorId: "bot-1",
+          userId: "user-1",
+        },
+        expected: true,
+      },
+      {
+        name: "unset defaults to own (author is not bot)",
+        input: {
+          mode: undefined,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "user-2",
+        },
+        expected: false,
+      },
+      {
+        name: "off mode",
+        input: {
+          mode: "off" as const,
+          botId: "bot-1",
+          messageAuthorId: "bot-1",
+          userId: "user-1",
+        },
+        expected: false,
+      },
+      {
+        name: "all mode",
+        input: {
+          mode: "all" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "user-2",
+        },
+        expected: true,
+      },
+      {
+        name: "own mode with bot-authored message",
+        input: {
+          mode: "own" as const,
+          botId: "bot-1",
+          messageAuthorId: "bot-1",
+          userId: "user-2",
+        },
+        expected: true,
+      },
+      {
+        name: "own mode with non-bot-authored message",
+        input: {
+          mode: "own" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-2",
+          userId: "user-3",
+        },
+        expected: false,
+      },
+      {
+        name: "allowlist mode without match",
+        input: {
+          mode: "allowlist" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "user-2",
+          allowlist: [],
+        },
+        expected: false,
+      },
+      {
+        name: "allowlist mode with id match",
+        input: {
+          mode: "allowlist" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "123",
+          userName: "steipete",
+          allowlist: ["123", "other"],
+        },
+        expected: true,
+      },
+    ] as const;
 
-  it("skips when mode is off", () => {
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: "off",
-        botId: "bot-1",
-        messageAuthorId: "bot-1",
-        userId: "user-1",
-      }),
-    ).toBe(false);
-  });
-
-  it("allows all reactions when mode is all", () => {
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: "all",
-        botId: "bot-1",
-        messageAuthorId: "user-1",
-        userId: "user-2",
-      }),
-    ).toBe(true);
-  });
-
-  it("requires bot ownership when mode is own", () => {
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: "own",
-        botId: "bot-1",
-        messageAuthorId: "bot-1",
-        userId: "user-2",
-      }),
-    ).toBe(true);
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: "own",
-        botId: "bot-1",
-        messageAuthorId: "user-2",
-        userId: "user-3",
-      }),
-    ).toBe(false);
-  });
-
-  it("requires allowlist matches when mode is allowlist", () => {
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: "allowlist",
-        botId: "bot-1",
-        messageAuthorId: "user-1",
-        userId: "user-2",
-        allowlist: [],
-      }),
-    ).toBe(false);
-    expect(
-      shouldEmitDiscordReactionNotification({
-        mode: "allowlist",
-        botId: "bot-1",
-        messageAuthorId: "user-1",
-        userId: "123",
-        userName: "steipete",
-        allowlist: ["123", "other"],
-      }),
-    ).toBe(true);
+    for (const testCase of cases) {
+      expect(shouldEmitDiscordReactionNotification(testCase.input), testCase.name).toBe(
+        testCase.expected,
+      );
+    }
   });
 });
 
@@ -858,37 +852,37 @@ function makeReactionListenerParams(overrides?: {
 }
 
 describe("discord DM reaction handling", () => {
-  it("processes DM reactions instead of dropping them", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
+  it("processes DM reactions with or without guild allowlists", async () => {
+    const cases = [
+      { name: "no guild allowlist", guildEntries: undefined },
+      {
+        name: "guild allowlist configured",
+        guildEntries: makeEntries({
+          "guild-123": { slug: "guild-123" },
+        }),
+      },
+    ] as const;
 
-    const data = makeReactionEvent({ botAsAuthor: true });
-    const client = makeReactionClient({ channelType: ChannelType.DM });
-    const listener = new DiscordReactionListener(makeReactionListenerParams());
+    for (const testCase of cases) {
+      enqueueSystemEventSpy.mockClear();
+      resolveAgentRouteMock.mockClear();
 
-    await listener.handle(data, client);
+      const data = makeReactionEvent({ botAsAuthor: true });
+      const client = makeReactionClient({ channelType: ChannelType.DM });
+      const listener = new DiscordReactionListener(
+        makeReactionListenerParams({ guildEntries: testCase.guildEntries }),
+      );
 
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-    const [text, opts] = enqueueSystemEventSpy.mock.calls[0];
-    expect(text).toContain("Discord reaction added");
-    expect(text).toContain("👍");
-    expect(opts.sessionKey).toBe("discord:acc-1:dm:user-1");
-  });
+      await listener.handle(data, client);
 
-  it("does not drop DM reactions when guild allowlist is configured", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
-
-    const data = makeReactionEvent({ botAsAuthor: true });
-    const client = makeReactionClient({ channelType: ChannelType.DM });
-    const guildEntries = makeEntries({
-      "guild-123": { slug: "guild-123" },
-    });
-    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
-
-    await listener.handle(data, client);
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+      expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledOnce();
+      const [text, opts] = enqueueSystemEventSpy.mock.calls[0];
+      expect(text, testCase.name).toContain("Discord reaction added");
+      expect(text, testCase.name).toContain("👍");
+      expect(text, testCase.name).toContain("dm");
+      expect(text, testCase.name).not.toContain("undefined");
+      expect(opts.sessionKey, testCase.name).toBe("discord:acc-1:dm:user-1");
+    }
   });
 
   it("still processes guild reactions (no regression)", async () => {
@@ -914,22 +908,6 @@ describe("discord DM reaction handling", () => {
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
     const [text] = enqueueSystemEventSpy.mock.calls[0];
     expect(text).toContain("Discord reaction added");
-  });
-
-  it("uses 'dm' in log text for DM reactions, not 'undefined'", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
-
-    const data = makeReactionEvent({ botAsAuthor: true });
-    const client = makeReactionClient({ channelType: ChannelType.DM });
-    const listener = new DiscordReactionListener(makeReactionListenerParams());
-
-    await listener.handle(data, client);
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-    const [text] = enqueueSystemEventSpy.mock.calls[0];
-    expect(text).toContain("dm");
-    expect(text).not.toContain("undefined");
   });
 
   it("routes DM reactions with peer kind 'direct' and user id", async () => {
@@ -977,111 +955,102 @@ describe("discord reaction notification modes", () => {
   const guildId = "guild-900";
   const guild = fakeGuild(guildId, "Mode Guild");
 
-  it("skips message fetch when mode is off", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
+  it("applies message-fetch behavior across notification modes and channel types", async () => {
+    const cases = [
+      {
+        name: "off mode",
+        reactionNotifications: "off" as const,
+        users: undefined,
+        userId: undefined,
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "other-user",
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 0,
+      },
+      {
+        name: "all mode",
+        reactionNotifications: "all" as const,
+        users: undefined,
+        userId: undefined,
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "other-user",
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 1,
+      },
+      {
+        name: "allowlist mode",
+        reactionNotifications: "allowlist" as const,
+        users: ["123"],
+        userId: "123",
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "other-user",
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 1,
+      },
+      {
+        name: "own mode",
+        reactionNotifications: "own" as const,
+        users: undefined,
+        userId: undefined,
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "bot-1",
+        expectedMessageFetchCalls: 1,
+        expectedEnqueueCalls: 1,
+      },
+      {
+        name: "all mode thread channel",
+        reactionNotifications: "all" as const,
+        users: undefined,
+        userId: undefined,
+        channelType: ChannelType.PublicThread,
+        channelId: "thread-1",
+        parentId: "parent-1",
+        messageAuthorId: "other-user",
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 1,
+      },
+    ] as const;
 
-    const messageFetch = vi.fn(async () => ({
-      author: { id: "bot-1", username: "bot", discriminator: "0" },
-    }));
-    const data = makeReactionEvent({ guildId, guild, messageFetch });
-    const client = makeReactionClient({ channelType: ChannelType.GuildText });
-    const guildEntries = makeEntries({
-      [guildId]: { reactionNotifications: "off" },
-    });
-    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
+    for (const testCase of cases) {
+      enqueueSystemEventSpy.mockClear();
+      resolveAgentRouteMock.mockClear();
 
-    await listener.handle(data, client);
+      const messageFetch = vi.fn(async () => ({
+        author: { id: testCase.messageAuthorId, username: "author", discriminator: "0" },
+      }));
+      const data = makeReactionEvent({
+        guildId,
+        guild,
+        userId: testCase.userId,
+        channelId: testCase.channelId,
+        messageFetch,
+      });
+      const client = makeReactionClient({
+        channelType: testCase.channelType,
+        parentId: testCase.parentId,
+      });
+      const guildEntries = makeEntries({
+        [guildId]: {
+          reactionNotifications: testCase.reactionNotifications,
+          users: testCase.users,
+        },
+      });
+      const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
 
-    expect(messageFetch).not.toHaveBeenCalled();
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-  });
+      await listener.handle(data, client);
 
-  it("skips message fetch when mode is all", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
-
-    const messageFetch = vi.fn(async () => ({
-      author: { id: "other-user", username: "other", discriminator: "0" },
-    }));
-    const data = makeReactionEvent({ guildId, guild, messageFetch });
-    const client = makeReactionClient({ channelType: ChannelType.GuildText });
-    const guildEntries = makeEntries({
-      [guildId]: { reactionNotifications: "all" },
-    });
-    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
-
-    await listener.handle(data, client);
-
-    expect(messageFetch).not.toHaveBeenCalled();
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-  });
-
-  it("skips message fetch when mode is allowlist", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
-
-    const messageFetch = vi.fn(async () => ({
-      author: { id: "other-user", username: "other", discriminator: "0" },
-    }));
-    const data = makeReactionEvent({ guildId, guild, userId: "123", messageFetch });
-    const client = makeReactionClient({ channelType: ChannelType.GuildText });
-    const guildEntries = makeEntries({
-      [guildId]: { reactionNotifications: "allowlist", users: ["123"] },
-    });
-    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
-
-    await listener.handle(data, client);
-
-    expect(messageFetch).not.toHaveBeenCalled();
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-  });
-
-  it("fetches message when mode is own", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
-
-    const messageFetch = vi.fn(async () => ({
-      author: { id: "bot-1", username: "bot", discriminator: "0" },
-    }));
-    const data = makeReactionEvent({ guildId, guild, messageFetch });
-    const client = makeReactionClient({ channelType: ChannelType.GuildText });
-    const guildEntries = makeEntries({
-      [guildId]: { reactionNotifications: "own" },
-    });
-    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
-
-    await listener.handle(data, client);
-
-    expect(messageFetch).toHaveBeenCalledOnce();
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-  });
-
-  it("skips message fetch for thread channels in all mode", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
-
-    const messageFetch = vi.fn(async () => ({
-      author: { id: "other-user", username: "other", discriminator: "0" },
-    }));
-    const data = makeReactionEvent({
-      guildId,
-      guild,
-      channelId: "thread-1",
-      messageFetch,
-    });
-    const client = makeReactionClient({
-      channelType: ChannelType.PublicThread,
-      parentId: "parent-1",
-    });
-    const guildEntries = makeEntries({
-      [guildId]: { reactionNotifications: "all" },
-    });
-    const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
-
-    await listener.handle(data, client);
-
-    expect(messageFetch).not.toHaveBeenCalled();
-    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+      expect(messageFetch, testCase.name).toHaveBeenCalledTimes(testCase.expectedMessageFetchCalls);
+      expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedEnqueueCalls,
+      );
+    }
   });
 });
