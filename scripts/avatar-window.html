@@ -1,241 +1,679 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hakua Avatar</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: transparent;
-      overflow: hidden;
-      width: 100vw;
-      height: 100vh;
-    }
-    #canvas-container {
-      width: 100%;
-      height: 100%;
-      position: relative;
-    }
-    canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-    #status {
-      position: absolute;
-      bottom: 8px;
-      left: 8px;
-      color: rgba(255,255,255,0.7);
-      font-family: monospace;
-      font-size: 11px;
-      pointer-events: none;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.8);
-    }
-    #sbv2-status {
-      position: absolute;
-      top: 8px;
-      right: 8px;
-      color: rgba(100,255,150,0.9);
-      font-family: monospace;
-      font-size: 10px;
-      pointer-events: none;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.8);
-    }
-  </style>
-</head>
-<body>
-  <div id="canvas-container">
-    <canvas id="avatar-canvas"></canvas>
-    <div id="status">Loading Hakua.fbx...</div>
-    <div id="sbv2-status">SBV2: checking...</div>
-  </div>
-
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hakua Avatar</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
       }
-    }
-  </script>
+      body {
+        background: transparent;
+        overflow: hidden;
+        width: 100vw;
+        height: 100vh;
+      }
+      #canvas-container {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #status {
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        color: rgba(255, 255, 255, 0.7);
+        font-family: monospace;
+        font-size: 11px;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      }
+      #sbv2-status {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        color: rgba(100, 255, 150, 0.9);
+        font-family: monospace;
+        font-size: 10px;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      }
+      #gw-status {
+        position: absolute;
+        top: 24px;
+        right: 8px;
+        color: rgba(100, 200, 255, 0.9);
+        font-family: monospace;
+        font-size: 10px;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      }
+      #ui-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 16px;
+      }
+      #camera-pip {
+        align-self: flex-start;
+        width: 160px;
+        height: 120px;
+        background: rgba(0,0,0,0.5);
+        border-radius: 8px;
+        overflow: hidden;
+        border: 2px solid rgba(255,255,255,0.2);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        position: relative;
+      }
+      #user-video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1); /* mirror */
+      }
+      .recording-badge {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        background: rgba(255, 0, 0, 0.8);
+        color: white;
+        font-size: 10px;
+        font-weight: bold;
+        padding: 4px 6px;
+        border-radius: 4px;
+        animation: pulse 1s infinite alternate;
+      }
+      @keyframes pulse {
+        from { opacity: 1; }
+        to { opacity: 0.5; }
+      }
+      .hidden { display: none !important; }
 
-  <script type="module">
-    import * as THREE from 'three';
-    import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      #chat-bubble {
+        align-self: center;
+        background: rgba(20, 20, 25, 0.85);
+        color: #fff;
+        padding: 12px 16px;
+        border-radius: 12px;
+        max-width: 80%;
+        font-family: sans-serif;
+        font-size: 16px;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.1);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+        backdrop-filter: blur(4px);
+        transition: opacity 0.3s;
+        margin-bottom: 20px;
+      }
 
-    const canvas = document.getElementById('avatar-canvas');
-    const statusEl = document.getElementById('status');
-    const sbv2El = document.getElementById('sbv2-status');
+      #controls {
+        align-self: center;
+        pointer-events: auto;
+        display: flex;
+        gap: 12px;
+        margin-bottom: 30px;
+      }
+      button {
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.3);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 20px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: all 0.2s;
+        backdrop-filter: blur(4px);
+      }
+      button:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      button.active {
+        background: rgba(100, 200, 255, 0.4);
+        border-color: rgba(100, 200, 255, 0.8);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="canvas-container">
+      <canvas id="avatar-canvas"></canvas>
 
-    // --- Renderer ---
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      alpha: true,
-    });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
+      <!-- UI Overlay for Conversation & Camera -->
+      <div id="ui-overlay">
+        <div id="camera-pip">
+          <video id="user-video" autoplay playsinline muted></video>
+          <div id="mic-status" class="recording-badge hidden">🔴 MIC ON</div>
+        </div>
 
-    // --- Scene ---
-    const scene = new THREE.Scene();
+        <div id="chat-bubble" class="hidden">
+          <div id="chat-text">...</div>
+        </div>
 
-    // --- Camera ---
-    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 1.5, 3.0);
-    camera.lookAt(0, 1.0, 0);
+        <div id="controls">
+          <button id="toggle-mic-btn">Start Mic</button>
+          <button id="toggle-cam-btn">Start Cam</button>
+        </div>
+      </div>
 
-    // --- Lights ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-    scene.add(ambientLight);
+      <div id="status">Loading Hakua.fbx...</div>
+      <div id="sbv2-status">SBV2: checking...</div>
+      <div id="gw-status">Gateway: disconnected</div>
+    </div>
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(2, 5, 3);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
-    scene.add(dirLight);
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+        }
+      }
+    </script>
 
-    const fillLight = new THREE.DirectionalLight(0x88ccff, 0.4);
-    fillLight.position.set(-2, 2, -1);
-    scene.add(fillLight);
+    <script type="module">
+      import * as THREE from "three";
+      import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-    // --- Controls ---
-    const controls = new OrbitControls(camera, canvas);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.target.set(0, 1.0, 0);
-    controls.minDistance = 1.0;
-    controls.maxDistance = 8.0;
-    controls.maxPolarAngle = Math.PI / 1.5;
+      const canvas = document.getElementById("avatar-canvas");
+      const statusEl = document.getElementById("status");
+      const sbv2El = document.getElementById("sbv2-status");
 
-    // --- FBX Loader ---
-    const loader = new FBXLoader();
-    let mixer = null;
-    let model = null;
-    let idleAction = null;
+      // --- Renderer ---
+      const renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: true,
+      });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    // FBX path - relative to this HTML file location
-    const fbxPath = '../assets/NFD/Hakua/FBX/Hakua.fbx';
+      // --- Scene ---
+      const scene = new THREE.Scene();
 
-    loader.load(
-      fbxPath,
-      (fbx) => {
-        model = fbx;
+      // --- Camera ---
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000,
+      );
+      camera.position.set(0, 1.5, 3.0);
+      camera.lookAt(0, 1.0, 0);
 
-        // Auto-scale: normalize to ~1.7m height
-        const box = new THREE.Box3().setFromObject(fbx);
-        const size = box.getSize(new THREE.Vector3());
-        const targetHeight = 1.7;
-        const scale = targetHeight / size.y;
-        fbx.scale.setScalar(scale);
+      // --- Lights ---
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+      scene.add(ambientLight);
 
-        // Center on ground
-        const center = box.getCenter(new THREE.Vector3());
-        fbx.position.x = -center.x * scale;
-        fbx.position.y = -box.min.y * scale;
-        fbx.position.z = -center.z * scale;
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      dirLight.position.set(2, 5, 3);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      scene.add(dirLight);
 
-        fbx.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
+      const fillLight = new THREE.DirectionalLight(0x88ccff, 0.4);
+      fillLight.position.set(-2, 2, -1);
+      scene.add(fillLight);
+
+      // --- Controls ---
+      const controls = new OrbitControls(camera, canvas);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.target.set(0, 1.0, 0);
+      controls.minDistance = 1.0;
+      controls.maxDistance = 8.0;
+      controls.maxPolarAngle = Math.PI / 1.5;
+
+      // --- FBX Loader ---
+      const loader = new FBXLoader();
+      let mixer = null;
+      let model = null;
+      let idleAction = null;
+
+      // FBX path - relative to this HTML file location
+      const fbxPath = "../assets/NFD/Hakua/FBX/Hakua.fbx";
+
+      loader.load(
+        fbxPath,
+        (fbx) => {
+          model = fbx;
+
+          // Auto-scale: normalize to ~1.7m height
+          const box = new THREE.Box3().setFromObject(fbx);
+          const size = box.getSize(new THREE.Vector3());
+          const targetHeight = 1.7;
+          const scale = targetHeight / size.y;
+          fbx.scale.setScalar(scale);
+
+          // Center on ground
+          const center = box.getCenter(new THREE.Vector3());
+          fbx.position.x = -center.x * scale;
+          fbx.position.y = -box.min.y * scale;
+          fbx.position.z = -center.z * scale;
+
+          fbx.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+
+          scene.add(fbx);
+
+          // Animation mixer
+          if (fbx.animations && fbx.animations.length > 0) {
+            mixer = new THREE.AnimationMixer(fbx);
+            idleAction = mixer.clipAction(fbx.animations[0]);
+            idleAction.play();
+            statusEl.textContent = `Hakua loaded (${fbx.animations.length} animations)`;
+          } else {
+            statusEl.textContent = "Hakua loaded (no animations)";
+          }
+        },
+        (progress) => {
+          if (progress.total > 0) {
+            const pct = Math.round((progress.loaded / progress.total) * 100);
+            statusEl.textContent = `Loading Hakua.fbx... ${pct}%`;
+          }
+        },
+        (err) => {
+          console.error("FBX load error:", err);
+          statusEl.textContent = `FBX error: ${err.message}`;
+          // Show fallback placeholder cube
+          const geo = new THREE.BoxGeometry(0.5, 1.7, 0.3);
+          const mat = new THREE.MeshLambertMaterial({ color: 0xccaaff });
+          const placeholder = new THREE.Mesh(geo, mat);
+          placeholder.position.y = 0.85;
+          scene.add(placeholder);
+          statusEl.textContent = "Placeholder avatar (FBX not found)";
+        },
+      );
+
+      // --- SBV2 status check ---
+      async function checkSbv2() {
+        try {
+          const res = await fetch("http://localhost:5000/status", {
+            signal: AbortSignal.timeout(2000),
+          });
+          if (res.ok) {
+            sbv2El.textContent = "SBV2: ✓ online";
+            sbv2El.style.color = "rgba(100,255,150,0.9)";
+          } else {
+            sbv2El.textContent = `SBV2: ${res.status}`;
+            sbv2El.style.color = "rgba(255,200,100,0.9)";
+          }
+        } catch {
+          sbv2El.textContent = "SBV2: offline";
+          sbv2El.style.color = "rgba(255,120,120,0.9)";
+        }
+      }
+      checkSbv2();
+      setInterval(checkSbv2, 10000);
+
+      // --- Breathing idle animation (when no FBX animation) ---
+      let t = 0;
+
+      // --- Render loop ---
+      const clock = new THREE.Clock();
+      function animate() {
+        requestAnimationFrame(animate);
+        const delta = clock.getDelta();
+        t += delta;
+
+        controls.update();
+
+        if (mixer) {
+          mixer.update(delta);
+        } else if (model) {
+          // Gentle breathing bob
+          model.position.y += Math.sin(t * 1.5) * 0.0002;
+        }
+
+        // Lip Sync Logic
+        if (isSpeaking && analyser && dataArray && jawBone) {
+          analyser.getByteFrequencyData(dataArray);
+          // Calculate average volume from the frequency data
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / dataArray.length;
+          
+          // Map volume (0-255) to jaw rotation angle (0 to 0.4 rad)
+          // Thresholding it a bit to avoid jitter on background noise
+          const targetRotation = avg > 10 ? (avg / 255) * 0.4 : 0;
+          
+          // Smoothly interpolate the jaw rotation for natural movement
+          jawBone.rotation.x += (targetRotation - jawBone.rotation.x) * 0.2;
+        }
+
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      // --- Resize handler ---
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // --- Keyboard shortcuts ---
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "r" || e.key === "R") {
+          // Reset camera
+          camera.position.set(0, 1.5, 3.0);
+          controls.target.set(0, 1.0, 0);
+          controls.update();
+        }
+      });
+
+      // --- UI & Interaction Logic ---
+      const toggleMicBtn = document.getElementById("toggle-mic-btn");
+      const toggleCamBtn = document.getElementById("toggle-cam-btn");
+      const userVideo = document.getElementById("user-video");
+      const micStatus = document.getElementById("mic-status");
+      const chatBubble = document.getElementById("chat-bubble");
+      const chatText = document.getElementById("chat-text");
+
+      let audioStream = null;
+      let videoStream = null;
+      let micActive = false;
+      let camActive = false;
+
+      // Toggle Camera
+      toggleCamBtn.addEventListener("click", async () => {
+        if (!camActive) {
+          try {
+            videoStream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+            userVideo.srcObject = videoStream;
+            camActive = true;
+            toggleCamBtn.textContent = "Stop Cam";
+            toggleCamBtn.classList.add("active");
+          } catch (err) {
+            console.error("Camera access denied or error:", err);
+            alert("Warning: Could not access the camera. Check your permissions.");
+          }
+        } else {
+          if (videoStream) {
+            videoStream.getTracks().forEach((track) => track.stop());
+            userVideo.srcObject = null;
+          }
+          camActive = false;
+          toggleCamBtn.textContent = "Start Cam";
+          toggleCamBtn.classList.remove("active");
+        }
+      });
+
+      // Toggle Microphone (Placeholder, full STT logic to follow)
+      toggleMicBtn.addEventListener("click", async () => {
+        if (!micActive) {
+          try {
+            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micActive = true;
+            toggleMicBtn.textContent = "Stop Mic";
+            toggleMicBtn.classList.add("active");
+            micStatus.classList.remove("hidden");
+            // NOTE: SpeechRecognition init will go here
+          } catch (err) {
+            console.error("Mic access denied or error:", err);
+            alert("Warning: Could not access the microphone.");
+          }
+        } else {
+          if (audioStream) {
+            audioStream.getTracks().forEach((track) => track.stop());
+          }
+          micActive = false;
+          toggleMicBtn.textContent = "Start Mic";
+          toggleMicBtn.classList.remove("active");
+          micStatus.classList.add("hidden");
+        }
+      });
+
+      function showChat(text, duration = 5000) {
+        chatText.textContent = text;
+        chatBubble.classList.remove("hidden");
+        setTimeout(() => chatBubble.classList.add("hidden"), duration);
+      }
+
+      // --- OpenClaw WebSocket Client ---
+      let gwSocket = null;
+      const gwStatusEl = document.getElementById("gw-status");
+      // Use config.gateway.auth.token
+      const GW_TOKEN = "kUyymC6zOuDa41H0KEcVZILRScO2vJ7Z95cPBX2jF9GAy0BO7y08NKFEgFn22BZ";
+
+      function connectGateway() {
+        // Assume default port 3000
+        gwSocket = new WebSocket(`ws://127.0.0.1:3000/?token=${GW_TOKEN}`);
+        
+        gwSocket.onopen = () => {
+          gwStatusEl.textContent = "Gateway: ✓ connected";
+          gwStatusEl.style.color = "rgba(100,255,150,0.9)";
+          console.log("Connected to OpenClaw Gateway WebSocket.");
+        };
+        
+        gwSocket.onmessage = async (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "agent:message" && data.payload && data.payload.text) {
+              const text = data.payload.text;
+              showChat(`Hakua: ${text}`, 8000);
+              await playTTSAndAnimate(text);
+            }
+          } catch (e) {
+            console.error("WebSocket message parse error", e);
+          }
+        };
+
+        gwSocket.onclose = () => {
+          gwStatusEl.textContent = "Gateway: disconnected (reconnecting...)";
+          gwStatusEl.style.color = "rgba(255,200,100,0.9)";
+          setTimeout(connectGateway, 5000);
+        };
+        
+        gwSocket.onerror = (err) => {
+          console.error("Gateway WS Error", err);
+        };
+      }
+      
+      connectGateway();
+
+      // Send text to the gateway
+      function sendToGateway(text) {
+        if (gwSocket && gwSocket.readyState === WebSocket.OPEN) {
+          showChat(`You: ${text}`, 3000);
+          gwSocket.send(JSON.stringify({
+            type: "chat:post",
+            payload: { text, channel: "voice-call", user: "local-user" }
+          }));
+        } else {
+          console.warn("Cannot send message, WebSocket not open.");
+          showChat("Error: Not connected to Gateway", 2000);
+        }
+      }
+
+      // --- Speech Recognition ---
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let recognition = null;
+      
+      if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'ja-JP';
+
+        recognition.onresult = (event) => {
+          const transcript = event.results[event.results.length - 1][0].transcript.trim();
+          if (transcript) {
+            console.log("Speech recognized:", transcript);
+            sendToGateway(transcript);
+          }
+        };
+        
+        recognition.onerror = (event) => {
+          console.error("Speech recognition error", event.error);
+        };
+        
+        recognition.onend = () => {
+          // Restart if still active (continuous listening mode)
+          if (micActive) {
+            try { recognition.start(); } catch(e) { }
+          }
+        };
+      } else {
+        console.warn("Speech recognition not supported in this browser.");
+      }
+
+      // Update Mic Toggle to use Recognition
+      toggleMicBtn.addEventListener("click", async () => {
+        if (!micActive) {
+          try {
+            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micActive = true;
+            toggleMicBtn.textContent = "Stop Mic";
+            toggleMicBtn.classList.add("active");
+            micStatus.classList.remove("hidden");
+            
+            if (recognition) {
+              try { recognition.start(); } catch(e) { /* already started */ }
+            }
+          } catch (err) {
+            console.error("Mic access denied or error:", err);
+            alert("Warning: Could not access the microphone.");
+          }
+        } else {
+          if (audioStream) {
+            audioStream.getTracks().forEach((track) => track.stop());
+          }
+          if (recognition) {
+            recognition.stop();
+          }
+          micActive = false;
+          toggleMicBtn.textContent = "Start Mic";
+          toggleMicBtn.classList.remove("active");
+          micStatus.classList.add("hidden");
+        }
+      });
+
+      // --- TTS and Animation Logic ---
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      let analyser = null;
+      let dataArray = null;
+      let currentSource = null;
+      let jawBone = null;
+      let isSpeaking = false;
+
+      // Extract animation tags e.g "Hello *wave*" -> text: "Hello", anim: "wave"
+      function extractAnimationTags(text) {
+        let cleanText = text;
+        let animations = [];
+        const regex = /\*([a-zA-Z0-9_-]+)\*/g;
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+          animations.push(match[1].toLowerCase());
+          cleanText = cleanText.replace(match[0], "");
+        }
+        return { text: cleanText.trim(), animations };
+      }
+
+      // Find the jaw bone in the FBX model
+      function findJawBone() {
+        if (!model || jawBone) return;
+        model.traverse((child) => {
+          if (child.isBone && child.name.toLowerCase().includes("jaw")) {
+            jawBone = child;
+            console.log("Found Jaw bone:", jawBone.name);
           }
         });
+      }
 
-        scene.add(fbx);
-
-        // Animation mixer
-        if (fbx.animations && fbx.animations.length > 0) {
-          mixer = new THREE.AnimationMixer(fbx);
-          idleAction = mixer.clipAction(fbx.animations[0]);
-          idleAction.play();
-          statusEl.textContent = `Hakua loaded (${fbx.animations.length} animations)`;
-        } else {
-          statusEl.textContent = 'Hakua loaded (no animations)';
+      async function playTTSAndAnimate(rawText) {
+        if (currentSource) {
+          currentSource.stop();
         }
-      },
-      (progress) => {
-        if (progress.total > 0) {
-          const pct = Math.round(progress.loaded / progress.total * 100);
-          statusEl.textContent = `Loading Hakua.fbx... ${pct}%`;
+
+        const { text, animations } = extractAnimationTags(rawText);
+        console.log("TTS Text:", text, "Animations:", animations);
+
+        // Try to play corresponding FBX animation if requested
+        if (mixer && animations.length > 0) {
+          const animName = animations[0]; // Play the first one for now
+          const clip = model.animations.find(a => a.name.toLowerCase().includes(animName));
+          if (clip) {
+            console.log("Playing animation:", clip.name);
+            const action = mixer.clipAction(clip);
+            action.reset();
+            action.play();
+            // Simple crossfade
+            if (idleAction) {
+              idleAction.crossFadeTo(action, 0.5, false);
+              setTimeout(() => {
+                action.crossFadeTo(idleAction, 0.5, false);
+              }, clip.duration * 1000 - 500);
+            }
+          }
         }
-      },
-      (err) => {
-        console.error('FBX load error:', err);
-        statusEl.textContent = `FBX error: ${err.message}`;
-        // Show fallback placeholder cube
-        const geo = new THREE.BoxGeometry(0.5, 1.7, 0.3);
-        const mat = new THREE.MeshLambertMaterial({ color: 0xccaaff });
-        const placeholder = new THREE.Mesh(geo, mat);
-        placeholder.position.y = 0.85;
-        scene.add(placeholder);
-        statusEl.textContent = 'Placeholder avatar (FBX not found)';
-      }
-    );
 
-    // --- SBV2 status check ---
-    async function checkSbv2() {
-      try {
-        const res = await fetch('http://localhost:5000/status', { signal: AbortSignal.timeout(2000) });
-        if (res.ok) {
-          sbv2El.textContent = 'SBV2: ✓ online';
-          sbv2El.style.color = 'rgba(100,255,150,0.9)';
-        } else {
-          sbv2El.textContent = `SBV2: ${res.status}`;
-          sbv2El.style.color = 'rgba(255,200,100,0.9)';
+        if (!text) return; // Only animation tags were sent
+
+        try {
+          // Fetch from SBV2 directly (assuming port 5000 and default params)
+          // OpenClaw config uses modelId: "Hakua", speakerId: 0
+          const ttsUrl = `http://localhost:5000/voice?text=${encodeURIComponent(text)}&model_id=0&speaker_id=0&style_weight=1`;
+          
+          const response = await fetch(ttsUrl);
+          if (!response.ok) throw new Error("TTS fetch failed");
+          
+          const arrayBuffer = await response.arrayBuffer();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          
+          currentSource = audioCtx.createBufferSource();
+          currentSource.buffer = audioBuffer;
+          
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 256;
+          const bufferLength = analyser.frequencyBinCount;
+          dataArray = new Uint8Array(bufferLength);
+
+          currentSource.connect(analyser);
+          analyser.connect(audioCtx.destination);
+          
+          findJawBone();
+          
+          currentSource.onended = () => {
+            isSpeaking = false;
+            if (jawBone) {
+              jawBone.rotation.x = 0; // Reset jaw
+            }
+          };
+
+          isSpeaking = true;
+          currentSource.start(0);
+
+        } catch (err) {
+          console.error("TTS playback error:", err);
         }
-      } catch {
-        sbv2El.textContent = 'SBV2: offline';
-        sbv2El.style.color = 'rgba(255,120,120,0.9)';
-      }
-    }
-    checkSbv2();
-    setInterval(checkSbv2, 10000);
-
-    // --- Breathing idle animation (when no FBX animation) ---
-    let t = 0;
-
-    // --- Render loop ---
-    const clock = new THREE.Clock();
-    function animate() {
-      requestAnimationFrame(animate);
-      const delta = clock.getDelta();
-      t += delta;
-
-      controls.update();
-
-      if (mixer) {
-        mixer.update(delta);
-      } else if (model) {
-        // Gentle breathing bob
-        model.position.y += Math.sin(t * 1.5) * 0.0002;
       }
 
-      renderer.render(scene, camera);
-    }
-    animate();
-
-    // --- Resize handler ---
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // --- Keyboard shortcuts ---
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'r' || e.key === 'R') {
-        // Reset camera
-        camera.position.set(0, 1.5, 3.0);
-        controls.target.set(0, 1.0, 0);
-        controls.update();
-      }
-    });
-  </script>
-</body>
+      // Integrate Lip Sync into the render loop
+      const originalAnimate = animate; // We can't really redefine animate directly, so we inject logic inside the existing animate loop instead of wrapping it.
+      // Wait, let's just modify the animate function in the previous block.
+      // We will override animate by reassigning it, since it's a function declaration. Unsafe in some strict modes, but we can do it.
+      // Better approach: wrap the requestAnimationFrame call, but it's recursively calling animate.
+      // So let's override the `animate` reference.
+    </script>
+  </body>
 </html>
