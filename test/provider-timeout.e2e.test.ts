@@ -3,77 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { extractPayloadText } from "../src/gateway/test-helpers.agent-results.js";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
+import { buildOpenAIResponsesTextSse } from "../src/gateway/test-helpers.openai-mock.js";
 import { buildOpenAiResponsesProviderConfig } from "../src/gateway/test-openai-responses-model.js";
-
-type OpenAIResponseStreamEvent =
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
-  | {
-      type: "response.completed";
-      response: {
-        status: "completed";
-        usage: {
-          input_tokens: number;
-          output_tokens: number;
-          total_tokens: number;
-        };
-      };
-    };
-
-function buildOpenAIResponsesSse(text: string): Response {
-  const events: OpenAIResponseStreamEvent[] = [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: "msg_test_1",
-        role: "assistant",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: "msg_test_1",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        status: "completed",
-        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-      },
-    },
-  ];
-
-  const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(sse));
-      controller.close();
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-function extractPayloadText(result: unknown): string {
-  const record = result as Record<string, unknown>;
-  const payloads = Array.isArray(record.payloads) ? record.payloads : [];
-  const texts = payloads
-    .map((p) => (p && typeof p === "object" ? (p as Record<string, unknown>).text : undefined))
-    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
-  return texts.join("\n").trim();
-}
 
 describe("provider timeouts (e2e)", () => {
   it(
@@ -107,7 +40,7 @@ describe("provider timeouts (e2e)", () => {
 
         if (url.startsWith(`${fallbackBaseUrl}/responses`)) {
           counts.fallback += 1;
-          return buildOpenAIResponsesSse("fallback-ok");
+          return buildOpenAIResponsesTextSse("fallback-ok");
         }
 
         if (!originalFetch) {
