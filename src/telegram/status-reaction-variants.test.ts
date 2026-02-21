@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_EMOJIS } from "../channels/status-reactions.js";
 import {
   buildTelegramStatusReactionVariants,
+  extractTelegramAllowedEmojiReactions,
   isTelegramSupportedReactionEmoji,
+  resolveTelegramAllowedEmojiReactions,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
@@ -58,6 +60,45 @@ describe("isTelegramSupportedReactionEmoji", () => {
   });
 });
 
+describe("extractTelegramAllowedEmojiReactions", () => {
+  it("returns undefined when chat does not include available_reactions", () => {
+    const result = extractTelegramAllowedEmojiReactions({ id: 1 });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns null when available_reactions is omitted/null", () => {
+    const result = extractTelegramAllowedEmojiReactions({ available_reactions: null });
+    expect(result).toBeNull();
+  });
+
+  it("extracts emoji reactions only", () => {
+    const result = extractTelegramAllowedEmojiReactions({
+      available_reactions: [
+        { type: "emoji", emoji: "👍" },
+        { type: "custom_emoji", custom_emoji_id: "abc" },
+        { type: "emoji", emoji: "🔥" },
+      ],
+    });
+    expect(result ? Array.from(result).toSorted() : null).toEqual(["👍", "🔥"]);
+  });
+});
+
+describe("resolveTelegramAllowedEmojiReactions", () => {
+  it("uses getChat lookup when message chat does not include available_reactions", async () => {
+    const getChat = async () => ({
+      available_reactions: [{ type: "emoji", emoji: "👍" }],
+    });
+
+    const result = await resolveTelegramAllowedEmojiReactions({
+      chat: { id: 1 },
+      chatId: 1,
+      getChat,
+    });
+
+    expect(result ? Array.from(result) : null).toEqual(["👍"]);
+  });
+});
+
 describe("resolveTelegramReactionVariant", () => {
   it("returns requested emoji when already Telegram-supported", () => {
     const variantsByEmoji = buildTelegramStatusReactionVariants({
@@ -94,6 +135,36 @@ describe("resolveTelegramReactionVariant", () => {
     });
 
     expect(result).toBe("👍");
+  });
+
+  it("respects chat allowed reactions", () => {
+    const variantsByEmoji = buildTelegramStatusReactionVariants({
+      ...DEFAULT_EMOJIS,
+      coding: "👨‍💻",
+    });
+
+    const result = resolveTelegramReactionVariant({
+      requestedEmoji: "👨‍💻",
+      variantsByRequestedEmoji: variantsByEmoji,
+      allowedEmojiReactions: new Set(["👍"]),
+    });
+
+    expect(result).toBe("👍");
+  });
+
+  it("returns undefined when no candidate is chat-allowed", () => {
+    const variantsByEmoji = buildTelegramStatusReactionVariants({
+      ...DEFAULT_EMOJIS,
+      coding: "👨‍💻",
+    });
+
+    const result = resolveTelegramReactionVariant({
+      requestedEmoji: "👨‍💻",
+      variantsByRequestedEmoji: variantsByEmoji,
+      allowedEmojiReactions: new Set(["🎉"]),
+    });
+
+    expect(result).toBeUndefined();
   });
 
   it("returns undefined for empty requested emoji", () => {
