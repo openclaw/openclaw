@@ -145,10 +145,19 @@ describe("resolveGatewayClientIp", () => {
   it("returns forwarded client IP when the remote is a trusted proxy", () => {
     const ip = resolveGatewayClientIp({
       remoteAddr: "127.0.0.1",
-      forwardedFor: "10.0.0.2, 127.0.0.1",
+      forwardedFor: "127.0.0.1, 10.0.0.2",
       trustedProxies: ["127.0.0.1"],
     });
     expect(ip).toBe("10.0.0.2");
+  });
+
+  it("does not trust the left-most X-Forwarded-For value when behind a trusted proxy", () => {
+    const ip = resolveGatewayClientIp({
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "198.51.100.99, 10.0.0.9, 127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+    });
+    expect(ip).toBe("10.0.0.9");
   });
 
   it("fails closed when trusted proxy headers are missing", () => {

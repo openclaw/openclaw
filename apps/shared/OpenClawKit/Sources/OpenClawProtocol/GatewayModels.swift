@@ -1226,6 +1226,8 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let key: String?
     public let startdate: String?
     public let enddate: String?
+    public let mode: AnyCodable?
+    public let utcoffset: String?
     public let limit: Int?
     public let includecontextweight: Bool?
 
@@ -1233,12 +1235,16 @@ public struct SessionsUsageParams: Codable, Sendable {
         key: String?,
         startdate: String?,
         enddate: String?,
+        mode: AnyCodable?,
+        utcoffset: String?,
         limit: Int?,
         includecontextweight: Bool?
     ) {
         self.key = key
         self.startdate = startdate
         self.enddate = enddate
+        self.mode = mode
+        self.utcoffset = utcoffset
         self.limit = limit
         self.includecontextweight = includecontextweight
     }
@@ -1246,6 +1252,8 @@ public struct SessionsUsageParams: Codable, Sendable {
         case key
         case startdate = "startDate"
         case enddate = "endDate"
+        case mode
+        case utcoffset = "utcOffset"
         case limit
         case includecontextweight = "includeContextWeight"
     }

@@ -647,6 +647,35 @@ extension TestChatTransportState {
         try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
     }
 
+    @Test func stripsInboundMetadataFromHistoryMessages() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": """
+Conversation info (untrusted metadata):
+```json
+{ \"sender\": \"openclaw-ios\" }
+```
+
+Hello?
+"""]],
+                    "timestamp": Date().timeIntervalSince1970 * 1000,
+                ]),
+            ],
+            thinkingLevel: "off")
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("history loaded") { await MainActor.run { !vm.messages.isEmpty } }
+
+        let sanitized = await MainActor.run { vm.messages.first?.content.first?.text }
+        #expect(sanitized == "Hello?")
+    }
+
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
         let sessionId = "sess-main"
         let history = OpenClawChatHistoryPayload(
