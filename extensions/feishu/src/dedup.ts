@@ -1,33 +1,44 @@
 // Prevent duplicate processing when WebSocket reconnects or Feishu redelivers messages.
-const DEDUP_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const DEDUP_MAX_SIZE = 1_000;
-const DEDUP_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // cleanup every 5 minutes
-const processedMessageIds = new Map<string, number>(); // messageId -> timestamp
-let lastCleanupTime = Date.now();
+import { tryRecordMessagePersistent } from "./dedup-store.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
-export function tryRecordMessage(messageId: string): boolean {
+const DEDUP_MAX_SIZE = 1_000;
+// Memory cache entry TTL so we re-check disk periodically and sense external writes (e.g. flush from elsewhere)
+const MEMORY_CACHE_ENTRY_TTL_MS = 30 * 1000; // 30 seconds
+// Namespace prefix: `${accountId}:${messageId}` to avoid cross-account collision when message_id overlaps
+const processedMessageIds = new Map<string, number>();
+
+/**
+ * Dedup check with persistent storage, per account.
+ * Survives OpenClaw restarts and handles WebSocket reconnects properly.
+ * Uses both memory cache (fast path) and disk storage (persistent).
+ */
+export async function tryRecordMessageAsync(
+  account: ResolvedFeishuAccount,
+  messageId: string,
+): Promise<boolean> {
+  const accountId = account.accountId ?? "default";
+  const cacheKey = `${accountId}:${messageId}`;
   const now = Date.now();
 
-  // Throttled cleanup: evict expired entries at most once per interval.
-  if (now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
-    for (const [id, ts] of processedMessageIds) {
-      if (now - ts > DEDUP_TTL_MS) {
-        processedMessageIds.delete(id);
-      }
+  // Fast path: memory cache (expire after TTL so we re-check disk and see external writes)
+  const cachedAt = processedMessageIds.get(cacheKey);
+  if (cachedAt !== undefined) {
+    if (now - cachedAt <= MEMORY_CACHE_ENTRY_TTL_MS) {
+      return false;
     }
-    lastCleanupTime = now;
+    processedMessageIds.delete(cacheKey);
   }
 
-  if (processedMessageIds.has(messageId)) {
-    return false;
-  }
+  // Then check persistent store for this account
+  const isNew = await tryRecordMessagePersistent(accountId, messageId);
 
-  // Evict oldest entries if cache is full.
+  // Update memory cache so next check for this message skips disk (whether new or already processed)
   if (processedMessageIds.size >= DEDUP_MAX_SIZE) {
     const first = processedMessageIds.keys().next().value!;
     processedMessageIds.delete(first);
   }
+  processedMessageIds.set(cacheKey, now);
 
-  processedMessageIds.set(messageId, now);
-  return true;
+  return isNew;
 }
