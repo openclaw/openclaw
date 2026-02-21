@@ -783,6 +783,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     isGuildMessage,
     channelConfig,
     threadChannel,
+    channelType: channelInfo?.type,
     baseText: baseText ?? "",
     combinedBody,
     replyToMode,
