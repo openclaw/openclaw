@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  readAllowFromStoreMock,
   sendMessageMock,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
@@ -22,6 +23,12 @@ async function checkUnauthorizedWorkDmSender() {
     sock: { sendMessage: sendMessageMock },
     remoteJid: "15550001111@s.whatsapp.net",
   });
+}
+
+function expectSilentlyBlocked(result: { allowed: boolean }) {
+  expect(result.allowed).toBe(false);
+  expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  expect(sendMessageMock).not.toHaveBeenCalled();
 }
 
 describe("checkInboundAccessControl pairing grace", () => {
@@ -80,10 +87,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
 
     const result = await checkUnauthorizedWorkDmSender();
-
-    expect(result.allowed).toBe(false);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).not.toHaveBeenCalled();
+    expectSilentlyBlocked(result);
   });
 
   it("inherits channel-level dmPolicy when account-level dmPolicy is unset", async () => {
@@ -103,9 +107,27 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
 
     const result = await checkUnauthorizedWorkDmSender();
+    expectSilentlyBlocked(result);
+  });
 
-    expect(result.allowed).toBe(false);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).not.toHaveBeenCalled();
+  it("does not merge persisted pairing approvals in allowlist mode", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          accounts: {
+            work: {
+              allowFrom: ["+15559999999"],
+            },
+          },
+        },
+      },
+    });
+    readAllowFromStoreMock.mockResolvedValue(["+15550001111"]);
+
+    const result = await checkUnauthorizedWorkDmSender();
+
+    expectSilentlyBlocked(result);
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });

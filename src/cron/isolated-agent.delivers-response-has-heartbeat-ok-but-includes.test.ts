@@ -1,8 +1,8 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CliDeps } from "../cli/deps.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
+import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -25,6 +25,7 @@ describe("runCronIsolatedAgentTurn", () => {
         lastTo: "123",
       });
       const deps: CliDeps = {
+        sendMessageSlack: vi.fn(),
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn().mockResolvedValue({
           messageId: "t1",

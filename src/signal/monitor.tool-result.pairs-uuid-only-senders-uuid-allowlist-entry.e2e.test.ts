@@ -15,20 +15,21 @@ const { monitorSignalProvider } = await import("./monitor.js");
 const { replyMock, sendMock, streamMock, upsertPairingRequestMock } =
   getSignalToolResultTestMocks();
 
-async function runMonitorWithMocks(
-  opts: Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0],
-) {
-  const { monitorSignalProvider } = await import("./monitor.js");
+type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
+
+async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider(opts);
 }
 describe("monitorSignalProvider tool results", () => {
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
+    const baseChannels = (config.channels ?? {}) as Record<string, unknown>;
+    const baseSignal = (baseChannels.signal ?? {}) as Record<string, unknown>;
     setSignalToolResultTestConfig({
       ...config,
       channels: {
-        ...config.channels,
+        ...baseChannels,
         signal: {
-          ...config.channels?.signal,
+          ...baseSignal,
           autoStart: false,
           dmPolicy: "pairing",
           allowFrom: [],

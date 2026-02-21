@@ -18,56 +18,61 @@ import { createTypingController } from "./typing.js";
 describe("matchesMentionWithExplicit", () => {
   const mentionRegexes = [/\bopenclaw\b/i];
 
-  it("checks mentionPatterns even when explicit mention is available", () => {
-    const result = matchesMentionWithExplicit({
-      text: "@openclaw hello",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: true,
+  it("combines explicit-mention state with regex fallback rules", () => {
+    const cases = [
+      {
+        name: "regex match with explicit resolver available",
+        text: "@openclaw hello",
+        mentionRegexes,
+        explicit: {
+          hasAnyMention: true,
+          isExplicitlyMentioned: false,
+          canResolveExplicit: true,
+        },
+        expected: true,
       },
-    });
-    expect(result).toBe(true);
-  });
-
-  it("returns false when explicit is false and no regex match", () => {
-    const result = matchesMentionWithExplicit({
-      text: "<@999999> hello",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: true,
+      {
+        name: "no explicit and no regex match",
+        text: "<@999999> hello",
+        mentionRegexes,
+        explicit: {
+          hasAnyMention: true,
+          isExplicitlyMentioned: false,
+          canResolveExplicit: true,
+        },
+        expected: false,
       },
-    });
-    expect(result).toBe(false);
-  });
-
-  it("returns true when explicitly mentioned even if regexes do not match", () => {
-    const result = matchesMentionWithExplicit({
-      text: "<@123456>",
-      mentionRegexes: [],
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: true,
-        canResolveExplicit: true,
+      {
+        name: "explicit mention even without regex",
+        text: "<@123456>",
+        mentionRegexes: [],
+        explicit: {
+          hasAnyMention: true,
+          isExplicitlyMentioned: true,
+          canResolveExplicit: true,
+        },
+        expected: true,
       },
-    });
-    expect(result).toBe(true);
-  });
-
-  it("falls back to regex matching when explicit mention cannot be resolved", () => {
-    const result = matchesMentionWithExplicit({
-      text: "openclaw please",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: false,
+      {
+        name: "falls back to regex when explicit cannot resolve",
+        text: "openclaw please",
+        mentionRegexes,
+        explicit: {
+          hasAnyMention: true,
+          isExplicitlyMentioned: false,
+          canResolveExplicit: false,
+        },
+        expected: true,
       },
-    });
-    expect(result).toBe(true);
+    ] as const;
+    for (const testCase of cases) {
+      const result = matchesMentionWithExplicit({
+        text: testCase.text,
+        mentionRegexes: [...testCase.mentionRegexes],
+        explicit: testCase.explicit,
+      });
+      expect(result, testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -89,30 +94,19 @@ describe("normalizeReplyPayload", () => {
     expect(normalized?.channelData).toEqual(payload.channelData);
   });
 
-  it("records silent skips", () => {
-    const reasons: string[] = [];
-    const normalized = normalizeReplyPayload(
-      { text: SILENT_REPLY_TOKEN },
-      {
+  it("records skip reasons for silent/empty payloads", () => {
+    const cases = [
+      { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
+      { name: "empty", payload: { text: "   " }, reason: "empty" },
+    ] as const;
+    for (const testCase of cases) {
+      const reasons: string[] = [];
+      const normalized = normalizeReplyPayload(testCase.payload, {
         onSkip: (reason) => reasons.push(reason),
-      },
-    );
-
-    expect(normalized).toBeNull();
-    expect(reasons).toEqual(["silent"]);
-  });
-
-  it("records empty skips", () => {
-    const reasons: string[] = [];
-    const normalized = normalizeReplyPayload(
-      { text: "   " },
-      {
-        onSkip: (reason) => reasons.push(reason),
-      },
-    );
-
-    expect(normalized).toBeNull();
-    expect(reasons).toEqual(["empty"]);
+      });
+      expect(normalized, testCase.name).toBeNull();
+      expect(reasons, testCase.name).toEqual([testCase.reason]);
+    }
   });
 });
 
@@ -121,49 +115,43 @@ describe("typing controller", () => {
     vi.useRealTimers();
   });
 
-  it("stops after run completion and dispatcher idle", async () => {
+  it("stops only after both run completion and dispatcher idle are set (any order)", async () => {
     vi.useFakeTimers();
-    const onReplyStart = vi.fn(async () => {});
-    const typing = createTypingController({
-      onReplyStart,
-      typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
-    });
+    const cases = [
+      { name: "run-complete first", first: "run", second: "idle" },
+      { name: "dispatch-idle first", first: "idle", second: "run" },
+    ] as const;
 
-    await typing.startTypingLoop();
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    for (const testCase of cases) {
+      const onReplyStart = vi.fn(async () => {});
+      const typing = createTypingController({
+        onReplyStart,
+        typingIntervalSeconds: 1,
+        typingTtlMs: 30_000,
+      });
 
-    vi.advanceTimersByTime(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(3);
+      await typing.startTypingLoop();
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(1);
 
-    typing.markRunComplete();
-    vi.advanceTimersByTime(1_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(4);
+      vi.advanceTimersByTime(2_000);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(3);
 
-    typing.markDispatchIdle();
-    vi.advanceTimersByTime(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(4);
-  });
+      if (testCase.first === "run") {
+        typing.markRunComplete();
+      } else {
+        typing.markDispatchIdle();
+      }
+      vi.advanceTimersByTime(2_000);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(5);
 
-  it("keeps typing until both idle and run completion are set", async () => {
-    vi.useFakeTimers();
-    const onReplyStart = vi.fn(async () => {});
-    const typing = createTypingController({
-      onReplyStart,
-      typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
-    });
-
-    await typing.startTypingLoop();
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-
-    typing.markDispatchIdle();
-    vi.advanceTimersByTime(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(3);
-
-    typing.markRunComplete();
-    vi.advanceTimersByTime(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(3);
+      if (testCase.second === "run") {
+        typing.markRunComplete();
+      } else {
+        typing.markDispatchIdle();
+      }
+      vi.advanceTimersByTime(2_000);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(5);
+    }
   });
 
   it("does not start typing after run completion", async () => {
@@ -207,99 +195,228 @@ describe("typing controller", () => {
 });
 
 describe("resolveTypingMode", () => {
-  it("defaults to instant for direct chats", () => {
-    expect(
-      resolveTypingMode({
-        configured: undefined,
-        isGroupChat: false,
-        wasMentioned: false,
-        isHeartbeat: false,
-      }),
-    ).toBe("instant");
+  it("resolves defaults, configured overrides, and heartbeat suppression", () => {
+    const cases = [
+      {
+        name: "default direct chat",
+        input: {
+          configured: undefined,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+        },
+        expected: "instant",
+      },
+      {
+        name: "default group chat without mention",
+        input: {
+          configured: undefined,
+          isGroupChat: true,
+          wasMentioned: false,
+          isHeartbeat: false,
+        },
+        expected: "message",
+      },
+      {
+        name: "default mentioned group chat",
+        input: {
+          configured: undefined,
+          isGroupChat: true,
+          wasMentioned: true,
+          isHeartbeat: false,
+        },
+        expected: "instant",
+      },
+      {
+        name: "configured thinking override",
+        input: {
+          configured: "thinking" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+        },
+        expected: "thinking",
+      },
+      {
+        name: "configured message override",
+        input: {
+          configured: "message" as const,
+          isGroupChat: true,
+          wasMentioned: true,
+          isHeartbeat: false,
+        },
+        expected: "message",
+      },
+      {
+        name: "heartbeat forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: true,
+        },
+        expected: "never",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(resolveTypingMode(testCase.input), testCase.name).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("parseAudioTag", () => {
+  it("extracts audio tag state and cleaned text", () => {
+    const cases = [
+      {
+        name: "tag in sentence",
+        input: "Hello [[audio_as_voice]] world",
+        expected: { audioAsVoice: true, hadTag: true, text: "Hello world" },
+      },
+      {
+        name: "missing text",
+        input: undefined,
+        expected: { audioAsVoice: false, hadTag: false, text: "" },
+      },
+      {
+        name: "tag-only content",
+        input: "[[audio_as_voice]]",
+        expected: { audioAsVoice: true, hadTag: true, text: "" },
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const result = parseAudioTag(testCase.input);
+      expect(result.audioAsVoice, testCase.name).toBe(testCase.expected.audioAsVoice);
+      expect(result.hadTag, testCase.name).toBe(testCase.expected.hadTag);
+      expect(result.text, testCase.name).toBe(testCase.expected.text);
+    }
+  });
+});
+
+describe("resolveResponsePrefixTemplate", () => {
+  it("resolves known variables, aliases, and case-insensitive tokens", () => {
+    const cases = [
+      {
+        name: "model",
+        template: "[{model}]",
+        values: { model: "gpt-5.2" },
+        expected: "[gpt-5.2]",
+      },
+      {
+        name: "modelFull",
+        template: "[{modelFull}]",
+        values: { modelFull: "openai-codex/gpt-5.2" },
+        expected: "[openai-codex/gpt-5.2]",
+      },
+      {
+        name: "provider",
+        template: "[{provider}]",
+        values: { provider: "anthropic" },
+        expected: "[anthropic]",
+      },
+      {
+        name: "thinkingLevel",
+        template: "think:{thinkingLevel}",
+        values: { thinkingLevel: "high" },
+        expected: "think:high",
+      },
+      {
+        name: "think alias",
+        template: "think:{think}",
+        values: { thinkingLevel: "low" },
+        expected: "think:low",
+      },
+      {
+        name: "identity.name",
+        template: "[{identity.name}]",
+        values: { identityName: "OpenClaw" },
+        expected: "[OpenClaw]",
+      },
+      {
+        name: "identityName alias",
+        template: "[{identityName}]",
+        values: { identityName: "OpenClaw" },
+        expected: "[OpenClaw]",
+      },
+      {
+        name: "case-insensitive variables",
+        template: "[{MODEL} | {ThinkingLevel}]",
+        values: { model: "gpt-5.2", thinkingLevel: "low" },
+        expected: "[gpt-5.2 | low]",
+      },
+      {
+        name: "all variables",
+        template: "[{identity.name}] {provider}/{model} (think:{thinkingLevel})",
+        values: {
+          identityName: "OpenClaw",
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          thinkingLevel: "high",
+        },
+        expected: "[OpenClaw] anthropic/claude-opus-4-5 (think:high)",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
+        testCase.expected,
+      );
+    }
   });
 
-  it("defaults to message for group chats without mentions", () => {
-    expect(
-      resolveTypingMode({
-        configured: undefined,
-        isGroupChat: true,
-        wasMentioned: false,
-        isHeartbeat: false,
-      }),
-    ).toBe("message");
-  });
-
-  it("defaults to instant for mentioned group chats", () => {
-    expect(
-      resolveTypingMode({
-        configured: undefined,
-        isGroupChat: true,
-        wasMentioned: true,
-        isHeartbeat: false,
-      }),
-    ).toBe("instant");
-  });
-
-  it("honors configured mode across contexts", () => {
-    expect(
-      resolveTypingMode({
-        configured: "thinking",
-        isGroupChat: false,
-        wasMentioned: false,
-        isHeartbeat: false,
-      }),
-    ).toBe("thinking");
-    expect(
-      resolveTypingMode({
-        configured: "message",
-        isGroupChat: true,
-        wasMentioned: true,
-        isHeartbeat: false,
-      }),
-    ).toBe("message");
-  });
-
-  it("forces never for heartbeat runs", () => {
-    expect(
-      resolveTypingMode({
-        configured: "instant",
-        isGroupChat: false,
-        wasMentioned: false,
-        isHeartbeat: true,
-      }),
-    ).toBe("never");
+  it("preserves unresolved/unknown placeholders and handles static inputs", () => {
+    const cases = [
+      { name: "undefined template", template: undefined, values: {}, expected: undefined },
+      { name: "no variables", template: "[Claude]", values: {}, expected: "[Claude]" },
+      {
+        name: "unresolved known variable",
+        template: "[{model}]",
+        values: {},
+        expected: "[{model}]",
+      },
+      {
+        name: "unrecognized variable",
+        template: "[{unknownVar}]",
+        values: { model: "gpt-5.2" },
+        expected: "[{unknownVar}]",
+      },
+      {
+        name: "mixed resolved/unresolved",
+        template: "[{model} | {provider}]",
+        values: { model: "gpt-5.2" },
+        expected: "[gpt-5.2 | {provider}]",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
+        testCase.expected,
+      );
+    }
   });
 });
 
 describe("createTypingSignaler", () => {
-  it("signals immediately for instant mode", async () => {
-    const typing = createMockTypingController();
-    const signaler = createTypingSignaler({
-      typing,
-      mode: "instant",
-      isHeartbeat: false,
-    });
+  it("gates run-start typing by mode", async () => {
+    const cases = [
+      { name: "instant", mode: "instant" as const, expectedStartCalls: 1 },
+      { name: "message", mode: "message" as const, expectedStartCalls: 0 },
+      { name: "thinking", mode: "thinking" as const, expectedStartCalls: 0 },
+    ] as const;
+    for (const testCase of cases) {
+      const typing = createMockTypingController();
+      const signaler = createTypingSignaler({
+        typing,
+        mode: testCase.mode,
+        isHeartbeat: false,
+      });
 
-    await signaler.signalRunStart();
-
-    expect(typing.startTypingLoop).toHaveBeenCalled();
+      await signaler.signalRunStart();
+      expect(typing.startTypingLoop, testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedStartCalls,
+      );
+    }
   });
 
-  it("signals on text for message mode", async () => {
-    const typing = createMockTypingController();
-    const signaler = createTypingSignaler({
-      typing,
-      mode: "message",
-      isHeartbeat: false,
-    });
-
-    await signaler.signalTextDelta("hello");
-
-    expect(typing.startTypingOnText).toHaveBeenCalledWith("hello");
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-  });
-
-  it("signals on message start for message mode", async () => {
+  it("signals on message-mode boundaries and text deltas", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -312,9 +429,10 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     await signaler.signalTextDelta("hello");
     expect(typing.startTypingOnText).toHaveBeenCalledWith("hello");
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("signals on reasoning for thinking mode", async () => {
+  it("starts typing and refreshes ttl on text for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -326,24 +444,11 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
-  });
-
-  it("refreshes ttl on text for thinking mode", async () => {
-    const typing = createMockTypingController();
-    const signaler = createTypingSignaler({
-      typing,
-      mode: "thinking",
-      isHeartbeat: false,
-    });
-
-    await signaler.signalTextDelta("hi");
-
-    expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("starts typing on tool start before text", async () => {
+  it("handles tool-start typing before and after active text mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -356,22 +461,9 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
-  });
-
-  it("refreshes ttl on tool start when active after text", async () => {
-    const typing = createMockTypingController({
-      isActive: vi.fn(() => true),
-    });
-    const signaler = createTypingSignaler({
-      typing,
-      mode: "message",
-      isHeartbeat: false,
-    });
-
-    await signaler.signalTextDelta("hello");
-    typing.startTypingLoop.mockClear();
-    typing.startTypingOnText.mockClear();
-    typing.refreshTypingTtl.mockClear();
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalToolStart();
 
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
@@ -392,28 +484,6 @@ describe("createTypingSignaler", () => {
 
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
-  });
-});
-
-describe("parseAudioTag", () => {
-  it("detects audio_as_voice and strips the tag", () => {
-    const result = parseAudioTag("Hello [[audio_as_voice]] world");
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.hadTag).toBe(true);
-    expect(result.text).toBe("Hello world");
-  });
-
-  it("returns empty output for missing text", () => {
-    const result = parseAudioTag(undefined);
-    expect(result.audioAsVoice).toBe(false);
-    expect(result.hadTag).toBe(false);
-    expect(result.text).toBe("");
-  });
-
-  it("removes tag-only messages", () => {
-    const result = parseAudioTag("[[audio_as_voice]]");
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe("");
   });
 });
 
@@ -462,25 +532,6 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("flushes each enqueued payload separately when flushOnEnqueue is set", async () => {
-    const flushes: string[] = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 200, idleMs: 100, joiner: "\n\n", flushOnEnqueue: true },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push(payload.text ?? "");
-      },
-    });
-
-    coalescer.enqueue({ text: "First paragraph" });
-    coalescer.enqueue({ text: "Second paragraph" });
-    coalescer.enqueue({ text: "Third paragraph" });
-
-    await Promise.resolve();
-    expect(flushes).toEqual(["First paragraph", "Second paragraph", "Third paragraph"]);
-    coalescer.stop();
-  });
-
   it("still accumulates when flushOnEnqueue is not set (default)", async () => {
     vi.useFakeTimers();
     const flushes: string[] = [];
@@ -500,41 +551,36 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("flushes short payloads immediately when flushOnEnqueue is set", async () => {
-    const flushes: string[] = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 10, maxChars: 200, idleMs: 50, joiner: "\n\n", flushOnEnqueue: true },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push(payload.text ?? "");
+  it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
+    const cases = [
+      {
+        config: { minChars: 10, maxChars: 200, idleMs: 50, joiner: "\n\n", flushOnEnqueue: true },
+        inputs: ["Hi"],
+        expected: ["Hi"],
       },
-    });
-
-    coalescer.enqueue({ text: "Hi" });
-    await Promise.resolve();
-    expect(flushes).toEqual(["Hi"]);
-    coalescer.stop();
-  });
-
-  it("resets char budget per paragraph with flushOnEnqueue", async () => {
-    const flushes: string[] = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 30, idleMs: 100, joiner: "\n\n", flushOnEnqueue: true },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push(payload.text ?? "");
+      {
+        config: { minChars: 1, maxChars: 30, idleMs: 100, joiner: "\n\n", flushOnEnqueue: true },
+        inputs: ["12345678901234567890", "abcdefghijklmnopqrst"],
+        expected: ["12345678901234567890", "abcdefghijklmnopqrst"],
       },
-    });
+    ] as const;
 
-    // Each 20-char payload fits within maxChars=30 individually
-    coalescer.enqueue({ text: "12345678901234567890" });
-    coalescer.enqueue({ text: "abcdefghijklmnopqrst" });
-
-    await Promise.resolve();
-    // Without flushOnEnqueue, these would be joined to 40+ chars and trigger maxChars split.
-    // With flushOnEnqueue, each is sent independently within budget.
-    expect(flushes).toEqual(["12345678901234567890", "abcdefghijklmnopqrst"]);
-    coalescer.stop();
+    for (const testCase of cases) {
+      const flushes: string[] = [];
+      const coalescer = createBlockReplyCoalescer({
+        config: testCase.config,
+        shouldAbort: () => false,
+        onFlush: (payload) => {
+          flushes.push(payload.text ?? "");
+        },
+      });
+      for (const input of testCase.inputs) {
+        coalescer.enqueue({ text: input });
+      }
+      await Promise.resolve();
+      expect(flushes).toEqual(testCase.expected);
+      coalescer.stop();
+    }
   });
 
   it("flushes buffered text before media payloads", () => {
@@ -562,42 +608,36 @@ describe("block reply coalescer", () => {
 });
 
 describe("createReplyReferencePlanner", () => {
-  it("disables references when mode is off", () => {
-    const planner = createReplyReferencePlanner({
+  it("plans references correctly for off/first/all modes", () => {
+    const offPlanner = createReplyReferencePlanner({
       replyToMode: "off",
       startId: "parent",
     });
-    expect(planner.use()).toBeUndefined();
-  });
+    expect(offPlanner.use()).toBeUndefined();
 
-  it("uses startId once when mode is first", () => {
-    const planner = createReplyReferencePlanner({
+    const firstPlanner = createReplyReferencePlanner({
       replyToMode: "first",
       startId: "parent",
     });
-    expect(planner.use()).toBe("parent");
-    expect(planner.hasReplied()).toBe(true);
-    planner.markSent();
-    expect(planner.use()).toBeUndefined();
-  });
+    expect(firstPlanner.use()).toBe("parent");
+    expect(firstPlanner.hasReplied()).toBe(true);
+    firstPlanner.markSent();
+    expect(firstPlanner.use()).toBeUndefined();
 
-  it("returns startId for every call when mode is all", () => {
-    const planner = createReplyReferencePlanner({
+    const allPlanner = createReplyReferencePlanner({
       replyToMode: "all",
       startId: "parent",
     });
-    expect(planner.use()).toBe("parent");
-    expect(planner.use()).toBe("parent");
-  });
+    expect(allPlanner.use()).toBe("parent");
+    expect(allPlanner.use()).toBe("parent");
 
-  it("uses existingId once when mode is first", () => {
-    const planner = createReplyReferencePlanner({
+    const existingIdPlanner = createReplyReferencePlanner({
       replyToMode: "first",
       existingId: "thread-1",
       startId: "parent",
     });
-    expect(planner.use()).toBe("thread-1");
-    expect(planner.use()).toBeUndefined();
+    expect(existingIdPlanner.use()).toBe("thread-1");
+    expect(existingIdPlanner.use()).toBeUndefined();
   });
 
   it("honors allowReference=false", () => {
@@ -634,148 +674,56 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
-  it("propagates explicit reply ids across chunks", () => {
+  it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
     expect(accumulator.consume("[[reply_to: abc-123]]")).toBeNull();
 
-    const result = accumulator.consume("Hi");
-    expect(result?.text).toBe("Hi");
-    expect(result?.replyToId).toBe("abc-123");
-    expect(result?.replyToTag).toBe(true);
-  });
-});
+    const first = accumulator.consume("Hi");
+    expect(first?.text).toBe("Hi");
+    expect(first?.replyToId).toBe("abc-123");
+    expect(first?.replyToTag).toBe(true);
 
-describe("resolveResponsePrefixTemplate", () => {
-  it("returns undefined for undefined template", () => {
-    expect(resolveResponsePrefixTemplate(undefined, {})).toBeUndefined();
+    const second = accumulator.consume("test 2");
+    expect(second?.replyToId).toBe("abc-123");
+    expect(second?.replyToTag).toBe(true);
   });
 
-  it("returns template as-is when no variables present", () => {
-    expect(resolveResponsePrefixTemplate("[Claude]", {})).toBe("[Claude]");
-  });
+  it("clears sticky reply context on reset", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
 
-  it("resolves {model} variable", () => {
-    const result = resolveResponsePrefixTemplate("[{model}]", {
-      model: "gpt-5.2",
-    });
-    expect(result).toBe("[gpt-5.2]");
-  });
+    expect(accumulator.consume("[[reply_to_current]]")).toBeNull();
+    expect(accumulator.consume("first")?.replyToCurrent).toBe(true);
 
-  it("resolves {modelFull} variable", () => {
-    const result = resolveResponsePrefixTemplate("[{modelFull}]", {
-      modelFull: "openai-codex/gpt-5.2",
-    });
-    expect(result).toBe("[openai-codex/gpt-5.2]");
-  });
+    accumulator.reset();
 
-  it("resolves {provider} variable", () => {
-    const result = resolveResponsePrefixTemplate("[{provider}]", {
-      provider: "anthropic",
-    });
-    expect(result).toBe("[anthropic]");
-  });
-
-  it("resolves {thinkingLevel} variable", () => {
-    const result = resolveResponsePrefixTemplate("think:{thinkingLevel}", {
-      thinkingLevel: "high",
-    });
-    expect(result).toBe("think:high");
-  });
-
-  it("resolves {think} as alias for thinkingLevel", () => {
-    const result = resolveResponsePrefixTemplate("think:{think}", {
-      thinkingLevel: "low",
-    });
-    expect(result).toBe("think:low");
-  });
-
-  it("resolves {identity.name} variable", () => {
-    const result = resolveResponsePrefixTemplate("[{identity.name}]", {
-      identityName: "OpenClaw",
-    });
-    expect(result).toBe("[OpenClaw]");
-  });
-
-  it("resolves {identityName} as alias", () => {
-    const result = resolveResponsePrefixTemplate("[{identityName}]", {
-      identityName: "OpenClaw",
-    });
-    expect(result).toBe("[OpenClaw]");
-  });
-
-  it("leaves unresolved variables as-is", () => {
-    const result = resolveResponsePrefixTemplate("[{model}]", {});
-    expect(result).toBe("[{model}]");
-  });
-
-  it("leaves unrecognized variables as-is", () => {
-    const result = resolveResponsePrefixTemplate("[{unknownVar}]", {
-      model: "gpt-5.2",
-    });
-    expect(result).toBe("[{unknownVar}]");
-  });
-
-  it("handles case insensitivity", () => {
-    const result = resolveResponsePrefixTemplate("[{MODEL} | {ThinkingLevel}]", {
-      model: "gpt-5.2",
-      thinkingLevel: "low",
-    });
-    expect(result).toBe("[gpt-5.2 | low]");
-  });
-
-  it("handles mixed resolved and unresolved variables", () => {
-    const result = resolveResponsePrefixTemplate("[{model} | {provider}]", {
-      model: "gpt-5.2",
-      // provider not provided
-    });
-    expect(result).toBe("[gpt-5.2 | {provider}]");
-  });
-
-  it("handles complex template with all variables", () => {
-    const result = resolveResponsePrefixTemplate(
-      "[{identity.name}] {provider}/{model} (think:{thinkingLevel})",
-      {
-        identityName: "OpenClaw",
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        thinkingLevel: "high",
-      },
-    );
-    expect(result).toBe("[OpenClaw] anthropic/claude-opus-4-5 (think:high)");
+    const afterReset = accumulator.consume("second");
+    expect(afterReset?.replyToCurrent).toBe(false);
+    expect(afterReset?.replyToTag).toBe(false);
+    expect(afterReset?.replyToId).toBeUndefined();
   });
 });
 
 describe("extractShortModelName", () => {
-  it("strips provider prefix", () => {
-    expect(extractShortModelName("openai-codex/gpt-5.2-codex")).toBe("gpt-5.2-codex");
-  });
-
-  it("strips date suffix", () => {
-    expect(extractShortModelName("claude-opus-4-5-20251101")).toBe("claude-opus-4-5");
-  });
-
-  it("strips -latest suffix", () => {
-    expect(extractShortModelName("gpt-5.2-latest")).toBe("gpt-5.2");
-  });
-
-  it("preserves version numbers that look like dates but are not", () => {
-    // Date suffix must be exactly 8 digits at the end
-    expect(extractShortModelName("model-123456789")).toBe("model-123456789");
+  it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
+    const cases = [
+      ["openai-codex/gpt-5.2-codex", "gpt-5.2-codex"],
+      ["claude-opus-4-5-20251101", "claude-opus-4-5"],
+      ["gpt-5.2-latest", "gpt-5.2"],
+      // Date suffix must be exactly 8 digits at the end.
+      ["model-123456789", "model-123456789"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(extractShortModelName(input), input).toBe(expected);
+    }
   });
 });
 
 describe("hasTemplateVariables", () => {
-  it("returns false for empty string", () => {
+  it("handles empty, static, and repeated variable checks", () => {
     expect(hasTemplateVariables("")).toBe(false);
-  });
-
-  it("handles consecutive calls correctly (regex lastIndex reset)", () => {
-    // First call
     expect(hasTemplateVariables("[{model}]")).toBe(true);
-    // Second call should still work
     expect(hasTemplateVariables("[{model}]")).toBe(true);
-    // Static string should return false
     expect(hasTemplateVariables("[Claude]")).toBe(false);
   });
 });

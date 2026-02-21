@@ -1,12 +1,12 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SandboxContext } from "./types.js";
 import {
   buildSandboxFsMounts,
   parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
+import type { SandboxContext } from "./types.js";
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });
@@ -23,6 +23,27 @@ describe("parseSandboxBindMount", () => {
       hostRoot: path.resolve("/tmp/b"),
       containerRoot: "/workspace-b",
       writable: true,
+    });
+  });
+
+  it("parses Windows drive-letter host paths", () => {
+    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
+      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
+      containerRoot: "/workspace",
+      writable: false,
+    });
+    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
+      hostRoot: path.resolve("D:/data"),
+      containerRoot: "/workspace-data",
+      writable: true,
+    });
+  });
+
+  it("parses UNC-style host paths", () => {
+    expect(parseSandboxBindMount("//server/share:/workspace:ro")).toEqual({
+      hostRoot: path.resolve("//server/share"),
+      containerRoot: "/workspace",
+      writable: false,
     });
   });
 });

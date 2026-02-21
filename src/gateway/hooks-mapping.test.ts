@@ -92,7 +92,7 @@ describe("hooks mapping", () => {
       ],
     });
     expect(result?.ok).toBe(true);
-    if (result?.ok) {
+    if (result?.ok && result.action?.kind === "agent") {
       expect(result.action.kind).toBe("agent");
       expect(result.action.message).toBe("Subject: Hello");
     }
@@ -109,7 +109,7 @@ describe("hooks mapping", () => {
       ],
     });
     expect(result?.ok).toBe(true);
-    if (result?.ok && result.action.kind === "agent") {
+    if (result?.ok && result.action && result.action.kind === "agent") {
       expect(result.action.model).toBe("openai/gpt-4.1-mini");
     }
   });
@@ -146,11 +146,9 @@ describe("hooks mapping", () => {
     });
 
     expect(result?.ok).toBe(true);
-    if (result?.ok) {
+    if (result?.ok && result.action?.kind === "wake") {
       expect(result.action.kind).toBe("wake");
-      if (result.action.kind === "wake") {
-        expect(result.action.text).toBe("Ping Ada");
-      }
+      expect(result.action.text).toBe("Ping Ada");
     }
   });
 
@@ -259,7 +257,7 @@ describe("hooks mapping", () => {
       ],
     });
     expect(result?.ok).toBe(true);
-    if (result?.ok) {
+    if (result?.ok && result.action?.kind === "agent") {
       expect(result.action.kind).toBe("agent");
       expect(result.action.message).toBe("Override subject: Hello");
     }
@@ -296,6 +294,72 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("caches transform functions by module path and export name", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-export-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "multi-export.mjs");
+    fs.writeFileSync(
+      modPath,
+      [
+        'export function transformA() { return { kind: "wake", text: "from-A" }; }',
+        'export function transformB() { return { kind: "wake", text: "from-B" }; }',
+      ].join("\n"),
+    );
+
+    const mappingsA = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "testA" },
+            action: "agent",
+            messageTemplate: "unused",
+            transform: { module: "multi-export.mjs", export: "transformA" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const mappingsB = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "testB" },
+            action: "agent",
+            messageTemplate: "unused",
+            transform: { module: "multi-export.mjs", export: "transformB" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const resultA = await applyHookMappings(mappingsA, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testA"),
+      path: "testA",
+    });
+
+    const resultB = await applyHookMappings(mappingsB, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testB"),
+      path: "testB",
+    });
+
+    expect(resultA?.ok).toBe(true);
+    if (resultA?.ok && resultA.action?.kind === "wake") {
+      expect(resultA.action.text).toBe("from-A");
+    }
+
+    expect(resultB?.ok).toBe(true);
+    if (resultB?.ok && resultB.action?.kind === "wake") {
+      expect(resultB.action.text).toBe("from-B");
+    }
+  });
+
   it("rejects missing message", async () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
@@ -307,5 +371,79 @@ describe("hooks mapping", () => {
       path: "noop",
     });
     expect(result?.ok).toBe(false);
+  });
+
+  describe("prototype pollution protection", () => {
+    it("blocks __proto__ traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "proto-test",
+            messageTemplate: "value: {{__proto__}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { __proto__: { polluted: true } } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("value: ");
+        }
+      }
+    });
+
+    it("blocks constructor traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "constructor-test",
+            messageTemplate: "type: {{constructor.name}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { constructor: { name: "INJECTED" } } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("type: ");
+        }
+      }
+    });
+
+    it("blocks prototype traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "prototype-test",
+            messageTemplate: "val: {{prototype}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { prototype: "leaked" } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("val: ");
+        }
+      }
+    });
   });
 });

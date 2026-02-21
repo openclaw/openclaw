@@ -7,10 +7,10 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import type { NostrProfile } from "./config-schema.js";
-import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import type { ProfilePublishResult } from "./nostr-profile.js";
 import { NostrConfigSchema } from "./config-schema.js";
+import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
 import {
   listNostrAccountIds,
@@ -215,7 +215,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           );
 
           // Forward to OpenClaw's message pipeline
-          // TODO: Replace with proper dispatchReplyWithBufferedBlockDispatcher call
           await (
             runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
           ).handleInboundMessage?.({

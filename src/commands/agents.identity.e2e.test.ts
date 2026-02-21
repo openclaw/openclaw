@@ -9,14 +9,11 @@ const configMocks = vi.hoisted(() => ({
   writeConfigFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-    writeConfigFile: configMocks.writeConfigFile,
-  };
-});
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+  writeConfigFile: configMocks.writeConfigFile,
+}));
 
 import { agentsSetIdentityCommand } from "./agents.js";
 
@@ -41,6 +38,14 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 function getWrittenMainIdentity() {
   const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as ConfigWritePayload;
   return written.agents?.list?.find((entry) => entry.id === "main")?.identity;
+}
+
+async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity = true) {
+  configMocks.readConfigFileSnapshot.mockResolvedValue({
+    ...baseConfigSnapshot,
+    config: { agents: { list: [{ id: "main", workspace }] } },
+  });
+  await agentsSetIdentityCommand({ workspace, fromIdentity }, runtime);
 }
 
 describe("agents set-identity command", () => {
@@ -171,12 +176,7 @@ describe("agents set-identity command", () => {
     const { workspace } = await createIdentityWorkspace();
     await writeIdentityFile(workspace, ["- Avatar: avatars/only.png"]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { list: [{ id: "main", workspace }] } },
-    });
-
-    await agentsSetIdentityCommand({ workspace, fromIdentity: true }, runtime);
+    await runIdentityCommandFromWorkspace(workspace);
 
     expect(getWrittenMainIdentity()).toEqual({
       avatar: "avatars/only.png",
@@ -202,12 +202,7 @@ describe("agents set-identity command", () => {
   it("errors when identity data is missing", async () => {
     const { workspace } = await createIdentityWorkspace();
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { list: [{ id: "main", workspace }] } },
-    });
-
-    await agentsSetIdentityCommand({ workspace, fromIdentity: true }, runtime);
+    await runIdentityCommandFromWorkspace(workspace);
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("No identity data found"));
     expect(runtime.exit).toHaveBeenCalledWith(1);

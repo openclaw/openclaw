@@ -52,8 +52,8 @@ function mockRepoLocalPathExists() {
 
 async function runInitialValueForChannel(channel: "dev" | "beta") {
   const runtime = makeRuntime();
-  const select = vi.fn(async () => "skip") as WizardPrompter["select"];
-  const prompter = makePrompter({ select });
+  const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
+  const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
   const cfg: OpenClawConfig = { update: { channel } };
   mockRepoLocalPathExists();
 
@@ -64,7 +64,16 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
     runtime,
   });
 
-  return select.mock.calls[0]?.[0]?.initialValue;
+  const call = select.mock.calls[0];
+  return call?.[0]?.initialValue;
+}
+
+function expectPluginLoadedFromLocalPath(
+  result: Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>>,
+) {
+  const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
+  expect(result.installed).toBe(true);
+  expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
 }
 
 describe("ensureOnboardingPluginInstalled", () => {
@@ -115,9 +124,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime,
     });
 
-    const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
-    expect(result.installed).toBe(true);
-    expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
+    expectPluginLoadedFromLocalPath(result);
     expect(result.cfg.plugins?.entries?.zalo?.enabled).toBe(true);
   });
 
@@ -152,9 +159,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime,
     });
 
-    const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
-    expect(result.installed).toBe(true);
-    expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
+    expectPluginLoadedFromLocalPath(result);
     expect(note).toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
   });

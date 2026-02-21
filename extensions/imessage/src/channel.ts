@@ -78,6 +78,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveIMessageAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -183,7 +185,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
@@ -195,10 +197,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       const result = await send(to, text, {
         maxBytes,
         accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
       });
       return { channel: "imessage", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps, replyToId }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
@@ -211,6 +214,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         mediaUrl,
         maxBytes,
         accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
       });
       return { channel: "imessage", ...result };
     },

@@ -35,12 +35,6 @@ describe("readStringOrNumberParam", () => {
     const params = { chatId: "  abc  " };
     expect(readStringOrNumberParam(params, "chatId")).toBe("abc");
   });
-
-  it("throws when required and missing", () => {
-    expect(() => readStringOrNumberParam({}, "chatId", { required: true })).toThrow(
-      /chatId required/,
-    );
-  });
 });
 
 describe("readNumberParam", () => {
@@ -53,8 +47,13 @@ describe("readNumberParam", () => {
     const params = { messageId: "42.9" };
     expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
   });
+});
 
-  it("throws when required and missing", () => {
+describe("required parameter validation", () => {
+  it("throws when required values are missing", () => {
+    expect(() => readStringOrNumberParam({}, "chatId", { required: true })).toThrow(
+      /chatId required/,
+    );
     expect(() => readNumberParam({}, "messageId", { required: true })).toThrow(
       /messageId required/,
     );

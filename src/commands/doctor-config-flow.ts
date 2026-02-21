@@ -1,13 +1,13 @@
-import type { ZodIssue } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
+import type { ZodIssue } from "zod";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
 } from "../channels/telegram/allow-from.js";
+import { fetchTelegramChatId } from "../channels/telegram/api.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   OpenClawSchema,
   CONFIG_PATH,
@@ -19,6 +19,7 @@ import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/acco
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -145,6 +146,30 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   );
 
   note(lines.join("\n"), "OpenCode Zen");
+}
+
+function noteIncludeConfinementWarning(snapshot: {
+  path?: string | null;
+  issues?: Array<{ message: string }>;
+}): void {
+  const issues = snapshot.issues ?? [];
+  const includeIssue = issues.find(
+    (issue) =>
+      issue.message.includes("Include path escapes config directory") ||
+      issue.message.includes("Include path resolves outside config directory"),
+  );
+  if (!includeIssue) {
+    return;
+  }
+  const configRoot = path.dirname(snapshot.path ?? CONFIG_PATH);
+  note(
+    [
+      `- $include paths must stay under: ${configRoot}`,
+      '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
+      `- Error: ${includeIssue.message}`,
+    ].join("\n"),
+    "Doctor warnings",
+  );
 }
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
@@ -305,18 +330,13 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
-        const url = `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(username)}`;
-        const res = await fetch(url, { signal: controller.signal }).catch(() => null);
-        if (!res || !res.ok) {
-          continue;
-        }
-        const data = (await res.json().catch(() => null)) as {
-          ok?: boolean;
-          result?: { id?: number | string };
-        } | null;
-        const id = data?.ok ? data?.result?.id : undefined;
-        if (typeof id === "number" || typeof id === "string") {
-          return String(id);
+        const id = await fetchTelegramChatId({
+          token,
+          chatId: username,
+          signal: controller.signal,
+        });
+        if (id) {
+          return id;
         }
       } catch {
         // ignore and try next token
@@ -387,6 +407,295 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
 
   for (const scope of collectTelegramAccountScopes(next)) {
     await repairAccount(scope.prefix, scope.account);
+  }
+
+  if (changes.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return { config: next, changes };
+}
+
+type DiscordNumericIdHit = { path: string; entry: number };
+
+type DiscordIdListRef = {
+  pathLabel: string;
+  holder: Record<string, unknown>;
+  key: string;
+};
+
+function collectDiscordAccountScopes(
+  cfg: OpenClawConfig,
+): Array<{ prefix: string; account: Record<string, unknown> }> {
+  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
+  const discord = asObjectRecord(cfg.channels?.discord);
+  if (!discord) {
+    return scopes;
+  }
+
+  scopes.push({ prefix: "channels.discord", account: discord });
+  const accounts = asObjectRecord(discord.accounts);
+  if (!accounts) {
+    return scopes;
+  }
+  for (const key of Object.keys(accounts)) {
+    const account = asObjectRecord(accounts[key]);
+    if (!account) {
+      continue;
+    }
+    scopes.push({ prefix: `channels.discord.accounts.${key}`, account });
+  }
+
+  return scopes;
+}
+
+function collectDiscordIdLists(
+  prefix: string,
+  account: Record<string, unknown>,
+): DiscordIdListRef[] {
+  const refs: DiscordIdListRef[] = [
+    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
+  ];
+  const dm = asObjectRecord(account.dm);
+  if (dm) {
+    refs.push({ pathLabel: `${prefix}.dm.allowFrom`, holder: dm, key: "allowFrom" });
+    refs.push({ pathLabel: `${prefix}.dm.groupChannels`, holder: dm, key: "groupChannels" });
+  }
+  const execApprovals = asObjectRecord(account.execApprovals);
+  if (execApprovals) {
+    refs.push({
+      pathLabel: `${prefix}.execApprovals.approvers`,
+      holder: execApprovals,
+      key: "approvers",
+    });
+  }
+  const guilds = asObjectRecord(account.guilds);
+  if (!guilds) {
+    return refs;
+  }
+
+  for (const guildId of Object.keys(guilds)) {
+    const guild = asObjectRecord(guilds[guildId]);
+    if (!guild) {
+      continue;
+    }
+    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.users`, holder: guild, key: "users" });
+    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.roles`, holder: guild, key: "roles" });
+    const channels = asObjectRecord(guild.channels);
+    if (!channels) {
+      continue;
+    }
+    for (const channelId of Object.keys(channels)) {
+      const channel = asObjectRecord(channels[channelId]);
+      if (!channel) {
+        continue;
+      }
+      refs.push({
+        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.users`,
+        holder: channel,
+        key: "users",
+      });
+      refs.push({
+        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.roles`,
+        holder: channel,
+        key: "roles",
+      });
+    }
+  }
+  return refs;
+}
+
+function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[] {
+  const hits: DiscordNumericIdHit[] = [];
+  const scanList = (pathLabel: string, list: unknown) => {
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (const [index, entry] of list.entries()) {
+      if (typeof entry !== "number") {
+        continue;
+      }
+      hits.push({ path: `${pathLabel}[${index}]`, entry });
+    }
+  };
+
+  for (const scope of collectDiscordAccountScopes(cfg)) {
+    for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
+      scanList(ref.pathLabel, ref.holder[ref.key]);
+    }
+  }
+
+  return hits;
+}
+
+function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const hits = scanDiscordNumericIdEntries(cfg);
+  if (hits.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+
+  const repairList = (pathLabel: string, holder: Record<string, unknown>, key: string) => {
+    const raw = holder[key];
+    if (!Array.isArray(raw)) {
+      return;
+    }
+    let converted = 0;
+    const updated = raw.map((entry) => {
+      if (typeof entry === "number") {
+        converted += 1;
+        return String(entry);
+      }
+      return entry;
+    });
+    if (converted === 0) {
+      return;
+    }
+    holder[key] = updated;
+    changes.push(
+      `- ${pathLabel}: converted ${converted} numeric ${converted === 1 ? "entry" : "entries"} to strings`,
+    );
+  };
+
+  for (const scope of collectDiscordAccountScopes(next)) {
+    for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
+      repairList(ref.pathLabel, ref.holder, ref.key);
+    }
+  }
+
+  if (changes.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return { config: next, changes };
+}
+
+/**
+ * Scan all channel configs for dmPolicy="open" without allowFrom including "*".
+ * This configuration is rejected by the schema validator but can easily occur when
+ * users (or integrations) set dmPolicy to "open" without realising that an explicit
+ * allowFrom wildcard is also required.
+ */
+function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object") {
+    return { config: cfg, changes: [] };
+  }
+
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+
+  type OpenPolicyAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+
+  const resolveAllowFromMode = (channelName: string): OpenPolicyAllowFromMode => {
+    if (channelName === "googlechat") {
+      return "nestedOnly";
+    }
+    if (channelName === "discord" || channelName === "slack") {
+      return "topOrNested";
+    }
+    return "topOnly";
+  };
+
+  const hasWildcard = (list?: Array<string | number>) =>
+    list?.some((v) => String(v).trim() === "*") ?? false;
+
+  const ensureWildcard = (
+    account: Record<string, unknown>,
+    prefix: string,
+    mode: OpenPolicyAllowFromMode,
+  ) => {
+    const dmEntry = account.dm;
+    const dm =
+      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+        ? (dmEntry as Record<string, unknown>)
+        : undefined;
+    const dmPolicy =
+      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
+
+    if (dmPolicy !== "open") {
+      return;
+    }
+
+    const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
+    const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
+
+    if (mode === "nestedOnly") {
+      if (hasWildcard(nestedAllowFrom)) {
+        return;
+      }
+      if (Array.isArray(nestedAllowFrom)) {
+        nestedAllowFrom.push("*");
+        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+        return;
+      }
+      const nextDm = dm ?? {};
+      nextDm.allowFrom = ["*"];
+      account.dm = nextDm;
+      changes.push(`- ${prefix}.dm.allowFrom: set to ["*"] (required by dmPolicy="open")`);
+      return;
+    }
+
+    if (mode === "topOrNested") {
+      if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
+        return;
+      }
+
+      if (Array.isArray(topAllowFrom)) {
+        topAllowFrom.push("*");
+        changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
+      } else if (Array.isArray(nestedAllowFrom)) {
+        nestedAllowFrom.push("*");
+        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+      } else {
+        account.allowFrom = ["*"];
+        changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
+      }
+      return;
+    }
+
+    if (hasWildcard(topAllowFrom)) {
+      return;
+    }
+    if (Array.isArray(topAllowFrom)) {
+      topAllowFrom.push("*");
+      changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
+    } else {
+      account.allowFrom = ["*"];
+      changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
+    }
+  };
+
+  const nextChannels = next.channels as Record<string, Record<string, unknown>>;
+  for (const [channelName, channelConfig] of Object.entries(nextChannels)) {
+    if (!channelConfig || typeof channelConfig !== "object") {
+      continue;
+    }
+
+    const allowFromMode = resolveAllowFromMode(channelName);
+
+    // Check the top-level channel config
+    ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
+
+    // Check per-account configs (e.g. channels.discord.accounts.mybot)
+    const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
+    if (accounts && typeof accounts === "object") {
+      for (const [accountName, accountConfig] of Object.entries(accounts)) {
+        if (accountConfig && typeof accountConfig === "object") {
+          ensureWildcard(
+            accountConfig,
+            `channels.${channelName}.accounts.${accountName}`,
+            allowFromMode,
+          );
+        }
+      }
+    }
   }
 
   if (changes.length === 0) {
@@ -469,6 +778,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const fixHints: string[] = [];
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
     note("Config invalid; doctor will run with best-effort config.", "Config");
+    noteIncludeConfinementWarning(snapshot);
   }
   const warnings = snapshot.warnings ?? [];
   if (warnings.length > 0) {
@@ -533,6 +843,22 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = true;
       cfg = repair.config;
     }
+
+    const discordRepair = maybeRepairDiscordNumericIds(candidate);
+    if (discordRepair.changes.length > 0) {
+      note(discordRepair.changes.join("\n"), "Doctor changes");
+      candidate = discordRepair.config;
+      pendingChanges = true;
+      cfg = discordRepair.config;
+    }
+
+    const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
+    if (allowFromRepair.changes.length > 0) {
+      note(allowFromRepair.changes.join("\n"), "Doctor changes");
+      candidate = allowFromRepair.config;
+      pendingChanges = true;
+      cfg = allowFromRepair.config;
+    }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -540,6 +866,28 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         [
           `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${hits[0]?.entry ?? "@"}); Telegram authorization requires numeric sender IDs.`,
           `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    }
+
+    const discordHits = scanDiscordNumericIdEntries(candidate);
+    if (discordHits.length > 0) {
+      note(
+        [
+          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
+          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    }
+
+    const allowFromScan = maybeRepairOpenPolicyAllowFrom(candidate);
+    if (allowFromScan.changes.length > 0) {
+      note(
+        [
+          ...allowFromScan.changes,
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
         ].join("\n"),
         "Doctor warnings",
       );
@@ -573,7 +921,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   }
 
+  if (shouldRepair && pendingChanges) {
+    shouldWriteConfig = true;
+  }
+
   noteOpencodeProviderOverrides(cfg);
 
-  return { cfg, path: snapshot.path ?? CONFIG_PATH, shouldWriteConfig };
+  return {
+    cfg,
+    path: snapshot.path ?? CONFIG_PATH,
+    shouldWriteConfig,
+    sourceConfigValid: snapshot.valid,
+  };
 }

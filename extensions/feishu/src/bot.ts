@@ -7,14 +7,18 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
-import type { DynamicAgentCreationConfig } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessage } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
-import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
-import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { downloadMessageResourceFeishu } from "./media.js";
+import {
+  escapeRegExp,
+  extractMentionTargets,
+  extractMessageBody,
+  isMentionForwardRequest,
+} from "./mention.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -24,6 +28,8 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
+import type { DynamicAgentCreationConfig } from "./types.js";
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -185,23 +191,30 @@ function parseMessageContent(content: string, messageType: string): string {
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  const mentions = event.message.mentions ?? [];
-  if (mentions.length === 0) return false;
   if (!botOpenId) return false;
-  return mentions.some((m) => m.id.open_id === botOpenId);
+  const mentions = event.message.mentions ?? [];
+  if (mentions.length > 0) {
+    return mentions.some((m) => m.id.open_id === botOpenId);
+  }
+  // Post (rich text) messages may have empty message.mentions when they contain docs/paste
+  if (event.message.message_type === "post") {
+    const { mentionedOpenIds } = parsePostContent(event.message.content);
+    return mentionedOpenIds.some((id) => id === botOpenId);
+  }
+  return false;
 }
 
-function stripBotMention(
+export function stripBotMention(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
 ): string {
   if (!mentions || mentions.length === 0) return text;
   let result = text;
   for (const mention of mentions) {
-    result = result.replace(new RegExp(`@${mention.name}\\s*`, "g"), "").trim();
-    result = result.replace(new RegExp(mention.key, "g"), "").trim();
+    result = result.replace(new RegExp(`@${escapeRegExp(mention.name)}\\s*`, "g"), "");
+    result = result.replace(new RegExp(escapeRegExp(mention.key), "g"), "");
   }
-  return result;
+  return result.trim();
 }
 
 /**
@@ -217,18 +230,20 @@ function parseMediaKeys(
 } {
   try {
     const parsed = JSON.parse(content);
+    const imageKey = normalizeFeishuExternalKey(parsed.image_key);
+    const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey: parsed.image_key };
+        return { imageKey };
       case "file":
-        return { fileKey: parsed.file_key, fileName: parsed.file_name };
+        return { fileKey, fileName: parsed.file_name };
       case "audio":
-        return { fileKey: parsed.file_key };
+        return { fileKey };
       case "video":
         // Video has both file_key (video) and image_key (thumbnail)
-        return { fileKey: parsed.file_key, imageKey: parsed.image_key };
+        return { fileKey, imageKey };
       case "sticker":
-        return { fileKey: parsed.file_key };
+        return { fileKey };
       default:
         return {};
     }
@@ -244,6 +259,7 @@ function parseMediaKeys(
 function parsePostContent(content: string): {
   textContent: string;
   imageKeys: string[];
+  mentionedOpenIds: string[];
 } {
   try {
     const parsed = JSON.parse(content);
@@ -251,6 +267,7 @@ function parsePostContent(content: string): {
     const contentBlocks = parsed.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
+    const mentionedOpenIds: string[] = [];
 
     for (const paragraph of contentBlocks) {
       if (Array.isArray(paragraph)) {
@@ -263,9 +280,15 @@ function parsePostContent(content: string): {
           } else if (element.tag === "at") {
             // Mention: @username
             textContent += `@${element.user_name || element.user_id || ""}`;
+            if (element.user_id) {
+              mentionedOpenIds.push(element.user_id);
+            }
           } else if (element.tag === "img" && element.image_key) {
             // Embedded image
-            imageKeys.push(element.image_key);
+            const imageKey = normalizeFeishuExternalKey(element.image_key);
+            if (imageKey) {
+              imageKeys.push(imageKey);
+            }
           }
         }
         textContent += "\n";
@@ -273,11 +296,12 @@ function parsePostContent(content: string): {
     }
 
     return {
-      textContent: textContent.trim() || "[富文本消息]",
+      textContent: textContent.trim() || "[Rich text message]",
       imageKeys,
+      mentionedOpenIds,
     };
   } catch {
-    return { textContent: "[富文本消息]", imageKeys: [] };
+    return { textContent: "[Rich text message]", imageKeys: [], mentionedOpenIds: [] };
   }
 }
 
@@ -606,7 +630,9 @@ export async function handleFeishuMessage(params: {
       cfg,
     );
     const storeAllowFrom =
-      !isGroup && (dmPolicy !== "open" || shouldComputeCommandAuthorized)
+      !isGroup &&
+      dmPolicy !== "allowlist" &&
+      (dmPolicy !== "open" || shouldComputeCommandAuthorized)
         ? await core.channel.pairing.readAllowFromStore("feishu").catch(() => [])
         : [];
     const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];

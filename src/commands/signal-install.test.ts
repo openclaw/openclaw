@@ -1,7 +1,7 @@
-import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import type { ReleaseAsset } from "./signal-install.js";
@@ -133,9 +133,17 @@ describe("pickAsset", () => {
 });
 
 describe("extractSignalCliArchive", () => {
-  it("rejects zip slip path traversal", async () => {
+  async function withArchiveWorkspace(run: (workDir: string) => Promise<void>) {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));
     try {
+      await run(workDir);
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  it("rejects zip slip path traversal", async () => {
+    await withArchiveWorkspace(async (workDir) => {
       const archivePath = path.join(workDir, "bad.zip");
       const extractDir = path.join(workDir, "extract");
       await fs.mkdir(extractDir, { recursive: true });
@@ -147,14 +155,28 @@ describe("extractSignalCliArchive", () => {
       await expect(extractSignalCliArchive(archivePath, extractDir, 5_000)).rejects.toThrow(
         /(escapes destination|absolute)/i,
       );
-    } finally {
-      await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    });
+  });
+
+  it("extracts zip archives", async () => {
+    await withArchiveWorkspace(async (workDir) => {
+      const archivePath = path.join(workDir, "ok.zip");
+      const extractDir = path.join(workDir, "extract");
+      await fs.mkdir(extractDir, { recursive: true });
+
+      const zip = new JSZip();
+      zip.file("root/signal-cli", "bin");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+      await extractSignalCliArchive(archivePath, extractDir, 5_000);
+
+      const extracted = await fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8");
+      expect(extracted).toBe("bin");
+    });
   });
 
   it("extracts tar.gz archives", async () => {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));
-    try {
+    await withArchiveWorkspace(async (workDir) => {
       const archivePath = path.join(workDir, "ok.tgz");
       const extractDir = path.join(workDir, "extract");
       const rootDir = path.join(workDir, "root");
@@ -167,8 +189,6 @@ describe("extractSignalCliArchive", () => {
 
       const extracted = await fs.readFile(path.join(extractDir, "root", "signal-cli"), "utf-8");
       expect(extracted).toBe("bin");
-    } finally {
-      await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    });
   });
 });

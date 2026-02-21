@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { ExecFn } from "./windows-acl.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -13,10 +14,12 @@ import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
+  collectGatewayHttpNoAuthFindings,
   collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectSandboxBrowserHashLabelFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
   collectNodeDenyCommandPatternFindings,
@@ -36,6 +39,7 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -87,6 +91,8 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: typeof probeGateway;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
+  /** Dependency injection for tests (Docker label checks). */
+  execDockerRawFn?: typeof execDockerRaw;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -110,6 +116,30 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
+}
+
+function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
+  const enabledFlags: string[] = [];
+  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
+    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
+  }
+  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
+    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
+  }
+  if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
+    enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
+  }
+  if (Array.isArray(cfg.hooks?.mappings)) {
+    for (const [index, mapping] of cfg.hooks.mappings.entries()) {
+      if (mapping?.allowUnsafeExternalContent === true) {
+        enabledFlags.push(`hooks.mappings[${index}].allowUnsafeExternalContent=true`);
+      }
+    }
+  }
+  if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
+    enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
+  }
+  return enabledFlags;
 }
 
 async function collectFilesystemFindings(params: {
@@ -186,6 +216,7 @@ async function collectFilesystemFindings(params: {
     exec: params.execIcacls,
   });
   if (configPerms.ok) {
+    const skipReadablePermWarnings = configPerms.isSymlink;
     if (configPerms.isSymlink) {
       findings.push({
         checkId: "fs.config.symlink",
@@ -208,7 +239,7 @@ async function collectFilesystemFindings(params: {
           env: params.env,
         }),
       });
-    } else if (configPerms.worldReadable) {
+    } else if (!skipReadablePermWarnings && configPerms.worldReadable) {
       findings.push({
         checkId: "fs.config.perms_world_readable",
         severity: "critical",
@@ -222,7 +253,7 @@ async function collectFilesystemFindings(params: {
           env: params.env,
         }),
       });
-    } else if (configPerms.groupReadable) {
+    } else if (!skipReadablePermWarnings && configPerms.groupReadable) {
       findings.push({
         checkId: "fs.config.perms_group_readable",
         severity: "warn",
@@ -345,10 +376,10 @@ function collectGatewayConfigFindings(
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "critical",
-      title: "Control UI allows insecure HTTP auth",
+      severity: "warn",
+      title: "Control UI insecure auth toggle enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
+        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }
@@ -361,6 +392,18 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+    });
+  }
+
+  const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
+  if (enabledDangerousFlags.length > 0) {
+    findings.push({
+      checkId: "config.insecure_or_dangerous_flags",
+      severity: "warn",
+      title: "Insecure or dangerous config flags enabled",
+      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      remediation:
+        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
@@ -564,6 +607,54 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
+function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const globalExecHost = cfg.tools?.exec?.host;
+  const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
+  const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
+
+  if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
+    findings.push({
+      checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
+      severity: "warn",
+      title: "Exec host is sandbox but sandbox mode is off",
+      detail:
+        "tools.exec.host is explicitly set to sandbox while agents.defaults.sandbox.mode=off. " +
+        "In this mode, exec runs directly on the gateway host.",
+      remediation:
+        'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway" with approvals.',
+    });
+  }
+
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const riskyAgents = agents
+    .filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        entry.tools?.exec?.host === "sandbox" &&
+        resolveSandboxConfigForAgent(cfg, entry.id).mode === "off",
+    )
+    .map((entry) => entry.id)
+    .slice(0, 5);
+
+  if (riskyAgents.length > 0) {
+    findings.push({
+      checkId: "tools.exec.host_sandbox_no_sandbox_agents",
+      severity: "warn",
+      title: "Agent exec host uses sandbox while sandbox mode is off",
+      detail:
+        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
+        "With sandbox mode off, exec runs directly on the gateway host.",
+      remediation:
+        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+    });
+  }
+
+  return findings;
+}
+
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
   timeoutMs: number;
@@ -619,7 +710,9 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
+  findings.push(...collectExecRuntimeFindings(cfg));
   findings.push(...collectHooksHardeningFindings(cfg, env));
+  findings.push(...collectGatewayHttpNoAuthFindings(cfg, env));
   findings.push(...collectGatewayHttpSessionKeyOverrideFindings(cfg));
   findings.push(...collectSandboxDockerNoopFindings(cfg));
   findings.push(...collectSandboxDangerousConfigFindings(cfg));
@@ -652,6 +745,11 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
+    );
+    findings.push(
+      ...(await collectSandboxBrowserHashLabelFindings({
+        execDockerRawFn: opts.execDockerRawFn,
+      })),
     );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {

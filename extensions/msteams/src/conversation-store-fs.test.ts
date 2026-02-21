@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { StoredConversationReference } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
 

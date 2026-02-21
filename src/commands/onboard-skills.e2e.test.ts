@@ -85,7 +85,7 @@ function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkil
     workspaceDir: "/tmp/ws",
     managedSkillsDir: "/tmp/managed",
     skills,
-  });
+  } as never);
 }
 
 function createPrompter(params: {
@@ -104,8 +104,10 @@ function createPrompter(params: {
     note: vi.fn(async (message: string, title?: string) => {
       notes.push({ title, message });
     }),
-    select: vi.fn(async () => "npm"),
-    multiselect: vi.fn(async () => params.multiselect ?? ["__skip__"]),
+    select: vi.fn(async () => "npm") as unknown as WizardPrompter["select"],
+    multiselect: vi.fn(
+      async () => params.multiselect ?? ["__skip__"],
+    ) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async () => ""),
     confirm: vi.fn(async ({ message }) => {
       if (message === "Show Homebrew install command?") {

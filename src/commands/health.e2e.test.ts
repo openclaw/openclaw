@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HealthSummary } from "./health.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatHealthCheckFailure } from "./health-format.js";
+import type { HealthSummary } from "./health.js";
 import { formatHealthChannelLines, healthCommand } from "./health.js";
 
 const runtime = {
@@ -10,7 +10,11 @@ const runtime = {
   exit: vi.fn(),
 };
 
-const defaultSessions = { path: "/tmp/sessions.json", count: 0, recent: [] };
+const defaultSessions: HealthSummary["sessions"] = {
+  path: "/tmp/sessions.json",
+  count: 0,
+  recent: [],
+};
 
 const createMainAgentSummary = (sessions = defaultSessions) => ({
   agentId: "main",

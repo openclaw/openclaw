@@ -6,12 +6,18 @@ import type {
 } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
-export const createTestRegistry = (channels: PluginRegistry["channels"] = []): PluginRegistry => ({
+type TestChannelRegistration = {
+  pluginId: string;
+  plugin: unknown;
+  source: string;
+};
+
+export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],
   typedHooks: [],
-  channels,
+  channels: channels as unknown as PluginRegistry["channels"],
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
@@ -22,13 +28,13 @@ export const createTestRegistry = (channels: PluginRegistry["channels"] = []): P
   diagnostics: [],
 });
 
-export const createOutboundTestPlugin = (params: {
+export const createChannelTestPluginBase = (params: {
   id: ChannelId;
-  outbound: ChannelOutboundAdapter;
   label?: string;
   docsPath?: string;
   capabilities?: ChannelCapabilities;
-}): ChannelPlugin => ({
+  config?: Partial<ChannelPlugin["config"]>;
+}): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> => ({
   id: params.id,
   meta: {
     id: params.id,
@@ -39,8 +45,25 @@ export const createOutboundTestPlugin = (params: {
   },
   capabilities: params.capabilities ?? { chatTypes: ["direct"] },
   config: {
-    listAccountIds: () => [],
+    listAccountIds: () => ["default"],
     resolveAccount: () => ({}),
+    ...params.config,
   },
+});
+
+export const createOutboundTestPlugin = (params: {
+  id: ChannelId;
+  outbound: ChannelOutboundAdapter;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: { listAccountIds: () => [] },
+  }),
   outbound: params.outbound,
 });

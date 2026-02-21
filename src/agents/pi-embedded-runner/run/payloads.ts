@@ -1,10 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
+import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -13,6 +12,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -48,7 +48,17 @@ function shouldShowToolErrorWarning(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
+  suppressToolErrorWarnings?: boolean;
+  verboseLevel?: VerboseLevel;
 }): boolean {
+  if (params.suppressToolErrorWarnings) {
+    return false;
+  }
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const verboseEnabled = params.verboseLevel === "on" || params.verboseLevel === "full";
+  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !verboseEnabled) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -68,9 +78,11 @@ export function buildEmbeddedRunPayloads(params: {
   config?: OpenClawConfig;
   sessionKey: string;
   provider?: string;
+  model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
 }): Array<{
   text?: string;
@@ -99,6 +111,7 @@ export function buildEmbeddedRunPayloads(params: {
         cfg: params.config,
         sessionKey: params.sessionKey,
         provider: params.provider,
+        model: params.model,
       })
     : undefined;
   const rawErrorMessage = lastAssistantErrored
@@ -247,6 +260,8 @@ export function buildEmbeddedRunPayloads(params: {
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      verboseLevel: params.verboseLevel,
     });
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.

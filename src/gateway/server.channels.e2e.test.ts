@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -10,7 +11,8 @@ import {
   startServerWithClient,
 } from "./test-helpers.js";
 
-const loadConfigHelpers = async () => await import("../config/config.js");
+let readConfigFileSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -26,7 +28,7 @@ const registryState = vi.hoisted(() => ({
     cliRegistrars: [],
     services: [],
     diagnostics: [],
-  } as PluginRegistry,
+  } as unknown as PluginRegistry,
 }));
 
 vi.mock("./server-plugins.js", async () => {
@@ -48,20 +50,11 @@ const createStubChannelPlugin = (params: {
   summary?: Record<string, unknown>;
   logoutCleared?: boolean;
 }): ChannelPlugin => ({
-  id: params.id,
-  meta: {
+  ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-    isConfigured: async () => false,
-  },
+    config: { isConfigured: async () => false },
+  }),
   status: {
     buildChannelSummary: async () => ({
       configured: false,
@@ -85,7 +78,6 @@ const telegramPlugin: ChannelPlugin = {
   }),
   gateway: {
     logoutAccount: async ({ cfg }) => {
-      const { writeConfigFile } = await import("../config/config.js");
       const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : {};
       delete nextTelegram.botToken;
       await writeConfigFile({
@@ -126,6 +118,7 @@ let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 
 beforeAll(async () => {
+  ({ readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js"));
   setRegistry(defaultRegistry);
   const started = await startServerWithClient();
   server = started.server;
@@ -150,13 +143,13 @@ describe("gateway server channels", () => {
     const res = await rpcReq<{
       channels?: Record<
         string,
-        | {
-            configured?: boolean;
-            tokenSource?: string;
-            probe?: unknown;
-            lastProbeAt?: unknown;
-          }
-        | { linked?: boolean }
+        {
+          configured?: boolean;
+          tokenSource?: string;
+          probe?: unknown;
+          lastProbeAt?: unknown;
+          linked?: boolean;
+        }
       >;
     }>(ws, "channels.status", { probe: false, timeoutMs: 2000 });
     expect(res.ok).toBe(true);
@@ -185,7 +178,6 @@ describe("gateway server channels", () => {
   test("channels.logout clears telegram bot token from config", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
     setRegistry(defaultRegistry);
-    const { readConfigFileSnapshot, writeConfigFile } = await loadConfigHelpers();
     await writeConfigFile({
       channels: {
         telegram: {

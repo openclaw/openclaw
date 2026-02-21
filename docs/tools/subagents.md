@@ -3,6 +3,7 @@ summary: "Sub-agents: spawning isolated agent runs that announce results back to
 read_when:
   - You want background/parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
+  - You are implementing or troubleshooting thread-bound subagent sessions
 title: "Sub-Agents"
 ---
 
@@ -19,8 +20,35 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
 - `/subagents log <id|#> [limit] [tools]`
 - `/subagents info <id|#>`
 - `/subagents send <id|#> <message>`
+- `/subagents steer <id|#> <message>`
+- `/subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]`
+
+Discord thread binding controls:
+
+- `/focus <subagent-label|session-key|session-id|session-label>`
+- `/unfocus`
+- `/agents`
+- `/session ttl <duration|off>`
 
 `/subagents info` shows run metadata (status, timestamps, session id, transcript path, cleanup).
+
+### Spawn behavior
+
+`/subagents spawn` starts a background sub-agent as a user command, not an internal relay, and it sends one final completion update back to the requester chat when the run finishes.
+
+- The spawn command is non-blocking; it returns a run id immediately.
+- On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+- For manual spawns, delivery is resilient:
+  - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
+  - If direct delivery fails, it falls back to queue routing.
+  - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
+- The completion message is a system message and includes:
+  - `Result` (`assistant` reply text, or latest `toolResult` if the assistant reply is empty)
+  - `Status` (`completed successfully` / `failed` / `timed out`)
+  - compact runtime/token stats
+- `--model` and `--thinking` override defaults for that specific run.
+- Use `info`/`log` to inspect details and output after completion.
+- `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
 
 Primary goals:
 
@@ -50,7 +78,39 @@ Tool params:
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
+- `thread?` (default `false`; when `true`, requests channel thread binding for this sub-agent session)
+- `mode?` (`run|session`)
+  - default is `run`
+  - if `thread: true` and `mode` omitted, default becomes `session`
+  - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
+
+## Discord thread-bound sessions
+
+When thread bindings are enabled, a sub-agent can stay bound to a Discord thread so follow-up user messages in that thread keep routing to the same sub-agent session.
+
+Quick flow:
+
+1. Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"`).
+2. OpenClaw creates or binds a Discord thread to that session target.
+3. Replies and follow-up messages in that thread route to the bound session.
+4. Use `/session ttl` to inspect/update auto-unfocus TTL.
+5. Use `/unfocus` to detach manually.
+
+Manual controls:
+
+- `/focus <target>` binds the current thread (or creates one) to a sub-agent/session target.
+- `/unfocus` removes the binding for the current Discord thread.
+- `/agents` lists active runs and binding state (`thread:<id>` or `unbound`).
+- `/session ttl` only works for focused Discord threads.
+
+Config switches:
+
+- Global default: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`
+- Discord override: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`
+- Spawn auto-bind opt-in: `channels.discord.threadBindings.spawnSubagentSessions`
+
+See [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), and [Slash commands](/tools/slash-commands).
 
 Allowlist:
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   parseModelRef,
   resolveModelRefFromString,
@@ -44,6 +45,14 @@ describe("model-selection", () => {
       expect(parseModelRef("opus-4.6", "anthropic")).toEqual({
         provider: "anthropic",
         model: "claude-opus-4-6",
+      });
+      expect(parseModelRef("anthropic/sonnet-4.6", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+      expect(parseModelRef("sonnet-4.6", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
       });
     });
 
@@ -138,26 +147,31 @@ describe("model-selection", () => {
 
   describe("resolveConfiguredModelRef", () => {
     it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const cfg: Partial<OpenClawConfig> = {
-        agents: {
-          defaults: {
-            model: "claude-3-5-sonnet",
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "claude-3-5-sonnet" },
+            },
           },
-        },
-      };
+        };
 
-      const result = resolveConfiguredModelRef({
-        cfg: cfg as OpenClawConfig,
-        defaultProvider: "google",
-        defaultModel: "gemini-pro",
-      });
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "google",
+          defaultModel: "gemini-pro",
+        });
 
-      expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
-      );
-      warnSpy.mockRestore();
+        expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
+        );
+      } finally {
+        setLoggerOverride(null);
+        resetLogger();
+      }
     });
 
     it("should use default provider/model if config is empty", () => {

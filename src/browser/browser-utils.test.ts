@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserServerState } from "./server-context.js";
 import { appendCdpPath, getHeadersWithAuth } from "./cdp.helpers.js";
 import { __test } from "./client-fetch.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { shouldRejectBrowserMutation } from "./csrf.js";
+import {
+  ensureChromeExtensionRelayServer,
+  stopChromeExtensionRelayServer,
+} from "./extension-relay.js";
 import { toBoolean } from "./routes/utils.js";
+import type { BrowserServerState } from "./server-context.js";
 import { listKnownProfileNames } from "./server-context.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
+import { getFreePort } from "./test-port.js";
 
 describe("toBoolean", () => {
   it("parses yes/no and 1/0", () => {
@@ -160,6 +165,31 @@ describe("cdp.helpers", () => {
       Authorization: "Bearer token",
     });
     expect(headers.Authorization).toBe("Bearer token");
+  });
+
+  it("does not add relay header for unknown loopback ports", () => {
+    const headers = getHeadersWithAuth("http://127.0.0.1:19444/json/version");
+    expect(headers["x-openclaw-relay-token"]).toBeUndefined();
+  });
+
+  it("adds relay header for known relay ports", async () => {
+    const port = await getFreePort();
+    const cdpUrl = `http://127.0.0.1:${port}`;
+    const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token";
+    try {
+      await ensureChromeExtensionRelayServer({ cdpUrl });
+      const headers = getHeadersWithAuth(`${cdpUrl}/json/version`);
+      expect(headers["x-openclaw-relay-token"]).toBeTruthy();
+      expect(headers["x-openclaw-relay-token"]).not.toBe("test-gateway-token");
+    } finally {
+      await stopChromeExtensionRelayServer({ cdpUrl }).catch(() => {});
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prev;
+      }
+    }
   });
 });
 

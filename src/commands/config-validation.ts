@@ -1,6 +1,6 @@
-import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export async function requireValidConfigSnapshot(
   runtime: RuntimeEnv,

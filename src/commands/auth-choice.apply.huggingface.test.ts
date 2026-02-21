@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 import {
+  createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
   readAuthProfilesForAgent,
@@ -26,18 +25,17 @@ function createHuggingfacePrompter(params: {
 }
 
 describe("applyAuthChoiceHuggingface", () => {
-  const envSnapshot = captureEnv([
+  const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "HF_TOKEN",
     "HUGGINGFACE_HUB_TOKEN",
   ]);
-  let tempStateDir: string | null = null;
 
   async function setupTempState() {
     const env = await setupAuthTestEnv("openclaw-hf-");
-    tempStateDir = env.stateDir;
+    lifecycle.setStateDir(env.stateDir);
     return env.agentDir;
   }
 
@@ -48,11 +46,7 @@ describe("applyAuthChoiceHuggingface", () => {
   }
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    envSnapshot.restore();
+    await lifecycle.cleanup();
   });
 
   it("returns null when authChoice is not huggingface-api-key", async () => {

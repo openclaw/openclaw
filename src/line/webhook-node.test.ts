@@ -1,5 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
@@ -8,24 +8,26 @@ const sign = (body: string, secret: string) =>
 
 function createRes() {
   const headers: Record<string, string> = {};
-  const res = {
+  const resObj = {
     statusCode: 0,
     headersSent: false,
     setHeader: (k: string, v: string) => {
       headers[k.toLowerCase()] = v;
     },
     end: vi.fn((data?: unknown) => {
-      res.headersSent = true;
+      resObj.headersSent = true;
       // Keep payload available for assertions
-      (res as { body?: unknown }).body = data;
+      resObj.body = data;
     }),
-  } as unknown as ServerResponse & { body?: unknown };
+    body: undefined as unknown,
+  };
+  const res = resObj as unknown as ServerResponse & { body?: unknown };
   return { res, headers };
 }
 
 function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
   const bot = { handleWebhook: vi.fn(async () => {}) };
-  const runtime = { error: vi.fn() };
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const handler = createLineNodeWebhookHandler({
     channelSecret: secret,
     bot,
@@ -38,7 +40,7 @@ function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
 describe("createLineNodeWebhookHandler", () => {
   it("returns 200 for GET", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
       bot,
