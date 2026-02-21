@@ -8,8 +8,8 @@ export function parseArgs(argv) {
   const args = { root: '~/Documents/Code', json: false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (token === '--json') args.json = true;
-    else if (token === '--root' && argv[i + 1]) args.root = argv[++i];
+    if (token === '--json') {args.json = true;}
+    else if (token === '--root' && argv[i + 1]) {args.root = argv[++i];}
   }
   return args;
 }
@@ -33,19 +33,19 @@ function runGit(cwd, args) {
 }
 
 function ageFromMs(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  if (!Number.isFinite(ms) || ms < 0) {return 'unknown';}
   const mins = Math.floor(ms / 60000);
-  if (mins < 60) return `${mins}m`;
+  if (mins < 60) {return `${mins}m`;}
   const hrs = Math.floor(mins / 60);
-  if (hrs < 48) return `${hrs}h`;
+  if (hrs < 48) {return `${hrs}h`;}
   return `${Math.floor(hrs / 24)}d`;
 }
 
 async function detectPmHints(repoPath) {
   const hints = [];
-  if (await exists(path.join(repoPath, 'package.json'))) hints.push('npm/pnpm/yarn');
-  if (await exists(path.join(repoPath, 'Cargo.toml'))) hints.push('cargo');
-  if (await exists(path.join(repoPath, 'go.mod'))) hints.push('go');
+  if (await exists(path.join(repoPath, 'package.json'))) {hints.push('npm/pnpm/yarn');}
+  if (await exists(path.join(repoPath, 'Cargo.toml'))) {hints.push('cargo');}
+  if (await exists(path.join(repoPath, 'go.mod'))) {hints.push('go');}
   return hints;
 }
 
@@ -54,21 +54,21 @@ async function collectRepos(root) {
   const rootEntries = await readdir(root, { withFileTypes: true });
 
   async function checkDir(dir) {
-    if (await exists(path.join(dir, '.git'))) repos.push(dir);
+    if (await exists(path.join(dir, '.git'))) {repos.push(dir);}
   }
 
   for (const entry of rootEntries) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) {continue;}
     const level1 = path.join(root, entry.name);
     await checkDir(level1);
 
     const sub = await readdir(level1, { withFileTypes: true }).catch(() => []);
     for (const s of sub) {
-      if (!s.isDirectory()) continue;
+      if (!s.isDirectory()) {continue;}
       await checkDir(path.join(level1, s.name));
     }
   }
-  return repos.sort();
+  return repos.toSorted();
 }
 
 async function inspectRepo(repoPath) {
@@ -123,7 +123,7 @@ export async function main(argv = process.argv.slice(2)) {
   const root = expandHome(args.root);
   const repos = await collectRepos(root).catch(() => []);
   const data = [];
-  for (const repo of repos) data.push(await inspectRepo(repo));
+  for (const repo of repos) {data.push(await inspectRepo(repo));}
 
   if (args.json) {
     console.log(JSON.stringify({ root, count: data.length, repos: data }, null, 2));

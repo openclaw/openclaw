@@ -5,9 +5,9 @@ export function parseArgs(argv) {
   const args = { file: null, strict: false, json: false };
   for (let i = 0; i < argv.length; i += 1) {
     const t = argv[i];
-    if (t === '--strict') args.strict = true;
-    else if (t === '--json') args.json = true;
-    else if (!args.file) args.file = t;
+    if (t === '--strict') {args.strict = true;}
+    else if (t === '--json') {args.json = true;}
+    else if (!args.file) {args.file = t;}
   }
   return args;
 }
@@ -25,7 +25,7 @@ export function parseJsonl(content) {
   const malformed = [];
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].trim();
-    if (!line) continue;
+    if (!line) {continue;}
     try {
       const obj = JSON.parse(line);
       events.push(summarizeEvent(obj, i + 1));
@@ -58,7 +58,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
   }
 
-  if (args.strict && out.malformed.length) process.exit(1);
+  if (args.strict && out.malformed.length) {process.exit(1);}
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

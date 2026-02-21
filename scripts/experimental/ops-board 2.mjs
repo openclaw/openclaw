@@ -36,19 +36,19 @@ async function gather() {
   const now = Date.now();
   const recent48h = [];
   for (const e of memEntries) {
-    if (!e.isFile()) continue;
+    if (!e.isFile()) {continue;}
     const fp = path.join(memDir, e.name);
     const st = await safeStat(fp);
-    if (st && now - st.mtimeMs <= 48 * 60 * 60 * 1000) recent48h.push({ file: e.name, mtimeMs: st.mtimeMs });
+    if (st && now - st.mtimeMs <= 48 * 60 * 60 * 1000) {recent48h.push({ file: e.name, mtimeMs: st.mtimeMs });}
   }
 
   const logCandidates = [];
   for (const e of stateEntries) {
-    if (!e.isFile()) continue;
-    if (!e.name.toLowerCase().includes('log')) continue;
+    if (!e.isFile()) {continue;}
+    if (!e.name.toLowerCase().includes('log')) {continue;}
     const fp = path.join(stateDir, e.name);
     const st = await safeStat(fp);
-    if (st) logCandidates.push({ file: e.name, mtimeMs: st.mtimeMs, size: st.size });
+    if (st) {logCandidates.push({ file: e.name, mtimeMs: st.mtimeMs, size: st.size });}
   }
   logCandidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
@@ -65,7 +65,7 @@ async function gather() {
     stateDirCount: stateEntries.filter((e) => e.isDirectory()).length,
     memoryFileCount: memEntries.filter((e) => e.isFile()).length,
     memoryRecent48h: recent48h
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .toSorted((a, b) => b.mtimeMs - a.mtimeMs)
       .map((x) => ({ file: x.file, modifiedAt: new Date(x.mtimeMs).toISOString() })),
     heartbeat: hbStat
       ? { exists: true, modifiedAt: new Date(hbStat.mtimeMs).toISOString(), preview: heartbeatPreview }
@@ -79,10 +79,10 @@ function printHuman(data) {
   console.log(`state: ${data.stateFileCount} files, ${data.stateDirCount} dirs`);
   console.log(`memory: ${data.memoryFileCount} files (${data.memoryRecent48h.length} modified in last 48h)`);
   console.log(`heartbeat: ${data.heartbeat.exists ? 'present' : 'missing'}`);
-  if (data.heartbeat.exists) console.log(`heartbeat preview: ${data.heartbeat.preview || '(empty)'}`);
+  if (data.heartbeat.exists) {console.log(`heartbeat preview: ${data.heartbeat.preview || '(empty)'}`);}
   if (data.logs.length) {
     console.log('latest logs:');
-    for (const l of data.logs) console.log(`- ${l.file} (${l.size} bytes)`);
+    for (const l of data.logs) {console.log(`- ${l.file} (${l.size} bytes)`);}
   }
 }
 
