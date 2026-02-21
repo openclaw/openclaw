@@ -12,15 +12,27 @@ const XHIGH_PATTERNS = [
 ];
 
 const HIGH_PATTERNS = [
-  /\b(plan|strategy|approach|blueprint|framework)\b/i,
+  /\b(strategy|strategic|blueprint|framework)\b/i,
+  /\b(plan|approach)\s+(for|to)\b/i,
   /\b(compare|comparison|evaluate|analysis|analyze|assess)\b/i,
   /\b(debug|investigate|root\s+cause|postmortem)\b/i,
 ];
 
-const LOW_PATTERNS = [
-  /^(hi|hello|hey|yo|sup|thanks|thank\s+you)\b/i,
-  /\b(quick\s+answer|tldr|one\s+line|briefly|just\s+tell\s+me)\b/i,
+const MEDIUM_PATTERNS = [
+  /\b(explain|summari[sz]e|rewrite|draft|refactor|improve|brainstorm)\b/i,
+  /\b(step[- ]by[- ]step|walk\s+me\s+through|help\s+me\s+understand)\b/i,
+  /\b(budget|estimate|timeline|checklist|itinerary)\b/i,
 ];
+
+const LOW_HINT_PATTERNS = [
+  /\b(quick\s+answer|tldr|one\s+line|briefly|just\s+tell\s+me)\b/i,
+  /^\s*(?:thanks?|thank\s+you|thx|ok|okay|cool|nice)\s*[!.?]*\s*$/i,
+  /^\s*(?:hi|hello|hey|yo|sup)\s*[!.?]*\s*$/i,
+];
+
+function matchesAnyPattern(text: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
 
 export function selectAdaptiveThinkingLevel(
   params: SelectAdaptiveThinkingLevelParams,
@@ -30,24 +42,22 @@ export function selectAdaptiveThinkingLevel(
     return undefined;
   }
 
-  for (const pattern of XHIGH_PATTERNS) {
-    if (pattern.test(text)) {
-      return params.supportsXHigh ? "xhigh" : "high";
-    }
+  if (matchesAnyPattern(text, XHIGH_PATTERNS)) {
+    return params.supportsXHigh ? "xhigh" : "high";
   }
 
-  for (const pattern of HIGH_PATTERNS) {
-    if (pattern.test(text)) {
-      return "high";
-    }
+  if (matchesAnyPattern(text, HIGH_PATTERNS)) {
+    return "high";
   }
 
-  for (const pattern of LOW_PATTERNS) {
-    if (pattern.test(text)) {
-      return "low";
-    }
+  if (matchesAnyPattern(text, LOW_HINT_PATTERNS)) {
+    return "low";
   }
 
-  // Sensible default: medium for normal requests.
-  return "medium";
+  if (matchesAnyPattern(text, MEDIUM_PATTERNS)) {
+    return "medium";
+  }
+
+  // Low-confidence intent: defer to normal model/session defaults.
+  return undefined;
 }

@@ -40,6 +40,10 @@ vi.mock("../command-detection.js", () => ({
   hasControlCommand: vi.fn().mockReturnValue(false),
 }));
 
+vi.mock("../thinking-auto.js", () => ({
+  selectAdaptiveThinkingLevel: vi.fn().mockReturnValue(undefined),
+}));
+
 vi.mock("./agent-runner.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
 }));
@@ -79,6 +83,7 @@ vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
+import { selectAdaptiveThinkingLevel } from "../thinking-auto.js";
 import { runReplyAgent } from "./agent-runner.js";
 
 function baseParams(
@@ -153,7 +158,7 @@ function baseParams(
   };
 }
 
-describe("runPreparedReply media-only handling", () => {
+describe("runPreparedReply handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -189,5 +194,75 @@ describe("runPreparedReply media-only handling", () => {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     });
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("falls back to model defaults when adaptive selection is inconclusive", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+    vi.mocked(selectAdaptiveThinkingLevel).mockReturnValue(undefined);
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "Can you take a look at this?",
+          RawBody: "Can you take a look at this?",
+          CommandBody: "Can you take a look at this?",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "Can you take a look at this?",
+          BodyStripped: "Can you take a look at this?",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        resolvedThinkLevel: undefined,
+        modelState: {
+          resolveDefaultThinkingLevel,
+        } as never,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.thinkLevel).toBe("off");
+    expect(vi.mocked(selectAdaptiveThinkingLevel)).toHaveBeenCalledOnce();
+    expect(resolveDefaultThinkingLevel).toHaveBeenCalledOnce();
+  });
+
+  it("does not run adaptive selection when think level is already resolved", async () => {
+    vi.mocked(selectAdaptiveThinkingLevel).mockReturnValue("xhigh");
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "Need an architectural RFC",
+          RawBody: "Need an architectural RFC",
+          CommandBody: "Need an architectural RFC",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "Need an architectural RFC",
+          BodyStripped: "Need an architectural RFC",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        resolvedThinkLevel: "low",
+        modelState: {
+          resolveDefaultThinkingLevel,
+        } as never,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.thinkLevel).toBe("low");
+    expect(vi.mocked(selectAdaptiveThinkingLevel)).not.toHaveBeenCalled();
+    expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
   });
 });
