@@ -47,6 +47,6 @@ describe("sendDiscordComponentMessage", () => {
 
     expect(registerMock).toHaveBeenCalledTimes(1);
     const args = registerMock.mock.calls[0]?.[0];
-    expect(args?.entries[0]?.sessionKey).toBe("agent:main:main");
+    expect(args?.entries[0]?.sessionKey).toBe("agent:main:discord:channel:dm-1");
   });
 });
