@@ -22,6 +22,8 @@ describe("model-sanitization", () => {
       expect(result.configured).toEqual(["anthropic/claude-3-5-sonnet", "openai/gpt-4o"]);
       expect(result.removed).toEqual([]);
       expect(result.repaired).toEqual([]);
+      expect(result.ambiguous).toEqual([]);
+      expect(result.unknown).toEqual([]);
     });
 
     it("repairs stale ID to -thinking variant when unambiguous", () => {
@@ -34,6 +36,23 @@ describe("model-sanitization", () => {
         },
       ]);
       expect(result.removed).toEqual([]);
+      expect(result.ambiguous).toEqual([]);
+      expect(result.unknown).toEqual([]);
+    });
+
+    it("repairs stale ID to a single deterministic candidate even without -thinking", () => {
+      const nonThinkingCatalog = new Set(["provider/model-v2"]);
+      const result = sanitizeConfiguredModelIds(["provider/model"], nonThinkingCatalog);
+      expect(result.configured).toEqual(["provider/model-v2"]);
+      expect(result.repaired).toEqual([
+        {
+          from: "provider/model",
+          to: "provider/model-v2",
+        },
+      ]);
+      expect(result.removed).toEqual([]);
+      expect(result.ambiguous).toEqual([]);
+      expect(result.unknown).toEqual([]);
     });
 
     it("removes ID when multiple candidates exist (ambiguous)", () => {
@@ -46,6 +65,8 @@ describe("model-sanitization", () => {
       expect(result.removed).toEqual(["provider/model"]);
       expect(result.configured).toEqual([]);
       expect(result.repaired).toEqual([]);
+      expect(result.ambiguous).toEqual(["provider/model"]);
+      expect(result.unknown).toEqual([]);
     });
 
     it("does not cross providers in repair logic", () => {
@@ -53,6 +74,16 @@ describe("model-sanitization", () => {
       expect(result.removed).toEqual(["other-provider/claude-opus-4-6"]);
       expect(result.configured).toEqual([]);
       expect(result.repaired).toEqual([]);
+      expect(result.ambiguous).toEqual([]);
+      expect(result.unknown).toEqual(["other-provider/claude-opus-4-6"]);
+    });
+
+    it("classifies malformed IDs as unknown", () => {
+      const result = sanitizeConfiguredModelIds(["noslash", "provider/"], catalog);
+      expect(result.configured).toEqual([]);
+      expect(result.repaired).toEqual([]);
+      expect(result.ambiguous).toEqual([]);
+      expect(result.unknown).toEqual(["noslash", "provider/"]);
     });
 
     it("is deterministic across multiple runs", () => {
@@ -71,6 +102,8 @@ describe("model-sanitization", () => {
       const result = sanitizeConfiguredModelIds(["provider/model"], catalogWithExact);
       expect(result.configured).toEqual(["provider/model"]);
       expect(result.repaired).toEqual([]);
+      expect(result.ambiguous).toEqual([]);
+      expect(result.unknown).toEqual([]);
     });
   });
 
@@ -93,6 +126,21 @@ describe("model-sanitization", () => {
         from: "google-antigravity/claude-opus-4-6",
         to: "google-antigravity/claude-opus-4-6-thinking",
       });
+    });
+
+    it("returns ambiguous reason when multiple candidates exist", () => {
+      const result = sanitizeSingleModelId(
+        "provider/model",
+        new Set(["provider/model-thinking", "provider/model-preview"]),
+      );
+      expect(result.id).toBeNull();
+      expect(result.reason).toBe("ambiguous");
+    });
+
+    it("returns unknown reason when no deterministic candidate exists", () => {
+      const result = sanitizeSingleModelId("provider/missing", catalog);
+      expect(result.id).toBeNull();
+      expect(result.reason).toBe("unknown");
     });
   });
 

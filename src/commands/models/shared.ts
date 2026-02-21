@@ -85,14 +85,24 @@ async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConf
     const sanitizeResult = sanitizeConfiguredModelIds(keys, catalogKeys);
 
     if (sanitizeResult.removed.length > 0 || sanitizeResult.repaired.length > 0) {
+      const removedSet = new Set(sanitizeResult.removed);
+      const repairedByFrom = new Map(
+        sanitizeResult.repaired.map((entry) => [entry.from, entry.to]),
+      );
       const newModels: typeof models = {};
 
-      for (const key of sanitizeResult.configured) {
-        const repairedEntry = sanitizeResult.repaired.find((r) => r.to === key);
-        const originalKey = repairedEntry?.from ?? key;
-        const value = models[originalKey];
+      for (const key of keys) {
+        if (removedSet.has(key)) {
+          continue;
+        }
+        const value = models[key];
         if (value !== undefined) {
-          newModels[key] = value;
+          const targetKey = repairedByFrom.get(key) ?? key;
+          // Prefer exact configured keys over repaired aliases when both resolve
+          // to the same target key, preventing stale-key overwrite of canonical entries.
+          if (newModels[targetKey] === undefined || key === targetKey) {
+            newModels[targetKey] = value;
+          }
         }
       }
 
@@ -110,14 +120,17 @@ async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConf
       for (const repair of sanitizeResult.repaired) {
         console.warn(`[model-sanitization] Repaired model ID: ${repair.from} -> ${repair.to}`);
       }
-      for (const removed of sanitizeResult.removed) {
-        console.warn(`[model-sanitization] Removed stale model ID: ${removed}`);
+      for (const ambiguous of sanitizeResult.ambiguous) {
+        console.warn(`[model-sanitization] Removed ambiguous model ID: ${ambiguous}`);
+      }
+      for (const unknown of sanitizeResult.unknown) {
+        console.warn(`[model-sanitization] Removed unknown model ID: ${unknown}`);
       }
     }
   }
 
   // Sanitize agents.defaults.model.primary
-  const modelConfig = cfg.agents?.defaults?.model as
+  let modelConfig = result.agents?.defaults?.model as
     | { primary?: string; fallbacks?: string[] }
     | undefined;
   if (modelConfig?.primary) {
@@ -127,8 +140,12 @@ async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConf
         console.warn(
           `[model-sanitization] Repaired primary model: ${primaryResult.repaired.from} -> ${primaryResult.repaired.to}`,
         );
+      } else if (primaryResult.id === null && primaryResult.reason === "ambiguous") {
+        console.warn(
+          `[model-sanitization] Removed ambiguous primary model: ${modelConfig.primary}`,
+        );
       } else if (primaryResult.id === null) {
-        console.warn(`[model-sanitization] Removed stale primary model: ${modelConfig.primary}`);
+        console.warn(`[model-sanitization] Removed unknown primary model: ${modelConfig.primary}`);
       }
 
       result = {
@@ -146,6 +163,9 @@ async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConf
       };
     }
   }
+  modelConfig = result.agents?.defaults?.model as
+    | { primary?: string; fallbacks?: string[] }
+    | undefined;
 
   // Sanitize agents.defaults.model.fallbacks
   if (modelConfig?.fallbacks && modelConfig.fallbacks.length > 0) {
@@ -156,13 +176,17 @@ async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConf
           `[model-sanitization] Repaired fallback model: ${repair.from} -> ${repair.to}`,
         );
       }
-      for (const removed of fallbacksResult.removed) {
-        console.warn(`[model-sanitization] Removed stale fallback model: ${removed}`);
+      for (const ambiguous of fallbacksResult.ambiguous) {
+        console.warn(`[model-sanitization] Removed ambiguous fallback model: ${ambiguous}`);
+      }
+      for (const unknown of fallbacksResult.unknown) {
+        console.warn(`[model-sanitization] Removed unknown fallback model: ${unknown}`);
       }
 
       const currentModel = result.agents?.defaults?.model as
         | { primary?: string; fallbacks?: string[] }
         | undefined;
+      const dedupedFallbacks = [...new Set(fallbacksResult.configured)];
 
       result = {
         ...result,
@@ -172,8 +196,7 @@ async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConf
             ...result.agents?.defaults,
             model: {
               ...currentModel,
-              fallbacks:
-                fallbacksResult.configured.length > 0 ? fallbacksResult.configured : undefined,
+              fallbacks: dedupedFallbacks.length > 0 ? dedupedFallbacks : undefined,
             },
           },
         },

@@ -9,7 +9,13 @@ export type SanitizeResult = {
   configured: string[];
   removed: string[];
   repaired: Array<{ from: string; to: string }>;
+  ambiguous: string[];
+  unknown: string[];
 };
+
+export type ModelSanitizationRemovalReason = "ambiguous" | "unknown";
+
+type RepairAttempt = { kind: "repaired"; to: string } | { kind: "ambiguous" } | { kind: "unknown" };
 
 export function sanitizeConfiguredModelIds(
   configuredIds: string[],
@@ -18,6 +24,8 @@ export function sanitizeConfiguredModelIds(
   const configured: string[] = [];
   const removed: string[] = [];
   const repaired: Array<{ from: string; to: string }> = [];
+  const ambiguous: string[] = [];
+  const unknown: string[] = [];
 
   for (const id of configuredIds) {
     const trimmed = id.trim();
@@ -30,42 +38,45 @@ export function sanitizeConfiguredModelIds(
       continue;
     }
 
-    const repairCandidate = attemptDeterministicRepair(trimmed, catalogModelIds);
-    if (repairCandidate) {
-      configured.push(repairCandidate);
-      repaired.push({ from: trimmed, to: repairCandidate });
+    const repairAttempt = attemptDeterministicRepair(trimmed, catalogModelIds);
+    if (repairAttempt.kind === "repaired") {
+      configured.push(repairAttempt.to);
+      repaired.push({ from: trimmed, to: repairAttempt.to });
       continue;
     }
 
     removed.push(trimmed);
+    if (repairAttempt.kind === "ambiguous") {
+      ambiguous.push(trimmed);
+    } else {
+      unknown.push(trimmed);
+    }
   }
 
-  return { configured, removed, repaired };
+  return { configured, removed, repaired, ambiguous, unknown };
 }
 
-function attemptDeterministicRepair(id: string, catalogModelIds: Set<string>): string | null {
+function attemptDeterministicRepair(id: string, catalogModelIds: Set<string>): RepairAttempt {
   const slash = id.indexOf("/");
   if (slash === -1) {
-    return null;
+    return { kind: "unknown" };
   }
 
   const provider = id.slice(0, slash);
   const modelPart = id.slice(slash + 1);
 
   if (!provider || !modelPart) {
-    return null;
+    return { kind: "unknown" };
   }
 
-  const thinkingVariant = provider + "/" + modelPart + "-thinking";
-  if (catalogModelIds.has(thinkingVariant)) {
-    const candidates = findCandidates(id, catalogModelIds);
-    if (candidates.length === 1 && candidates[0] === thinkingVariant) {
-      return thinkingVariant;
-    }
-    return null;
+  const candidates = findCandidates(id, catalogModelIds);
+  if (candidates.length === 0) {
+    return { kind: "unknown" };
   }
-
-  return null;
+  if (candidates.length === 1) {
+    return { kind: "repaired", to: candidates[0] ?? id };
+  }
+  return { kind: "ambiguous" };
 }
 
 function findCandidates(baseId: string, catalogModelIds: Set<string>): string[] {
@@ -98,7 +109,11 @@ function findCandidates(baseId: string, catalogModelIds: Set<string>): string[] 
 export function sanitizeSingleModelId(
   modelId: string | undefined,
   catalogModelIds: Set<string>,
-): { id: string | null; repaired?: { from: string; to: string } } {
+): {
+  id: string | null;
+  repaired?: { from: string; to: string };
+  reason?: ModelSanitizationRemovalReason;
+} {
   if (!modelId?.trim()) {
     return { id: null };
   }
@@ -113,7 +128,9 @@ export function sanitizeSingleModelId(
     };
   }
 
-  return { id: null };
+  const reason: ModelSanitizationRemovalReason =
+    result.ambiguous.length > 0 ? "ambiguous" : "unknown";
+  return { id: null, reason };
 }
 
 export function buildCatalogKeySet(catalog: Array<{ provider: string; id: string }>): Set<string> {
