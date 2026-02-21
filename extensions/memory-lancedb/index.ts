@@ -2,14 +2,13 @@
  * OpenClaw Memory (LanceDB) Plugin
  *
  * Long-term memory with vector search for AI conversations.
- * Uses LanceDB for storage and OpenAI for embeddings.
+ * Uses LanceDB for storage and OpenAI-compatible embeddings.
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
-import OpenAI from "openai";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
@@ -157,25 +156,55 @@ class MemoryDB {
 }
 
 // ============================================================================
-// OpenAI Embeddings
+// OpenAI-compatible embeddings (raw HTTP for broad endpoint compatibility)
 // ============================================================================
 
 class Embeddings {
-  private client: OpenAI;
+  private readonly baseUrl: string;
+  private static readonly REQUEST_TIMEOUT_MS = 30_000;
 
   constructor(
-    apiKey: string,
-    private model: string,
+    private readonly apiKey: string,
+    private readonly model: string,
+    baseUrl?: string,
+    private readonly requestDimensions?: number,
+    private readonly expectedDimensions?: number,
   ) {
-    this.client = new OpenAI({ apiKey });
+    const normalized = (baseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+    this.baseUrl = normalized;
   }
 
   async embed(text: string): Promise<number[]> {
-    const response = await this.client.embeddings.create({
-      model: this.model,
-      input: text,
+    const res = await fetch(`${this.baseUrl}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model,
+        input: text,
+        ...(typeof this.requestDimensions === "number"
+          ? { dimensions: this.requestDimensions }
+          : {}),
+      }),
+      signal: AbortSignal.timeout(Embeddings.REQUEST_TIMEOUT_MS),
     });
-    return response.data[0].embedding;
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`embeddings request failed: ${res.status} ${body}`);
+    }
+    const payload = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
+    const vector = payload.data?.[0]?.embedding;
+    if (!Array.isArray(vector) || vector.length === 0) {
+      throw new Error("embeddings response missing vector");
+    }
+    if (typeof this.expectedDimensions === "number" && vector.length !== this.expectedDimensions) {
+      throw new Error(
+        `embedding dimension mismatch: expected ${this.expectedDimensions}, got ${vector.length}`,
+      );
+    }
+    return vector;
   }
 }
 
@@ -293,9 +322,18 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
+    const vectorDim = vectorDimsForModel(
+      cfg.embedding.model ?? "text-embedding-3-small",
+      cfg.embedding.dimensions,
+    );
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+    const embeddings = new Embeddings(
+      cfg.embedding.apiKey,
+      cfg.embedding.model!,
+      cfg.embedding.baseUrl,
+      cfg.embedding.dimensions,
+      vectorDim,
+    );
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -657,7 +695,7 @@ const memoryPlugin = {
       id: "memory-lancedb",
       start: () => {
         api.logger.info(
-          `memory-lancedb: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
+          `memory-lancedb: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model}, dims: ${vectorDim})`,
         );
       },
       stop: () => {

@@ -60,6 +60,7 @@ describe("memory plugin e2e", () => {
 
     expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
+    expect(config?.embedding?.model).toBe("text-embedding-3-small");
     expect(config?.dbPath).toBe(dbPath);
     expect(config?.captureMaxChars).toBe(500);
   });
@@ -69,17 +70,39 @@ describe("memory plugin e2e", () => {
 
     // Set a test env var
     process.env.TEST_MEMORY_API_KEY = "test-key-123";
+    process.env.TEST_MEMORY_BASE_URL = "http://127.0.0.1:1234/v1";
 
     const config = memoryPlugin.configSchema?.parse?.({
       embedding: {
         apiKey: "${TEST_MEMORY_API_KEY}",
+        baseUrl: "${TEST_MEMORY_BASE_URL}",
       },
       dbPath,
     });
 
     expect(config?.embedding?.apiKey).toBe("test-key-123");
+    expect(config?.embedding?.baseUrl).toBe("http://127.0.0.1:1234/v1");
 
     delete process.env.TEST_MEMORY_API_KEY;
+    delete process.env.TEST_MEMORY_BASE_URL;
+  });
+
+  test("config schema supports custom model with baseUrl and dimensions", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        baseUrl: "http://127.0.0.1:1234/v1",
+        model: "text-embedding-nomic-embed-text-v1.5@q8_0",
+        dimensions: 768,
+      },
+      dbPath,
+    });
+
+    expect(config?.embedding?.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(config?.embedding?.model).toBe("text-embedding-nomic-embed-text-v1.5@q8_0");
+    expect(config?.embedding?.dimensions).toBe(768);
   });
 
   test("config schema rejects missing apiKey", async () => {
@@ -103,6 +126,59 @@ describe("memory plugin e2e", () => {
         captureMaxChars: 99,
       });
     }).toThrow("captureMaxChars must be between 100 and 10000");
+  });
+
+  test("config schema requires dimensions for unknown model ids", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-nomic-embed-text-v1.5@q8_0",
+        },
+        dbPath,
+      });
+    }).toThrow("Set embedding.dimensions for custom models");
+  });
+
+  test("config schema validates dimensions type and range", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-nomic-embed-text-v1.5@q8_0",
+          dimensions: 0,
+        },
+        dbPath,
+      });
+    }).toThrow("embedding.dimensions must be an integer between 1");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          dimensions: 768.5,
+        },
+        dbPath,
+      });
+    }).toThrow("embedding.dimensions must be an integer");
+  });
+
+  test("config schema rejects empty baseUrl", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          baseUrl: "   ",
+        },
+        dbPath,
+      });
+    }).toThrow("embedding.baseUrl cannot be empty");
   });
 
   test("config schema accepts captureMaxChars override", async () => {
