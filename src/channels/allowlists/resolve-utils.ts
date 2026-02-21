@@ -6,31 +6,32 @@ export type AllowlistUserResolutionLike = {
   id?: string;
 };
 
+function dedupeAllowlistEntries(entries: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const entry of entries) {
+    const normalized = entry.trim();
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(normalized);
+  }
+  return deduped;
+}
+
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  const push = (value: string) => {
-    const normalized = value.trim();
-    if (!normalized) {
-      return;
-    }
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    merged.push(normalized);
-  };
-  for (const entry of params.existing ?? []) {
-    push(String(entry));
-  }
-  for (const entry of params.additions) {
-    push(entry);
-  }
-  return merged;
+  return dedupeAllowlistEntries([
+    ...(params.existing ?? []).map((entry) => String(entry)),
+    ...params.additions,
+  ]);
 }
 
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
@@ -71,10 +72,33 @@ export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLik
   return additions;
 }
 
+export function canonicalizeAllowlistWithResolvedIds<
+  T extends AllowlistUserResolutionLike,
+>(params: { existing?: Array<string | number>; resolvedMap: Map<string, T> }): string[] {
+  const canonicalized: string[] = [];
+  for (const entry of params.existing ?? []) {
+    const trimmed = String(entry).trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed === "*") {
+      canonicalized.push(trimmed);
+      continue;
+    }
+    const resolved = params.resolvedMap.get(trimmed);
+    canonicalized.push(resolved?.resolved && resolved.id ? resolved.id : trimmed);
+  }
+  return dedupeAllowlistEntries(canonicalized);
+}
+
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
->(params: { entries: TEntries; resolvedMap: Map<string, T> }): TEntries {
+>(params: {
+  entries: TEntries;
+  resolvedMap: Map<string, T>;
+  strategy?: "merge" | "canonicalize";
+}): TEntries {
   const nextEntries: Record<string, unknown> = { ...params.entries };
   for (const [entryKey, entryConfig] of Object.entries(params.entries)) {
     if (!entryConfig || typeof entryConfig !== "object") {
@@ -88,9 +112,16 @@ export function patchAllowlistUsersInConfigEntries<
       existing: users,
       resolvedMap: params.resolvedMap,
     });
+    const resolvedUsers =
+      params.strategy === "canonicalize"
+        ? canonicalizeAllowlistWithResolvedIds({
+            existing: users,
+            resolvedMap: params.resolvedMap,
+          })
+        : mergeAllowlist({ existing: users, additions });
     nextEntries[entryKey] = {
       ...entryConfig,
-      users: mergeAllowlist({ existing: users, additions }),
+      users: resolvedUsers,
     };
   }
   return nextEntries as TEntries;

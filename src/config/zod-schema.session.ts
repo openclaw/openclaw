@@ -10,6 +10,7 @@ import {
   QueueSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 const SessionResetConfigSchema = z
   .object({
@@ -62,6 +63,13 @@ export const SessionSchema = z
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
       })
       .strict()
       .optional(),
@@ -161,8 +169,12 @@ export const CommandsSchema = z
     restart: z.boolean().optional().default(true),
     useAccessGroups: z.boolean().optional(),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),
+    ownerDisplaySecret: z.string().optional().register(sensitive),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()
   .optional()
-  .default({ native: "auto", nativeSkills: "auto", restart: true });
+  .default(
+    () => ({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" }) as const,
+  );

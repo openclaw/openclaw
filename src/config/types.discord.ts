@@ -13,7 +13,7 @@ import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-export type DiscordStreamMode = "partial" | "block" | "off";
+export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -142,6 +142,25 @@ export type DiscordUiConfig = {
   components?: DiscordUiComponentsConfig;
 };
 
+export type DiscordThreadBindingsConfig = {
+  /**
+   * Enable Discord thread binding features (/focus, thread-bound delivery, and
+   * thread-bound subagent session flows). Overrides session.threadBindings.enabled
+   * when set.
+   */
+  enabled?: boolean;
+  /**
+   * Auto-unfocus TTL for thread-bound sessions in hours.
+   * Set to 0 to disable TTL. Default: 24.
+   */
+  ttlHours?: number;
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
+   * threads for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+};
+
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
@@ -179,14 +198,20 @@ export type DiscordAccountConfig = {
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /**
-   * Live preview streaming mode (edit-based, like Telegram).
-   * - "partial": send a message and continuously edit it with new content as tokens arrive.
-   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
-   * - "off": no preview streaming (default).
-   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
+   * Live stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in chunked preview updates
+   * - "progress": alias that maps to "partial" on Discord
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streamMode?: DiscordStreamMode;
-  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
+  streaming?: DiscordStreamMode | boolean;
+  /**
+   * @deprecated Legacy key; migrated automatically to `streaming`.
+   */
+  streamMode?: "partial" | "block" | "off";
+  /** Chunking config for Discord stream previews in `streaming: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
@@ -233,6 +258,8 @@ export type DiscordAccountConfig = {
   ui?: DiscordUiConfig;
   /** Slash command configuration. */
   slashCommand?: DiscordSlashCommandConfig;
+  /** Thread binding lifecycle settings (focus/subagent thread sessions). */
+  threadBindings?: DiscordThreadBindingsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */
