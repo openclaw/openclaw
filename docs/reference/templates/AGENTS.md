@@ -15,14 +15,15 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Every Session
 
-Before doing anything else:
+The following files are **already in your context** (auto-injected by the system prompt assembler — do NOT re-read them):
+`SOUL.md`, `USER.md`, `IDENTITY.md`, `TOOLS.md`, `HEARTBEAT.md`, `AGENTS.md`
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+Before doing anything else, read these files that are **not** auto-injected (batch them in a single parallel tool call):
 
-Don't ask permission. Just do it.
+1. `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+2. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+
+If any of these files don't exist, that's fine — skip them and move on. Don't retry or look for alternatives.
 
 ## Memory
 
