@@ -63,11 +63,11 @@ export class ConnectionStatus extends LitElement {
     const connecting = g?.connecting ?? false;
     const stalled = g?.retryStalled ?? false;
 
-    const pillClass = connected
-      ? "pill pill--connected"
+    const stateClass = connected
+      ? "connection-status-btn--connected"
       : stalled
-        ? "pill pill--danger"
-        : "pill pill--connecting";
+        ? "connection-status-btn--danger"
+        : "connection-status-btn--connecting";
 
     const label = connected ? "Connected" : stalled ? "Offline" : "Connecting…";
 
@@ -80,7 +80,7 @@ export class ConnectionStatus extends LitElement {
     return html`
       <div class="connection-status-wrapper">
         <button
-          class="${pillClass} connection-status-btn"
+          class="connection-status-btn ${stateClass}"
           @click=${this.handleClick}
           title=${hint}
           aria-expanded=${this.showMenu}

@@ -624,13 +624,14 @@ sidebar-nav {
 }
 
 .connection-status-btn {
-  /* Match theme-toggle capsule sizing */
+  /* Match theme-toggle capsule height: 2px container pad + 6px btn pad + icon + border */
   display: inline-flex;
   align-items: center;
   gap: 6px;
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 0.8rem;
+  height: 36px;
   font-weight: 600;
   letter-spacing: 0.02em;
   border: 1px solid var(--lg-border-color);
@@ -670,12 +671,16 @@ sidebar-nav {
   height: 6px;
 }
 
-.pill--connected {
+.connection-status-btn--connected {
   color: var(--success);
 }
 
-.pill--connecting {
+.connection-status-btn--connecting {
   color: var(--muted);
+}
+
+.connection-status-btn--danger {
+  color: var(--warn);
 }
 
 .status-dot--pulse {
@@ -683,8 +688,15 @@ sidebar-nav {
 }
 
 @keyframes dot-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .connection-menu {
@@ -741,10 +753,18 @@ sidebar-nav {
 
 .theme-toggle {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--lg-border-color);
   border-radius: 999px;
-  padding: 2px;
+  padding: 6px;
+  height: 36px;
   background: var(--lg-bg-primary);
+  overflow: hidden;
+  /* Collapsed: fit exactly one button */
+  max-width: 36px;
+  transition:
+    max-width var(--lg-duration-normal) var(--lg-easing-spring);
 }
 
 @supports (backdrop-filter: blur(1px)) {
@@ -752,6 +772,23 @@ sidebar-nav {
     backdrop-filter: blur(var(--lg-blur-sm));
     -webkit-backdrop-filter: blur(var(--lg-blur-sm));
   }
+}
+
+/* Desktop: expand on hover */
+@media (hover: hover) {
+  .theme-toggle:hover {
+    max-width: 200px;
+  }
+}
+
+/* Touch/mobile: expand on focus-within (tap any button) */
+.theme-toggle:focus-within {
+  max-width: 200px;
+}
+
+/* Also expand when explicitly opened via JS class */
+.theme-toggle.theme-toggle--open {
+  max-width: 200px;
 }
 
 .theme-btn {
@@ -764,17 +801,53 @@ sidebar-nav {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  white-space: nowrap;
+  flex-shrink: 0;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  cursor: pointer;
   transition:
     color var(--lg-duration-fast) var(--lg-easing-spring),
     background var(--lg-duration-fast) var(--lg-easing-spring),
     transform var(--lg-duration-fast) var(--lg-easing-spring);
 }
 
+/* Active button: square padding when collapsed so icon is centered */
+.theme-btn.active {
+  padding: 6px 7px;
+}
+
+/* In collapsed state, hide inactive buttons; show only active */
+.theme-btn:not(.active) {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  padding: 6px 0;
+  overflow: hidden;
+  transition:
+    opacity var(--lg-duration-fast) var(--lg-easing-spring),
+    width var(--lg-duration-fast) var(--lg-easing-spring),
+    padding var(--lg-duration-fast) var(--lg-easing-spring),
+    color var(--lg-duration-fast) var(--lg-easing-spring),
+    background var(--lg-duration-fast) var(--lg-easing-spring),
+    transform var(--lg-duration-fast) var(--lg-easing-spring);
+}
+
+/* When expanded (hover / focus-within / open), show all buttons */
+.theme-toggle:hover .theme-btn,
+.theme-toggle:focus-within .theme-btn,
+.theme-toggle--open .theme-btn {
+  opacity: 1;
+  pointer-events: auto;
+  width: auto;
+  padding: 6px 10px;
+}
+
 .theme-btn.active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text);
+  order: -1;
+  /* Active button slides to the front in collapsed state */
 }
 
 .theme-btn:hover {
@@ -827,7 +900,7 @@ sidebar-nav {
   box-shadow: var(--lg-shadow-high);
 }
 
-.panel + .panel {
+.panel+.panel {
   margin-top: 12px;
 }
 
@@ -992,8 +1065,13 @@ sidebar-nav {
 /* ─── Icon Spin ─── */
 
 @keyframes icon-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .icon-spin {
@@ -1084,6 +1162,7 @@ sidebar-nav {
     opacity: 0;
     transform: scale(0.97) translateY(6px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -1157,6 +1236,7 @@ sidebar-nav {
 }
 
 @supports (backdrop-filter: blur(1px)) {
+
   .input-row input,
   .connect-form input {
     backdrop-filter: blur(var(--lg-blur-sm));
@@ -1501,6 +1581,7 @@ pre {
 /* ─── Accessibility ─── */
 
 @media (prefers-reduced-transparency: reduce) {
+
   .topbar,
   .panel,
   .sidebar,
