@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+/// These cases cover optional `security=allowlist` behavior.
+/// Default install posture remains deny-by-default for exec on macOS node-host.
 struct ExecAllowlistTests {
     @Test func matchUsesResolvedPath() {
         let entry = ExecAllowlistEntry(pattern: "/opt/homebrew/bin/rg")
@@ -14,7 +16,7 @@ struct ExecAllowlistTests {
         #expect(match?.pattern == entry.pattern)
     }
 
-    @Test func matchUsesBasenameForSimplePattern() {
+    @Test func matchIgnoresBasenamePattern() {
         let entry = ExecAllowlistEntry(pattern: "rg")
         let resolution = ExecCommandResolution(
             rawExecutable: "rg",
@@ -22,7 +24,18 @@ struct ExecAllowlistTests {
             executableName: "rg",
             cwd: nil)
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
-        #expect(match?.pattern == entry.pattern)
+        #expect(match == nil)
+    }
+
+    @Test func matchIgnoresBasenameForRelativeExecutable() {
+        let entry = ExecAllowlistEntry(pattern: "echo")
+        let resolution = ExecCommandResolution(
+            rawExecutable: "./echo",
+            resolvedPath: "/tmp/oc-basename/echo",
+            executableName: "echo",
+            cwd: "/tmp/oc-basename")
+        let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
+        #expect(match == nil)
     }
 
     @Test func matchIsCaseInsensitive() {

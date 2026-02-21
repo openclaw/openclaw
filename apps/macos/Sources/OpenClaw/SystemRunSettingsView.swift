@@ -105,17 +105,21 @@ struct SystemRunSettingsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
-                    TextField("Add allowlist pattern (case-insensitive globs)", text: self.$newPattern)
+                    TextField("Add allowlist path pattern (case-insensitive globs)", text: self.$newPattern)
                         .textFieldStyle(.roundedBorder)
                     Button("Add") {
                         let pattern = self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !pattern.isEmpty else { return }
+                        guard self.model.isPathPattern(pattern) else { return }
                         self.model.addEntry(pattern)
                         self.newPattern = ""
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!self.model.isPathPattern(self.newPattern))
                 }
+
+                Text("Path patterns only. Basename entries like \"echo\" are ignored.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
                 if self.model.entries.isEmpty {
                     Text("No allowlisted commands yet.")
@@ -370,7 +374,7 @@ final class ExecApprovalsSettingsModel {
     func addEntry(_ pattern: String) {
         guard !self.isDefaultsScope else { return }
         let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard self.isPathPattern(trimmed) else { return }
         self.entries.append(ExecAllowlistEntry(pattern: trimmed, lastUsedAt: nil))
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
@@ -378,7 +382,11 @@ final class ExecApprovalsSettingsModel {
     func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) {
         guard !self.isDefaultsScope else { return }
         guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
-        self.entries[index] = entry
+        var next = entry
+        let trimmed = next.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.isPathPattern(trimmed) else { return }
+        next.pattern = trimmed
+        self.entries[index] = next
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
@@ -391,6 +399,12 @@ final class ExecApprovalsSettingsModel {
 
     func entry(for id: UUID) -> ExecAllowlistEntry? {
         self.entries.first(where: { $0.id == id })
+    }
+
+    func isPathPattern(_ pattern: String) -> Bool {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.contains("/") || trimmed.contains("~") || trimmed.contains("\\")
     }
 
     func refreshSkillBins(force: Bool = false) async {
