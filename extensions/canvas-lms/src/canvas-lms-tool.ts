@@ -132,12 +132,13 @@ function readPerPage(params: Record<string, unknown>, configured?: number): numb
 
 function readPositiveInt(
   value: unknown,
-  options: { fallback: number; min: number; max: number },
+  options: { fallback: number; min: number; max: number; allowZero?: boolean },
 ): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  const min = options.allowZero ? Math.min(0, options.min) : Math.max(1, options.min);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) {
     return options.fallback;
   }
-  return Math.max(options.min, Math.min(options.max, Math.floor(value)));
+  return Math.max(min, Math.min(options.max, Math.floor(value)));
 }
 
 function computeRetryAfterMs(value: string | null): number | undefined {
@@ -635,6 +636,7 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
         fallback: DEFAULT_MAX_RETRIES,
         min: 0,
         max: 5,
+        allowZero: true,
       });
       const maxPages = readPositiveInt(pluginConfig.maxPages, {
         fallback: DEFAULT_MAX_PAGES,
