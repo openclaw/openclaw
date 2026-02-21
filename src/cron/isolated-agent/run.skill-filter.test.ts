@@ -10,6 +10,7 @@ const resolveAgentSkillsFilterMock = vi.fn();
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
+  resolveEffectiveModelRecoveryProbeIntervalMs: vi.fn().mockReturnValue(undefined),
   resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
   resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
