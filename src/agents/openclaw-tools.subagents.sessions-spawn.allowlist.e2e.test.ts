@@ -12,6 +12,17 @@ const callGatewayMock = getCallGatewayMock();
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   function setAllowAgents(allowAgents: string[]) {
+    const seededAgents = [
+      "dev",
+      "research",
+      "research-analyst",
+      "codex",
+      "visionclaw",
+      "katman-social",
+      "gizem-asistan",
+      "alpha",
+      "beta",
+    ].map((id) => ({ id }));
     setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
@@ -25,6 +36,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
               allowAgents,
             },
           },
+          ...seededAgents,
         ],
       },
     });
@@ -158,5 +170,48 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       callId: "call10",
       acceptedAt: 5200,
     });
+  });
+
+  it("requires explicit routing for main when agentId is missing and task is ambiguous", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    setAllowAgents(["*"]);
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call11", {
+      task: "quick test ping",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("sessions_spawn requires explicit agent routing"),
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("infers dev agent for coding tasks when main omits agentId", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    setAllowAgents(["*"]);
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call12", {
+      task: "write a tiny bash script that echoes hello and exits",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:dev:subagent:")).toBe(true);
   });
 });

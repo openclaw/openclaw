@@ -698,6 +698,45 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tool output only");
   });
 
+  it("ignores synthetic transcript-repair tool output and keeps real findings", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "real worker output" }],
+        },
+        {
+          role: "toolResult",
+          content: [
+            {
+              type: "text",
+              text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+            },
+          ],
+        },
+      ],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("");
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-ignore-synthetic",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => sendSpy.mock.calls.length + agentSpy.mock.calls.length).toBe(1);
+    const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } } | undefined;
+    const agentCall = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } } | undefined;
+    const msg = String(sendCall?.params?.message ?? agentCall?.params?.message ?? "");
+    expect(msg).toContain("real worker output");
+    expect(msg).not.toContain("transcript repair");
+  });
+
   it("queues announce delivery back into requester subagent session", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);

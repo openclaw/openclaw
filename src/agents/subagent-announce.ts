@@ -75,6 +75,14 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
+function isSyntheticTranscriptRepairText(text: string): boolean {
+  const folded = text.toLowerCase();
+  return (
+    folded.includes("missing tool result in session history") &&
+    folded.includes("transcript repair")
+  );
+}
+
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
@@ -171,6 +179,9 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
     const msg = messages[i];
     const text = extractSubagentOutputText(msg);
     if (text) {
+      if (isSyntheticTranscriptRepairText(text)) {
+        continue;
+      }
       return text;
     }
   }
@@ -648,6 +659,7 @@ export function buildSubagentSystemPrompt(params: {
     lines.push(
       "## Sub-Agent Spawning",
       "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
+      "Always set `agentId` in every `sessions_spawn` call (use `agents_list` first) and do not rely on implicit defaults.",
       "Use the `subagents` tool to steer, kill, or do an on-demand status check for your spawned sub-agents.",
       "Your sub-agents will announce their results back to you automatically (not to the main agent).",
       "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",

@@ -42,6 +42,8 @@ export type SpawnSubagentContext = {
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "auto-announces on completion, do not poll/sleep. The response will be sent back as an agent message.";
+const ROUTING_REQUIRED_ERROR =
+  "sessions_spawn requires explicit agent routing. Set agentId or provide a clearer task so fleet routing can pick one (dev/research/codex/visionclaw/katman-social/gizem-asistan).";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -65,6 +67,106 @@ export function splitModelRef(ref?: string) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
+}
+
+function inferMainSpawnTargetAgentId(params: {
+  task: string;
+  label?: string;
+  allowAny: boolean;
+  allowSet: Set<string>;
+  knownAgents: Set<string>;
+}): string | undefined {
+  const haystack = `${params.label ?? ""}\n${params.task}`.toLowerCase();
+  const matches = (patterns: RegExp[]) => patterns.some((pattern) => pattern.test(haystack));
+  const candidateBuckets: string[][] = [];
+
+  if (
+    matches([
+      /\bvision\b/,
+      /\bvisionclaw\b/,
+      /\bimage\b/,
+      /\bphoto\b/,
+      /\bscreenshot\b/,
+      /\bocr\b/,
+      /\bg[öo]rsel\b/,
+      /\bresim\b/,
+      /\bgör[üu]nt[üu]\b/,
+    ])
+  ) {
+    candidateBuckets.push(["visionclaw"]);
+  }
+  if (matches([/\bkatman\b/, /\bsocial\b/, /\btweet\b/, /\bx post\b/, /\binstagram\b/])) {
+    candidateBuckets.push(["katman-social"]);
+  }
+  if (matches([/\bgizem\b/, /\basistan\b/])) {
+    candidateBuckets.push(["gizem-asistan"]);
+  }
+  if (matches([/\bcodex\b/, /\bpatch\b/, /\bimplement\b/, /\bwrite code\b/])) {
+    candidateBuckets.push(["codex", "dev"]);
+  }
+  if (
+    matches([
+      /\bresearch\b/,
+      /\baraştır\b/,
+      /\banaly[sz]e\b/,
+      /\banaliz\b/,
+      /\baudit\b/,
+      /\bcompare\b/,
+      /\btrend\b/,
+      /\bsource\b/,
+      /\bweb\b/,
+    ])
+  ) {
+    candidateBuckets.push(["research", "research-analyst"]);
+  }
+  if (
+    matches([
+      /\bcode\b/,
+      /\bcoding\b/,
+      /\bscript\b/,
+      /\bbug\b/,
+      /\bfix\b/,
+      /\brefactor\b/,
+      /\bbuild\b/,
+      /\bcompile\b/,
+      /\bpytest\b/,
+      /\bvitest\b/,
+      /\bjest\b/,
+      /\btypescript\b/,
+      /\bjavascript\b/,
+      /\bpython\b/,
+      /\bbash\b/,
+      /\bsql\b/,
+      /\bdatabase\b/,
+      /\bdb\b/,
+      /\brepo\b/,
+      /\bpull request\b/,
+      /\bpr\b/,
+    ])
+  ) {
+    candidateBuckets.push(["dev", "codex"]);
+  }
+
+  const isAllowedCandidate = (candidate: string): boolean => {
+    const normalized = normalizeAgentId(candidate).toLowerCase();
+    if (!params.allowAny && params.allowSet.size > 0 && !params.allowSet.has(normalized)) {
+      return false;
+    }
+    if (params.knownAgents.size > 0 && !params.knownAgents.has(normalized)) {
+      return false;
+    }
+    return true;
+  };
+
+  for (const bucket of candidateBuckets) {
+    for (const candidate of bucket) {
+      if (isAllowedCandidate(candidate)) {
+        return normalizeAgentId(candidate);
+      }
+    }
+  }
+
+  return undefined;
 }
 
 export async function spawnSubagentDirect(
@@ -127,16 +229,41 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
-  if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = targetAgentId.toLowerCase();
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeAgentId(value).toLowerCase()),
+  const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+  const allowAny = allowAgents.some((value) => value.trim() === "*");
+  const allowSet = new Set(
+    allowAgents
+      .filter((value) => value.trim() && value.trim() !== "*")
+      .map((value) => normalizeAgentId(value).toLowerCase()),
+  );
+  let targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  if (!requestedAgentId && requesterAgentId === "main" && (allowAny || allowSet.size > 0)) {
+    const knownAgents = new Set(
+      (Array.isArray(cfg.agents?.list) ? cfg.agents.list : [])
+        .map((agent) =>
+          agent && typeof agent === "object" && "id" in agent && typeof agent.id === "string"
+            ? normalizeAgentId(agent.id).toLowerCase()
+            : "",
+        )
+        .filter(Boolean),
     );
+    const inferredTargetAgentId = inferMainSpawnTargetAgentId({
+      task,
+      label,
+      allowAny,
+      allowSet,
+      knownAgents,
+    });
+    if (!inferredTargetAgentId) {
+      return {
+        status: "forbidden",
+        error: ROUTING_REQUIRED_ERROR,
+      };
+    }
+    targetAgentId = inferredTargetAgentId;
+  }
+  if (targetAgentId !== requesterAgentId) {
+    const normalizedTargetId = targetAgentId.toLowerCase();
     if (!allowAny && !allowSet.has(normalizedTargetId)) {
       const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
       return {
