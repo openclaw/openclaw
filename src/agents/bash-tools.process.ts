@@ -4,6 +4,7 @@ import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { MaskedSecrets } from "../security/masked-secrets/index.js";
 import {
   type ProcessSession,
   deleteSession,
@@ -22,6 +23,7 @@ import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 export type ProcessToolDefaults = {
   cleanupMs?: number;
   scopeKey?: string;
+  maskedSecrets?: MaskedSecrets;
 };
 
 type WritableStdin = {
@@ -124,6 +126,9 @@ export function createProcessTool(
     setJobTtlMs(defaults.cleanupMs);
   }
   const scopeKey = defaults?.scopeKey;
+  const maskedSecrets = defaults?.maskedSecrets;
+  const redactText = (text: string): string =>
+    maskedSecrets ? maskedSecrets.redact(text).text : text;
   const supervisor = getProcessSupervisor();
   const isInScope = (session?: { scopeKey?: string } | null) =>
     !scopeKey || session?.scopeKey === scopeKey;
@@ -288,10 +293,12 @@ export function createProcessTool(
                   {
                     type: "text",
                     text:
-                      (scopedFinished.tail ||
-                        `(no output recorded${
-                          scopedFinished.truncated ? " — truncated to cap" : ""
-                        })`) +
+                      redactText(
+                        scopedFinished.tail ||
+                          `(no output recorded${
+                            scopedFinished.truncated ? " — truncated to cap" : ""
+                          })`,
+                      ) +
                       `\n\nProcess exited with ${
                         scopedFinished.exitSignal
                           ? `signal ${scopedFinished.exitSignal}`
@@ -354,7 +361,7 @@ export function createProcessTool(
               {
                 type: "text",
                 text:
-                  (output || "(no new output)") +
+                  redactText(output || "(no new output)") +
                   (exited
                     ? `\n\nProcess exited with ${
                         exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
@@ -394,7 +401,9 @@ export function createProcessTool(
             );
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
-              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
+              content: [
+                { type: "text", text: redactText(slice || "(no output yet)") + logDefaultTailNote },
+              ],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
@@ -417,7 +426,10 @@ export function createProcessTool(
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                {
+                  type: "text",
+                  text: redactText(slice || "(no output recorded)") + logDefaultTailNote,
+                },
               ],
               details: {
                 status,

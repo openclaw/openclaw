@@ -16,6 +16,7 @@ import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { createMaskedSecrets, type MaskedSecrets } from "../../security/masked-secrets/index.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
@@ -478,6 +479,13 @@ export async function compactEmbeddedPiSessionDirect(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    // Create MaskedSecrets instance to get actual loaded secret names for the system prompt.
+    const maskedSecretsConfig = (params.config as Record<string, unknown> | undefined)?.security as
+      | { maskedSecrets?: Record<string, unknown> }
+      | undefined;
+    const maskedSecretsInstance: MaskedSecrets | undefined = maskedSecretsConfig?.maskedSecrets
+      ? createMaskedSecrets(maskedSecretsConfig.maskedSecrets)
+      : undefined;
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -508,6 +516,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      maskedSecretNames: maskedSecretsInstance?.listSecretNames(),
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

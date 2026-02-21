@@ -249,6 +249,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Names of masked secrets available via {{secret:NAME}} syntax. */
+  maskedSecretNames?: string[];
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -625,6 +627,21 @@ export function buildAgentSystemPrompt(params: {
     for (const file of validContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
+  }
+
+  // Masked secrets: inform agent about {{secret:NAME}} syntax.
+  const secretNames = params.maskedSecretNames ?? [];
+  if (secretNames.length > 0 && !isMinimal) {
+    lines.push(
+      "## Secrets",
+      "To use API keys or secrets in shell commands, use the reference syntax:",
+      '  curl -H "Authorization: Bearer {{secret:MY_API_KEY}}" https://api.example.com',
+      "",
+      `Available secrets: ${secretNames.join(", ")}`,
+      "",
+      "Do NOT try to read .env files or print environment variables directly.",
+      "",
+    );
   }
 
   // Skip silent replies for subagent/none modes
