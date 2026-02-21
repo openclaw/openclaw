@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { checkAndBlockSuspiciousContent } from "../security/external-content.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -74,6 +77,51 @@ export function registerSkillsCli(program: Command) {
         const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         defaultRuntime.log(formatSkillsCheck(report, opts));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("scan")
+    .description("Scan skill files for suspicious/malicious content (AE-001 mitigation)")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts: { json: boolean }) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const results: Array<{ name: string; blocked: boolean; reason: string; matches: string[] }> = [];
+        for (const skill of report.skills ?? []) {
+          const skillName = (skill as { name?: string }).name ?? "unknown";
+          let content = "";
+          try {
+            const fp = (skill as { filePath?: string }).filePath;
+            if (fp) {
+              content = fs.readFileSync(path.resolve(workspaceDir, fp), "utf8");
+            }
+          } catch {
+            /* skip unreadable files */
+          }
+          const check = checkAndBlockSuspiciousContent(content);
+          results.push({ name: skillName, ...check });
+        }
+        const flagged = results.filter((r) => r.blocked);
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify({ results, flaggedCount: flagged.length }, null, 2));
+        } else {
+          if (flagged.length === 0) {
+            defaultRuntime.log(theme.success("✓ No suspicious content detected in skill files."));
+          } else {
+            defaultRuntime.log(theme.error(`✗ ${flagged.length} skill(s) flagged for suspicious content:`));
+            for (const r of flagged) {
+              defaultRuntime.log(`  ${theme.error(r.name)}: ${r.reason}`);
+            }
+          }
+        }
+        if (flagged.length > 0) defaultRuntime.exit(1);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

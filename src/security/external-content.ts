@@ -41,6 +41,45 @@ export function detectSuspiciousPatterns(content: string): string[] {
 }
 
 /**
+ * Result of a suspicious-content check that may block processing.
+ */
+export type SuspiciousContentResult = {
+  /** Whether the content was blocked due to detected patterns */
+  blocked: boolean;
+  /** Human-readable reason for blocking (empty string if not blocked) */
+  reason: string;
+  /** All matched suspicious pattern sources */
+  matches: string[];
+};
+
+/**
+ * Checks content for prompt injection patterns and returns a blocking result.
+ *
+ * Unlike `detectSuspiciousPatterns` (which is log-only), this function returns
+ * a structured result that callers MUST act on to enforce hard blocking.
+ *
+ * @example
+ * ```ts
+ * const result = checkAndBlockSuspiciousContent(userContent);
+ * if (result.blocked) {
+ *   logger.warn("Blocked prompt injection attempt", { reason: result.reason });
+ *   return; // do not pass content to the LLM
+ * }
+ * ```
+ */
+export function checkAndBlockSuspiciousContent(content: string): SuspiciousContentResult {
+  const matches = detectSuspiciousPatterns(content);
+  if (matches.length === 0) {
+    return { blocked: false, reason: "", matches: [] };
+  }
+  return {
+    blocked: true,
+    reason: `Prompt injection detected: ${matches[0]}`,
+    matches,
+  };
+}
+
+/**
  * Unique boundary markers for external content.
  * Using XML-style tags that are unlikely to appear in legitimate content.
  */

@@ -16,6 +16,12 @@ services:
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    # Security hardening (DI-006 / AF-005): prevent privilege escalation and
+    # reduce attack surface by dropping all Linux capabilities.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command:
       [
         "node",
@@ -43,4 +49,10 @@ services:
     stdin_open: true
     tty: true
     init: true
+    # Security hardening (DI-006 / AF-005): prevent privilege escalation and
+    # reduce attack surface by dropping all Linux capabilities.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     entrypoint: ["node", "dist/index.js"]

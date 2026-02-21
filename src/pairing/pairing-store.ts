@@ -13,6 +13,47 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
+
+// Rate-limiting constants for pairing code approval attempts
+const MAX_PAIRING_ATTEMPTS = 5;
+const PAIRING_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Simple in-process rate limiter for pairing code approval attempts.
+ *
+ * Tracks failures per (channel, code) key and locks out after MAX_PAIRING_ATTEMPTS
+ * failed attempts for PAIRING_LOCKOUT_MS milliseconds, mitigating brute-force attacks.
+ */
+class PairingRateLimiter {
+  private readonly failures = new Map<string, { count: number; lockedUntil?: number }>();
+
+  /** Check whether a given key is currently allowed to attempt approval. */
+  check(key: string): { allowed: boolean; retryAfterMs?: number } {
+    const entry = this.failures.get(key);
+    if (!entry) return { allowed: true };
+    if (entry.lockedUntil !== undefined && Date.now() < entry.lockedUntil) {
+      return { allowed: false, retryAfterMs: entry.lockedUntil - Date.now() };
+    }
+    return { allowed: true };
+  }
+
+  /** Record a failed attempt for a key, locking out if threshold is reached. */
+  recordFailure(key: string): void {
+    const entry = this.failures.get(key) ?? { count: 0 };
+    entry.count += 1;
+    if (entry.count >= MAX_PAIRING_ATTEMPTS) {
+      entry.lockedUntil = Date.now() + PAIRING_LOCKOUT_MS;
+    }
+    this.failures.set(key, entry);
+  }
+
+  /** Reset failure tracking after a successful approval. */
+  reset(key: string): void {
+    this.failures.delete(key);
+  }
+}
+
+const pairingRateLimiter = new PairingRateLimiter();
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -573,6 +614,13 @@ export async function approveChannelPairingCode(params: {
     return null;
   }
 
+  // SC-003: Brute-force rate limiting per (channel, code) key
+  const rateLimitKey = `${params.channel}:${code}`;
+  const rlCheck = pairingRateLimiter.check(rateLimitKey);
+  if (!rlCheck.allowed) {
+    return null; // too many failed attempts — locked out
+  }
+
   const filePath = resolvePairingPath(params.channel, env);
   return await withFileLock(
     filePath,
@@ -593,6 +641,7 @@ export async function approveChannelPairingCode(params: {
             requests: pruned,
           } satisfies PairingStore);
         }
+        pairingRateLimiter.recordFailure(rateLimitKey);
         return null;
       }
       const entry = pruned[idx];
@@ -611,6 +660,7 @@ export async function approveChannelPairingCode(params: {
         accountId: params.accountId?.trim() || entryAccountId,
         env,
       });
+      pairingRateLimiter.reset(rateLimitKey);
       return { id: entry.id, entry };
     },
   );
