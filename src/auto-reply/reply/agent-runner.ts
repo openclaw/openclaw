@@ -28,7 +28,10 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
+import {
+  CONTEXT_OVERFLOW_FALLBACK_TEXT,
+  runAgentTurnWithFallback,
+} from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -391,6 +394,12 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
     } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
+    const runErrorFallbackPayload =
+      runResult.meta?.error &&
+      (runResult.meta.error.kind === "context_overflow" ||
+        runResult.meta.error.kind === "compaction_failure")
+        ? ({ text: CONTEXT_OVERFLOW_FALLBACK_TEXT, isError: true } satisfies ReplyPayload)
+        : undefined;
 
     if (
       shouldInjectGroupIntro &&
@@ -492,7 +501,7 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      return finalizeWithFollowup(runErrorFallbackPayload, queueKey, runFollowupTurn);
     }
 
     const payloadResult = buildReplyPayloads({
@@ -516,7 +525,7 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      return finalizeWithFollowup(runErrorFallbackPayload, queueKey, runFollowupTurn);
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;

@@ -64,6 +64,9 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+export const CONTEXT_OVERFLOW_FALLBACK_TEXT =
+  "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -443,6 +446,19 @@ export async function runAgentTurnWithFallback(params: {
           },
         };
       }
+      if (
+        embeddedError &&
+        isContextOverflowError(embeddedError.message) &&
+        (runResult.payloads?.length ?? 0) === 0
+      ) {
+        return {
+          kind: "final",
+          payload: {
+            text: CONTEXT_OVERFLOW_FALLBACK_TEXT,
+            isError: true,
+          },
+        };
+      }
       if (embeddedError?.kind === "role_ordering") {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
         if (didReset) {
@@ -555,7 +571,7 @@ export async function runAgentTurnWithFallback(params: {
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow
-        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+        ? CONTEXT_OVERFLOW_FALLBACK_TEXT
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
           : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;

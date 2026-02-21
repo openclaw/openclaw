@@ -1185,6 +1185,50 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("returns a deterministic overflow fallback when error meta has no payloads", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "context_overflow",
+          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        },
+      },
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("Context overflow"),
+      isError: true,
+    });
+  });
+
+  it("returns a deterministic overflow fallback when error payload normalizes to empty", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [{ text: " \n\t ", isError: true }],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "context_overflow",
+          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        },
+      },
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("Context overflow"),
+      isError: true,
+    });
+  });
+
   it("resets the session after role ordering payloads", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "session";
