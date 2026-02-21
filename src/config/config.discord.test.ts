@@ -69,7 +69,7 @@ describe("config discord", () => {
     });
   });
 
-  it("rejects numeric discord allowlist entries", () => {
+  it("coerces numeric Discord ID list entries to strings (avoids 64-bit truncation)", () => {
     const res = validateConfigObject({
       channels: {
         discord: {
@@ -89,11 +89,13 @@ describe("config discord", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
     if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.message.includes("Discord IDs must be strings")),
-      ).toBe(true);
+      return;
     }
+    const cfg = res.config;
+    expect(cfg.channels?.discord?.allowFrom).toEqual(["123"]);
+    expect(cfg.channels?.discord?.dm?.allowFrom).toEqual(["456"]);
+    expect(cfg.channels?.discord?.execApprovals?.approvers).toEqual(["555"]);
   });
 });
