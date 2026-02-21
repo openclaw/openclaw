@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Config: unify channel preview streaming config handling with a shared resolver and canonical migration path.
 - Discord/Allowlist: canonicalize resolved Discord allowlist names to IDs and split resolution flow for clearer fail-closed behavior.
 - iOS/Talk: prefetch TTS segments and suppress expected speech-cancellation errors for smoother talk playback. (#22833) Thanks @ngutman.
+- Agents/Logging: migrate remaining safe-scope internal `src/agents` `console.warn/error/info` calls to subsystem logger output. (#22906) Thanks @Kepler2024.
 
 ### Breaking
 
