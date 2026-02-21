@@ -16,6 +16,7 @@ Already followed [Getting Started](/start/getting-started)? You're all set — t
 - **[Node 22+](/install/node)** (the [installer script](#install-methods) will install it if missing)
 - macOS, Linux, or Windows
 - `pnpm` only if you build from source
+- **Linux**: `build-essential` for native module compilation (install with `sudo apt install build-essential` on Debian/Ubuntu)
 
 <Note>
 On Windows, we strongly recommend running OpenClaw under [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install).
