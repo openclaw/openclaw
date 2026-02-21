@@ -9,6 +9,8 @@ concurrency:
   group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions: read-all
+
 jobs:
   no-tabs:
     runs-on: blacksmith-16vcpu-ubuntu-2404

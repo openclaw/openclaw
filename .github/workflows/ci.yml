@@ -9,6 +9,8 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions: read-all
+
 jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
   # Lint and format always run. Fail-safe: if detection fails, run everything.
