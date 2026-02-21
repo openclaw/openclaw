@@ -64,11 +64,12 @@ enum ChatMarkdownPreprocessor {
             return raw
         }
 
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
         var outputLines: [String] = []
         var inMetaBlock = false
         var inFencedJson = false
 
-        for line in raw.split(whereSeparator: \.isNewline, omittingEmptySubsequences: false) {
+        for line in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
             let currentLine = String(line)
 
             if !inMetaBlock && self.inboundContextHeaders.contains(where: currentLine.hasPrefix) {
