@@ -31,6 +31,7 @@ vi.mock("./session-utils.js", () => ({
 
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import { loadConfig } from "../config/config.js";
 import type { HealthSummary } from "../commands/health.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -41,6 +42,7 @@ import { handleNodeEvent } from "./server-node-events.js";
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
 const agentCommandMock = vi.mocked(agentCommand);
+const loadConfigMock = vi.mocked(loadConfig);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 
 function buildCtx(): NodeEventContext {
@@ -70,6 +72,8 @@ describe("node exec events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockReset();
     requestHeartbeatNowMock.mockReset();
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue({ session: { mainKey: "agent:main:main" } } as OpenClawConfig);
   });
 
   it("enqueues exec.started events", async () => {
@@ -162,6 +166,23 @@ describe("node exec events", () => {
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
+  it("suppresses node exec events when tools.nodes.notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValue({
+      tools: { nodes: { notifyOnExit: false } },
+    } as OpenClawConfig);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-1", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "test",
+        runId: "r1",
+        exitCode: 0,
+        output: "hello",
+      }),
+    });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 });
 

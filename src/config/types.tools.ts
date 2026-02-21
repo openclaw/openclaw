@@ -257,6 +257,10 @@ export type AgentToolsConfig = {
   };
   /** Exec tool defaults for this agent. */
   exec?: ExecToolConfig;
+  nodes?: {
+    /** Emit system events and heartbeats for node exec events (started/finished/denied). Default: true. */
+    notifyOnExit?: boolean;
+  };
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
@@ -519,6 +523,10 @@ export type ToolsConfig = {
   };
   /** Exec tool defaults. */
   exec?: ExecToolConfig;
+  nodes?: {
+    /** Emit system events and heartbeats for node exec events (started/finished/denied). Default: true. */
+    notifyOnExit?: boolean;
+  };
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
