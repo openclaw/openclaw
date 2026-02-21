@@ -74,4 +74,33 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
     expect(threadStop).toHaveBeenCalledTimes(1);
   });
+
+  it("cleans up when gateway wait fails after startup", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
+
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const threadStop = vi.fn();
+
+    await expect(
+      runDiscordGatewayLifecycle({
+        accountId: "default",
+        client: { getPlugin: vi.fn(() => undefined) } as unknown as Client,
+        runtime: {} as RuntimeEnv,
+        isDisallowedIntentsError: () => false,
+        voiceManager: null,
+        voiceManagerRef: { current: null },
+        execApprovalsHandler: { start, stop },
+        threadBindings: { stop: threadStop },
+      }),
+    ).rejects.toThrow("gateway wait failed");
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(1);
+    expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
+    expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
+    expect(threadStop).toHaveBeenCalledTimes(1);
+  });
 });
