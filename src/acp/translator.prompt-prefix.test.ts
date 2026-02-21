@@ -13,13 +13,12 @@ function createConnection(): AgentSideConnection {
 }
 
 describe("acp prompt cwd prefix", () => {
-  it("redacts home directory in prompt prefix", async () => {
+  async function runPromptWithCwd(cwd: string) {
     const sessionStore = createInMemorySessionStore();
-    const homeCwd = path.join(os.homedir(), "openclaw-test");
     sessionStore.createSession({
       sessionId: "session-1",
       sessionKey: "agent:main:main",
-      cwd: homeCwd,
+      cwd,
     });
 
     const requestSpy = vi.fn(async (method: string) => {
@@ -44,11 +43,26 @@ describe("acp prompt cwd prefix", () => {
         _meta: {},
       } as unknown as PromptRequest),
     ).rejects.toThrow("stop-after-send");
+    return requestSpy;
+  }
 
+  it("redacts home directory in prompt prefix", async () => {
+    const requestSpy = await runPromptWithCwd(path.join(os.homedir(), "openclaw-test"));
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         message: expect.stringMatching(/\[Working directory: ~[\\/]openclaw-test\]/),
+      }),
+      { expectFinal: true },
+    );
+  });
+
+  it("keeps backslash separators when cwd uses them", async () => {
+    const requestSpy = await runPromptWithCwd(`${os.homedir()}\\openclaw-test`);
+    expect(requestSpy).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: expect.stringContaining("[Working directory: ~\\openclaw-test]"),
       }),
       { expectFinal: true },
     );
