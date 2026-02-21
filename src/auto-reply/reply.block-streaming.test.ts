@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
 import { withTempHome as withTempHomeHarness } from "../config/home-env.test-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 

@@ -1,5 +1,5 @@
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
+import { splitArgsPreservingQuotes } from "./arg-split.js";
 
 const SYSTEMD_LINE_BREAKS = /[\r\n]/;
 

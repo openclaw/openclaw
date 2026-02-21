@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
   formatUsageWindowSummary,
 } from "./provider-usage.format.js";
-import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
 const now = Date.UTC(2026, 0, 7, 12, 0, 0);
 

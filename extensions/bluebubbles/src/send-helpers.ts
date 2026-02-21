@@ -1,5 +1,5 @@
-import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
+import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 
 export function resolveBlueBubblesSendTarget(raw: string): BlueBubblesSendTarget {
   const parsed = parseBlueBubblesTarget(raw);
