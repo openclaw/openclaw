@@ -609,6 +609,7 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        announce: z.enum(["full", "notify", "silent"]).optional(),
       })
       .strict()
       .optional(),

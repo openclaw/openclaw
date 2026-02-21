@@ -724,6 +724,7 @@ export async function runSubagentAnnounceFlow(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  announceMode?: "full" | "notify" | "silent";
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -924,41 +925,53 @@ export async function runSubagentAnnounceFlow(params: {
     ].join("\n");
     triggerMessage = [internalSummaryMessage, "", replyInstruction].join("\n");
 
-    const announceId = buildAnnounceIdFromChildRun({
-      childSessionKey: params.childSessionKey,
-      childRunId: params.childRunId,
-    });
-    // Send to the requester session. For nested subagents this is an internal
-    // follow-up injection (deliver=false) so the orchestrator receives it.
-    let directOrigin = targetRequesterOrigin;
-    if (!requesterIsSubagent) {
-      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
-      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
+    // ── Announce mode branching ──────────────────────────────────────────
+    const effectiveAnnounceMode = params.announceMode ?? "full";
+    if (effectiveAnnounceMode === "notify") {
+      triggerMessage = `[System] Task "${taskLabel}" ${statusLabel}. Session: ${params.childSessionKey}. Use sessions_history to read details.`;
     }
-    // Use a deterministic idempotency key so the gateway dedup cache
-    // catches duplicates if this announce is also queued by the gateway-
-    // level message queue while the main session is busy (#17122).
-    const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
-    const delivery = await deliverSubagentAnnouncement({
-      requesterSessionKey: targetRequesterSessionKey,
-      announceId,
-      triggerMessage,
-      completionMessage,
-      summaryLine: taskLabel,
-      requesterOrigin: targetRequesterOrigin,
-      completionDirectOrigin: targetRequesterOrigin,
-      directOrigin,
-      targetRequesterSessionKey,
-      requesterIsSubagent,
-      expectsCompletionMessage: expectsCompletionMessage,
-      directIdempotencyKey,
-    });
-    didAnnounce = delivery.delivered;
-    if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.error?.(
-        `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
-      );
-    }
+    if (effectiveAnnounceMode === "silent") {
+      // Silent mode: skip delivery entirely, still run cleanup
+      didAnnounce = true;
+    } else {
+      // ── End announce mode branching ──────────────────────────────────────
+
+      const announceId = buildAnnounceIdFromChildRun({
+        childSessionKey: params.childSessionKey,
+        childRunId: params.childRunId,
+      });
+      // Send to the requester session. For nested subagents this is an internal
+      // follow-up injection (deliver=false) so the orchestrator receives it.
+      let directOrigin = targetRequesterOrigin;
+      if (!requesterIsSubagent) {
+        const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+        directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
+      }
+      // Use a deterministic idempotency key so the gateway dedup cache
+      // catches duplicates if this announce is also queued by the gateway-
+      // level message queue while the main session is busy (#17122).
+      const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+      const delivery = await deliverSubagentAnnouncement({
+        requesterSessionKey: targetRequesterSessionKey,
+        announceId,
+        triggerMessage,
+        completionMessage,
+        summaryLine: taskLabel,
+        requesterOrigin: targetRequesterOrigin,
+        completionDirectOrigin: targetRequesterOrigin,
+        directOrigin,
+        targetRequesterSessionKey,
+        requesterIsSubagent,
+        expectsCompletionMessage: expectsCompletionMessage,
+        directIdempotencyKey,
+      });
+      didAnnounce = delivery.delivered;
+      if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
+        defaultRuntime.error?.(
+          `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
+        );
+      }
+    } // end non-silent branch
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.

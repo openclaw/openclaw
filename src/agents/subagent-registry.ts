@@ -21,6 +21,7 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  announceMode?: "full" | "notify" | "silent";
   runTimeoutSeconds?: number;
   createdAt: number;
   startedAt?: number;
@@ -110,6 +111,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     endedAt: entry.endedAt,
     label: entry.label,
     outcome: entry.outcome,
+    announceMode: entry.announceMode,
   }).then((didAnnounce) => {
     finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
   });
@@ -514,6 +516,7 @@ export function registerSubagentRun(params: {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  announceMode?: "full" | "notify" | "silent";
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
 }) {
@@ -535,6 +538,7 @@ export function registerSubagentRun(params: {
     expectsCompletionMessage: params.expectsCompletionMessage,
     label: params.label,
     model: params.model,
+    announceMode: params.announceMode,
     runTimeoutSeconds,
     createdAt: now,
     startedAt: now,

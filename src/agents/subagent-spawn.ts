@@ -173,6 +173,10 @@ export async function spawnSubagentDirect(
     }
     thinkingOverride = normalized;
   }
+  const announceMode =
+    readStringParam(targetAgentConfig?.subagents ?? {}, "announce") ??
+    readStringParam(cfg.agents?.defaults?.subagents ?? {}, "announce") ??
+    "notify";
   try {
     await callGateway({
       method: "sessions.patch",
@@ -291,6 +295,7 @@ export async function spawnSubagentDirect(
     cleanup,
     label: label || undefined,
     model: resolvedModel,
+    announceMode: announceMode as "full" | "notify" | "silent",
     runTimeoutSeconds,
     expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
