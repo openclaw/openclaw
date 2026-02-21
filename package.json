@@ -246,9 +246,6 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ],
-    "updateConfig": {
-      "minimumReleaseAge": 2880
-    }
+    ]
   }
 }
