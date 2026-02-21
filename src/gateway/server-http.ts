@@ -21,7 +21,7 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
-  authorizeGatewayConnect,
+  authorizeHttpGatewayConnect,
   isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
@@ -150,12 +150,11 @@ async function authorizeCanvasRequest(params: {
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
-    const authResult = await authorizeGatewayConnect({
+    const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
       connectAuth: { token, password: token },
       req,
       trustedProxies,
-      allowTailscaleHeaderAuth: false,
       rateLimiter,
     });
     if (authResult.ok) {
@@ -528,12 +527,11 @@ export function createGatewayHttpServer(opts: {
         // their own auth when exposing sensitive functionality.
         if (requestPath.startsWith("/api/channels/")) {
           const token = getBearerToken(req);
-          const authResult = await authorizeGatewayConnect({
+          const authResult = await authorizeHttpGatewayConnect({
             auth: resolvedAuth,
             connectAuth: token ? { token, password: token } : null,
             req,
             trustedProxies,
-            allowTailscaleHeaderAuth: false,
             rateLimiter,
           });
           if (!authResult.ok) {
