@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -97,22 +97,31 @@ describe("runCommandWithTimeout", () => {
 });
 
 describe("runCommandWithTimeout Corepack prompt suppression", () => {
-  // Creates a fake package manager script in a temp dir and returns argv[0] to pass.
-  // On Windows: writes a .cmd batch file; for pnpm/yarn resolveCommand auto-appends
-  // .cmd so we return the path without extension; for bun we return the .cmd path directly.
-  // On Unix: writes an executable shell script and returns its path.
+  // Creates a fake package manager executable and returns the full path to it.
+  // On Windows: copies node.exe to {name}.exe and creates a .js script to run with it
+  // On Unix: creates an executable shell script with shebang
   function createFakePackageManager(dir: string, name: string): string {
     const printEnv = `process.stdout.write(process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT ?? "unset")`;
+
     if (process.platform === "win32") {
-      writeFileSync(join(dir, `${name}.cmd`), `@${process.execPath} -e "${printEnv}"`);
-      // resolveCommand auto-appends .cmd for pnpm and yarn; bun gets no auto-suffix
-      const autoCmd = name === "pnpm" || name === "yarn";
-      return autoCmd ? join(dir, name) : join(dir, `${name}.cmd`);
+      // Create a .js script that prints the env var
+      const scriptPath = join(dir, `${name}.js`);
+      writeFileSync(scriptPath, printEnv);
+
+      // Copy node.exe to {name}.exe so it can be executed directly
+      // This way argv[0] will be "{name}.exe" which triggers the shouldSuppressCorePack logic
+      const exePath = join(dir, `${name}.exe`);
+      copyFileSync(process.execPath, exePath);
+
+      // Return [exePath, scriptPath] to run the exe with the script
+      // But we need to return just the command for the test to work
+      // Actually, we need to modify how we call it
+      return exePath;
     } else {
-      const p = join(dir, name);
-      writeFileSync(p, `#!/bin/sh\n${process.execPath} -e '${printEnv}'`);
-      chmodSync(p, 0o755);
-      return p;
+      const scriptPath = join(dir, name);
+      writeFileSync(scriptPath, `#!/bin/sh\n"${process.execPath}" -e '${printEnv}'`);
+      chmodSync(scriptPath, 0o755);
+      return scriptPath;
     }
   }
 
@@ -120,8 +129,10 @@ describe("runCommandWithTimeout Corepack prompt suppression", () => {
     it(`sets COREPACK_ENABLE_DOWNLOAD_PROMPT=0 when running ${manager}`, async () => {
       const dir = mkdtempSync(join(tmpdir(), "exec-corepack-test-"));
       try {
-        const argv0 = createFakePackageManager(dir, manager);
-        const result = await runCommandWithTimeout([argv0], { timeoutMs: 5_000 });
+        const command = createFakePackageManager(dir, manager);
+        const argv =
+          process.platform === "win32" ? [command, join(dir, `${manager}.js`)] : [command];
+        const result = await runCommandWithTimeout(argv, { timeoutMs: 5_000 });
         expect(result.code).toBe(0);
         expect(result.stdout).toBe("0");
       } finally {
@@ -152,8 +163,9 @@ describe("runCommandWithTimeout Corepack prompt suppression", () => {
   it("does not override COREPACK_ENABLE_DOWNLOAD_PROMPT when already set in env option", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exec-corepack-test-"));
     try {
-      const argv0 = createFakePackageManager(dir, "pnpm");
-      const result = await runCommandWithTimeout([argv0], {
+      const command = createFakePackageManager(dir, "pnpm");
+      const argv = process.platform === "win32" ? [command, join(dir, "pnpm.js")] : [command];
+      const result = await runCommandWithTimeout(argv, {
         timeoutMs: 5_000,
         env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "1" },
       });
