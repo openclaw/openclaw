@@ -923,6 +923,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   noteOpencodeProviderOverrides(cfg);
 
+  // When --fix is used and config was modified, ensure the caller persists changes.
+  if (shouldRepair && pendingChanges) {
+    shouldWriteConfig = true;
+  }
+
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
