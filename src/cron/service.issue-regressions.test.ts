@@ -755,4 +755,61 @@ describe("Cron issue regressions", () => {
     expect(secondDone?.state.lastDurationMs).toBe(20);
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
   });
+
+  it("honors cron maxConcurrentRuns for due jobs", async () => {
+    vi.useRealTimers();
+    const store = await makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const first = createDueIsolatedJob({ id: "parallel-first", nowMs: dueAt, nextRunAtMs: dueAt });
+    const second = createDueIsolatedJob({
+      id: "parallel-second",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [first, second] }, null, 2),
+      "utf-8",
+    );
+
+    let now = dueAt;
+    let activeRuns = 0;
+    let peakActiveRuns = 0;
+    const firstRun = createDeferred<{ status: "ok"; summary: string }>();
+    const secondRun = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 2 },
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
+        activeRuns += 1;
+        peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
+        try {
+          const result =
+            params.job.id === first.id ? await firstRun.promise : await secondRun.promise;
+          now += 10;
+          return result;
+        } finally {
+          activeRuns -= 1;
+        }
+      }),
+    });
+
+    const timerPromise = onTimer(state);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(peakActiveRuns).toBe(2);
+
+    firstRun.resolve({ status: "ok", summary: "first done" });
+    secondRun.resolve({ status: "ok", summary: "second done" });
+    await timerPromise;
+
+    const jobs = state.store?.jobs ?? [];
+    expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
+    expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
+  });
 });
