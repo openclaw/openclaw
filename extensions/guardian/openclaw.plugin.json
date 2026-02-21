@@ -1,0 +1,60 @@
+{
+  "id": "guardian",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "model": {
+        "type": "string",
+        "description": "Guardian model in provider/model format (e.g. 'kimi/moonshot-v1-8k', 'ollama/llama3.1:8b', 'openai/gpt-4o-mini'). If omitted, uses the main agent model."
+      },
+      "watched_tools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": [
+          "message_send",
+          "message",
+          "exec",
+          "write_file",
+          "Write",
+          "gateway",
+          "gateway_config",
+          "cron",
+          "cron_add"
+        ]
+      },
+      "timeout_ms": {
+        "type": "number",
+        "default": 20000,
+        "description": "Max wait for guardian API response in milliseconds"
+      },
+      "fallback_on_error": {
+        "type": "string",
+        "enum": ["allow", "block"],
+        "default": "allow",
+        "description": "Action when guardian API fails or times out"
+      },
+      "log_decisions": {
+        "type": "boolean",
+        "default": true,
+        "description": "Log all ALLOW/BLOCK decisions"
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["enforce", "audit"],
+        "default": "enforce",
+        "description": "enforce = block disallowed calls; audit = log only"
+      },
+      "max_user_messages": {
+        "type": "number",
+        "default": 3,
+        "description": "Number of recent user messages to include in guardian prompt"
+      },
+      "max_arg_length": {
+        "type": "number",
+        "default": 500,
+        "description": "Max characters of tool arguments to include (truncated)"
+      }
+    },
+    "additionalProperties": false
+  }
+}
