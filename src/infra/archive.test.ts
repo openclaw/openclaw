@@ -16,6 +16,17 @@ async function makeTempDir(prefix = "case") {
   return dir;
 }
 
+async function withArchiveCase(
+  ext: "zip" | "tar",
+  run: (params: { workDir: string; archivePath: string; extractDir: string }) => Promise<void>,
+) {
+  const workDir = await makeTempDir(ext);
+  const archivePath = path.join(workDir, `bundle.${ext}`);
+  const extractDir = path.join(workDir, "extract");
+  await fs.mkdir(extractDir, { recursive: true });
+  await run({ workDir, archivePath, extractDir });
+}
+
 async function expectExtractedSizeBudgetExceeded(params: {
   archivePath: string;
   destDir: string;
@@ -50,171 +61,153 @@ describe("archive utils", () => {
   });
 
   it("extracts zip archives", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.zip");
-    const extractDir = path.join(workDir, "extract");
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const zip = new JSZip();
+      zip.file("package/hello.txt", "hi");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-    const zip = new JSZip();
-    zip.file("package/hello.txt", "hi");
-    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 });
-    const rootDir = await resolvePackedRootDir(extractDir);
-    const content = await fs.readFile(path.join(rootDir, "hello.txt"), "utf-8");
-    expect(content).toBe("hi");
+      await extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 });
+      const rootDir = await resolvePackedRootDir(extractDir);
+      const content = await fs.readFile(path.join(rootDir, "hello.txt"), "utf-8");
+      expect(content).toBe("hi");
+    });
   });
 
   it("rejects zip path traversal (zip slip)", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.zip");
-    const extractDir = path.join(workDir, "a");
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const zip = new JSZip();
+      zip.file("../b/evil.txt", "pwnd");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-    const zip = new JSZip();
-    zip.file("../b/evil.txt", "pwnd");
-    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await expect(
-      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
-    ).rejects.toThrow(/(escapes destination|absolute)/i);
+      await expect(
+        extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+      ).rejects.toThrow(/(escapes destination|absolute)/i);
+    });
   });
 
   it("rejects zip entries that traverse pre-existing destination symlinks", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.zip");
-    const extractDir = path.join(workDir, "extract");
-    const outsideDir = path.join(workDir, "outside");
+    await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
+      const outsideDir = path.join(workDir, "outside");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.symlink(outsideDir, path.join(extractDir, "escape"));
 
-    await fs.mkdir(extractDir, { recursive: true });
-    await fs.mkdir(outsideDir, { recursive: true });
-    await fs.symlink(outsideDir, path.join(extractDir, "escape"));
+      const zip = new JSZip();
+      zip.file("escape/pwn.txt", "owned");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-    const zip = new JSZip();
-    zip.file("escape/pwn.txt", "owned");
-    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      await expect(
+        extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+      ).rejects.toMatchObject({
+        code: "destination-symlink-traversal",
+      } satisfies Partial<ArchiveSecurityError>);
 
-    await expect(
-      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
-    ).rejects.toMatchObject({
-      code: "destination-symlink-traversal",
-    } satisfies Partial<ArchiveSecurityError>);
-
-    const outsideFile = path.join(outsideDir, "pwn.txt");
-    const outsideExists = await fs
-      .stat(outsideFile)
-      .then(() => true)
-      .catch(() => false);
-    expect(outsideExists).toBe(false);
+      const outsideFile = path.join(outsideDir, "pwn.txt");
+      const outsideExists = await fs
+        .stat(outsideFile)
+        .then(() => true)
+        .catch(() => false);
+      expect(outsideExists).toBe(false);
+    });
   });
 
   it("extracts tar archives", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.tar");
-    const extractDir = path.join(workDir, "extract");
-    const packageDir = path.join(workDir, "package");
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      const packageDir = path.join(workDir, "package");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(path.join(packageDir, "hello.txt"), "yo");
+      await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
 
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "hello.txt"), "yo");
-    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 });
-    const rootDir = await resolvePackedRootDir(extractDir);
-    const content = await fs.readFile(path.join(rootDir, "hello.txt"), "utf-8");
-    expect(content).toBe("yo");
+      await extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 });
+      const rootDir = await resolvePackedRootDir(extractDir);
+      const content = await fs.readFile(path.join(rootDir, "hello.txt"), "utf-8");
+      expect(content).toBe("yo");
+    });
   });
 
   it("rejects tar path traversal (zip slip)", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.tar");
-    const extractDir = path.join(workDir, "extract");
-    const insideDir = path.join(workDir, "inside");
-    await fs.mkdir(insideDir, { recursive: true });
-    await fs.writeFile(path.join(workDir, "outside.txt"), "pwnd");
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      const insideDir = path.join(workDir, "inside");
+      await fs.mkdir(insideDir, { recursive: true });
+      await fs.writeFile(path.join(workDir, "outside.txt"), "pwnd");
 
-    await tar.c({ cwd: insideDir, file: archivePath }, ["../outside.txt"]);
+      await tar.c({ cwd: insideDir, file: archivePath }, ["../outside.txt"]);
 
-    await fs.mkdir(extractDir, { recursive: true });
-    await expect(
-      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
-    ).rejects.toThrow(/escapes destination/i);
+      await expect(
+        extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+      ).rejects.toThrow(/escapes destination/i);
+    });
   });
 
   it("rejects zip archives that exceed extracted size budget", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.zip");
-    const extractDir = path.join(workDir, "extract");
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const zip = new JSZip();
+      zip.file("package/big.txt", "x".repeat(64));
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-    const zip = new JSZip();
-    zip.file("package/big.txt", "x".repeat(64));
-    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await expectExtractedSizeBudgetExceeded({
-      archivePath,
-      destDir: extractDir,
-      maxExtractedBytes: 32,
+      await expectExtractedSizeBudgetExceeded({
+        archivePath,
+        destDir: extractDir,
+        maxExtractedBytes: 32,
+      });
     });
   });
 
   it("rejects archives that exceed archive size budget", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.zip");
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const zip = new JSZip();
+      zip.file("package/file.txt", "ok");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const stat = await fs.stat(archivePath);
+
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: 5_000,
+          limits: { maxArchiveBytes: Math.max(1, stat.size - 1) },
+        }),
+      ).rejects.toThrow("archive size exceeds limit");
+    });
+  });
+
+  it("fails resolvePackedRootDir when extract dir has multiple root dirs", async () => {
+    const workDir = await makeTempDir("packed-root");
     const extractDir = path.join(workDir, "extract");
-
-    const zip = new JSZip();
-    zip.file("package/file.txt", "ok");
-    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
-    const stat = await fs.stat(archivePath);
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await expect(
-      extractArchive({
-        archivePath,
-        destDir: extractDir,
-        timeoutMs: 5_000,
-        limits: { maxArchiveBytes: Math.max(1, stat.size - 1) },
-      }),
-    ).rejects.toThrow("archive size exceeds limit");
+    await fs.mkdir(path.join(extractDir, "a"), { recursive: true });
+    await fs.mkdir(path.join(extractDir, "b"), { recursive: true });
+    await expect(resolvePackedRootDir(extractDir)).rejects.toThrow(/unexpected archive layout/i);
   });
 
   it("rejects tar archives that exceed extracted size budget", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.tar");
-    const extractDir = path.join(workDir, "extract");
-    const packageDir = path.join(workDir, "package");
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      const packageDir = path.join(workDir, "package");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(path.join(packageDir, "big.txt"), "x".repeat(64));
+      await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
 
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "big.txt"), "x".repeat(64));
-    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await expectExtractedSizeBudgetExceeded({
-      archivePath,
-      destDir: extractDir,
-      maxExtractedBytes: 32,
+      await expectExtractedSizeBudgetExceeded({
+        archivePath,
+        destDir: extractDir,
+        maxExtractedBytes: 32,
+      });
     });
   });
 
   it("rejects tar entries with absolute extraction paths", async () => {
-    const workDir = await makeTempDir();
-    const archivePath = path.join(workDir, "bundle.tar");
-    const extractDir = path.join(workDir, "extract");
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      const inputDir = path.join(workDir, "input");
+      const outsideFile = path.join(inputDir, "outside.txt");
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(outsideFile, "owned");
+      await tar.c({ file: archivePath, preservePaths: true }, [outsideFile]);
 
-    const inputDir = path.join(workDir, "input");
-    const outsideFile = path.join(inputDir, "outside.txt");
-    await fs.mkdir(inputDir, { recursive: true });
-    await fs.writeFile(outsideFile, "owned");
-    await tar.c({ file: archivePath, preservePaths: true }, [outsideFile]);
-
-    await fs.mkdir(extractDir, { recursive: true });
-    await expect(
-      extractArchive({
-        archivePath,
-        destDir: extractDir,
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow(/absolute|drive path|escapes destination/i);
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow(/absolute|drive path|escapes destination/i);
+    });
   });
 });
