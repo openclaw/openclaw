@@ -392,18 +392,22 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await sendPollTelegram(to, {
-      question,
-      options,
-      maxSelections: maxSelections ?? undefined,
-      durationSeconds: durationSeconds ?? undefined,
-    }, {
-      token,
-      accountId: accountId ?? undefined,
-      isAnonymous,
-      silent,
-      messageThreadId: messageThreadId != null ? Number(messageThreadId) : undefined,
-    });
+    const result = await sendPollTelegram(
+      to,
+      {
+        question,
+        options,
+        maxSelections: maxSelections ?? undefined,
+        durationSeconds: durationSeconds ?? undefined,
+      },
+      {
+        token,
+        accountId: accountId ?? undefined,
+        isAnonymous,
+        silent,
+        messageThreadId: messageThreadId != null ? Number(messageThreadId) : undefined,
+      },
+    );
     return jsonResult({
       ok: true,
       messageId: result.messageId,
