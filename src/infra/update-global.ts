@@ -84,8 +84,18 @@ export async function detectGlobalInstallManagerForRoot(
     const globalReal = await tryRealpath(globalRoot);
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
+      // Check direct path match
       if (path.resolve(expected) === path.resolve(pkgReal)) {
         return manager;
+      }
+      // Check symlink target match (for pnpm content-addressable store)
+      try {
+        const expectedReal = await tryRealpath(expected);
+        if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
+          return manager;
+        }
+      } catch {
+        // ignore symlink read errors
       }
     }
   }
