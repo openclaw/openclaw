@@ -127,6 +127,10 @@ export type AgentVerifierConfig = {
   enabled?: boolean;
   /** Verify every response regardless of trigger keywords (default: false). */
   verifyAll?: boolean;
+  /** Also verify heartbeat responses (default: false).
+   *  When enabled, the verifier evaluates heartbeat replies against HEARTBEAT.md tasks
+   *  to catch lazy HEARTBEAT_OK responses when the agent should have taken action. */
+  verifyHeartbeat?: boolean;
   /** Verifier model reference (e.g. "anthropic/claude-sonnet-4-5"). */
   model?: string;
   /** Max attempts including original (default: 3). */

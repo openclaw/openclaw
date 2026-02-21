@@ -99,3 +99,6 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Personal VPS docs
+VPS-CUSTOM-BUILD.md

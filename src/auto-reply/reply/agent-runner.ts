@@ -435,7 +435,7 @@ export async function runReplyAgent(params: {
 
     if (
       verifierConfig?.enabled === true &&
-      !isHeartbeat &&
+      (!isHeartbeat || verifierConfig.verifyHeartbeat === true) &&
       payloadArray.length > 0 &&
       !isCliProvider(followupRun.run.provider, cfg)
     ) {
@@ -472,14 +472,24 @@ export async function runReplyAgent(params: {
           "here you go",
         ];
 
-        if (responseText && (verifyAll || shouldVerifyResponse(responseText, triggerKeywords))) {
+        // Heartbeat runs with verifyHeartbeat always verify (catch lazy HEARTBEAT_OK).
+        const heartbeatForced = isHeartbeat && verifierConfig.verifyHeartbeat === true;
+        if (
+          responseText &&
+          (verifyAll || heartbeatForced || shouldVerifyResponse(responseText, triggerKeywords))
+        ) {
           verificationAttempted = true;
           const maxAttempts = verifierConfig.maxAttempts ?? 3;
           const verifierModel = verifierConfig.model ?? defaultModel;
           const timeoutMs = (verifierConfig.timeoutSeconds ?? 30) * 1000;
 
+          const triggerLabel = heartbeatForced
+            ? "heartbeat"
+            : verifyAll
+              ? "verifyAll"
+              : "keyword-triggered";
           defaultRuntime.log?.(
-            `[verifier] ${verifyAll ? "verifyAll" : "keyword-triggered"} — verifying with ${verifierModel} (max ${maxAttempts} attempts, full-context)`,
+            `[verifier] ${triggerLabel} — verifying with ${verifierModel} (max ${maxAttempts} attempts, full-context)`,
           );
           emitAgentEvent({
             runId,

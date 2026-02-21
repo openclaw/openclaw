@@ -273,7 +273,7 @@ describe("agent verifier integration", () => {
     expect(getEmittedPhases()).toContain("verification_exhausted");
   });
 
-  it("skips verification for heartbeat runs", async () => {
+  it("skips verification for heartbeat runs when verifyHeartbeat is not set", async () => {
     state.runAgentTurnWithFallbackMock.mockResolvedValueOnce(
       makeSuccessOutcome([{ text: "I'm done with the heartbeat check." }]),
     );
@@ -285,6 +285,50 @@ describe("agent verifier integration", () => {
     await run();
 
     expect(state.verifyAgentResponseMock).not.toHaveBeenCalled();
+  });
+
+  it("verifies heartbeat responses when verifyHeartbeat is true", async () => {
+    state.runAgentTurnWithFallbackMock.mockResolvedValueOnce(
+      makeSuccessOutcome([{ text: "HEARTBEAT_OK" }]),
+    );
+    state.verifyAgentResponseMock.mockResolvedValueOnce({ passed: true });
+
+    const { run } = createVerifierRun({
+      config: verifierEnabledConfig({ verifyHeartbeat: true, verifyAll: true }),
+      opts: { isHeartbeat: true },
+    });
+    await run();
+
+    expect(state.verifyAgentResponseMock).toHaveBeenCalledOnce();
+    expect(getEmittedPhases()).toContain("verification_start");
+  });
+
+  it("retries heartbeat when verifier rejects lazy HEARTBEAT_OK", async () => {
+    state.runAgentTurnWithFallbackMock
+      .mockResolvedValueOnce(makeSuccessOutcome([{ text: "HEARTBEAT_OK" }]))
+      .mockResolvedValueOnce(
+        makeSuccessOutcome([
+          { text: "Found a new Kaggle competition. Registering and starting work." },
+        ]),
+      );
+    state.verifyAgentResponseMock
+      .mockResolvedValueOnce({
+        passed: false,
+        feedback: "Agent responded HEARTBEAT_OK without checking for new tasks in HEARTBEAT.md.",
+        failCategory: "goal_missed",
+      })
+      .mockResolvedValueOnce({ passed: true });
+
+    const { run } = createVerifierRun({
+      config: verifierEnabledConfig({ verifyHeartbeat: true, verifyAll: true }),
+      opts: { isHeartbeat: true },
+    });
+    const result = await run();
+
+    expect(state.verifyAgentResponseMock).toHaveBeenCalledTimes(2);
+    expect(state.runAgentTurnWithFallbackMock).toHaveBeenCalledTimes(2);
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads.some((p) => p?.text?.includes("Kaggle"))).toBe(true);
   });
 
   it("skips verification when block streaming already delivered content", async () => {
