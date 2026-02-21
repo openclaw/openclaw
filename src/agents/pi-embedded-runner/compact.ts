@@ -32,6 +32,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
+import { parseModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   ensureSessionHeader,
@@ -271,14 +272,32 @@ export async function compactEmbeddedPiSessionDirect(
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
+
+  // Override with compaction-specific model if configured and enabled
+  const compactionOverrideEnabled =
+    params.config?.agents?.defaults?.compaction?.overrideModel ?? false;
+  const compactionModelRef = compactionOverrideEnabled
+    ? params.config?.agents?.defaults?.compaction?.model?.trim()
+    : undefined;
+  let effectiveProvider = provider;
+  let effectiveModelId = modelId;
+  if (compactionModelRef) {
+    const parsed = parseModelRef(compactionModelRef, provider);
+    if (parsed) {
+      effectiveProvider = parsed.provider;
+      effectiveModelId = parsed.model;
+      log.info(`compaction: using override model ${effectiveProvider}/${effectiveModelId}`);
+    }
+  }
+
   const { model, error, authStorage, modelRegistry } = resolveModel(
-    provider,
-    modelId,
+    effectiveProvider,
+    effectiveModelId,
     agentDir,
     params.config,
   );
   if (!model) {
-    const reason = error ?? `Unknown model: ${provider}/${modelId}`;
+    const reason = error ?? `Unknown model: ${effectiveProvider}/${effectiveModelId}`;
     return fail(reason);
   }
   try {
@@ -378,12 +397,12 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
-      modelId,
+      modelId: effectiveModelId,
       modelContextWindowTokens: model.contextWindow,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
-    logToolSchemasForGoogle({ tools, provider });
+    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: effectiveProvider });
+    logToolSchemasForGoogle({ tools, provider: effectiveProvider });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -451,14 +470,14 @@ export async function compactEmbeddedPiSessionDirect(
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
-      model: `${provider}/${modelId}`,
+      model: `${effectiveProvider}/${effectiveModelId}`,
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
       capabilities: runtimeCapabilities,
       channelActions,
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(provider);
+    const reasoningTagHint = isReasoningTagProvider(effectiveProvider);
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
@@ -525,8 +544,8 @@ export async function compactEmbeddedPiSessionDirect(
       await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
-        provider,
-        modelId,
+        provider: effectiveProvider,
+        modelId: effectiveModelId,
       });
       const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
@@ -544,8 +563,8 @@ export async function compactEmbeddedPiSessionDirect(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
-        provider,
-        modelId,
+        provider: effectiveProvider,
+        modelId: effectiveModelId,
         model,
       });
       // Only create an explicit resource loader when there are extension factories
@@ -566,12 +585,19 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
+      // Disable reasoning for compaction sessions. The SDK's generateSummary()
+      // hardcodes reasoning: "high" which triggers extended thinking on
+      // reasoning-capable models. Extended thinking adds significant latency
+      // and token cost (16K+ budget) to summarization with marginal quality
+      // benefit, and not all API-compatible providers support thinking params.
+      const compactionModel = model.reasoning ? { ...model, reasoning: false } : model;
+
       const { session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
         authStorage,
         modelRegistry,
-        model,
+        model: compactionModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,
@@ -585,8 +611,8 @@ export async function compactEmbeddedPiSessionDirect(
         const prior = await sanitizeSessionHistory({
           messages: session.messages,
           modelApi: model.api,
-          modelId,
-          provider,
+          modelId: effectiveModelId,
+          provider: effectiveProvider,
           config: params.config,
           sessionManager,
           sessionId: params.sessionId,
@@ -646,7 +672,7 @@ export async function compactEmbeddedPiSessionDirect(
         if (diagEnabled && preMetrics) {
           log.debug(
             `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${effectiveProvider}/${effectiveModelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} ` +
               `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
               `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
@@ -656,9 +682,16 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
 
+        const compactionTimeoutMs =
+          params.config?.agents?.defaults?.compaction?.timeoutMs ?? undefined;
         const compactStartedAt = Date.now();
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
+        log.info(
+          `compaction: start sessionId=${params.sessionId} ` +
+            `model=${effectiveProvider}/${effectiveModelId} timeoutMs=${compactionTimeoutMs ?? "default"}`,
+        );
+        const result = await compactWithSafetyTimeout(
+          () => session.compact(params.customInstructions),
+          compactionTimeoutMs,
         );
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -694,11 +727,18 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
+        log.info(
+          `compaction: done sessionId=${params.sessionId} ` +
+            `model=${effectiveProvider}/${effectiveModelId} ` +
+            `tokensBefore=${result.tokensBefore} tokensAfter=${tokensAfter ?? "?"} ` +
+            `durationMs=${Date.now() - compactStartedAt}`,
+        );
+
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+              `diagId=${diagId} trigger=${trigger} provider=${effectiveProvider}/${effectiveModelId} ` +
               `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
               `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
