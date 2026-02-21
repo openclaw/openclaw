@@ -495,6 +495,7 @@ Notes:
 - Headful (Xvfb) reduces bot blocking vs headless.
 - Headless can still be used by setting `agents.defaults.sandbox.browser.headless=true`.
 - No full desktop environment (GNOME) is needed; Xvfb provides the display.
+- noVNC observer access is password-protected by default; OpenClaw provides an auto-connect URL with the password query parameter.
 
 Use config:
 

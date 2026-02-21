@@ -33,7 +33,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowedOrigins":
     "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
   "gateway.controlUi.allowInsecureAuth":
-    "Allow Control UI auth over insecure HTTP (token-only; not recommended).",
+    "Insecure-auth toggle; Control UI still enforces secure context + device identity unless dangerouslyDisableDeviceAuth is enabled.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "DANGEROUS. Disable Control UI device identity checks (token/password only).",
   "gateway.http.endpoints.chatCompletions.enabled":
@@ -394,7 +394,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    "Enable Telegram live stream preview via message edits (default: true; legacy streamMode auto-maps here).",
+    "Enable Telegram live stream preview via message edits (default: false; legacy streamMode auto-maps here).",
   "channels.discord.streamMode":
     "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
   "channels.discord.draftChunk.minChars":

@@ -167,6 +167,7 @@ export function createTelegramDraftStream(params: {
     lastSentText = "";
     lastSentParseMode = undefined;
     loop.resetPending();
+    loop.resetThrottleWindow();
   };
 
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
