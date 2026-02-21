@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
@@ -15,6 +16,7 @@ import {
   loadConfig,
   migrateLegacyConfig,
   readConfigFileSnapshot,
+  tryLoadValidConfigBackup,
   writeConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -214,9 +216,34 @@ export async function startGatewayServer(
             .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
             .join("\n")
         : "Unknown validation issue.";
-    throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
-    );
+
+    const backup = await tryLoadValidConfigBackup(configSnapshot.path);
+    if (backup) {
+      const brokenDest = `${configSnapshot.path}.broken-${Date.now()}`;
+      let brokenSaved = false;
+      try {
+        await fs.promises.copyFile(configSnapshot.path, brokenDest);
+        brokenSaved = true;
+      } catch {
+        // best-effort: preserve the broken config for debugging
+      }
+      await writeConfigFile(backup.snapshot.config);
+      configSnapshot = await readConfigFileSnapshot();
+      const brokenMsg = brokenSaved
+        ? `Broken config saved to: ${brokenDest}`
+        : `Failed to save broken config to: ${brokenDest}`;
+      log.warn(
+        `gateway: invalid config detected — rolled back to last known-good backup.\n` +
+          `  Original errors:\n${issues}\n` +
+          `  ${brokenMsg}\n` +
+          `  Restored from: ${backup.backupPath}`,
+      );
+    } else {
+      throw new Error(
+        `Invalid config at ${configSnapshot.path}.\n${issues}\n` +
+          `No usable backup found — run "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
+      );
+    }
   }
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
