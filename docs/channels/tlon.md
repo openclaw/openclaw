@@ -55,21 +55,31 @@ Minimal config (single account):
 }
 ```
 
-Private/LAN ship URLs (advanced):
+## Private/LAN ships
 
-By default, OpenClaw blocks private/internal hostnames and IP ranges for this plugin (SSRF hardening).
-If your ship URL is on a private network (for example `http://192.168.1.50:8080` or `http://localhost:8080`),
+By default, OpenClaw blocks private/internal hostnames and IP ranges for SSRF protection.
+If your ship is running on a private network (localhost, LAN IP, or internal hostname),
 you must explicitly opt in:
 
 ```json5
 {
   channels: {
     tlon: {
+      url: "http://localhost:8080",
       allowPrivateNetwork: true,
     },
   },
 }
 ```
+
+This applies to URLs like:
+
+- `http://localhost:8080`
+- `http://192.168.x.x:8080`
+- `http://my-ship.local:8080`
+
+⚠️ Only enable this if you trust your local network. This setting disables SSRF protections
+for requests to your ship URL.
 
 ## Group channels
 
@@ -99,7 +109,7 @@ Disable auto-discovery:
 
 ## Access control
 
-DM allowlist (empty = allow all):
+DM allowlist (empty = no DMs allowed, use `ownerShip` for approval flow):
 
 ```json5
 {
