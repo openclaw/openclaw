@@ -1,0 +1,5 @@
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+PyYAML>=6.0.1
+pytest>=8.0.0
+mypy>=1.10.0

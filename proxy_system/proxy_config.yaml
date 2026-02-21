@@ -1,0 +1,14 @@
+storage_path: "proxies.json"
+default_strategy: "round_robin"
+max_failures: 5
+failure_threshold: 0.2
+test_url: "https://httpbin.org/ip"
+test_timeout: 5
+
+proxies:
+  - host: "127.0.0.1"
+    port: 8080
+    id: "local-proxy-1"
+  - host: "127.0.0.1"
+    port: 8081
+    id: "local-proxy-2"
