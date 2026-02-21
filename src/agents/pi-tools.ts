@@ -32,6 +32,11 @@ import {
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
 import {
+  createDisablePiMonitorTool,
+  createMonitorState,
+  wrapToolWithPromptInjectionMonitor,
+} from "./pi-tools.prompt-injection-monitor.js";
+import {
   assertRequiredParams,
   CLAUDE_PARAM_GROUPS,
   createOpenClawReadTool,
@@ -394,6 +399,7 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
+  const monitorState = createMonitorState(options?.config);
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -417,6 +423,7 @@ export function createOpenClawCodingTools(options?: {
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
+    createDisablePiMonitorTool(monitorState),
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
     ...createOpenClawTools({
@@ -496,9 +503,12 @@ export function createOpenClawCodingTools(options?: {
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );
+  const withMonitor = withHooks.map((tool) =>
+    wrapToolWithPromptInjectionMonitor(tool, monitorState),
+  );
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
+    ? withMonitor.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withMonitor;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
