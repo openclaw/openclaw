@@ -170,12 +170,13 @@ export type AgentDefaultsConfig = {
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
-  /** Default block streaming level when no override is present. */
+  /** Default block streaming level when no override is present. Defaults to "on". */
   blockStreamingDefault?: "off" | "on";
   /**
    * Block streaming boundary:
    * - "text_end": end of each assistant text content block (before tool calls)
    * - "message_end": end of the whole assistant message (may include tool blocks)
+   * Defaults to "message_end".
    */
   blockStreamingBreak?: "text_end" | "message_end";
   /** Soft block chunking for streamed replies (min/max chars, prefer paragraph/newline). */

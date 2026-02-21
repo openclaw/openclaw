@@ -360,11 +360,11 @@ export async function resolveReplyDirectives(params: {
       ? "off"
       : opts?.disableBlockStreaming === false
         ? "on"
-        : agentCfg?.blockStreamingDefault === "on"
-          ? "on"
-          : "off";
+        : agentCfg?.blockStreamingDefault === "off"
+          ? "off"
+          : "on";
   const resolvedBlockStreamingBreak: "text_end" | "message_end" =
-    agentCfg?.blockStreamingBreak === "message_end" ? "message_end" : "text_end";
+    agentCfg?.blockStreamingBreak === "text_end" ? "text_end" : "message_end";
   const blockStreamingEnabled =
     resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
   const blockReplyChunking = blockStreamingEnabled
