@@ -39,5 +39,11 @@ export type WebInboundMessage = {
   mediaType?: string;
   mediaFileName?: string;
   mediaUrl?: string;
+  /** Batched media paths when multiple media messages are combined via debouncing. */
+  mediaPaths?: string[];
+  /** Batched media types corresponding to mediaPaths. */
+  mediaTypes?: string[];
+  /** Batched media file names corresponding to mediaPaths. */
+  mediaFileNames?: string[];
   wasMentioned?: boolean;
 };

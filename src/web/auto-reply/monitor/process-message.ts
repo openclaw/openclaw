@@ -301,6 +301,10 @@ export async function processMessage(params: {
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
+    // Support batched media from debounced multi-image messages
+    MediaPaths: params.msg.mediaPaths,
+    MediaTypes: params.msg.mediaTypes,
+    MediaUrls: params.msg.mediaPaths, // Use paths as URLs for local files
     ChatType: params.msg.chatType,
     ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
     GroupSubject: params.msg.groupSubject,
