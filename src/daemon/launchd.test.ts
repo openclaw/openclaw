@@ -179,6 +179,23 @@ describe("launchd install", () => {
     expect(plist).toContain(`<string>${tmpDir}</string>`);
   });
 
+  it("writes KeepAlive SuccessfulExit + ThrottleInterval to avoid launchd restart loops", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>KeepAlive</key>");
+    expect(plist).toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>ThrottleInterval</key>");
+    expect(plist).toContain("<integer>5</integer>");
+    expect(plist).not.toMatch(/<key>KeepAlive<\/key>\s*<true\s*\/>/i);
+  });
+
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
     state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
     const env = createDefaultLaunchdEnv();
@@ -208,6 +225,26 @@ describe("launchd install", () => {
         programArguments: defaultProgramArguments,
       }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+  });
+});
+
+describe("LaunchAgent plist content", () => {
+  it("generated plist uses SuccessfulExit dict instead of bare KeepAlive=true", async () => {
+    const env = { HOME: "/Users/test" };
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: ["node", "gateway"],
+    });
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const written = state.files.get(plistPath) ?? "";
+    // Must have KeepAlive as dict with SuccessfulExit
+    expect(written).toMatch(/<key>KeepAlive<\/key>/);
+    expect(written).toMatch(/<key>SuccessfulExit<\/key>\s*<true\s*\/>/);
+    // Must NOT have bare KeepAlive=<true/>
+    expect(written).not.toMatch(/<key>KeepAlive<\/key>\s*<true\s*\/>/);
+    // Must have ThrottleInterval = 5
+    expect(written).toMatch(/<key>ThrottleInterval<\/key>\s*<integer>5<\/integer>/);
   });
 });
 

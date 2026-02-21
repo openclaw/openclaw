@@ -146,6 +146,21 @@ describe("sendMessageMatrix media", () => {
     expect(content.file?.url).toBe("mxc://example/file");
   });
 
+  it("formats standalone display math as data-mx-maths block in formatted_body", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "$$x^2$$", { client });
+
+    const content = sendMessage.mock.calls[0]?.[1] as {
+      body?: string;
+      format?: string;
+      formatted_body?: string;
+    };
+    expect(content.body).toBe("$$x^2$$");
+    expect(content.format).toBe("org.matrix.custom.html");
+    expect(content.formatted_body).toBe('<div data-mx-maths="x^2"><code>x^2</code></div>');
+  });
+
   it("marks voice metadata and sends caption follow-up when audioAsVoice is compatible", async () => {
     const { client, sendMessage } = makeClient();
     mediaKindFromMimeMock.mockReturnValue("audio");
