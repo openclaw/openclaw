@@ -439,6 +439,21 @@ export const OpenClawSchema = z
       .optional(),
     talk: z
       .object({
+        provider: z.string().optional(),
+        providers: z
+          .record(
+            z.string(),
+            z
+              .object({
+                voiceId: z.string().optional(),
+                voiceAliases: z.record(z.string(), z.string()).optional(),
+                modelId: z.string().optional(),
+                outputFormat: z.string().optional(),
+                apiKey: z.string().optional().register(sensitive),
+              })
+              .catchall(z.unknown()),
+          )
+          .optional(),
         voiceId: z.string().optional(),
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),

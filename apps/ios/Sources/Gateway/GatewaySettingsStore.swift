@@ -25,7 +25,8 @@ enum GatewaySettingsStore {
     private static let instanceIdAccount = "instanceId"
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
-    private static let talkElevenLabsApiKeyAccount = "elevenlabs.apiKey"
+    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey."
+    private static let talkElevenLabsApiKeyLegacyAccount = "elevenlabs.apiKey"
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
@@ -145,25 +146,52 @@ enum GatewaySettingsStore {
         case discovered
     }
 
-    static func loadTalkElevenLabsApiKey() -> String? {
+    static func loadTalkProviderApiKey(provider: String) -> String? {
+        guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
+        let account = self.talkProviderApiKeyAccount(providerId: providerId)
         let value = KeychainStore.loadString(
             service: self.talkService,
-            account: self.talkElevenLabsApiKeyAccount)?
+            account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if value?.isEmpty == false { return value }
+
+        if providerId == "elevenlabs" {
+            let legacyValue = KeychainStore.loadString(
+                service: self.talkService,
+                account: self.talkElevenLabsApiKeyLegacyAccount)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if legacyValue?.isEmpty == false {
+                _ = KeychainStore.saveString(legacyValue!, service: self.talkService, account: account)
+                return legacyValue
+            }
+        }
+
         return nil
     }
 
-    static func saveTalkElevenLabsApiKey(_ apiKey: String?) {
+    static func saveTalkProviderApiKey(_ apiKey: String?, provider: String) {
+        guard let providerId = self.normalizedTalkProviderID(provider) else { return }
+        let account = self.talkProviderApiKeyAccount(providerId: providerId)
         let trimmed = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
-            _ = KeychainStore.delete(service: self.talkService, account: self.talkElevenLabsApiKeyAccount)
+            _ = KeychainStore.delete(service: self.talkService, account: account)
+            if providerId == "elevenlabs" {
+                _ = KeychainStore.delete(service: self.talkService, account: self.talkElevenLabsApiKeyLegacyAccount)
+            }
             return
         }
-        _ = KeychainStore.saveString(
-            trimmed,
-            service: self.talkService,
-            account: self.talkElevenLabsApiKeyAccount)
+        _ = KeychainStore.saveString(trimmed, service: self.talkService, account: account)
+        if providerId == "elevenlabs" {
+            _ = KeychainStore.delete(service: self.talkService, account: self.talkElevenLabsApiKeyLegacyAccount)
+        }
+    }
+
+    static func loadTalkElevenLabsApiKey() -> String? {
+        self.loadTalkProviderApiKey(provider: "elevenlabs")
+    }
+
+    static func saveTalkElevenLabsApiKey(_ apiKey: String?) {
+        self.saveTalkProviderApiKey(apiKey, provider: "elevenlabs")
     }
 
     static func saveLastGatewayConnectionManual(host: String, port: Int, useTLS: Bool, stableID: String) {
@@ -276,6 +304,15 @@ enum GatewaySettingsStore {
 
     private static func gatewayPasswordAccount(instanceId: String) -> String {
         "gateway-password.\(instanceId)"
+    }
+
+    private static func talkProviderApiKeyAccount(providerId: String) -> String {
+        self.talkProviderApiKeyAccountPrefix + providerId
+    }
+
+    private static func normalizedTalkProviderID(_ provider: String) -> String? {
+        let trimmed = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func ensureStableInstanceID() {
