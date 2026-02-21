@@ -1,5 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { readNumberParam, readStringParam } from "../agents/tools/common.js";
+import {
+  readNumberParam,
+  readStringOrNumberParam,
+  readStringParam,
+} from "../agents/tools/common.js";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import { parseSlackBlocksInput } from "../slack/blocks-input.js";
 
@@ -108,7 +112,7 @@ export async function handleSlackMessageAction(params: {
       accountId,
     };
     if (includeReadThreadId) {
-      readAction.threadId = readStringParam(actionParams, "threadId");
+      readAction.threadId = readStringOrNumberParam(actionParams, "threadId");
     }
     return await invoke(readAction, cfg);
   }
