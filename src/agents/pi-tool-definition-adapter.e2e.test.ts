@@ -12,13 +12,14 @@ type TimedAgentToolResult = AgentToolResult<unknown> & {
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
+const emptySchema = Type.Object({});
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {
     name,
     label: name === "bash" ? "Bash" : "Boom",
     description: "throws",
-    parameters: Type.Object({}),
+    parameters: emptySchema,
     execute: async () => {
       throw new Error("nope");
     },
@@ -59,10 +60,12 @@ describe("pi tool definition adapter", () => {
       name: "ok",
       label: "Ok",
       description: "works",
-      parameters: {},
-      execute: async () => {
-        return { content: [{ type: "text", text: "done" }] };
-      },
+      parameters: emptySchema,
+      execute: async () =>
+        ({
+          content: [{ type: "text", text: "done" }],
+          details: { ok: true },
+        }) as AgentToolResult<unknown>,
     } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
@@ -71,6 +74,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     expect(typeof result.durationMs).toBe("number");
@@ -86,7 +90,7 @@ describe("pi tool definition adapter", () => {
       name: "fail",
       label: "Fail",
       description: "fails",
-      parameters: {},
+      parameters: emptySchema,
       execute: async () => {
         throw new Error("unlucky");
       },
@@ -98,6 +102,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     expect(result.details).toMatchObject({
@@ -122,10 +127,12 @@ describe("pi tool definition adapter", () => {
       name: "okNoDuration",
       label: "OkNoDuration",
       description: "works",
-      parameters: {},
-      execute: async () => {
-        return { content: [{ type: "text", text: "done" }] };
-      },
+      parameters: emptySchema,
+      execute: async () =>
+        ({
+          content: [{ type: "text", text: "done" }],
+          details: { ok: true },
+        }) as AgentToolResult<unknown>,
     } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool], { recordDurationMetadata: false });
@@ -134,6 +141,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     expect(result.durationMs).toBeUndefined();
@@ -145,7 +153,7 @@ describe("pi tool definition adapter", () => {
       name: "failNoDuration",
       label: "FailNoDuration",
       description: "fails",
-      parameters: {},
+      parameters: emptySchema,
       execute: async () => {
         throw new Error("unlucky");
       },
@@ -157,6 +165,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     expect(result.durationMs).toBeUndefined();
@@ -172,10 +181,11 @@ describe("pi tool definition adapter", () => {
       name: "preTimed",
       label: "PreTimed",
       description: "already timed",
-      parameters: {},
+      parameters: emptySchema,
       execute: async () => {
         return {
           content: [{ type: "text", text: "done" }],
+          details: { ok: true },
           durationMs: 123,
         } as unknown as AgentToolResult<unknown>;
       },
@@ -187,6 +197,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     expect(result.durationMs).toBe(123);
@@ -209,7 +220,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
-      undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     const details = result.details as { metadata?: { durationMs?: number } } | undefined;
@@ -238,7 +249,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
-      undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     const details = result.details as { metadata?: { durationMs?: number } } | undefined;
@@ -254,7 +265,7 @@ describe("pi tool definition adapter", () => {
       name: "immutable",
       label: "Immutable",
       description: "returns shared details",
-      parameters: {},
+      parameters: emptySchema,
       execute: async () =>
         ({
           content: [{ type: "text", text: "done" }],
@@ -268,6 +279,7 @@ describe("pi tool definition adapter", () => {
       {},
       undefined,
       undefined,
+      extensionContext,
     )) as TimedAgentToolResult;
 
     expect(originalDetails.metadata?.durationMs).toBeUndefined();

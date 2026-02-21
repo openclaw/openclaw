@@ -261,7 +261,10 @@ describe("resolveDeliveryTarget", () => {
 
   it("uses channel selection result when no previous session target exists", async () => {
     setMainSessionEntry(undefined);
-    vi.mocked(resolveMessageChannelSelection).mockResolvedValueOnce({ channel: "telegram" });
+    vi.mocked(resolveMessageChannelSelection).mockResolvedValueOnce({
+      channel: "telegram",
+      configured: ["telegram"],
+    });
 
     const result = await resolveForAgent({
       cfg: makeCfg({ bindings: [] }),

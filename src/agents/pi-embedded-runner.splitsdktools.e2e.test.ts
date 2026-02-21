@@ -7,14 +7,17 @@ type DurationProbeResult = AgentToolResult<unknown> & {
   durationMs?: number;
   metadata?: { durationMs?: number };
 };
+type SplitExecute = ReturnType<typeof splitSdkTools>["customTools"][number]["execute"];
+const extensionContext = {} as Parameters<SplitExecute>[4];
+const emptySchema = Type.Object({});
 
 function createStubTool(name: string): AgentTool {
   return {
     name,
     label: name,
     description: "",
-    parameters: Type.Object({}),
-    execute: async () => ({}) as AgentToolResult<unknown>,
+    parameters: emptySchema,
+    execute: async () => ({ content: [], details: { ok: true } }) as AgentToolResult<unknown>,
   };
 }
 
@@ -62,9 +65,12 @@ describe("splitSdkTools", () => {
       name: "probe",
       label: "probe",
       description: "",
-      parameters: {},
+      parameters: emptySchema,
       execute: async () =>
-        ({ content: [{ type: "text", text: "ok" }] }) as AgentToolResult<unknown>,
+        ({
+          content: [{ type: "text", text: "ok" }],
+          details: { ok: true },
+        }) as AgentToolResult<unknown>,
     };
 
     const { customTools } = splitSdkTools({
@@ -78,7 +84,7 @@ describe("splitSdkTools", () => {
       {},
       undefined,
       undefined,
-      undefined,
+      extensionContext,
     )) as DurationProbeResult;
 
     expect(result.durationMs).toBeUndefined();
@@ -90,9 +96,12 @@ describe("splitSdkTools", () => {
       name: "probeOn",
       label: "probeOn",
       description: "",
-      parameters: {},
+      parameters: emptySchema,
       execute: async () =>
-        ({ content: [{ type: "text", text: "ok" }] }) as AgentToolResult<unknown>,
+        ({
+          content: [{ type: "text", text: "ok" }],
+          details: { ok: true },
+        }) as AgentToolResult<unknown>,
     };
 
     const { customTools } = splitSdkTools({
@@ -105,7 +114,7 @@ describe("splitSdkTools", () => {
       {},
       undefined,
       undefined,
-      undefined,
+      extensionContext,
     )) as DurationProbeResult;
 
     expect(typeof result.durationMs).toBe("number");
