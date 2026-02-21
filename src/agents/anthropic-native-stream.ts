@@ -236,21 +236,15 @@ export function createAnthropicNativeStreamFn(
     const run = async () => {
       try {
         const effectiveApiKey = options?.apiKey || apiKey;
-        const isOAuthToken = effectiveApiKey.startsWith("sk-ant-oat");
-
-        // Build anthropic-beta header. Both API keys and OAuth tokens need the tool streaming
-        // and thinking betas. OAuth tokens additionally need claude-code-20250219 and oauth-2025-04-20.
-        const betaHeaders = [
-          "fine-grained-tool-streaming-2025-05-14",
-          "interleaved-thinking-2025-05-14",
-          ...(isOAuthToken ? ["claude-code-20250219", "oauth-2025-04-20"] : []),
-        ];
 
         const client = new Anthropic({
-          ...(isOAuthToken ? { authToken: effectiveApiKey } : { apiKey: effectiveApiKey }),
+          apiKey: effectiveApiKey,
           ...(opts?.baseUrl ? { baseURL: opts.baseUrl } : {}),
           defaultHeaders: {
-            "anthropic-beta": betaHeaders.join(","),
+            "anthropic-beta": [
+              "fine-grained-tool-streaming-2025-05-14",
+              "interleaved-thinking-2025-05-14",
+            ].join(","),
           },
         });
 
