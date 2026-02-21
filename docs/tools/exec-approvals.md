@@ -142,6 +142,9 @@ Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfi
 (including safe bins or skill auto-allow). Redirections remain unsupported in allowlist mode.
 Command substitution (`$()` / backticks) is rejected during allowlist parsing, including inside
 double quotes; use single quotes if you need literal `$()` text.
+On macOS companion-app approvals, raw shell text containing shell control or expansion syntax
+(`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss unless
+the shell binary itself is allowlisted.
 
 Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
