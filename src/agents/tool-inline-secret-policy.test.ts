@@ -24,6 +24,15 @@ describe("tool inline secret policy", () => {
     expect(violation).toBeNull();
   });
 
+  it("does not flag generic key params used by non-secret tools", () => {
+    const violation = findInlineToolSecretViolation({
+      request: {
+        key: "Enter",
+      },
+    });
+    expect(violation).toBeNull();
+  });
+
   it("supports emergency bypass env flag", () => {
     process.env.OPENCLAW_ALLOW_INLINE_TOOL_SECRETS = "1";
     try {
