@@ -298,6 +298,22 @@ export async function ensureWorkspaceAndSessions(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
+
+  // Initialize agent state sessions directory with empty sessions.json if it doesn't exist
+  if (options?.agentId) {
+    const agentStateSessionsDir = path.join(CONFIG_DIR, "agents", options.agentId, "sessions");
+    const sessionsFile = path.join(agentStateSessionsDir, "sessions.json");
+    
+    try {
+      await fs.stat(sessionsFile);
+    } catch {
+      // File doesn't exist, create it with empty structure
+      await fs.mkdir(agentStateSessionsDir, { recursive: true });
+      const emptySessions = {};
+      await fs.writeFile(sessionsFile, JSON.stringify(emptySessions, null, 2));
+      runtime.log(`Agent state initialized: ${shortenHomePath(sessionsFile)}`);
+    }
+  }
 }
 
 export function resolveNodeManagerOptions(): Array<{
