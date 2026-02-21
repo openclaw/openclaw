@@ -28,6 +28,7 @@ export type TelegramNetworkConfig = {
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
+export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 
 export type TelegramCapabilitiesConfig =
   | string[]
@@ -95,15 +96,23 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
-  /** Enable live stream preview via message edits (default: true). */
-  streaming?: boolean;
+  /**
+   * Stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in larger chunked updates
+   * - "progress": alias that maps to "partial" on Telegram
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
+   */
+  streaming?: TelegramStreamingMode | boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** @deprecated Legacy key; migrated automatically to `streaming` boolean. */
+  /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */

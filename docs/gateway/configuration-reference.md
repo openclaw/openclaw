@@ -151,7 +151,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all
       linkPreview: true,
-      streaming: true, // live preview on/off (default true)
+      streaming: "partial", // off | partial | block | progress (default: off)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 5,
@@ -228,6 +228,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 20,
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
+      streaming: "off", // off | partial | block | progress (progress maps to partial on Discord)
       maxLinesPerMessage: 17,
       ui: {
         components: {
@@ -265,6 +266,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
+- `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -348,6 +350,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       textChunkLimit: 4000,
       chunkMode: "length",
+      streaming: "partial", // off | partial | block | progress (preview mode)
+      nativeStreaming: true, // use Slack native streaming API when streaming=partial
       mediaMaxMb: 20,
     },
   },
@@ -357,6 +361,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `configWrites: false` blocks Slack-initiated config writes.
+- `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
