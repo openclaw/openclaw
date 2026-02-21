@@ -116,6 +116,12 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type ToolInterruptEmitParams,
+  ToolInterruptEmitParamsSchema,
+  type ToolInterruptListParams,
+  ToolInterruptListParamsSchema,
+  type ToolInterruptResumeParams,
+  ToolInterruptResumeParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -366,6 +372,15 @@ export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
 );
+export const validateToolInterruptEmitParams = ajv.compile<ToolInterruptEmitParams>(
+  ToolInterruptEmitParamsSchema,
+);
+export const validateToolInterruptListParams = ajv.compile<ToolInterruptListParams>(
+  ToolInterruptListParamsSchema,
+);
+export const validateToolInterruptResumeParams = ajv.compile<ToolInterruptResumeParams>(
+  ToolInterruptResumeParamsSchema,
+);
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
@@ -606,6 +621,9 @@ export type {
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
+  ToolInterruptEmitParams,
+  ToolInterruptListParams,
+  ToolInterruptResumeParams,
   LogsTailParams,
   LogsTailResult,
   PollParams,

@@ -11,6 +11,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { ToolInterruptManager } from "../tool-interrupt-manager.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -32,6 +33,7 @@ export type GatewayRequestContext = {
   cron: CronService;
   cronStorePath: string;
   execApprovalManager?: ExecApprovalManager;
+  toolInterruptManager?: ToolInterruptManager;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;

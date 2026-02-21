@@ -25,6 +25,7 @@ import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { wrapToolWithPauseForApproval } from "./pi-tools.pause-for-approval.js";
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
@@ -162,6 +163,7 @@ export const __testing = {
 } as const;
 
 export function createOpenClawCodingTools(options?: {
+  runId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
@@ -496,9 +498,15 @@ export function createOpenClawCodingTools(options?: {
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );
+  const withPause = withHooks.map((tool) =>
+    wrapToolWithPauseForApproval(tool, {
+      runId: options?.runId,
+      sessionKey: options?.sessionKey,
+    }),
+  );
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
+    ? withPause.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withPause;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
