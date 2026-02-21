@@ -164,6 +164,17 @@ async function runCommand(
     let timedOut = false;
     let settled = false;
 
+    // Auto-create cwd if it doesn't exist to avoid misleading
+    // "spawn /bin/sh ENOENT" errors (Node surfaces missing cwd as ENOENT
+    // on the shell binary rather than the directory).
+    if (cwd) {
+      try {
+        fs.mkdirSync(cwd, { recursive: true });
+      } catch {
+        // Best-effort; let spawn surface the real error if mkdir fails.
+      }
+    }
+
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
       env,
