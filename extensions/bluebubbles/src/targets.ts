@@ -326,10 +326,54 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
 export function isAllowedBlueBubblesSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
+  dmPolicy?: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
 }): boolean {
+<<<<<<< fix/bluebubbles-dmPolicy-enforcement
+  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
+  if (allowFrom.length === 0) {
+    // When policy requires pairing or allowlist, empty list = no one allowed.
+    if (params.dmPolicy === "pairing" || params.dmPolicy === "allowlist") {
+      return false;
+    }
+    return true;
+  }
+  if (allowFrom.includes("*")) {
+    return true;
+  }
+
+  const senderNormalized = normalizeBlueBubblesHandle(params.sender);
+  const chatId = params.chatId ?? undefined;
+  const chatGuid = params.chatGuid?.trim();
+  const chatIdentifier = params.chatIdentifier?.trim();
+
+  for (const entry of allowFrom) {
+    if (!entry) {
+      continue;
+    }
+    const parsed = parseBlueBubblesAllowTarget(entry);
+    if (parsed.kind === "chat_id" && chatId !== undefined) {
+      if (parsed.chatId === chatId) {
+        return true;
+      }
+    } else if (parsed.kind === "chat_guid" && chatGuid) {
+      if (parsed.chatGuid === chatGuid) {
+        return true;
+      }
+    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
+      if (parsed.chatIdentifier === chatIdentifier) {
+        return true;
+      }
+    } else if (parsed.kind === "handle" && senderNormalized) {
+      if (parsed.handle === senderNormalized) {
+        return true;
+      }
+    }
+  }
+  return false;
+=======
   return isAllowedParsedChatSender({
     allowFrom: params.allowFrom,
     sender: params.sender,
@@ -339,6 +383,7 @@ export function isAllowedBlueBubblesSender(params: {
     normalizeSender: normalizeBlueBubblesHandle,
     parseAllowTarget: parseBlueBubblesAllowTarget,
   });
+>>>>>>> main
 }
 
 export function formatBlueBubblesChatTarget(params: {
