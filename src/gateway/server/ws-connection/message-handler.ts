@@ -72,6 +72,40 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
 
+type ControlUiAuthPolicy = {
+  allowInsecureAuthConfigured: boolean;
+  dangerouslyDisableDeviceAuth: boolean;
+  allowBypass: boolean;
+  device: ConnectParams["device"] | null | undefined;
+};
+
+function resolveControlUiAuthPolicy(params: {
+  isControlUi: boolean;
+  controlUiConfig:
+    | {
+        allowInsecureAuth?: boolean;
+        dangerouslyDisableDeviceAuth?: boolean;
+      }
+    | undefined;
+  deviceRaw: ConnectParams["device"] | null | undefined;
+}): ControlUiAuthPolicy {
+  const allowInsecureAuthConfigured =
+    params.isControlUi && params.controlUiConfig?.allowInsecureAuth === true;
+  const dangerouslyDisableDeviceAuth =
+    params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
+  return {
+    allowInsecureAuthConfigured,
+    dangerouslyDisableDeviceAuth,
+    // `allowInsecureAuth` must not bypass secure-context/device-auth requirements.
+    allowBypass: dangerouslyDisableDeviceAuth,
+    device: dangerouslyDisableDeviceAuth ? null : params.deviceRaw,
+  };
+}
+
+function shouldSkipControlUiPairing(policy: ControlUiAuthPolicy, sharedAuthOk: boolean): boolean {
+  return policy.allowBypass && sharedAuthOk;
+}
+
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
@@ -337,62 +371,74 @@ export function attachGatewayWsMessageHandler(params: {
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
-        const allowInsecureControlUi =
-          isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
-        const disableControlUiDeviceAuth =
-          isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
-        // `allowInsecureAuth` must not bypass secure-context/device-auth requirements.
-        const allowControlUiBypass = disableControlUiDeviceAuth;
-        const device = disableControlUiDeviceAuth ? null : deviceRaw;
-
-        const hasDeviceTokenCandidate = Boolean(connectParams.auth?.token && device);
-        let authResult: GatewayAuthResult = await authorizeGatewayConnect({
-          auth: resolvedAuth,
-          connectAuth: connectParams.auth,
-          req: upgradeReq,
-          trustedProxies,
-          allowTailscaleHeaderAuth: true,
-          rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
-          clientIp,
-          rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        const controlUiAuthPolicy = resolveControlUiAuthPolicy({
+          isControlUi,
+          controlUiConfig: configSnapshot.gateway?.controlUi,
+          deviceRaw,
         });
+        const device = controlUiAuthPolicy.device;
 
-        if (
-          hasDeviceTokenCandidate &&
-          authResult.ok &&
-          rateLimiter &&
-          (authResult.method === "token" || authResult.method === "password")
-        ) {
-          const sharedRateCheck = rateLimiter.check(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-          if (!sharedRateCheck.allowed) {
-            authResult = {
-              ok: false,
-              reason: "rate_limited",
-              rateLimited: true,
-              retryAfterMs: sharedRateCheck.retryAfterMs,
-            };
-          } else {
-            rateLimiter.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+        const resolveAuthState = async () => {
+          const hasDeviceTokenCandidate = Boolean(connectParams.auth?.token && device);
+          let nextAuthResult: GatewayAuthResult = await authorizeGatewayConnect({
+            auth: resolvedAuth,
+            connectAuth: connectParams.auth,
+            req: upgradeReq,
+            trustedProxies,
+            allowTailscaleHeaderAuth: true,
+            rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
+            clientIp,
+            rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          });
+
+          if (
+            hasDeviceTokenCandidate &&
+            nextAuthResult.ok &&
+            rateLimiter &&
+            (nextAuthResult.method === "token" || nextAuthResult.method === "password")
+          ) {
+            const sharedRateCheck = rateLimiter.check(
+              clientIp,
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
+            if (!sharedRateCheck.allowed) {
+              nextAuthResult = {
+                ok: false,
+                reason: "rate_limited",
+                rateLimited: true,
+                retryAfterMs: sharedRateCheck.retryAfterMs,
+              };
+            } else {
+              rateLimiter.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+            }
           }
-        }
 
-        let authOk = authResult.ok;
-        let authMethod =
-          authResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
-        const sharedAuthResult = hasSharedAuth
-          ? await authorizeGatewayConnect({
-              auth: { ...resolvedAuth, allowTailscale: false },
-              connectAuth: connectParams.auth,
-              req: upgradeReq,
-              trustedProxies,
-              // Shared-auth probe only; rate-limit side effects are handled in
-              // the primary auth flow (or deferred for device-token candidates).
-              rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-            })
-          : null;
-        const sharedAuthOk =
-          sharedAuthResult?.ok === true &&
-          (sharedAuthResult.method === "token" || sharedAuthResult.method === "password");
+          const nextAuthMethod =
+            nextAuthResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
+          const sharedAuthResult = hasSharedAuth
+            ? await authorizeGatewayConnect({
+                auth: { ...resolvedAuth, allowTailscale: false },
+                connectAuth: connectParams.auth,
+                req: upgradeReq,
+                trustedProxies,
+                // Shared-auth probe only; rate-limit side effects are handled in
+                // the primary auth flow (or deferred for device-token candidates).
+                rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+              })
+            : null;
+          const nextSharedAuthOk =
+            sharedAuthResult?.ok === true &&
+            (sharedAuthResult.method === "token" || sharedAuthResult.method === "password");
+
+          return {
+            authResult: nextAuthResult,
+            authOk: nextAuthResult.ok,
+            authMethod: nextAuthMethod,
+            sharedAuthOk: nextSharedAuthOk,
+          };
+        };
+
+        let { authResult, authOk, authMethod, sharedAuthOk } = await resolveAuthState();
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           markHandshakeFailure("unauthorized", {
             authMode: resolvedAuth.mode,
@@ -421,35 +467,46 @@ export function attachGatewayWsMessageHandler(params: {
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage);
           close(1008, truncateCloseReason(authMessage));
         };
-        if (!device) {
-          if (scopes.length > 0 && !allowControlUiBypass) {
+        const clearUnboundScopes = () => {
+          if (scopes.length > 0 && !controlUiAuthPolicy.allowBypass) {
             scopes = [];
             connectParams.scopes = scopes;
           }
+        };
+        const handleMissingDeviceIdentity = (): boolean => {
+          if (device) {
+            return true;
+          }
+          clearUnboundScopes();
           const canSkipDevice = sharedAuthOk;
 
-          if (isControlUi && !allowControlUiBypass) {
+          if (isControlUi && !controlUiAuthPolicy.allowBypass) {
             const errorMessage =
               "control ui requires device identity (use HTTPS or localhost secure context)";
             markHandshakeFailure("control-ui-insecure-auth", {
-              insecureAuthConfigured: allowInsecureControlUi,
+              insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
             close(1008, errorMessage);
-            return;
+            return false;
           }
 
-          // Allow shared-secret authenticated connections (e.g., control-ui) to skip device identity
+          // Allow shared-secret authenticated connections (e.g., control-ui) to skip device identity.
           if (!canSkipDevice) {
             if (!authOk && hasSharedAuth) {
               rejectUnauthorized(authResult);
-              return;
+              return false;
             }
             markHandshakeFailure("device-required");
             sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, "device identity required");
             close(1008, "device identity required");
-            return;
+            return false;
           }
+
+          return true;
+        };
+        if (!handleMissingDeviceIdentity()) {
+          return;
         }
         if (device) {
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
@@ -625,7 +682,7 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const skipPairing = allowControlUiBypass && sharedAuthOk;
+        const skipPairing = shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
