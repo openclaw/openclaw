@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
   mockCopilotTokenExchangeSuccess,
@@ -32,21 +32,24 @@ describe("models-config", () => {
 
   it("prefers COPILOT_GITHUB_TOKEN over GH_TOKEN and GITHUB_TOKEN", async () => {
     await withTempHome(async () => {
-      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
-      process.env.COPILOT_GITHUB_TOKEN = "copilot-token";
-      process.env.GH_TOKEN = "gh-token";
-      process.env.GITHUB_TOKEN = "github-token";
+      await withEnvAsync(
+        {
+          COPILOT_GITHUB_TOKEN: "copilot-token",
+          GH_TOKEN: "gh-token",
+          GITHUB_TOKEN: "github-token",
+        },
+        async () => {
+          const fetchMock = mockCopilotTokenExchangeSuccess();
 
-      const fetchMock = mockCopilotTokenExchangeSuccess();
+          await ensureOpenClawModelsJson({ models: { providers: {} } });
 
-      try {
-        await ensureOpenClawModelsJson({ models: { providers: {} } });
-
-        const [, opts] = fetchMock.mock.calls[0] as [string, { headers?: Record<string, string> }];
-        expect(opts?.headers?.Authorization).toBe("Bearer copilot-token");
-      } finally {
-        envSnapshot.restore();
-      }
+          const [, opts] = fetchMock.mock.calls[0] as [
+            string,
+            { headers?: Record<string, string> },
+          ];
+          expect(opts?.headers?.Authorization).toBe("Bearer copilot-token");
+        },
+      );
     });
   });
 });
