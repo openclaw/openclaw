@@ -7,21 +7,21 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs: fix FAQ typos and add documentation spellcheck automation with a custom codespell dictionary/ignore list, including CI coverage. (#22457) Thanks @vincentkoc.
-- Security/Unused Dependencies: add dead-code scans to CI via Knip/ts-prune/ts-unused-exports and report unused dependencies/exports in non-blocking checks. (#22468) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: add dead-code scans to CI via Knip/ts-prune/ts-unused-exports and report unused dependencies/exports in non-blocking checks. (#22468) Thanks @vincentkoc.
 - Security/Agents: make owner-ID obfuscation use a dedicated HMAC secret from configuration (`ownerDisplaySecret`) and update hashing behavior so obfuscation is decoupled from gateway token handling for improved control. (#7343) Thanks @vincentkoc.
 - Security/Infra: switch gateway lock and tool-call synthetic IDs from SHA-1 to SHA-256 with unchanged truncation length to strengthen hash basis while keeping deterministic behavior and lock key format. (#7343) Thanks @vincentkoc.
-- Security/Unused Dependencies: move `@larksuiteoapi/node-sdk` out of root `package.json` and keep it scoped to `extensions/feishu` where it is used. (#22471) Thanks @vincentkoc.
-- Security/Unused Dependencies: remove unused root dependency `signal-utils` from core manifest after confirming it was only used by extension-only paths. (#22471) Thanks @vincentkoc.
-- Security/Unused Dependencies: remove unused root devDependency `ollama` now that native Ollama support uses local HTTP transport code paths only. (#22471) Thanks @vincentkoc.
-- Security/Unused Dependencies: remove unused root devDependencies `@lit/context` and `@lit-labs/signals` flagged as unused by Knip dead-code reports. (#22471) Thanks @vincentkoc.
-- Security/Unused Dependencies: remove unused root dependency `lit` that is now scoped to `ui/` package dependencies. (#22471) Thanks @vincentkoc.
-- Security/Unused Dependencies: remove unused root dependencies `long` and `rolldown`; keep A2UI bundling functional by falling back to `pnpm dlx rolldown` when the binary is not locally installed. (#22481) Thanks @vincentkoc.
-- Security/Unused Dependencies: harden A2UI bundling dependency resolution by resolving `lit`, `@lit/context`, `@lit-labs/signals`, and `signal-utils` from UI workspace or repo-root dependency locations to tolerate Docker layout differences without root-only assumptions. (#22507) Thanks @vincentkoc.
-- Security/Unused Dependencies: fix A2UI bundle resolution for removed root `lit` deps by resolving `lit`, `@lit/context`, `@lit-labs/signals`, and `signal-utils` from UI workspace dependencies in `rolldown.config.mjs` during bundling. (#22481) Thanks @vincentkoc.
-- Security/Unused Dependencies: simplify `canvas-a2ui` bundling script by removing temporary vendored `node_modules` symlink logic now that `ui` workspace dependencies are explicit. (#22481) Thanks @vincentkoc.
-- Security/Unused Dependencies: remove unused `@microsoft/agents-hosting-express` and `@microsoft/agents-hosting-extensions-teams` from `extensions/msteams` because current code only uses `@microsoft/agents-hosting`. Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: move `@larksuiteoapi/node-sdk` out of root `package.json` and keep it scoped to `extensions/feishu` where it is used. (#22471) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused root dependency `signal-utils` from core manifest after confirming it was only used by extension-only paths. (#22471) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused root devDependency `ollama` now that native Ollama support uses local HTTP transport code paths only. (#22471) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused root devDependencies `@lit/context` and `@lit-labs/signals` flagged as unused by Knip dead-code reports. (#22471) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused root dependency `lit` that is now scoped to `ui/` package dependencies. (#22471) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused root dependencies `long` and `rolldown`; keep A2UI bundling functional by falling back to `pnpm dlx rolldown` when the binary is not locally installed. (#22481) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: harden A2UI bundling dependency resolution by resolving `lit`, `@lit/context`, `@lit-labs/signals`, and `signal-utils` from UI workspace or repo-root dependency locations to tolerate Docker layout differences without root-only assumptions. (#22507) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: fix A2UI bundle resolution for removed root `lit` deps by resolving `lit`, `@lit/context`, `@lit-labs/signals`, and `signal-utils` from UI workspace dependencies in `rolldown.config.mjs` during bundling. (#22481) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: simplify `canvas-a2ui` bundling script by removing temporary vendored `node_modules` symlink logic now that `ui` workspace dependencies are explicit. (#22481) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused `@microsoft/agents-hosting-express` and `@microsoft/agents-hosting-extensions-teams` from `extensions/msteams` because current code only uses `@microsoft/agents-hosting`. Thanks @vincentkoc.
 - MSTeams: dedupe sent-message cache storage by removing duplicate per-message Set storage and using timestamps Map keys as the single membership source. (#22514) Thanks @TaKO8Ki.
-- Security/Unused Dependencies: remove unused plugin-local `openclaw` devDependencies from `extensions/open-prose`, `extensions/lobster`, and `extensions/llm-task` after removing this dependency from build-time requirements. (#22495) Thanks @vincentkoc.
+- Dependencies/Unused Dependencies: remove unused plugin-local `openclaw` devDependencies from `extensions/open-prose`, `extensions/lobster`, and `extensions/llm-task` after removing this dependency from build-time requirements. (#22495) Thanks @vincentkoc.
 - Agents/Subagents: default subagent spawn depth now uses shared `maxSpawnDepth=2`, enabling depth-1 orchestrator spawning by default while keeping depth policy checks consistent across spawn and prompt paths. (#22223) Thanks @tyler6204.
 - Channels/CLI: add per-account/channel `defaultTo` outbound routing fallback so `openclaw agent --deliver` can send without explicit `--reply-to` when a default target is configured. (#16985) Thanks @KirillShchetinin.
 - Telegram/Streaming: simplify preview streaming config to `channels.telegram.streaming` (boolean), auto-map legacy `streamMode` values, and remove block-vs-partial preview branching. (#22012) thanks @obviyus.
