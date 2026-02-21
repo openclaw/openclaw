@@ -527,13 +527,29 @@ function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[]
   return hits;
 }
 
-function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
+function maybeRepairDiscordNumericIds(
+  cfg: OpenClawConfig,
+  rawText: string | null,
+): {
   config: OpenClawConfig;
   changes: string[];
 } {
   const hits = scanDiscordNumericIdEntries(cfg);
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
+  }
+
+  // Build a lookup from lossy Number() → original digit string for bare integers
+  // in the raw config text that exceed MAX_SAFE_INTEGER.
+  const rawLookup = new Map<number, string>();
+  if (rawText) {
+    for (const m of rawText.matchAll(/(?<!")(\b\d{16,}\b)(?!")/g)) {
+      const original = m[1];
+      const asNumber = Number(original);
+      if (String(asNumber) !== original) {
+        rawLookup.set(asNumber, original);
+      }
+    }
   }
 
   const next = structuredClone(cfg);
@@ -545,10 +561,15 @@ function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
       return;
     }
     let converted = 0;
+    let recovered = 0;
     const updated = raw.map((entry) => {
       if (typeof entry === "number") {
         converted += 1;
-        return String(entry);
+        const original = rawLookup.get(entry);
+        if (original) {
+          recovered += 1;
+        }
+        return original ?? String(entry);
       }
       return entry;
     });
@@ -556,8 +577,9 @@ function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
       return;
     }
     holder[key] = updated;
+    const suffix = recovered > 0 ? " (recovered original precision from file)" : "";
     changes.push(
-      `- ${pathLabel}: converted ${converted} numeric ${converted === 1 ? "entry" : "entries"} to strings`,
+      `- ${pathLabel}: converted ${converted} numeric ${converted === 1 ? "entry" : "entries"} to strings${suffix}`,
     );
   };
 
@@ -844,7 +866,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = repair.config;
     }
 
-    const discordRepair = maybeRepairDiscordNumericIds(candidate);
+    const discordRepair = maybeRepairDiscordNumericIds(candidate, snapshot.raw);
     if (discordRepair.changes.length > 0) {
       note(discordRepair.changes.join("\n"), "Doctor changes");
       candidate = discordRepair.config;

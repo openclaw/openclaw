@@ -243,6 +243,31 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("preserves original precision of large discord snowflake IDs on repair", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      // Write raw JSON with a bare integer that exceeds MAX_SAFE_INTEGER.
+      // Must NOT use JSON.stringify — that would itself truncate the number.
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        `{ "channels": { "discord": { "allowFrom": [1234567890123456789] } } }`,
+        "utf-8",
+      );
+
+      const result = await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      const cfg = result.cfg as unknown as {
+        channels: { discord: { allowFrom: string[] } };
+      };
+      // The original 19-digit ID must be preserved, not the truncated Number() form
+      expect(cfg.channels.discord.allowFrom).toEqual(["1234567890123456789"]);
+    });
+  });
+
   it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
