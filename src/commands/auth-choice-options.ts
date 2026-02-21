@@ -250,7 +250,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "google-antigravity",
     label: "Google Antigravity OAuth",
-    hint: "Uses the bundled Antigravity auth plugin",
+    hint: "Unofficial flow; review account-risk warning before use",
   },
   {
     value: "google-gemini-cli",
