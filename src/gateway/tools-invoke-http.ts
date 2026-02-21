@@ -151,6 +151,7 @@ export async function handleToolsInvokeHttpRequest(
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowTailscaleHeaderAuth: false,
     rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
