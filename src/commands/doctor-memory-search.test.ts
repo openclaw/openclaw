@@ -43,7 +43,7 @@ describe("noteMemorySearchHealth", () => {
       remote: { apiKey: "from-config" },
     });
 
-    await noteMemorySearchHealth(cfg);
+    await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
@@ -55,6 +55,7 @@ describe("noteMemorySearchHealth", () => {
     resolveAgentDir.mockClear();
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
+    resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
@@ -70,7 +71,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
 
-    await noteMemorySearchHealth(cfg);
+    await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
   });
@@ -95,7 +96,7 @@ describe("noteMemorySearchHealth", () => {
       mode: "api-key",
     });
 
-    await noteMemorySearchHealth(cfg);
+    await noteMemorySearchHealth(cfg, {});
 
     expect(resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "google",
@@ -103,6 +104,33 @@ describe("noteMemorySearchHealth", () => {
       agentDir: "/tmp/agent-default",
     });
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("notes when gateway is healthy but CLI API key is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, { gatewayHealthOk: true });
+
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("may be loaded by the running gateway");
+  });
+
+  it("uses configure hint when gateway is down and API key is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, { gatewayHealthOk: false });
+
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("openclaw configure");
+    expect(message).not.toContain("auth add");
   });
 });
 
