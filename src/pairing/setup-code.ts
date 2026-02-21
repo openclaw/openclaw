@@ -89,7 +89,9 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
 function resolveGatewayPort(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): number {
   const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
   if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
+    // Handle "host:port" format (e.g. "127.0.0.1:18789" from Docker Compose)
+    const portPart = envRaw.includes(":") ? envRaw.split(":").at(-1)! : envRaw;
+    const parsed = Number.parseInt(portPart, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }

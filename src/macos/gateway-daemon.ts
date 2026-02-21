@@ -88,7 +88,9 @@ async function main() {
     process.env.CLAWDBOT_GATEWAY_PORT ??
     (typeof cfg.gateway?.port === "number" ? String(cfg.gateway.port) : "") ??
     "18789";
-  const port = Number.parseInt(portRaw, 10);
+  // Handle "host:port" format (e.g. "127.0.0.1:18789" from Docker Compose)
+  const portPart = portRaw.includes(":") ? portRaw.split(":").at(-1)! : portRaw;
+  const port = Number.parseInt(portPart, 10);
   if (Number.isNaN(port) || port <= 0) {
     defaultRuntime.error(`Invalid --port (${portRaw})`);
     process.exit(1);

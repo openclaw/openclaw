@@ -207,6 +207,22 @@ describe("Nix integration (U3, U5, U9)", () => {
         ),
       ).toBe(19003);
     });
+
+    it("extracts port from host:port format (Docker Compose bind)", () => {
+      expect(resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" }))).toBe(
+        18789,
+      );
+    });
+
+    it("extracts port from 0.0.0.0:port format", () => {
+      expect(resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: "0.0.0.0:19001" }))).toBe(
+        19001,
+      );
+    });
+
+    it("handles plain port number unchanged", () => {
+      expect(resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: "18789" }))).toBe(18789);
+    });
   });
 
   describe("U9: telegram.tokenFile schema validation", () => {

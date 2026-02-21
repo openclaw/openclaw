@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expandHomePrefix, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import type { OpenClawConfig } from "./types.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "../infra/home-dir.js";
 
 /**
  * Nix mode detection: When OPENCLAW_NIX_MODE=1, the gateway is running under Nix.
@@ -260,7 +260,9 @@ export function resolveGatewayPort(
 ): number {
   const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
   if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
+    // Handle "host:port" format (e.g. "127.0.0.1:18789" from Docker Compose)
+    const portPart = envRaw.includes(":") ? envRaw.split(":").at(-1)! : envRaw;
+    const parsed = Number.parseInt(portPart, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }
