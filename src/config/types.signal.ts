@@ -6,6 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyConfig, GroupToolPolicyBySenderConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -53,6 +54,20 @@ export type SignalAccountConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Per-group configuration overrides keyed by group ID (or "*" for default). */
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+      groupPolicy?: GroupPolicy;
+      tools?: GroupToolPolicyConfig;
+      toolsBySender?: GroupToolPolicyBySenderConfig;
+      skills?: string[];
+      enabled?: boolean;
+      allowFrom?: Array<string | number>;
+      systemPrompt?: string;
+    }
+  >;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
