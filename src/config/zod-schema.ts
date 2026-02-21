@@ -336,6 +336,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    slugGenerator: z
+      .object({
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     web: z
       .object({
         enabled: z.boolean().optional(),
