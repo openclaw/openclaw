@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/rocketchat",
+  "version": "2026.2.15",
+  "private": true,
+  "description": "OpenClaw Rocket.Chat channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "rocketchat",
+      "label": "Rocket.Chat",
+      "selectionLabel": "Rocket.Chat (plugin)",
+      "docsPath": "/channels/rocketchat",
+      "docsLabel": "rocketchat",
+      "blurb": "self-hosted open-source chat; install the plugin to enable.",
+      "order": 66
+    },
+    "install": {
+      "npmSpec": "@openclaw/rocketchat",
+      "localPath": "extensions/rocketchat",
+      "defaultChoice": "npm"
+    }
+  }
+}
