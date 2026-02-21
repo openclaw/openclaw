@@ -210,7 +210,7 @@ export async function runOnboardingWizard(
       bind,
       authMode,
       tailscaleMode,
-      token: baseConfig.gateway?.auth?.token,
+      token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
       password: baseConfig.gateway?.auth?.password,
       customBindHost: baseConfig.gateway?.customBindHost,
       tailscaleResetOnExit: baseConfig.gateway?.tailscale?.resetOnExit ?? false,
