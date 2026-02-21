@@ -417,9 +417,13 @@ function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
 }
 
 function resolveSearXngConfig(search?: WebSearchConfig): SearXngConfig {
-  if (!search || typeof search !== "object") return {};
+  if (!search || typeof search !== "object") {
+    return {};
+  }
   const searxng = "searxng" in search ? search.searxng : undefined;
-  if (!searxng || typeof searxng !== "object") return {};
+  if (!searxng || typeof searxng !== "object") {
+    return {};
+  }
   return searxng as SearXngConfig;
 }
 
