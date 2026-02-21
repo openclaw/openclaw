@@ -125,6 +125,13 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Enable Slack native text streaming (Agents & AI Apps). Default: true.
+   *
+   * Set to `false` to disable native Slack text streaming and use normal reply
+   * delivery behavior only.
+   */
+  streaming?: boolean;
   /** Slack stream preview mode (replace|status_final|append). Default: replace. */
   streamMode?: SlackStreamMode;
   mediaMaxMb?: number;
@@ -153,6 +160,8 @@ export type SlackAccountConfig = {
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dm?: SlackDmConfig;
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */

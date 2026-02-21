@@ -219,4 +219,26 @@ describe("web_search grok response parsing", () => {
     expect(result.text).toBeUndefined();
     expect(result.annotationCitations).toEqual([]);
   });
+
+  it("extracts output_text blocks directly in output array (no message wrapper)", () => {
+    const result = extractGrokContent({
+      output: [
+        { type: "web_search_call" },
+        {
+          type: "output_text",
+          text: "direct output text",
+          annotations: [
+            {
+              type: "url_citation",
+              url: "https://example.com/direct",
+              start_index: 0,
+              end_index: 5,
+            },
+          ],
+        },
+      ],
+    } as Parameters<typeof extractGrokContent>[0]);
+    expect(result.text).toBe("direct output text");
+    expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
 });

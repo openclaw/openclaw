@@ -18,6 +18,9 @@ ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
 
+# Mise configuration files
+mise.toml
+
 # Android build artifacts
 apps/android/.gradle/
 apps/android/app/build/
@@ -41,6 +44,7 @@ Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
+apps/ios/.derivedData/
 apps/ios/.local-signing.xcconfig
 vendor/
 apps/ios/Clawdbot.xcodeproj/
@@ -88,6 +92,10 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+.claude/settings.local.json
+.agents/
+.agents
+.agent/
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig

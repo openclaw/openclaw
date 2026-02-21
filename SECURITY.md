@@ -49,6 +49,14 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 - Using OpenClaw in ways that the docs recommend not to
 - Prompt injection attacks
 
+## Plugin Trust Boundary
+
+Plugins/extensions are loaded **in-process** with the Gateway and are treated as trusted code.
+
+- Plugins can execute with the same OS privileges as the OpenClaw process.
+- Runtime helpers (for example `runtime.system.runCommandWithTimeout`) are convenience APIs, not a sandbox boundary.
+- Only install plugins you trust, and prefer `plugins.allow` to pin explicit trusted plugin ids.
+
 ## Operational Guidance
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
@@ -68,6 +76,10 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
   - CLI: `openclaw gateway run --bind loopback`.
+- Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
+  - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
+  - Expected routes: `/__openclaw__/canvas/`, `/__openclaw__/a2ui/`.
+  - This deployment model alone is not a security vulnerability.
 - Do **not** expose it to the public internet (no direct bind to `0.0.0.0`, no public reverse proxy). It is not hardened for public exposure.
 - If you need remote access, prefer an SSH tunnel or Tailscale serve/funnel (so the Gateway still binds to loopback), plus strong Gateway auth.
 - The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.

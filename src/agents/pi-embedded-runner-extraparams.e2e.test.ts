@@ -64,6 +64,30 @@ describe("resolveExtraParams", () => {
 });
 
 describe("applyExtraParamsToAgent", () => {
+  function createOptionsCaptureAgent() {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    return {
+      calls,
+      agent: { streamFn: baseStreamFn },
+    };
+  }
+
+  function buildAnthropicModelConfig(modelKey: string, params: Record<string, unknown>) {
+    return {
+      agents: {
+        defaults: {
+          models: {
+            [modelKey]: { params },
+          },
+        },
+      },
+    };
+  }
+
   function runStoreMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
@@ -86,12 +110,7 @@ describe("applyExtraParamsToAgent", () => {
   }
 
   it("adds OpenRouter attribution headers to stream options", () => {
-    const calls: Array<SimpleStreamOptions | undefined> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+    const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
 
@@ -110,6 +129,125 @@ describe("applyExtraParamsToAgent", () => {
       "X-Title": "OpenClaw",
       "X-Custom": "1",
     });
+  });
+
+  it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-test",
+      headers: { "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "X-Custom": "1",
+      // Includes pi-ai default betas (preserved to avoid overwrite) + context1m
+      "anthropic-beta":
+        "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,context-1m-2025-08-07",
+    });
+  });
+
+  it("preserves oauth-2025-04-20 beta when context1m is enabled with an OAuth token", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {
+              params: {
+                context1m: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-oat01-test-oauth-token",
+      headers: { "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] as string;
+    // Must include the OAuth-required betas so they aren't stripped by pi-ai's mergeHeaders
+    expect(betaHeader).toContain("oauth-2025-04-20");
+    expect(betaHeader).toContain("claude-code-20250219");
+    expect(betaHeader).toContain("context-1m-2025-08-07");
+  });
+
+  it("merges existing anthropic-beta headers with configured betas", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
+      context1m: true,
+      anthropicBeta: ["files-api-2025-04-14"],
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-5");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-test",
+      headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "anthropic-beta":
+        "prompt-caching-2024-07-31,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,files-api-2025-04-14,context-1m-2025-08-07",
+    });
+  });
+
+  it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-haiku-3-5");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-haiku-3-5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({ "X-Custom": "1" });
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {

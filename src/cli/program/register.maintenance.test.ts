@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const doctorCommand = vi.fn();
 const dashboardCommand = vi.fn();
@@ -32,7 +32,19 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+let registerMaintenanceCommands: typeof import("./register.maintenance.js").registerMaintenanceCommands;
+
+beforeAll(async () => {
+  ({ registerMaintenanceCommands } = await import("./register.maintenance.js"));
+});
+
 describe("registerMaintenanceCommands doctor action", () => {
+  async function runMaintenanceCli(args: string[]) {
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    await program.parseAsync(args, { from: "user" });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -40,11 +52,7 @@ describe("registerMaintenanceCommands doctor action", () => {
   it("exits with code 0 after successful doctor run", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
-    const { registerMaintenanceCommands } = await import("./register.maintenance.js");
-    const program = new Command();
-    registerMaintenanceCommands(program);
-
-    await program.parseAsync(["doctor", "--non-interactive", "--yes"], { from: "user" });
+    await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
 
     expect(doctorCommand).toHaveBeenCalledWith(
       runtime,
@@ -59,11 +67,7 @@ describe("registerMaintenanceCommands doctor action", () => {
   it("exits with code 1 when doctor fails", async () => {
     doctorCommand.mockRejectedValue(new Error("doctor failed"));
 
-    const { registerMaintenanceCommands } = await import("./register.maintenance.js");
-    const program = new Command();
-    registerMaintenanceCommands(program);
-
-    await program.parseAsync(["doctor"], { from: "user" });
+    await runMaintenanceCli(["doctor"]);
 
     expect(runtime.error).toHaveBeenCalledWith("Error: doctor failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
