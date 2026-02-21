@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
@@ -178,8 +178,12 @@ describe("msteams messenger", () => {
     });
 
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
-      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "msteams-mention-"));
-      const localFile = path.join(tmpDir, "note.txt");
+      const oldStateDir = process.env.OPENCLAW_STATE_DIR;
+      const testStateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-state-"));
+      process.env.OPENCLAW_STATE_DIR = testStateDir;
+      const mediaDir = path.join(testStateDir, "media");
+      await mkdir(mediaDir, { recursive: true });
+      const localFile = path.join(mediaDir, "note.txt");
       await writeFile(localFile, "hello");
 
       try {
@@ -232,7 +236,12 @@ describe("msteams messenger", () => {
           },
         ]);
       } finally {
-        await rm(tmpDir, { recursive: true, force: true });
+        await rm(testStateDir, { recursive: true, force: true });
+        if (oldStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = oldStateDir;
+        }
       }
     });
 

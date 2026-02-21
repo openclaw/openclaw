@@ -207,7 +207,7 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=MaxListenersExceededWarning",
 ];
 
-const DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB = 4096;
+const DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB = 6144;
 const maxOldSpaceSizeMb = (() => {
   // CI can hit Node heap limits (especially on large suites). Allow override, default to 4GB.
   const raw = process.env.OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB ?? "";

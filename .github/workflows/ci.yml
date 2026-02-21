@@ -222,6 +222,8 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: matrix.runtime != 'bun' || github.event_name != 'push'
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: ${{ matrix.command }}
 
       - name: Summarize slowest tests
@@ -308,7 +310,7 @@ jobs:
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-windows-2025
     env:
-      NODE_OPTIONS: --max-old-space-size=4096
+      NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 16 vCPU runner:
       # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
       OPENCLAW_TEST_WORKERS: 2
@@ -442,7 +444,7 @@ jobs:
       # --- Run all checks sequentially (fast gates first) ---
       - name: TS tests (macOS)
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm test
 
       # --- Xcode/Swift setup ---
