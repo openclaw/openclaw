@@ -112,7 +112,7 @@ function compileCustomPatterns(patterns: string[]): RegExp[] {
     try {
       compiled.push(new RegExp(pattern, "g"));
     } catch (err) {
-      log.warn(`Invalid output redaction pattern: ${pattern}`, err);
+      log.warn(`Invalid output redaction pattern: ${pattern}`, err as Record<string, unknown>);
     }
   }
   return compiled;

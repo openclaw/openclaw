@@ -19,6 +19,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
 } from "../../../routing/session-key.js";
+import { createMaskedSecrets, type MaskedSecrets } from "../../../security/masked-secrets/index.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -436,6 +437,12 @@ export async function runEmbeddedAttempt(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const maskedSecretsConfig = (params.config as Record<string, unknown> | undefined)?.security as
+      | { maskedSecrets?: Record<string, unknown> }
+      | undefined;
+    const maskedSecretsInstance: MaskedSecrets | undefined = maskedSecretsConfig?.maskedSecrets
+      ? createMaskedSecrets(maskedSecretsConfig.maskedSecrets)
+      : undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -468,11 +475,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
-      maskedSecretNames: (
-        (params.config as Record<string, unknown> | undefined)?.security as
-          | { maskedSecrets?: { mask?: string[] } }
-          | undefined
-      )?.maskedSecrets?.mask,
+      maskedSecretNames: maskedSecretsInstance?.listSecretNames(),
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

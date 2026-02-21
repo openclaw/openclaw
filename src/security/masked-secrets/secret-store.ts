@@ -24,13 +24,13 @@ const log = createSubsystemLogger("security/masked-secrets");
  * Used for auto-detection when config.mask is empty.
  */
 const AUTO_DETECT_PATTERNS = [
-  /^[A-Z_]*API[_]?KEY$/i,
-  /^[A-Z_]*SECRET$/i,
-  /^[A-Z_]*TOKEN$/i,
-  /^[A-Z_]*PASSWORD$/i,
-  /^[A-Z_]*CREDENTIALS?$/i,
-  /^[A-Z_]*AUTH$/i,
-  /^[A-Z_]*PRIVATE[_]?KEY$/i,
+  /^[A-Z_]+API[_]?KEY$/i,
+  /^[A-Z_]+SECRET$/i,
+  /^[A-Z_]+TOKEN$/i,
+  /^[A-Z_]+PASSWORD$/i,
+  /^[A-Z_]+CREDENTIALS?$/i,
+  /^[A-Z_]+AUTH$/i,
+  /^[A-Z_]+PRIVATE[_]?KEY$/i,
   // Common specific keys
   /^OPENAI_API_KEY$/,
   /^ANTHROPIC_API_KEY$/,

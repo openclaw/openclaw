@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createMaskedSecrets } from "./index.js";
+import { createMaskedSecrets, type MaskedSecrets } from "./index.js";
 
 /**
  * Integration tests for masked-secrets wiring into exec/process pipelines.
@@ -95,7 +95,7 @@ describe("MaskedSecrets integration", () => {
       const result = ms.preflight("curl -H '{{secret:NONEXISTENT}}'");
       expect(result.allowed).toBe(true);
       expect(result.warnings).toBeDefined();
-      expect(result.warnings!.some((w) => w.includes("NONEXISTENT"))).toBe(true);
+      expect(result.warnings!.some((w: string) => w.includes("NONEXISTENT"))).toBe(true);
     });
 
     it("redaction scrubs secret values from output", () => {
