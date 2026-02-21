@@ -640,9 +640,7 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        skillsLogger.warn(
-          `Failed to resolve safe destination for ${entry.skill.name}: ${message}`,
-        );
+        skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
         continue;
       }
       if (!dest) {

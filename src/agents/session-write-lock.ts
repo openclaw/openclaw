@@ -190,9 +190,7 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    log.warn(
-      `Releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
-    );
+    log.warn(`Releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`);
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
     if (didRelease) {

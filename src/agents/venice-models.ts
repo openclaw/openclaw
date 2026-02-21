@@ -348,9 +348,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     });
 
     if (!response.ok) {
-      log.warn(
-        `Failed to discover models: HTTP ${response.status}, using static catalog`,
-      );
+      log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
       return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 

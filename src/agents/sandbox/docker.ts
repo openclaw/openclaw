@@ -294,9 +294,7 @@ export function buildSandboxCreateArgs(params: {
   }
   const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
   if (envSanitization.blocked.length > 0) {
-    log.warn(
-      `Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`,
-    );
+    log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
   }
   if (envSanitization.warnings.length > 0) {
     log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);

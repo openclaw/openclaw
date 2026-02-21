@@ -171,9 +171,7 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
     });
 
     if (!response.ok) {
-      log.warn(
-        `GET /v1/models failed: HTTP ${response.status}, using static catalog`,
-      );
+      log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     }
 

@@ -117,9 +117,7 @@ function applySkillConfigEnvOverrides(params: {
   });
 
   if (sanitized.blocked.length > 0) {
-    log.warn(
-      `Blocked skill env overrides for ${skillKey}: ${sanitized.blocked.join(", ")}`,
-    );
+    log.warn(`Blocked skill env overrides for ${skillKey}: ${sanitized.blocked.join(", ")}`);
   }
   if (sanitized.warnings.length > 0) {
     log.warn(`Suspicious skill env overrides for ${skillKey}: ${sanitized.warnings.join(", ")}`);
