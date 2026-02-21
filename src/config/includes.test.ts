@@ -142,8 +142,8 @@ describe("resolveConfigIncludes", () => {
     for (const testCase of cases) {
       const files = { [configPath(testCase.includeFile)]: testCase.included };
       const obj = { $include: `./${testCase.includeFile}`, extra: true };
-      expect(() => resolve(obj, files), testCase.includeFile).toThrow(ConfigIncludeError);
-      expect(() => resolve(obj, files), testCase.includeFile).toThrow(
+      expectResolveIncludeError(
+        () => resolve(obj, files),
         /Sibling keys require included content to be an object/,
       );
     }
