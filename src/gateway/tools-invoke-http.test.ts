@@ -594,4 +594,27 @@ describe("POST /tools/invoke", () => {
     expect(body.result?.observedFormat).toBe("pdf");
     expect(body.result?.observedFileFormat).toBeUndefined();
   });
+
+  it("rejects inline secret-like tool args globally", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["tools_invoke_test"] } }],
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "tools_invoke_test",
+      args: { mode: "ok", apiKey: "sk-live-123" },
+      sessionKey: "main",
+    });
+    expect(res.status).toBe(400);
+
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("tool_error");
+    expect(body.error?.message).toContain(
+      'Inline secret-like tool parameter "apiKey" is not allowed',
+    );
+  });
 });
