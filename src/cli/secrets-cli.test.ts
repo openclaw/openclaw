@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn();
+const runSecretsMigration = vi.fn();
+const rollbackSecretsMigration = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -15,6 +17,11 @@ vi.mock("./gateway-rpc.js", () => ({
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+}));
+
+vi.mock("../secrets/migrate.js", () => ({
+  runSecretsMigration: (options: unknown) => runSecretsMigration(options),
+  rollbackSecretsMigration: (options: unknown) => rollbackSecretsMigration(options),
 }));
 
 const { registerSecretsCli } = await import("./secrets-cli.js");
@@ -30,6 +37,8 @@ describe("secrets CLI", () => {
   beforeEach(() => {
     resetRuntimeCapture();
     callGatewayFromCli.mockReset();
+    runSecretsMigration.mockReset();
+    rollbackSecretsMigration.mockReset();
   });
 
   it("calls secrets.reload and prints human output", async () => {
@@ -49,5 +58,39 @@ describe("secrets CLI", () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 0 });
     await createProgram().parseAsync(["secrets", "reload", "--json"], { from: "user" });
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
+  });
+
+  it("runs secrets migrate as dry-run by default", async () => {
+    runSecretsMigration.mockResolvedValue({
+      mode: "dry-run",
+      changed: true,
+      secretsFilePath: "/tmp/secrets.enc.json",
+      counters: { secretsWritten: 3 },
+      changedFiles: ["/tmp/openclaw.json"],
+    });
+
+    await createProgram().parseAsync(["secrets", "migrate"], { from: "user" });
+
+    expect(runSecretsMigration).toHaveBeenCalledWith(
+      expect.objectContaining({ write: false, scrubEnv: true }),
+    );
+    expect(runtimeLogs.at(-1)).toContain("dry run");
+  });
+
+  it("runs rollback when --rollback is provided", async () => {
+    rollbackSecretsMigration.mockResolvedValue({
+      backupId: "20260221T010203Z",
+      restoredFiles: 2,
+      deletedFiles: 1,
+    });
+
+    await createProgram().parseAsync(["secrets", "migrate", "--rollback", "20260221T010203Z"], {
+      from: "user",
+    });
+
+    expect(rollbackSecretsMigration).toHaveBeenCalledWith({
+      backupId: "20260221T010203Z",
+    });
+    expect(runtimeLogs.at(-1)).toContain("rollback complete");
   });
 });

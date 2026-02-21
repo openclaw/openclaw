@@ -40,6 +40,10 @@ type ProviderLike = {
   apiKey?: unknown;
 };
 
+type SkillEntryLike = {
+  apiKey?: unknown;
+};
+
 type GoogleChatAccountLike = {
   serviceAccount?: unknown;
   serviceAccountRef?: unknown;
@@ -124,6 +128,22 @@ async function resolveConfigSecretRefs(params: {
         );
       }
       provider.apiKey = resolvedValue;
+    }
+  }
+
+  const skillEntries = resolved.skills?.entries as Record<string, SkillEntryLike> | undefined;
+  if (skillEntries) {
+    for (const [skillKey, entry] of Object.entries(skillEntries)) {
+      if (!isSecretRef(entry.apiKey)) {
+        continue;
+      }
+      const resolvedValue = await resolveSecretRefValue(entry.apiKey, params.context);
+      if (!isNonEmptyString(resolvedValue)) {
+        throw new Error(
+          `skills.entries.${skillKey}.apiKey resolved to a non-string or empty value.`,
+        );
+      }
+      entry.apiKey = resolvedValue;
     }
   }
 
