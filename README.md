@@ -23,6 +23,28 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
+---
+
+### 🌟 独自機能ハイライト (Custom Feature Highlights)
+
+このフォーク版 OpenClaw (`zapabob/clawdbot`) では、公式版にはない以下の独自機能（Full Autonomy・3Dアバター連携など）が追加・最適化されています。
+
+- **🤖 完全自律モード (100% Full Autonomy):** LLMタスク生成エンジンやプロアクティブなバックグラウンドワーカーにより、ユーザーの確認不要で自律的にPC上のタスクを実行・記憶の整理を行います。
+- **🌐 VRChat / OSC 連携 (VRChat Integration):** VRChatと連動し、OSCプロトコルを通じてアバターの操作やワールドとのインタラクションをAIが自律的に行います。
+- **🗣️ ローカル3Dアバター & 音声 (Local 3D Avatar & Voice):** [VRM/FBX] モデルの読み込みと _Style-Bert-VITS2_ を用いたローカルTTSによる音声合成・リップシンク機能をローカルで完結して実行します（LilToon風シェーダー対応）。
+- **📱 LAN Web開放 (LAN Web Exposure):** Canvas UIやアバター画面をローカルネットワーク (0.0.0.0) に開放し、スマートフォン等からカメラ/マイクを使った対話がすぐに可能です。
+- **🐞 各種プラグインの安定化 (Plugin Stability Fixes):** LINE・TelegramのWebhookループ問題や、Windows環境におけるCanvas UIのビルドエラーなどを修正し、安定稼働を実現しています。
+
+This repository (`zapabob/clawdbot`) is a specialized fork of OpenClaw that introduces several unique, deeply integrated features:
+
+- **100% Full Autonomy:** Enhanced with proactive background workers and LLM task generators that manage the PC, execute tools, and organize long-term memory without requiring user confirmation.
+- **VRChat / OSC Integration:** Bridges the AI directly into VRChat, allowing it to control avatars, interact with the world, and relay information via OSC.
+- **Local 3D Avatar & TTS:** Fully local 3D avatar rendering (FBX/VRM with LilToon-like shaders) paired with local text-to-speech (_Style-Bert-VITS2_) and real-time lip-sync.
+- **LAN Web UI & Canvas:** Exposes the interactive Canvas UI and Avatar frontend to the local network (0.0.0.0), allowing easy access and camera/mic interaction from mobile devices.
+- **Runtime & Build Fixes:** Includes critical stability patches for Telegram/LINE webhook restart loops and Windows-native JS bundler pipelines for the frontend web assets.
+
+---
+
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
