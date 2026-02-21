@@ -14,6 +14,7 @@ enum HostEnvSanitizer {
         "RUBYOPT",
         "BASH_ENV",
         "ENV",
+        "SHELL",
         "GCONV_PATH",
         "IFS",
         "SSLKEYLOGFILE",
