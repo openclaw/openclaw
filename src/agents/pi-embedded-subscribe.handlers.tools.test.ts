@@ -300,4 +300,28 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
+
+  it("tracks successful tts tool media from MEDIA token output", async () => {
+    const { ctx } = createTestContext();
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tool-tts-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "[[audio_as_voice]]\nMEDIA:/tmp/tts-output.opus",
+          },
+        ],
+        details: { audioPath: "/tmp/tts-output.opus" },
+      },
+    };
+
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("/tmp/tts-output.opus");
+  });
 });

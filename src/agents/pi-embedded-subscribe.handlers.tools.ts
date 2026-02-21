@@ -83,6 +83,7 @@ function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): s
   pushUniqueMediaUrl(urls, seen, record.media);
   pushUniqueMediaUrl(urls, seen, record.mediaUrl);
   pushUniqueMediaUrl(urls, seen, record.path);
+  pushUniqueMediaUrl(urls, seen, record.audioPath);
   pushUniqueMediaUrl(urls, seen, record.filePath);
 
   const mediaUrls = record.mediaUrls;
@@ -115,6 +116,9 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   appendFromRecord(result);
   if (result && typeof result === "object") {
     appendFromRecord((result as Record<string, unknown>).details);
+  }
+  for (const mediaPath of extractToolResultMediaPaths(result)) {
+    pushUniqueMediaUrl(urls, seen, mediaPath);
   }
 
   const outputText = extractToolResultText(result);
@@ -327,6 +331,7 @@ export async function handleToolExecutionEnd(
       : {};
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
+    toolName === "tts" ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
   if (!isToolError && isMessagingSend) {
     const committedMediaUrls = [
