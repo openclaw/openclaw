@@ -410,6 +410,30 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     buf = "";
   };
 
+  const isEscapedInHeredocLine = (line: string, index: number): boolean => {
+    let slashes = 0;
+    for (let i = index - 1; i >= 0 && line[i] === "\\"; i -= 1) {
+      slashes += 1;
+    }
+    return slashes % 2 === 1;
+  };
+
+  const hasUnquotedHeredocExpansionToken = (line: string): boolean => {
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === "`" && !isEscapedInHeredocLine(line, i)) {
+        return true;
+      }
+      if (ch === "$" && !isEscapedInHeredocLine(line, i)) {
+        const next = line[i + 1];
+        if (next === "(" || next === "{") {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const next = command[i + 1];
@@ -421,6 +445,8 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
           if (line === current.delimiter) {
             pendingHeredocs.shift();
+          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
+            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
           }
         }
         heredocLine = "";
@@ -431,19 +457,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           i += 1;
         }
       } else {
-        // When the heredoc delimiter is unquoted, the shell performs expansion
-        // on the body (variable substitution, command substitution, etc.).
-        // Reject commands that use unquoted heredocs containing expansion tokens
-        // to prevent allowlist bypass via embedded command substitution.
-        const currentHeredoc = pendingHeredocs[0];
-        if (currentHeredoc && !currentHeredoc.quoted) {
-          if (ch === "`") {
-            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
-          }
-          if (ch === "$" && (next === "(" || next === "{")) {
-            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
-          }
-        }
         heredocLine += ch;
       }
       continue;
@@ -565,7 +578,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
     if (line === current.delimiter) {
       pendingHeredocs.shift();
+      if (pendingHeredocs.length === 0) {
+        inHeredocBody = false;
+      }
     }
+  }
+
+  if (pendingHeredocs.length > 0 || inHeredocBody) {
+    return { ok: false, reason: "unterminated heredoc", segments: [] };
   }
 
   if (escaped || inSingle || inDouble) {
