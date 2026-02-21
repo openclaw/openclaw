@@ -87,4 +87,62 @@ describe("resolveGatewayProgramArguments", () => {
       "18789",
     ]);
   });
+
+  it("includes --profile in program arguments when profile is provided", async () => {
+    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789, profile: "myprofile" });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      entryPath,
+      "gateway",
+      "--port",
+      "18789",
+      "--profile",
+      "myprofile",
+    ]);
+  });
+
+  it("omits --profile when profile is empty", async () => {
+    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789, profile: "" });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      entryPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("trims whitespace from profile name", async () => {
+    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789, profile: "  myprofile  " });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      entryPath,
+      "gateway",
+      "--port",
+      "18789",
+      "--profile",
+      "myprofile",
+    ]);
+  });
 });

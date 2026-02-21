@@ -46,6 +46,7 @@ export async function buildGatewayInstallPlan(params: {
     dev: devMode,
     runtime: params.runtime,
     nodePath,
+    profile: params.env.OPENCLAW_PROFILE,
   });
   await emitNodeRuntimeWarning({
     env: params.env,
