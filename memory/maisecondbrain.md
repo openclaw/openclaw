@@ -97,6 +97,12 @@ Mnemo
 - 2026-02-20: **Sprint 1 완료** — 볼트 파서 + 그래프 빌더 + CLI (3,113 노트 → 2,475 노드 + 16,576 엣지, 19초)
 - 2026-02-20: **Sprint 2 완료** — 임베딩(Ollama nomic-embed-text, 2,164개, 46초) + GraphRAG 하이브리드 검색(키워드50%+벡터30%+그래프20%) + FastAPI API + MAIBOT 스킬
 - 2026-02-20: **종합 검증 T002** — 빌드(2.8s) ✅, 검색 4/5 정확(80%), daily_enrich 39.1s 풀 파이프라인 ✅, 캐시 경로 이슈 발견→수정, 최종 그래프 2,481노드 29,352엣지
+- 2026-02-21: **대규모 개선** — YAML relations 위키링크 수정, Mnemo MAIBOT 통합 (search.py + integrated_search.py)
+- 2026-02-21: **팀에이전트 풀 점검** — 품질분석(T003) + frontmatter보강(T004) + 임베딩99.9%(T005) + memory24개 보강
+- 2026-02-21: **P001 개선** — 댕글링 스텁 31개 생성(댕글링 0 달성) + 경로 기반 고유키(중복 932개 분리)
+- 2026-02-21: **최종 수치** — 3,474 노드 / 30,328 엣지 / 381 컴포넌트 / 댕글링 0 / 임베딩 99.9% / 검색 5/5
+- 2026-02-21: **MAI Universe Pipeline v1.0** — 6단계 풀사이클 자동화 스킬
+- 2026-02-21: **Stage 2/5/6 자동화** — 기회 스코어링 + 배포 스킬 + KPI 대시보드
 
 ## 결정사항
 
@@ -114,9 +120,13 @@ Mnemo
 - [x] 태그 공유 엣지 추가 → 3,820 tag_shared 엣지
 - [x] daily_enrich.py 7단계 파이프라인 (외부 지식 수집 포함)
 - [x] **종합 검증 (T002)**: 빌드 ✅ | 검색 80% 정확/100% 관련 | 파이프라인 39초 | 캐시 경로 수정
+- [x] Mnemo를 memory_search 대체/보강으로 MAIBOT 핵심 루프에 통합 (search.py + integrated_search.py)
+- [x] YAML relations 엣지 수정 ([[위키링크]] 형식)
+- [x] **P001 개선**: 댕글링 스텁 생성 (31개) + 경로 기반 고유키 (전체 모듈 리팩토링)
+- [x] 옵시디언 대시보드 자동 싱크 (daily_enrich 8단계)
+- [x] 기회 탐지 + 스코어링 시스템 (Stage 2 DISCOVER)
 - [ ] Phase 2: Obsidian 플러그인 (TypeScript)
-- [ ] Mnemo를 memory_search 대체/보강으로 MAIBOT 핵심 루프에 통합
-- [ ] YAML relations 엣지 추가 (frontmatter `related:` 등)
+- [ ] NotebookLM 공식 API 출시 시 Mnemo 통합
 
 ## 문서 목록
 

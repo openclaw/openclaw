@@ -28,5 +28,9 @@ related:
 - [ ] MAIBEAUTY: SadTalker → Hedra 전환 테스트
 - [ ] MAIBEAUTY: edge-tts → Kani-TTS-2 베트남어 테스트
 - [ ] MAISTAR7: Zalo 이탈 리스크 대비 멀티채널 전략
+
+### 📡 모니터링 워치리스트
+
+- [ ] **Google NotebookLM 공식 API** — 출시 시 Mnemo 지식그래프와 통합 예정. NotebookLM에 축적된 지니님 자료를 Obsidian 볼트로 마이그레이션 + 실시간 연동 (2026-02-21 지니님 결정: 공식 API 나올 때까지 대기)
 - [ ] MAIOSS: CVE-2026-1642 탐지 룰 + reachability analysis 기능
 - [ ] MAIBOTALKS: Chatterbox-Turbo 로컬 벤치마크

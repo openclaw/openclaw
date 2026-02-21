@@ -1,0 +1,77 @@
+{
+  "metrics": [
+    {
+      "contributors": 100,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-20",
+      "commits_30d": 100,
+      "forks": 0,
+      "project": "MAIBOT"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-20",
+      "commits_30d": 100,
+      "forks": 0,
+      "project": "MAIBEAUTY"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 9,
+      "stars": 1,
+      "last_activity": "2026-02-20",
+      "commits_30d": 0,
+      "forks": 0,
+      "project": "MAIOSS"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-14",
+      "commits_30d": 0,
+      "forks": 0,
+      "project": "MAITUTOR"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-20",
+      "commits_30d": 35,
+      "forks": 0,
+      "project": "MAIBOTALKS"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-18",
+      "commits_30d": 3,
+      "forks": 0,
+      "project": "MAITOK"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-20",
+      "commits_30d": 1,
+      "forks": 0,
+      "project": "MAIAX"
+    },
+    {
+      "contributors": 1,
+      "open_issues": 0,
+      "stars": 0,
+      "last_activity": "2026-02-20",
+      "commits_30d": 17,
+      "forks": 0,
+      "project": "MAISECONDBRAIN"
+    }
+  ],
+  "collected_at": "2026-02-21 12:11:44"
+}
