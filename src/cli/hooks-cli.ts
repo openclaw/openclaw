@@ -28,8 +28,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import {
   buildNpmInstallRecordFields,
-  logPinnedNpmSpecMessages,
-  resolvePinnedNpmSpec,
+  resolvePinnedNpmInstallRecordForCli,
 } from "./npm-resolution.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -684,25 +683,19 @@ export function registerHooksCli(program: Command): void {
       }
 
       let next = enableInternalHookEntries(cfg, result.hooks);
-      const pinInfo = resolvePinnedNpmSpec({
-        rawSpec: raw,
-        pin: Boolean(opts.pin),
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-      });
-      logPinnedNpmSpecMessages(
-        pinInfo,
-        (message) => defaultRuntime.log(message),
-        (message) => defaultRuntime.log(theme.warn(message)),
+      const installRecord = resolvePinnedNpmInstallRecordForCli(
+        raw,
+        Boolean(opts.pin),
+        result.targetDir,
+        result.version,
+        result.npmResolution,
+        defaultRuntime.log,
+        theme.warn,
       );
 
       next = recordHookInstall(next, {
         hookId: result.hookPackId,
-        ...buildNpmInstallRecordFields({
-          spec: pinInfo.recordSpec,
-          installPath: result.targetDir,
-          version: result.version,
-          resolution: result.npmResolution,
-        }),
+        ...installRecord,
         hooks: result.hooks,
       });
       await writeConfigFile(next);
