@@ -137,18 +137,28 @@ export async function deliverAgentCommandResult(params: {
 
   const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? []);
   if (opts.json) {
+    // Filter systemPromptReport from meta unless --debug flag is set (VD-4)
+    const filteredMeta = opts.debug
+      ? result.meta
+      : result.meta
+        ? {
+            ...result.meta,
+            systemPromptReport: undefined,
+          }
+        : result.meta;
+
     runtime.log(
       JSON.stringify(
         buildOutboundResultEnvelope({
           payloads: normalizedPayloads,
-          meta: result.meta,
+          meta: filteredMeta,
         }),
         null,
         2,
       ),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
+      return { payloads: normalizedPayloads, meta: filteredMeta };
     }
   }
 

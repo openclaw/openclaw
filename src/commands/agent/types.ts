@@ -42,6 +42,8 @@ export type AgentCommandOpts = {
   thinkingOnce?: string;
   verbose?: string;
   json?: boolean;
+  /** Include debug fields (systemPromptReport) in JSON output. */
+  debug?: boolean;
   timeout?: string;
   deliver?: boolean;
   /** Override delivery target (separate from session routing). */
