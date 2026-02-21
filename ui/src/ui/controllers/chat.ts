@@ -1,4 +1,5 @@
 import { extractText } from "../chat/message-extract.ts";
+import { formatRawAssistantErrorForUi } from "../chat/error-format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -146,16 +147,17 @@ export async function sendChatMessage(
     });
     return runId;
   } catch (err) {
-    const error = String(err);
+    const rawError = String(err);
+    const formattedError = formatRawAssistantErrorForUi(rawError);
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
-    state.lastError = error;
+    state.lastError = formattedError;
     state.chatMessages = [
       ...state.chatMessages,
       {
         role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
+        content: [{ type: "text", text: formattedError }],
         timestamp: Date.now(),
       },
     ];
@@ -235,7 +237,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
-    state.lastError = payload.errorMessage ?? "chat error";
+
+    const formattedError = formatRawAssistantErrorForUi(payload.errorMessage);
+    state.lastError = formattedError;
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: formattedError }],
+        timestamp: Date.now(),
+      },
+    ];
   }
   return payload.state;
 }
