@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, symlink, mkdir } from "node:fs/promises";
+import { mkdtemp, realpath, writeFile, symlink, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -88,7 +88,8 @@ describe("validateLocalFilePath", () => {
     await writeFile(filePath, "audio-data");
 
     const result = await validateLocalFilePath(filePath, baseDir);
-    expect(result).toBe(filePath);
+    // realpath resolves symlinks and Windows 8.3 short names (e.g. RUNNER~1)
+    expect(result).toBe(await realpath(filePath));
   });
 
   it("rejects a path that escapes the allowed directory via ..", async () => {

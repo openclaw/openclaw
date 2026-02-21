@@ -62,12 +62,14 @@ export async function validateLocalFilePath(
   if (baseDir === nodePath.parse(baseDir).root) {
     throw new Error("localApiDataDir must not resolve to the filesystem root");
   }
-  // Resolve symlinks + normalise ".." segments.
+  // Resolve symlinks + normalise ".." segments (also resolve baseDir so
+  // Windows 8.3 short names like RUNNER~1 match the long-name realpath).
   const real = await realpath(filePath);
-  const normalBase = baseDir.endsWith(nodePath.sep) ? baseDir : `${baseDir}${nodePath.sep}`;
-  if (!real.startsWith(normalBase) && real !== baseDir) {
+  const realBase = await realpath(baseDir);
+  const normalBase = realBase.endsWith(nodePath.sep) ? realBase : `${realBase}${nodePath.sep}`;
+  if (!real.startsWith(normalBase) && real !== realBase) {
     throw new Error(
-      `Local Bot API file path escapes allowed directory: ${filePath} resolved to ${real} (allowed: ${baseDir})`,
+      `Local Bot API file path escapes allowed directory: ${filePath} resolved to ${real} (allowed: ${realBase})`,
     );
   }
   return real;
