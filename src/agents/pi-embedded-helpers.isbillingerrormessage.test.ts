@@ -585,6 +585,20 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
+  it("matches gateway/websocket connection failures as timeout failover", () => {
+    const samples = [
+      "Connection error.",
+      "gateway not connected",
+      "gateway closed (1006): abnormal closure (no close frame)",
+      "websocket disconnected while waiting for response",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
   it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
     expectTimeoutFailoverSamples([
       "Unhandled stop reason: MALFORMED_RESPONSE",
