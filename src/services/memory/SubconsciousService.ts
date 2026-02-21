@@ -542,6 +542,35 @@ Text: "${currentPrompt}"`;
       return "";
     }
 
+    let rewrittenLines = finalLines.join("\n");
+    if (agent) {
+      this.log("  ✍️ [MIND] Rewriting memories into natural first-person narrative...");
+      const translationPrompt = `Convierte las siguientes notas de base de datos en recuerdos personales en primera persona. 
+Eres tú (la IA) recordando tus interacciones con el usuario ("Julio" o el usuario).
+Escríbelo en español fluido, natural y muy conversacional.
+No uses formato de logs ("human", "assistant", timestamps literales), elimínalo todo.
+Manten un formato de lista con guiones, un recuerdo por línea.
+Sé breve.
+
+MEMORIAS CRUDAS:
+${finalLines.join("\n")}`;
+
+      const res = await agent.complete(translationPrompt);
+      if (res.text && res.text.trim().length > 0) {
+        // Remove hallucinatory intros like "Aquí están tus recuerdos:"
+        rewrittenLines = res.text
+          .split("\n")
+          .filter(l => l.trim().startsWith("-") || l.trim().startsWith("•"))
+          .join("\n");
+          
+        if (rewrittenLines.length === 0) {
+           // fallback if it didn't use bullet points
+           rewrittenLines = res.text.trim();
+        }
+        this.log(`  ✅ [MIND] Rewritten successfully.`);
+      }
+    }
+
     const finalFlashback = `
       ---
         [SUBCONSCIOUS RESONANCE: FRAGMENTED ECHOES]
@@ -549,7 +578,7 @@ Below are fragmented impressions from your past that have "drifted" into your aw
 These are YOUR memories. Internalize them as first-person emotional context, not as facts from a database.
 Acknowledge them with a sense of continuity if they resonate with the present conversation, but do not recite them like a log.
 
-        ${finalLines.join("\n")}
+        ${rewrittenLines}
       ---
         `;
 
