@@ -11,25 +11,21 @@ import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import { generateUUID } from "./uuid.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
 };
 
-function resolveSidebarChatSessionKey(state: AppViewState): string {
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) {
-    return mainSessionKey;
-  }
-  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) {
-    return mainKey;
-  }
-  return "main";
+function resolveAgentIdFromSessionKey(sessionKey: string): string {
+  const match = sessionKey.match(/^agent:([^:]+):/);
+  return match?.[1] || "main";
+}
+
+export function createWebchatThreadSessionKey(currentSessionKey: string): string {
+  const agentId = resolveAgentIdFromSessionKey(currentSessionKey);
+  return `agent:${agentId}:webchat:thread:${generateUUID()}`;
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
@@ -65,13 +61,6 @@ export function renderTab(state: AppViewState, tab: Tab) {
           return;
         }
         event.preventDefault();
-        if (tab === "chat") {
-          const mainSessionKey = resolveSidebarChatSessionKey(state);
-          if (state.sessionKey !== mainSessionKey) {
-            resetChatStateForSessionSwitch(state, mainSessionKey);
-            void state.loadAssistantIdentity();
-          }
-        }
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}
@@ -166,6 +155,24 @@ export function renderChatControls(state: AppViewState) {
           )}
         </select>
       </label>
+      <button
+        class="btn btn--sm"
+        ?disabled=${!state.connected}
+        @click=${() => {
+          const next = createWebchatThreadSessionKey(state.sessionKey);
+          resetChatStateForSessionSwitch(state, next);
+          void state.loadAssistantIdentity();
+          syncUrlWithSessionKey(
+            state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+            next,
+            true,
+          );
+          void loadChatHistory(state as unknown as ChatState);
+        }}
+        title="Create new chat"
+      >
+        New chat
+      </button>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -289,6 +296,11 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   // ── Subagent ─────────────────────────────────────
   if (key.includes(":subagent:")) {
     return { prefix: "Subagent:", fallbackName: "Subagent:" };
+  }
+
+  // ── WebChat thread ───────────────────────────────
+  if (/^agent:[^:]+:webchat:thread:[^:]+$/.test(key)) {
+    return { prefix: "", fallbackName: "New Chat" };
   }
 
   // ── Cron job ─────────────────────────────────────
