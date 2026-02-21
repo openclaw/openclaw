@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
-import { resolveFinalAssistantText, resolveTuiSessionKey } from "./tui.js";
+import {
+  resolveFinalAssistantText,
+  resolveGatewayDisconnectState,
+  resolveTuiSessionKey,
+} from "./tui.js";
 
 describe("resolveFinalAssistantText", () => {
   it("falls back to streamed text when final text is empty", () => {
@@ -65,5 +69,21 @@ describe("resolveTuiSessionKey", () => {
         sessionMainKey: "agent:main:main",
       }),
     ).toBe("agent:ops:incident");
+  });
+});
+
+describe("resolveGatewayDisconnectState", () => {
+  it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
+    const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
+    expect(state.connectionStatus).toContain("pairing required");
+    expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
+    expect(state.pairingHint).toContain("openclaw devices list");
+  });
+
+  it("falls back to idle for generic disconnect reasons", () => {
+    const state = resolveGatewayDisconnectState("network timeout");
+    expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
+    expect(state.activityStatus).toBe("idle");
+    expect(state.pairingHint).toBeUndefined();
   });
 });
