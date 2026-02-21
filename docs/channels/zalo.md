@@ -17,7 +17,7 @@ Zalo ships as a plugin and is not bundled with the core install.
 - Or select **Zalo** during onboarding and confirm the install prompt
 - Details: [Plugins](/tools/plugin)
 
-## Quick setup (beginner)
+## Onboarding
 
 1. Install the Zalo plugin:
    - From a source checkout: `openclaw plugins install ./extensions/zalo`
@@ -53,7 +53,7 @@ It is a good fit for support or notifications where you want deterministic routi
 - DMs share the agent's main session.
 - Groups are not yet supported (Zalo docs state "coming soon").
 
-## Setup (fast path)
+## Onboarding (quick path)
 
 ### 1) Create a bot token (Zalo Bot Platform)
 
@@ -115,6 +115,9 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
   - Webhook URL must use HTTPS.
   - Zalo sends events with `X-Bot-Api-Secret-Token` header for verification.
   - Gateway HTTP handles webhook requests at `channels.zalo.webhookPath` (defaults to the webhook URL path).
+  - Requests must use `Content-Type: application/json` (or `+json` media types).
+  - Duplicate events (`event_name + message_id`) are ignored for a short replay window.
+  - Burst traffic is rate-limited per path/source and may return HTTP 429.
 
 **Note:** getUpdates (polling) and webhook are mutually exclusive per Zalo API docs.
 
@@ -158,7 +161,7 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 - Confirm the gateway HTTP endpoint is reachable on the configured path
 - Check that getUpdates polling is not running (they're mutually exclusive)
 
-## Configuration reference (Zalo)
+## Configuration
 
 Full configuration: [Configuration](/gateway/configuration)
 

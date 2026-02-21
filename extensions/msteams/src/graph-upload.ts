@@ -24,7 +24,6 @@ export interface OneDriveUploadResult {
 /**
  * Upload a file to the user's OneDrive root folder.
  * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;

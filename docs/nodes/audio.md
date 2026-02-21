@@ -107,8 +107,27 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Transcript is available to templates as `{{Transcript}}`.
 - CLI stdout is capped (5MB); keep CLI output concise.
 
+## Mention Detection in Groups
+
+When `requireMention: true` is set for a group chat, OpenClaw now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
+
+**How it works:**
+
+1. If a voice message has no text body and the group requires mentions, OpenClaw performs a "preflight" transcription.
+2. The transcript is checked for mention patterns (e.g., `@BotName`, emoji triggers).
+3. If a mention is found, the message proceeds through the full reply pipeline.
+4. The transcript is used for mention detection so voice notes can pass the mention gate.
+
+**Fallback behavior:**
+
+- If transcription fails during preflight (timeout, API error, etc.), the message is processed based on text-only mention detection.
+- This ensures that mixed messages (text + audio) are never incorrectly dropped.
+
+**Example:** A user sends a voice note saying "Hey @Claude, what's the weather?" in a Telegram group with `requireMention: true`. The voice note is transcribed, the mention is detected, and the agent replies.
+
 ## Gotchas
 
 - Scope rules use first-match wins. `chatType` is normalized to `direct`, `group`, or `room`.
 - Ensure your CLI exits 0 and prints plain text; JSON needs to be massaged via `jq -r .text`.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
+- Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio is processed during the main media understanding phase.

@@ -1,6 +1,7 @@
+import { normalizeChatType } from "../channels/chat-type.js";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SlackAccountConfig } from "../config/types.js";
-import { normalizeChatType } from "../channels/chat-type.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
 
@@ -28,29 +29,9 @@ export type ResolvedSlackAccount = {
   channels?: SlackAccountConfig["channels"];
 };
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.slack?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listSlackAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultSlackAccountId(cfg: OpenClawConfig): string {
-  const ids = listSlackAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
+export const listSlackAccountIds = listAccountIds;
+export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,

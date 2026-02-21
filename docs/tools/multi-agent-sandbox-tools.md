@@ -324,6 +324,7 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
 ```json
 {
   "tools": {
+    "sessions": { "visibility": "tree" },
     "allow": ["sessions_list", "sessions_send", "sessions_history", "session_status"],
     "deny": ["exec", "write", "edit", "apply_patch", "read", "browser"]
   }

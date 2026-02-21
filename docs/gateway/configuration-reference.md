@@ -38,6 +38,29 @@ Pairing codes expire after 1 hour. Pending DM pairing requests are capped at **3
 Slack/Discord have a special fallback: if their provider section is missing entirely, runtime group policy can resolve to `open` (with a startup warning).
 </Note>
 
+### Channel model overrides
+
+Use `channels.modelByChannel` to pin specific channel IDs to a model. Values accept `provider/model` or configured model aliases. The channel mapping applies when a session does not already have a model override (for example, set via `/model`).
+
+```json5
+{
+  channels: {
+    modelByChannel: {
+      discord: {
+        "123456789012345678": "anthropic/claude-opus-4-6",
+      },
+      slack: {
+        C1234567890: "openai/gpt-4.1",
+      },
+      telegram: {
+        "-1001234567890": "openai/gpt-4.1-mini",
+        "-1001234567890:topic:99": "anthropic/claude-sonnet-4-6",
+      },
+    },
+  },
+}
+```
+
 ### WhatsApp
 
 WhatsApp runs through the gateway's web channel (Baileys Web). It starts automatically when a linked session exists.
@@ -93,7 +116,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - Legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
-- Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`.
+- Per-account overrides: `channels.whatsapp.accounts.<id>.sendReadReceipts`, `channels.whatsapp.accounts.<id>.dmPolicy`, `channels.whatsapp.accounts.<id>.allowFrom`.
 
 </Accordion>
 
@@ -128,12 +151,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all
       linkPreview: true,
-      streamMode: "partial", // off | partial | block
-      draftChunk: {
-        minChars: 200,
-        maxChars: 800,
-        breakPreference: "paragraph", // paragraph | newline | sentence
-      },
+      streaming: true, // live preview on/off (default true)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 5,
@@ -155,7 +173,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile`, with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
-- Draft streaming uses Telegram `sendMessageDraft` (requires private chat topics).
+- Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - Retry policy: see [Retry policy](/concepts/retry).
 
 ### Discord
@@ -186,13 +204,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         moderation: false,
       },
       replyToMode: "off", // off | first | all
-      dm: {
-        enabled: true,
-        policy: "pairing",
-        allowFrom: ["1234567890", "steipete"],
-        groupEnabled: false,
-        groupChannels: ["openclaw-dm"],
-      },
+      dmPolicy: "pairing",
+      allowFrom: ["1234567890", "steipete"],
+      dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
       guilds: {
         "123456789012345678": {
           slug: "friends-of-openclaw",
@@ -215,6 +229,24 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
       maxLinesPerMessage: 17,
+      ui: {
+        components: {
+          accentColor: "#5865F2",
+        },
+      },
+      voice: {
+        enabled: true,
+        autoJoin: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+        tts: {
+          provider: "openai",
+          openai: { voice: "alloy" },
+        },
+      },
       retry: {
         attempts: 3,
         minDelayMs: 500,
@@ -231,6 +263,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
+- `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -276,13 +310,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       enabled: true,
       botToken: "xoxb-...",
       appToken: "xapp-...",
-      dm: {
-        enabled: true,
-        policy: "pairing",
-        allowFrom: ["U123", "U456", "*"],
-        groupEnabled: false,
-        groupChannels: ["G123"],
-      },
+      dmPolicy: "pairing",
+      allowFrom: ["U123", "U456", "*"],
+      dm: { enabled: true, groupEnabled: false, groupChannels: ["G123"] },
       channels: {
         C123: { allow: true, requireMention: true, allowBots: false },
         "#general": {
@@ -396,6 +426,8 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,
       includeAttachments: false,
+      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+      remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
       mediaMaxMb: 16,
       service: "auto",
       region: "US",
@@ -406,7 +438,9 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
 - Requires Full Disk Access to the Messages DB.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `cliPath` can point to an SSH wrapper; set `remoteHost` for SCP attachment fetching.
+- `cliPath` can point to an SSH wrapper; set `remoteHost` (`host` or `user@host`) for SCP attachment fetching.
+- `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
+- SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
 
 <Accordion title="iMessage SSH wrapper example">
 
@@ -589,6 +623,30 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 }
 ```
 
+### `agents.defaults.bootstrapTotalMaxChars`
+
+Max total characters injected across all workspace bootstrap files. Default: `150000`.
+
+```json5
+{
+  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
+}
+```
+
+### `agents.defaults.imageMaxDimensionPx`
+
+Max pixel size for the longest image side in transcript/tool image blocks before provider calls.
+Default: `1200`.
+
+Lower values usually reduce vision-token usage and request payload size for screenshot-heavy runs.
+Higher values preserve more visual detail.
+
+```json5
+{
+  agents: { defaults: { imageMaxDimensionPx: 1200 } },
+}
+```
+
 ### `agents.defaults.userTimezone`
 
 Timezone for system prompt context (not message timestamps). Falls back to host timezone.
@@ -658,6 +716,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 Your configured aliases always win over defaults.
 
 Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinking off` or define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
+Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 
 ### `agents.defaults.cliBackends`
 
@@ -710,6 +769,7 @@ Periodic heartbeat runs.
         target: "last", // last | whatsapp | telegram | discord | ... | none
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
+        suppressToolErrorWarnings: false,
       },
     },
   },
@@ -717,6 +777,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
+- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -869,7 +930,9 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
         browser: {
           enabled: false,
           image: "openclaw-sandbox-browser:bookworm-slim",
+          network: "openclaw-sandbox-browser",
           cdpPort: 9222,
+          cdpSourceRange: "172.21.0.1/32",
           vncPort: 5900,
           noVncPort: 6080,
           headless: false,
@@ -931,8 +994,12 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
 **Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
+noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL (instead of exposing the password in the shared URL).
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
+- `network` defaults to `openclaw-sandbox-browser` (dedicated bridge network). Set to `bridge` only when you explicitly want global bridge connectivity.
+- `cdpSourceRange` optionally restricts CDP ingress at the container edge to a CIDR range (for example `172.21.0.1/32`).
+- `sandbox.browser.binds` mounts additional host directories into the sandbox browser container only. When set (including `[]`), it replaces `docker.binds` for the browser container.
 
 </Accordion>
 
@@ -979,7 +1046,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
-- `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks).
+- `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
@@ -1171,7 +1238,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
-- **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), or `keyPrefix`. First deny wins.
+- **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: `warn` warns the active session on eviction; `enforce` applies pruning and rotation.
 
 </Accordion>
@@ -1229,6 +1296,8 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 ### Ack reaction
 
 - Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.
+- Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
+- Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
 - `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
 
@@ -1278,6 +1347,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
+- `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
 
 ---
@@ -1394,6 +1464,7 @@ Controls elevated (host) exec access:
       timeoutSec: 1800,
       cleanupMs: 1800000,
       notifyOnExit: true,
+      notifyOnExitEmptySuccess: false,
       applyPatch: {
         enabled: false,
         allowModels: ["gpt-5.2"],
@@ -1402,6 +1473,39 @@ Controls elevated (host) exec access:
   },
 }
 ```
+
+### `tools.loopDetection`
+
+Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection.
+Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
+
+```json5
+{
+  tools: {
+    loopDetection: {
+      enabled: true,
+      historySize: 30,
+      warningThreshold: 10,
+      criticalThreshold: 20,
+      globalCircuitBreakerThreshold: 30,
+      detectors: {
+        genericRepeat: true,
+        knownPollNoProgress: true,
+        pingPong: true,
+      },
+    },
+  },
+}
+```
+
+- `historySize`: max tool-call history retained for loop analysis.
+- `warningThreshold`: repeating no-progress pattern threshold for warnings.
+- `criticalThreshold`: higher repeating threshold for blocking critical loops.
+- `globalCircuitBreakerThreshold`: hard stop threshold for any no-progress run.
+- `detectors.genericRepeat`: warn on repeated same-tool/same-args calls.
+- `detectors.knownPollNoProgress`: warn/block on known poll tools (`process.poll`, `command_status`, etc.).
+- `detectors.pingPong`: warn/block on alternating no-progress pair patterns.
+- If `warningThreshold >= criticalThreshold` or `criticalThreshold >= globalCircuitBreakerThreshold`, validation fails.
 
 ### `tools.web`
 
@@ -1495,6 +1599,31 @@ Provider auth follows standard order: auth profiles → env vars → `models.pro
   },
 }
 ```
+
+### `tools.sessions`
+
+Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
+
+Default: `tree` (current session + sessions spawned by it, such as subagents).
+
+```json5
+{
+  tools: {
+    sessions: {
+      // "self" | "tree" | "agent" | "all"
+      visibility: "tree",
+    },
+  },
+}
+```
+
+Notes:
+
+- `self`: only the current session key.
+- `tree`: current session + sessions spawned by the current session (subagents).
+- `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
+- `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
+- Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
 
 ### `tools.subagents`
 
@@ -1889,10 +2018,17 @@ See [Plugins](/tools/plugin).
     port: 18789,
     bind: "loopback",
     auth: {
-      mode: "token", // token | password
+      mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
       // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
+      // trustedProxy: { userHeader: "x-forwarded-user" }, // for mode=trusted-proxy; see /gateway/trusted-proxy-auth
       allowTailscale: true,
+      rateLimit: {
+        maxAttempts: 10,
+        windowMs: 60000,
+        lockoutMs: 300000,
+        exemptLoopback: true,
+      },
     },
     tailscale: {
       mode: "off", // off | serve | funnel
@@ -1912,6 +2048,14 @@ See [Plugins](/tools/plugin).
       // password: "your-password",
     },
     trustedProxies: ["10.0.0.1"],
+    // Optional. Default false.
+    allowRealIpFallback: false,
+    tools: {
+      // Additional /tools/invoke HTTP denies
+      deny: ["browser"],
+      // Remove tools from the default HTTP deny list
+      allow: ["gateway"],
+    },
   },
 }
 ```
@@ -1922,11 +2066,18 @@ See [Plugins](/tools/plugin).
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
-- `auth.allowTailscale`: when `true`, Tailscale Serve identity headers satisfy auth (verified via `tailscale whois`). Defaults to `true` when `tailscale.mode = "serve"`.
+- `auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
+- `auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
+- `auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`); HTTP API endpoints still require token/password auth. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
+- `auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
+  - `auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
 - `gateway.remote.token` is for remote CLI calls only; does not enable local gateway auth.
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
+- `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
+- `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
+- `gateway.tools.allow`: remove tool names from the default HTTP deny list.
 
 </Accordion>
 
@@ -1934,6 +2085,10 @@ See [Plugins](/tools/plugin).
 
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
+- Responses URL-input hardening:
+  - `gateway.http.endpoints.responses.maxUrlParts`
+  - `gateway.http.endpoints.responses.files.urlAllowlist`
+  - `gateway.http.endpoints.responses.images.urlAllowlist`
 
 ### Multi-instance isolation
 
@@ -1960,9 +2115,12 @@ See [Multiple Gateways](/gateway/multiple-gateways).
     token: "shared-secret",
     path: "/hooks",
     maxBodyBytes: 262144,
+    defaultSessionKey: "hook:ingress",
+    allowRequestSessionKey: false,
+    allowedSessionKeyPrefixes: ["hook:"],
     allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.openclaw/hooks/transforms",
     mappings: [
       {
         match: { path: "gmail" },
@@ -1987,6 +2145,7 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+  - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 <Accordion title="Mapping details">
@@ -1995,8 +2154,12 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 - `match.source` matches a payload field for generic paths.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module returning a hook action.
+  - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
 - `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
+- `allowRequestSessionKey`: allow `/hooks/agent` callers to set `sessionKey` (default: `false`).
+- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`.
 - `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
@@ -2036,14 +2199,19 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 {
   canvasHost: {
     root: "~/.openclaw/workspace/canvas",
-    port: 18793,
     liveReload: true,
     // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
   },
 }
 ```
 
-- Serves HTML/CSS/JS over HTTP for iOS/Android nodes.
+- Serves agent-editable HTML/CSS/JS and A2UI over HTTP under the Gateway port:
+  - `http://<gateway-host>:<gateway.port>/__openclaw__/canvas/`
+  - `http://<gateway-host>:<gateway.port>/__openclaw__/a2ui/`
+- Local-only: keep `gateway.bind: "loopback"` (default).
+- Non-loopback binds: canvas routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
+- Node WebViews typically don't send auth headers; after a node is paired and connected, the Gateway advertises node-scoped capability URLs for canvas/A2UI access.
+- Capability URLs are bound to the active node WS session and expire quickly. IP-based fallback is not used.
 - Injects live-reload client into served HTML.
 - Auto-creates starter `index.html` when empty.
 - Also serves A2UI at `/__openclaw__/a2ui/`.
@@ -2249,12 +2417,16 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 2,
+    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
+    webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
   },
 }
 ```
 
 - `sessionRetention`: how long to keep completed cron sessions before pruning. Default: `24h`.
+- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
 See [Cron Jobs](/automation/cron-jobs).
 
@@ -2310,7 +2482,7 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: relative (to the including file), absolute, or `../` parent references.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of the main config file). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
 - Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---

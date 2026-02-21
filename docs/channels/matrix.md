@@ -36,7 +36,7 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
-## Setup
+## Onboarding
 
 1. Install the Matrix plugin:
    - From npm: `openclaw plugins install @openclaw/matrix`
@@ -136,6 +136,47 @@ When E2EE is enabled, the bot will request verification from your other sessions
 Open Element (or another client) and approve the verification request to establish trust.
 Once verified, the bot can decrypt messages in encrypted rooms.
 
+## Multi-account
+
+Multi-account support: use `channels.matrix.accounts` with per-account credentials and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
+Each account runs as a separate Matrix user on any homeserver. Per-account config
+inherits from the top-level `channels.matrix` settings and can override any option
+(DM policy, groups, encryption, etc.).
+
+```json5
+{
+  channels: {
+    matrix: {
+      enabled: true,
+      dm: { policy: "pairing" },
+      accounts: {
+        assistant: {
+          name: "Main assistant",
+          homeserver: "https://matrix.example.org",
+          accessToken: "syt_assistant_***",
+          encryption: true,
+        },
+        alerts: {
+          name: "Alerts bot",
+          homeserver: "https://matrix.example.org",
+          accessToken: "syt_alerts_***",
+          dm: { policy: "allowlist", allowFrom: ["@admin:example.org"] },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Account startup is serialized to avoid race conditions with concurrent module imports.
+- Env variables (`MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, etc.) only apply to the **default** account.
+- Base channel settings (DM policy, group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Use `bindings[].match.accountId` to route each account to a different agent.
+- Crypto state is stored per account + access token (separate key stores per account).
+
 ## Routing model
 
 - Replies always go back to Matrix.
@@ -149,6 +190,7 @@ Once verified, the bot can decrypt messages in encrypted rooms.
   - `openclaw pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
 - `channels.matrix.dm.allowFrom` accepts full Matrix user IDs (example: `@user:server`). The wizard resolves display names to user IDs when directory search finds a single exact match.
+- Do not use display names or bare localparts (example: `"Alice"` or `"alice"`). They are ambiguous and are ignored for allowlist matching. Use full `@user:server` IDs.
 
 ## Rooms (groups)
 
@@ -228,7 +270,7 @@ Common failures:
 
 For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
-## Configuration reference (Matrix)
+## Configuration
 
 Full configuration: [Configuration](/gateway/configuration)
 
@@ -256,4 +298,5 @@ Provider options:
 - `channels.matrix.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.matrix.autoJoin`: invite handling (`always | allowlist | off`, default: always).
 - `channels.matrix.autoJoinAllowlist`: allowed room IDs/aliases for auto-join.
+- `channels.matrix.accounts`: multi-account configuration keyed by account ID (each account inherits top-level settings).
 - `channels.matrix.actions`: per-action tool gating (reactions/messages/pins/memberInfo/channelInfo).

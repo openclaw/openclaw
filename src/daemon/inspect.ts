@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -9,6 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
@@ -24,7 +23,6 @@ export type FindExtraGatewayServicesOptions = {
 };
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
-const execFileAsync = promisify(execFile);
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -138,17 +136,28 @@ function isLegacyLabel(label: string): boolean {
   return lower.includes("clawdbot") || lower.includes("moltbot");
 }
 
+async function readDirEntries(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+async function readUtf8File(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(params.dir);
-  } catch {
-    return results;
-  }
+  const entries = await readDirEntries(params.dir);
 
   for (const entry of entries) {
     if (!entry.endsWith(".plist")) {
@@ -159,10 +168,8 @@ async function scanLaunchdDir(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    let contents = "";
-    try {
-      contents = await fs.readFile(fullPath, "utf8");
-    } catch {
+    const contents = await readUtf8File(fullPath);
+    if (contents === null) {
       continue;
     }
     const marker = detectMarker(contents);
@@ -206,12 +213,7 @@ async function scanSystemdDir(params: {
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(params.dir);
-  } catch {
-    return results;
-  }
+  const entries = await readDirEntries(params.dir);
 
   for (const entry of entries) {
     if (!entry.endsWith(".service")) {
@@ -222,10 +224,8 @@ async function scanSystemdDir(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    let contents = "";
-    try {
-      contents = await fs.readFile(fullPath, "utf8");
-    } catch {
+    const contents = await readUtf8File(fullPath);
+    if (contents === null) {
       continue;
     }
     const marker = detectMarker(contents);
@@ -294,35 +294,6 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
     tasks.push(current);
   }
   return tasks;
-}
-
-async function execSchtasks(
-  args: string[],
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  try {
-    const { stdout, stderr } = await execFileAsync("schtasks", args, {
-      encoding: "utf8",
-      windowsHide: true,
-    });
-    return {
-      stdout: String(stdout ?? ""),
-      stderr: String(stderr ?? ""),
-      code: 0,
-    };
-  } catch (error) {
-    const e = error as {
-      stdout?: unknown;
-      stderr?: unknown;
-      code?: unknown;
-      message?: unknown;
-    };
-    return {
-      stdout: typeof e.stdout === "string" ? e.stdout : "",
-      stderr:
-        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
-      code: typeof e.code === "number" ? e.code : 1,
-    };
-  }
 }
 
 export async function findExtraGatewayServices(

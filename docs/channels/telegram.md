@@ -21,7 +21,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   </Card>
 </CardGroup>
 
-## Quick setup
+## Onboarding
 
 <Steps>
   <Step title="Create the bot token in BotFather">
@@ -112,7 +112,9 @@ Token resolution order is account-aware. In practice, config values win over env
     - `open` (requires `allowFrom` to include `"*"`)
     - `disabled`
 
-    `channels.telegram.allowFrom` accepts numeric IDs and usernames. `telegram:` / `tg:` prefixes are accepted and normalized.
+    `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
+    The onboarding wizard accepts `@username` input and resolves it to numeric IDs.
+    If you upgraded and your config contains `@username` allowlist entries, run `openclaw doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
 
     ### Finding your Telegram user ID
 
@@ -145,6 +147,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `disabled`
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
+    `groupAllowFrom` entries must be numeric Telegram user IDs.
 
     Example: allow any member in one specific group:
 
@@ -218,37 +221,25 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ## Feature reference
 
 <AccordionGroup>
-  <Accordion title="Draft streaming in Telegram DMs">
-    OpenClaw can stream partial replies with Telegram draft bubbles (`sendMessageDraft`).
+  <Accordion title="Live stream preview (message edits)">
+    OpenClaw can stream partial replies by sending a temporary Telegram message and editing it as text arrives.
 
-    Requirements:
+    Requirement:
 
-    - `channels.telegram.streamMode` is not `"off"` (default: `"partial"`)
-    - private chat
-    - inbound update includes `message_thread_id`
-    - bot topics are enabled (`getMe().has_topics_enabled`)
+    - `channels.telegram.streaming` is `true` (default)
+    - legacy `channels.telegram.streamMode` values are auto-mapped to `streaming`
 
-    Modes:
+    This works in direct chats and groups/topics.
 
-    - `off`: no draft streaming
-    - `partial`: frequent draft updates from partial text
-    - `block`: chunked draft updates using `channels.telegram.draftChunk`
+    For text-only replies, OpenClaw keeps the same preview message and performs a final edit in place (no second message).
 
-    `draftChunk` defaults for block mode:
+    For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
-    - `minChars: 200`
-    - `maxChars: 800`
-    - `breakPreference: "paragraph"`
-
-    `maxChars` is clamped by `channels.telegram.textChunkLimit`.
-
-    Draft streaming is DM-only; groups/channels do not use draft bubbles.
-
-    If you want early real Telegram messages instead of draft updates, use block streaming (`channels.telegram.blockStreaming: true`).
+    Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
     Telegram-only reasoning stream:
 
-    - `/reasoning stream` sends reasoning to the draft bubble while generating
+    - `/reasoning stream` sends reasoning to the live preview while generating
     - final answer is sent without reasoning text
 
   </Accordion>
@@ -412,9 +403,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `channels.telegram.replyToMode` controls handling:
 
-    - `first` (default)
+    - `off` (default)
+    - `first`
     - `all`
-    - `off`
+
+    Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
   </Accordion>
 
@@ -565,6 +558,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
+  <Accordion title="Ack reactions">
+    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+
+    Resolution order:
+
+    - `channels.telegram.accounts.<accountId>.ackReaction`
+    - `channels.telegram.ackReaction`
+    - `messages.ackReaction`
+    - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+
+    Notes:
+
+    - Telegram expects unicode emoji (for example "👀").
+    - Use `""` to disable the reaction for a channel or account.
+
+  </Accordion>
+
   <Accordion title="Config writes from Telegram events and commands">
     Channel config writes are enabled by default (`configWrites !== false`).
 
@@ -595,10 +605,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - set `channels.telegram.webhookUrl`
     - set `channels.telegram.webhookSecret` (required when webhook URL is set)
     - optional `channels.telegram.webhookPath` (default `/telegram-webhook`)
+    - optional `channels.telegram.webhookHost` (default `127.0.0.1`)
 
-    Default local listener for webhook mode binds to `0.0.0.0:8787`.
+    Default local listener for webhook mode binds to `127.0.0.1:8787`.
 
     If your public endpoint differs, place a reverse proxy in front and point `webhookUrl` at the public URL.
+    Set `webhookHost` (for example `0.0.0.0`) when you intentionally need external ingress.
 
   </Accordion>
 
@@ -647,7 +659,7 @@ openclaw message send --channel telegram --target @name --message "hi"
 
   <Accordion title="Commands work partially or not at all">
 
-    - authorize your sender identity (pairing and/or `allowFrom`)
+    - authorize your sender identity (pairing and/or numeric `allowFrom`)
     - command authorization still applies even when group policy is `open`
     - `setMyCommands failed` usually indicates DNS/HTTPS reachability issues to `api.telegram.org`
 
@@ -673,6 +685,45 @@ More help: [Channel troubleshooting](/channels/troubleshooting).
 
 Primary reference:
 
+- `channels.telegram.enabled`: enable/disable channel startup.
+- `channels.telegram.botToken`: bot token (BotFather).
+- `channels.telegram.tokenFile`: read token from file path.
+- `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
+- `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
+- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
+  - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
+  - `channels.telegram.groups.<id>.requireMention`: mention gating default.
+  - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
+  - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
+  - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
+  - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
+  - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
+  - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
+  - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
+- `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
+- `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
+- `channels.telegram.replyToMode`: `off | first | all` (default: `off`).
+- `channels.telegram.textChunkLimit`: outbound chunk size (chars).
+- `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
+- `channels.telegram.streaming`: `true | false` (live stream preview; default: true).
+- `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
+- `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
+- `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
+- `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
+- `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
+- `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
+- `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
+- `channels.telegram.webhookHost`: local webhook bind host (default `127.0.0.1`).
+- `channels.telegram.actions.reactions`: gate Telegram tool reactions.
+- `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
+- `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
+- `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
+
 - [Configuration reference - Telegram](/gateway/configuration-reference#telegram)
 
 Telegram-specific high-signal fields:
@@ -681,10 +732,10 @@ Telegram-specific high-signal fields:
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`
 - command/menu: `commands.native`, `customCommands`
 - threading/replies: `replyToMode`
-- streaming: `streamMode`, `draftChunk`, `blockStreaming`
+- streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
-- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`
+- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
@@ -693,4 +744,5 @@ Telegram-specific high-signal fields:
 
 - [Pairing](/channels/pairing)
 - [Channel routing](/channels/channel-routing)
+- [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)
