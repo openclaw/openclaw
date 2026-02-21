@@ -59,6 +59,16 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe(input);
   });
 
+  it("does not treat MEDIA:-prefixed prose as a file path (#18780)", () => {
+    // Tool results (e.g. web_fetch of release notes) may contain lines that
+    // start with MEDIA: but are natural language, not file directives.
+    const input =
+      "MEDIA:-prefixed paths (lenient whitespace) when loading outbound media to prevent ENOENT for tool-returned local media paths. (#13107)";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
   it("parses MEDIA tags with leading whitespace", () => {
     const result = splitMediaFromOutput("  MEDIA:./screenshot.png");
     expect(result.mediaUrls).toEqual(["./screenshot.png"]);
