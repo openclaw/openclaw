@@ -36,6 +36,9 @@ type NormalizedAttachment = {
   base64: string;
 };
 
+const WEBCHAT_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
+const WEBCHAT_UPLOAD_MAX_FILES = 500;
+
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) {
     return undefined;
@@ -105,7 +108,60 @@ async function persistImageAttachment(params: {
   const fileName = `${sanitizeAttachmentLabel(params.label)}-${crypto.randomUUID()}${ext}`;
   const filePath = path.join(uploadDir, fileName);
   await fs.writeFile(filePath, Buffer.from(params.base64, "base64"), { mode: 0o600 });
+  await prunePersistedWebchatUploads(uploadDir, filePath);
   return filePath;
+}
+
+async function prunePersistedWebchatUploads(uploadDir: string, keepPath: string): Promise<void> {
+  try {
+    const entries = await fs.readdir(uploadDir);
+    const now = Date.now();
+    const cutoff = now - WEBCHAT_UPLOAD_RETENTION_MS;
+
+    const fileStats = await Promise.all(
+      entries.map(async (entry) => {
+        const fullPath = path.join(uploadDir, entry);
+        try {
+          const stat = await fs.stat(fullPath);
+          return stat.isFile() ? { fullPath, mtimeMs: stat.mtimeMs } : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const files = fileStats.filter((entry) => entry !== null);
+    const stale = files.filter((entry) => entry.mtimeMs < cutoff);
+    await Promise.all(
+      stale.map(async (entry) => {
+        if (entry.fullPath !== keepPath) {
+          await fs.unlink(entry.fullPath).catch(() => {});
+        }
+      }),
+    );
+
+    const fresh = files
+      .filter((entry) => entry.mtimeMs >= cutoff || entry.fullPath === keepPath)
+      .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
+
+    if (fresh.length <= WEBCHAT_UPLOAD_MAX_FILES) {
+      return;
+    }
+
+    let toDelete = fresh.length - WEBCHAT_UPLOAD_MAX_FILES;
+    for (const entry of fresh.toReversed()) {
+      if (toDelete <= 0) {
+        break;
+      }
+      if (entry.fullPath === keepPath) {
+        continue;
+      }
+      await fs.unlink(entry.fullPath).catch(() => {});
+      toDelete -= 1;
+    }
+  } catch {
+    // Best-effort retention cleanup; upload persistence should still succeed.
+  }
 }
 
 function validateAttachmentBase64OrThrow(
