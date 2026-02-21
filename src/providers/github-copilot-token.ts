@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -10,7 +11,13 @@ export type CachedCopilotToken = {
   expiresAt: number;
   /** milliseconds since epoch */
   updatedAt: number;
+  /** SHA-256 hex digest of the ghu_ token that produced this cached API token. */
+  githubTokenHash?: string;
 };
+
+function hashGithubToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
 
 function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
@@ -95,9 +102,10 @@ export async function resolveCopilotApiToken(params: {
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+  const requestTokenHash = hashGithubToken(params.githubToken);
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
-    if (isTokenUsable(cached)) {
+    if (isTokenUsable(cached) && cached.githubTokenHash === requestTokenHash) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
@@ -125,6 +133,7 @@ export async function resolveCopilotApiToken(params: {
     token: json.token,
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
+    githubTokenHash: requestTokenHash,
   };
   saveJsonFileFn(cachePath, payload);
 
