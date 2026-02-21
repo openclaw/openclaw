@@ -25,12 +25,27 @@ function clampBounds(start: number, length: number, textLength: number) {
   return { start: safeStart, end: safeEnd };
 }
 
-export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {
+export interface MentionRenderResult {
+  text: string;
+  /**
+   * Map from original character offset to cumulative shift caused by mention expansions.
+   * Used to adjust textStyle ranges that reference the original message offsets.
+   */
+  offsetShifts: Map<number, number>;
+}
+
+export function renderSignalMentions(
+  message: string,
+  mentions?: SignalMention[] | null,
+): MentionRenderResult {
   if (!message || !mentions?.length) {
-    return message;
+    return { text: message, offsetShifts: new Map() };
   }
 
   let normalized = message;
+  const offsetShifts = new Map<number, number>();
+  // Process mentions in reverse order (sorted by descending start position)
+  // to avoid having to recalculate positions as we insert text
   const candidates = mentions.filter(isValidMention).toSorted((a, b) => b.start! - a.start!);
 
   for (const mention of candidates) {
@@ -49,8 +64,18 @@ export function renderSignalMentions(message: string, mentions?: SignalMention[]
       continue;
     }
 
-    normalized = normalized.slice(0, start) + `@${identifier}` + normalized.slice(end);
+    const replacement = `@${identifier}`;
+    const originalLength = end - start;
+    const newLength = replacement.length;
+    const shift = newLength - originalLength;
+
+    normalized = normalized.slice(0, start) + replacement + normalized.slice(end);
+
+    // Track the shift at this position
+    if (shift !== 0) {
+      offsetShifts.set(start, shift);
+    }
   }
 
-  return normalized;
+  return { text: normalized, offsetShifts };
 }

@@ -62,6 +62,8 @@ describe("signal event handler sender prefix", () => {
       ignoreAttachments: true,
       sendReadReceipts: false,
       readReceiptsViaDaemon: false,
+      injectLinkPreviews: true,
+      preserveTextStyles: true,
       fetchAttachment: async () => null,
       deliverReplies: async () => undefined,
       resolveSignalReactionTargets: () => [],

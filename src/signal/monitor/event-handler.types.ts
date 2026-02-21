@@ -11,7 +11,10 @@ export type SignalEnvelope = {
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
-  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  editMessage?: {
+    targetSentTimestamp?: number | null;
+    dataMessage?: SignalDataMessage | null;
+  } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
 };
@@ -28,12 +31,22 @@ export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
+  sticker?: SignalSticker | null;
+  previews?: Array<SignalLinkPreview> | null;
+  textStyles?: Array<SignalTextStyleRange> | null;
   mentions?: Array<SignalMention> | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: {
+    id?: number | string | null;
+    timestamp?: number | null;
+    text?: string | null;
+    authorUuid?: string | null;
+    authorNumber?: string | null;
+    author?: string | null;
+  } | null;
   reaction?: SignalReactionMessage | null;
 };
 
@@ -53,7 +66,30 @@ export type SignalAttachment = {
   id?: string | null;
   contentType?: string | null;
   filename?: string | null;
+  caption?: string | null;
   size?: number | null;
+  voiceNote?: boolean | null;
+  width?: number | null;
+  height?: number | null;
+};
+
+export type SignalSticker = {
+  packId?: string | number | null;
+  stickerId?: string | number | null;
+  attachment?: SignalAttachment | null;
+};
+
+export type SignalLinkPreview = {
+  url?: string | null;
+  title?: string | null;
+  description?: string | null;
+  image?: SignalAttachment | null;
+};
+
+export type SignalTextStyleRange = {
+  style?: string | null;
+  start?: number | null;
+  length?: number | null;
 };
 
 export type SignalReactionTarget = {
@@ -87,6 +123,8 @@ export type SignalEventHandlerDeps = {
   ignoreAttachments: boolean;
   sendReadReceipts: boolean;
   readReceiptsViaDaemon: boolean;
+  injectLinkPreviews?: boolean;
+  preserveTextStyles?: boolean;
   fetchAttachment: (params: {
     baseUrl: string;
     account?: string;

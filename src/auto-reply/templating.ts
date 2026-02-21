@@ -53,6 +53,8 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  /** Provider-specific timestamp/id targeted by an edit message. */
+  EditTargetTimestamp?: number;
   ReplyToId?: string;
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
@@ -76,10 +78,20 @@ export type MsgContext = {
   MediaPath?: string;
   MediaUrl?: string;
   MediaType?: string;
+  MediaCaption?: string;
   MediaDir?: string;
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  MediaCaptions?: string[];
+  MediaDimension?: {
+    width?: number;
+    height?: number;
+  };
+  MediaDimensions?: Array<{
+    width?: number;
+    height?: number;
+  }>;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerMetadata;
   OutputDir?: string;
