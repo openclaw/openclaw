@@ -1,7 +1,7 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
+import { applyOwnerOnlyToolPolicy, normalizeToolName } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -204,7 +204,8 @@ export async function handleInlineActions(params: {
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      const normalizedDispatchName = normalizeToolName(dispatch.toolName);
+      const tool = authorizedTools.find((candidate) => candidate.name === normalizedDispatchName);
       if (!tool) {
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
