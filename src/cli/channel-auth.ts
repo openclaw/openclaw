@@ -11,24 +11,42 @@ type ChannelAuthOptions = {
   verbose?: boolean;
 };
 
-export async function runChannelLogin(
+type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
+type ChannelAuthMode = "login" | "logout";
+
+function resolveChannelPluginForMode(
   opts: ChannelAuthOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+  mode: ChannelAuthMode,
+): { channelInput: string; channelId: string; plugin: ChannelPlugin } {
   const channelInput = opts.channel ?? DEFAULT_CHAT_CHANNEL;
   const channelId = normalizeChannelId(channelInput);
   if (!channelId) {
     throw new Error(`Unsupported channel: ${channelInput}`);
   }
   const plugin = getChannelPlugin(channelId);
-  if (!plugin?.auth?.login) {
-    throw new Error(`Channel ${channelId} does not support login`);
+  const supportsMode =
+    mode === "login" ? Boolean(plugin?.auth?.login) : Boolean(plugin?.gateway?.logoutAccount);
+  if (!supportsMode) {
+    throw new Error(`Channel ${channelId} does not support ${mode}`);
   }
-  // Auth-only flow: do not mutate channel config here.
-  setVerbose(Boolean(opts.verbose));
+  return { channelInput, channelId, plugin: plugin as ChannelPlugin };
+}
+
+function resolveAccountContext(plugin: ChannelPlugin, opts: ChannelAuthOptions) {
   const cfg = loadConfig();
   const accountId = opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
-  await plugin.auth.login({
+  return { cfg, accountId };
+}
+
+export async function runChannelLogin(
+  opts: ChannelAuthOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  const { channelInput, plugin } = resolveChannelPluginForMode(opts, "login");
+  // Auth-only flow: do not mutate channel config here.
+  setVerbose(Boolean(opts.verbose));
+  const { cfg, accountId } = resolveAccountContext(plugin, opts);
+  await plugin.auth!.login({
     cfg,
     accountId,
     runtime,
@@ -41,20 +59,11 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const channelInput = opts.channel ?? DEFAULT_CHAT_CHANNEL;
-  const channelId = normalizeChannelId(channelInput);
-  if (!channelId) {
-    throw new Error(`Unsupported channel: ${channelInput}`);
-  }
-  const plugin = getChannelPlugin(channelId);
-  if (!plugin?.gateway?.logoutAccount) {
-    throw new Error(`Channel ${channelId} does not support logout`);
-  }
+  const { plugin } = resolveChannelPluginForMode(opts, "logout");
   // Auth-only flow: resolve account + clear session state only.
-  const cfg = loadConfig();
-  const accountId = opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
+  const { cfg, accountId } = resolveAccountContext(plugin, opts);
   const account = plugin.config.resolveAccount(cfg, accountId);
-  await plugin.gateway.logoutAccount({
+  await plugin.gateway!.logoutAccount({
     cfg,
     accountId,
     account,
