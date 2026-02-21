@@ -486,6 +486,7 @@ Rules:
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.
+For current secret substitution behavior (`${VAR_NAME}`), see [Secrets in config values](/gateway/secrets-providers).
 
 ## Full reference
 

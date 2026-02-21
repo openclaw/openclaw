@@ -1117,6 +1117,7 @@
                     "group": "Configuration and operations",
                     "pages": [
                       "gateway/configuration",
+                      "gateway/secrets-providers",
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",

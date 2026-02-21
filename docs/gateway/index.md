@@ -249,6 +249,7 @@ Related:
 - [Troubleshooting](/gateway/troubleshooting)
 - [Background Process](/gateway/background-process)
 - [Configuration](/gateway/configuration)
+- [Secrets providers](/gateway/secrets-providers)
 - [Health](/gateway/health)
 - [Doctor](/gateway/doctor)
 - [Authentication](/gateway/authentication)
