@@ -219,13 +219,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
       if (Array.isArray(assistant.content)) {
-        const nonToolContent = assistant.content.filter((block) => {
-          if (!block || typeof block !== "object") {
-            return true;
-          }
-          const type = (block as { type?: unknown }).type;
-          return typeof type !== "string" || !TOOL_CALL_TYPES.has(type);
-        });
+        const nonToolContent = assistant.content.filter((block) => !isToolCallBlock(block));
         if (nonToolContent.length > 0) {
           out.push({ ...msg, content: nonToolContent } as AgentMessage);
           changed = true;

@@ -290,7 +290,7 @@ describe("sanitizeToolCallInputs", () => {
   it("drops tool calls with partialJson: true even when input is present", () => {
     // When streaming is interrupted, tool_use blocks may have partialJson: true
     // and an empty/incomplete input object. These should be treated as incomplete.
-    const input: AgentMessage[] = [
+    const input = [
       {
         role: "assistant",
         content: [
@@ -298,7 +298,7 @@ describe("sanitizeToolCallInputs", () => {
         ],
       },
       { role: "user", content: "hello" },
-    ];
+    ] as unknown as AgentMessage[];
 
     const out = sanitizeToolCallInputs(input);
     expect(out.map((m) => m.role)).toEqual(["user"]);
