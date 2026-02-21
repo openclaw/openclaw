@@ -143,6 +143,8 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture("My email is test@example.com")).toBe(true);
     expect(shouldCapture("Call me at +1234567890123")).toBe(true);
     expect(shouldCapture("I always want verbose output")).toBe(true);
+    expect(shouldCapture("请记住我喜欢深色模式")).toBe(true);
+    expect(shouldCapture("我决定以后都用 TypeScript")).toBe(true);
     expect(shouldCapture("x")).toBe(false);
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);
@@ -187,9 +189,23 @@ describe("memory plugin e2e", () => {
     const { detectCategory } = await import("./index.js");
 
     expect(detectCategory("I prefer dark mode")).toBe("preference");
+    expect(detectCategory("I need dark mode")).toBe("preference");
+    expect(detectCategory("I always use dark mode")).toBe("preference");
+    expect(detectCategory("I never use emojis")).toBe("preference");
+    expect(detectCategory("This is important for me")).toBe("preference");
+    expect(detectCategory("Preferuji tmavý režim")).toBe("preference");
+    expect(detectCategory("Nechci používat světlý režim")).toBe("preference");
+    expect(detectCategory("我喜欢深色模式")).toBe("preference");
     expect(detectCategory("We decided to use React")).toBe("decision");
+    expect(detectCategory("我们决定以后都用 React")).toBe("decision");
+    expect(detectCategory("我决定以后都用 TypeScript")).toBe("decision");
     expect(detectCategory("My email is test@example.com")).toBe("entity");
+    expect(detectCategory("我是张三")).toBe("entity");
+    expect(detectCategory("我叫小明")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
+    expect(detectCategory("服务器状态是正常")).toBe("fact");
+    expect(detectCategory("我们有 3 台服务器")).toBe("fact");
+    expect(detectCategory("我有问题吗？")).toBe("other");
     expect(detectCategory("Random note")).toBe("other");
   });
 });
