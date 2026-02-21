@@ -37,6 +37,55 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts per-agent thinking defaults and heartbeat thinking override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          heartbeat: {
+            thinking: "medium",
+          },
+        },
+        list: [
+          {
+            id: "nicole",
+            thinkingDefault: "high",
+            heartbeat: {
+              thinking: "off",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts per-agent memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "nicole",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  {
+                    name: "family-sessions",
+                    path: "~/.openclaw/agents/family/qmd/sessions",
+                    pattern: "**/*.md",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

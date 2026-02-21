@@ -25,8 +25,13 @@ title: "Thinking Levels"
 
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.thinkingDefault` in config).
-4. Fallback: low for reasoning-capable models; off otherwise.
+3. Per-agent default (`agents.list[].thinkingDefault` in config).
+4. Global default (`agents.defaults.thinkingDefault` in config).
+5. Fallback: low for reasoning-capable models; off otherwise.
+
+For cron jobs: `payload.thinking` → per-agent default → global default → fallback.
+
+For heartbeats: `heartbeat.thinking` → per-agent default → global default → fallback.
 
 ## Setting a session default
 

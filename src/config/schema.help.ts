@@ -21,6 +21,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.list[].thinkingDefault":
+    "Per-agent default thinking level (overrides agents.defaults.thinkingDefault).",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   "gateway.auth.token":
@@ -179,12 +181,18 @@ export const FIELD_HELP: Record<string, string> = {
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.heartbeat.thinking":
+    "Thinking level for heartbeat runs (overrides agent/global thinkingDefault).",
+  "agents.list[].heartbeat.thinking":
+    "Thinking level for heartbeat runs (overrides agent/global thinkingDefault).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.sources":
     'Sources to index for memory search (default: ["memory"]; add "sessions" to include session transcripts).',
   "agents.defaults.memorySearch.extraPaths":
     "Extra paths to include in memory search (directories or .md files; relative paths resolved from workspace).",
+  "agents.list[].memorySearch.qmd.extraCollections":
+    "Per-agent extra QMD collections to include in memory search.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Enable experimental session transcript indexing for memory search (default: false).",
   "agents.defaults.memorySearch.provider":

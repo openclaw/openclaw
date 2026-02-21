@@ -79,6 +79,7 @@ afterEach(() => {
 describe("runHeartbeatOnce – heartbeat model override", () => {
   async function runDefaultsHeartbeat(params: {
     model?: string;
+    thinking?: string;
     suppressToolErrorWarnings?: boolean;
   }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
@@ -90,6 +91,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: "5m",
               target: "whatsapp",
               model: params.model,
+              thinking: params.thinking,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             },
           },
@@ -133,6 +135,16 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       expect.objectContaining({
         isHeartbeat: true,
         suppressToolErrorWarnings: true,
+      }),
+    );
+  });
+
+  it("passes heartbeat thinking override from defaults heartbeat config", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ thinking: "medium" });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        heartbeatThinkingOverride: "medium",
       }),
     );
   });
@@ -183,6 +195,59 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         expect.objectContaining({
           isHeartbeat: true,
           heartbeatModelOverride: "ollama/llama3.2:1b",
+        }),
+        cfg,
+      );
+    });
+  });
+
+  it("passes per-agent heartbeat thinking override (merged with defaults)", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              model: "openai/gpt-4o-mini",
+              thinking: "low",
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "whatsapp",
+                thinking: "high",
+              },
+            },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "ops",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          isHeartbeat: true,
+          heartbeatThinkingOverride: "high",
         }),
         cfg,
       );

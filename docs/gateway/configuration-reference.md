@@ -763,6 +763,7 @@ Periodic heartbeat runs.
       heartbeat: {
         every: "30m", // 0m disables
         model: "openai/gpt-5.2-mini",
+        thinking: "medium", // override thinking level for heartbeat runs
         includeReasoning: false,
         session: "main",
         to: "+15555550123",
@@ -777,6 +778,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
+- `thinking`: thinking level override for heartbeat runs. Resolution: `heartbeat.thinking` > per-agent `thinkingDefault` > global `thinkingDefault`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
@@ -1023,6 +1025,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        thinkingDefault: "low", // per-agent thinking level
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -1047,9 +1050,11 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
+- `thinkingDefault`: per-agent thinking level override. Resolution: per-agent > global `agents.defaults.thinkingDefault` > fallback. Values: `off | minimal | low | medium | high | xhigh`.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
+- `memorySearch.qmd.extraCollections`: additional QMD collections for this agent's memory search. Useful for cross-agent session search (e.g., letting one agent search another's session transcripts). Each entry: `{ path, pattern?, name? }`.
 
 ---
 

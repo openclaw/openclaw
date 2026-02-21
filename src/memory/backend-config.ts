@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionSendPolicyConfig } from "../config/types.base.js";
@@ -237,6 +237,40 @@ function resolveCustomPaths(
   return collections;
 }
 
+function resolveAgentExtraCollections(
+  rawCollections: Array<{ name?: string; path: string; pattern?: string }> | undefined,
+  workspaceDir: string,
+  existing: Set<string>,
+  agentId: string,
+): ResolvedQmdCollection[] {
+  if (!rawCollections?.length) {
+    return [];
+  }
+  const collections: ResolvedQmdCollection[] = [];
+  rawCollections.forEach((entry, index) => {
+    const trimmedPath = entry?.path?.trim();
+    if (!trimmedPath) {
+      return;
+    }
+    let resolved: string;
+    try {
+      resolved = resolvePath(trimmedPath, workspaceDir);
+    } catch {
+      return;
+    }
+    const pattern = entry.pattern?.trim() || "**/*.md";
+    const baseName = scopeCollectionBase(entry.name?.trim() || `agent-extra-${index + 1}`, agentId);
+    const name = ensureUniqueName(baseName, existing);
+    collections.push({
+      name,
+      path: resolved,
+      pattern,
+      kind: "custom",
+    });
+  });
+  return collections;
+}
+
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -273,9 +307,17 @@ export function resolveMemoryBackendConfig(params: {
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
+  const agentQmdExtraCollections = resolveAgentConfig(params.cfg, params.agentId)?.memorySearch?.qmd
+    ?.extraCollections;
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
     ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveAgentExtraCollections(
+      agentQmdExtraCollections,
+      workspaceDir,
+      nameSet,
+      params.agentId,
+    ),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
