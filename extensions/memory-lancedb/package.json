@@ -12,16 +12,6 @@
     "openai": "^6.22.0",
     "reflect-metadata": "^0.2.2"
   },
-  "optionalDependencies": {
-    "@lancedb/lancedb-darwin-arm64": "0.26.2",
-    "@lancedb/lancedb-darwin-x64": "0.26.2",
-    "@lancedb/lancedb-linux-arm64-gnu": "0.26.2",
-    "@lancedb/lancedb-linux-arm64-musl": "0.26.2",
-    "@lancedb/lancedb-linux-x64-gnu": "0.26.2",
-    "@lancedb/lancedb-linux-x64-musl": "0.26.2",
-    "@lancedb/lancedb-win32-arm64-msvc": "0.26.2",
-    "@lancedb/lancedb-win32-x64-msvc": "0.26.2"
-  },
   "devDependencies": {
     "openclaw": "workspace:*"
   },

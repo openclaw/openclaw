@@ -417,28 +417,6 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
-    optionalDependencies:
-      '@lancedb/lancedb-darwin-arm64':
-        specifier: 0.26.2
-        version: 0.26.2
-      '@lancedb/lancedb-linux-arm64-gnu':
-        specifier: 0.26.2
-        version: 0.26.2
-      '@lancedb/lancedb-linux-arm64-musl':
-        specifier: 0.26.2
-        version: 0.26.2
-      '@lancedb/lancedb-linux-x64-gnu':
-        specifier: 0.26.2
-        version: 0.26.2
-      '@lancedb/lancedb-linux-x64-musl':
-        specifier: 0.26.2
-        version: 0.26.2
-      '@lancedb/lancedb-win32-arm64-msvc':
-        specifier: 0.26.2
-        version: 0.26.2
-      '@lancedb/lancedb-win32-x64-msvc':
-        specifier: 0.26.2
-        version: 0.26.2
 
   extensions/minimax-portal-auth:
     devDependencies:
