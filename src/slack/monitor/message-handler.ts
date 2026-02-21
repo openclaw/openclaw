@@ -84,7 +84,9 @@ export function createSlackMessageHandler(params: {
         return;
       }
       if (entries.length > 1) {
-        const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+        const ids = entries
+          .map((entry) => entry.message.ts ?? entry.message.event_ts)
+          .filter((id): id is string => Boolean(id));
         if (ids.length > 0) {
           prepared.ctxPayload.MessageSids = ids;
           prepared.ctxPayload.MessageSidFirst = ids[0];
@@ -110,10 +112,14 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
+    const messageTs = message.ts ?? message.event_ts;
+    if (ctx.markMessageSeen(message.channel, messageTs)) {
       return;
     }
-    const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
+    const resolvedMessage = await threadTsResolver.resolve({
+      message: { ...message, ts: messageTs },
+      source: opts.source,
+    });
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
 }

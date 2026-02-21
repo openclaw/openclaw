@@ -78,11 +78,12 @@ export function createSlackThreadTsResolver(params: {
       source: "message" | "app_mention";
     }): Promise<SlackMessageEvent> => {
       const { message } = request;
-      if (!message.parent_user_id || message.thread_ts || !message.ts) {
+      const messageTs = message.ts ?? message.event_ts;
+      if (!message.parent_user_id || message.thread_ts || !messageTs) {
         return message;
       }
 
-      const cacheKey = `${message.channel}:${message.ts}`;
+      const cacheKey = `${message.channel}:${messageTs}`;
       const now = Date.now();
       const cached = getCached(cacheKey, now);
       if (cached !== undefined) {
@@ -91,7 +92,7 @@ export function createSlackThreadTsResolver(params: {
 
       if (shouldLogVerbose()) {
         logVerbose(
-          `slack inbound: missing thread_ts for thread reply channel=${message.channel} ts=${message.ts} source=${request.source}`,
+          `slack inbound: missing thread_ts for thread reply channel=${message.channel} ts=${messageTs} source=${request.source}`,
         );
       }
 
@@ -100,7 +101,7 @@ export function createSlackThreadTsResolver(params: {
         pending = resolveThreadTsFromHistory({
           client: params.client,
           channelId: message.channel,
-          messageTs: message.ts,
+          messageTs: messageTs,
         });
         inflight.set(cacheKey, pending);
       }
@@ -117,7 +118,7 @@ export function createSlackThreadTsResolver(params: {
       if (resolved) {
         if (shouldLogVerbose()) {
           logVerbose(
-            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
+            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${messageTs} -> thread_ts=${resolved}`,
           );
         }
         return { ...message, thread_ts: resolved };
@@ -125,7 +126,7 @@ export function createSlackThreadTsResolver(params: {
 
       if (shouldLogVerbose()) {
         logVerbose(
-          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
+          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${messageTs}`,
         );
       }
       return message;
