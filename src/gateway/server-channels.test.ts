@@ -5,14 +5,8 @@ import {
   type SubsystemLogger,
   runtimeForLogger,
 } from "../logging/subsystem.js";
-import {
-  createEmptyPluginRegistry,
-  type PluginRegistry,
-} from "../plugins/registry.js";
-import {
-  getActivePluginRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
@@ -47,9 +41,7 @@ type TestAccount = {
 
 function createTestPlugin(params?: {
   account?: TestAccount;
-  startAccount?: NonNullable<
-    ChannelPlugin<TestAccount>["gateway"]
-  >["startAccount"];
+  startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
 }): ChannelPlugin<TestAccount> {
   const account = params?.account ?? { enabled: true, configured: true };
@@ -148,14 +140,13 @@ describe("server-channels auto restart", () => {
 
   it("does not auto-restart when startAccount stays pending", async () => {
     // Resolve on abort so stopChannel() completes and test cleanup exits
-    const startAccount = vi.fn((ctx: { abortSignal?: AbortSignal }) =>
-      new Promise<void>((resolve) => {
-        ctx.abortSignal?.addEventListener(
-          "abort",
-          () => resolve(),
-          { once: true },
-        );
-      }),
+    const startAccount = vi.fn(
+      (ctx: { abortSignal?: AbortSignal }) =>
+        new Promise<void>((resolve) => {
+          ctx.abortSignal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        }),
     );
     installTestRegistry(
       createTestPlugin({
