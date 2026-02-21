@@ -25,7 +25,24 @@ import {
 } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+/** Extra buffer added on top of the job timeout before declaring it stuck. */
+const STUCK_RUN_BUFFER_MS = 5 * 60 * 1000;
+
+/** Default per-job timeout — duplicated from timer.ts to avoid a circular import. */
+const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Compute the stuck-run threshold for a job.  Uses the job's configured
+ * `timeoutSeconds` (with a buffer) when available, falling back to
+ * {@link DEFAULT_JOB_TIMEOUT_MS} for jobs without an explicit timeout.
+ */
+function resolveStuckRunMs(job: CronJob): number {
+  const payloadTimeout =
+    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      ? job.payload.timeoutSeconds * 1_000
+      : DEFAULT_JOB_TIMEOUT_MS;
+  return payloadTimeout + STUCK_RUN_BUFFER_MS;
+}
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   if (staggerMs <= 1) {
@@ -203,13 +220,16 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   const runningAt = job.state.runningAtMs;
-  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
-    state.deps.log.warn(
-      { jobId: job.id, runningAtMs: runningAt },
-      "cron: clearing stuck running marker",
-    );
-    job.state.runningAtMs = undefined;
-    changed = true;
+  if (typeof runningAt === "number") {
+    const stuckMs = resolveStuckRunMs(job);
+    if (nowMs - runningAt > stuckMs) {
+      state.deps.log.warn(
+        { jobId: job.id, runningAtMs: runningAt, stuckThresholdMs: stuckMs },
+        "cron: clearing stuck running marker",
+      );
+      job.state.runningAtMs = undefined;
+      changed = true;
+    }
   }
 
   return { changed, skip: false };
