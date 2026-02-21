@@ -128,6 +128,15 @@ async function findPreviousSessionFile(params: {
       return path.join(params.sessionsDir, baseFromReset);
     }
 
+    // If caller already points at a rotated transcript, prefer that exact file.
+    // This avoids accidentally selecting a newer empty .jsonl created by /new.
+    const currentBaseName = params.currentSessionFile
+      ? path.basename(params.currentSessionFile)
+      : undefined;
+    if (currentBaseName?.includes(".reset.") && fileSet.has(currentBaseName)) {
+      return path.join(params.sessionsDir, currentBaseName);
+    }
+
     const trimmedSessionId = params.sessionId?.trim();
     if (trimmedSessionId) {
       const canonicalFile = `${trimmedSessionId}.jsonl`;
