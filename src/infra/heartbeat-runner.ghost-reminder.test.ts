@@ -32,6 +32,29 @@ afterEach(() => {
 });
 
 describe("Ghost reminder bug (issue #13317)", () => {
+  const withTempDir = async <T>(
+    prefix: string,
+    run: (tmpDir: string) => Promise<T>,
+  ): Promise<T> => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    try {
+      return await run(tmpDir);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  };
+
+  const createHeartbeatDeps = (replyText: string) => {
+    const sendTelegram = vi.fn().mockResolvedValue({
+      messageId: "m1",
+      chatId: "155462274",
+    });
+    const getReplySpy = vi
+      .spyOn(replyModule, "getReplyFromConfig")
+      .mockResolvedValue({ text: replyText });
+    return { sendTelegram, getReplySpy };
+  };
+
   const createConfig = async (
     tmpDir: string,
   ): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
@@ -84,16 +107,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
     sendTelegram: ReturnType<typeof vi.fn>;
     getReplySpy: ReturnType<typeof vi.fn>;
   }> => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), tmpPrefix));
-    const sendTelegram = vi.fn().mockResolvedValue({
-      messageId: "m1",
-      chatId: "155462274",
-    });
-    const getReplySpy = vi
-      .spyOn(replyModule, "getReplyFromConfig")
-      .mockResolvedValue({ text: "Relay this reminder now" });
-
-    try {
+    return await withTempDir(tmpPrefix, async (tmpDir) => {
+      const { sendTelegram, getReplySpy } = createHeartbeatDeps("Relay this reminder now");
       const { cfg, sessionKey } = await createConfig(tmpDir);
       enqueue(sessionKey);
       const result = await runHeartbeatOnce({
@@ -105,22 +120,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
         },
       });
       return { result, sendTelegram, getReplySpy };
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   };
 
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ghost-"));
-    const sendTelegram = vi.fn().mockResolvedValue({
-      messageId: "m1",
-      chatId: "155462274",
-    });
-    const getReplySpy = vi
-      .spyOn(replyModule, "getReplyFromConfig")
-      .mockResolvedValue({ text: "Heartbeat check-in" });
-
-    try {
+    await withTempDir("openclaw-ghost-", async (tmpDir) => {
+      const { sendTelegram, getReplySpy } = createHeartbeatDeps("Heartbeat check-in");
       const { cfg } = await createConfig(tmpDir);
       enqueueSystemEvent("HEARTBEAT_OK", { sessionKey: resolveMainSessionKey(cfg) });
 
@@ -140,9 +145,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
       expect(calledCtx?.Body).not.toContain("relay this reminder");
       expect(sendTelegram).toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("uses CRON_EVENT_PROMPT when an actionable cron event exists", async () => {
@@ -171,17 +174,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("uses CRON_EVENT_PROMPT for tagged cron events on interval wake", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-interval-"));
-    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-    const sendTelegram = vi.fn().mockResolvedValue({
-      messageId: "m1",
-      chatId: "155462274",
-    });
-    const getReplySpy = vi
-      .spyOn(replyModule, "getReplyFromConfig")
-      .mockResolvedValue({ text: "Relay this cron update now" });
-
-    try {
+    await withTempDir("openclaw-cron-interval-", async (tmpDir) => {
+      await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
+      const { sendTelegram, getReplySpy } = createHeartbeatDeps("Relay this cron update now");
       const { cfg, sessionKey } = await createConfig(tmpDir);
       enqueueSystemEvent("Cron: QMD maintenance completed", {
         sessionKey,
@@ -205,8 +200,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
       expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
       expect(sendTelegram).toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 });
