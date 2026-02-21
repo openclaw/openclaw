@@ -623,6 +623,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
     defineChatCommand({
+      key: "agent",
+      description: "Switch the active agent for this chat.",
+      textAlias: "/agent",
+      scope: "text",
+      category: "session",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "model",
       nativeName: "model",
       description: "Show or set the model.",

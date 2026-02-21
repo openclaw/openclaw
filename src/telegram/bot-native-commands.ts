@@ -361,6 +361,9 @@ export const registerTelegramNativeCommands = ({
       .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
+    // /agent is handled by a dedicated interceptor in bot-handlers.ts (instant, no queue).
+    // We add it here only for the Telegram command menu visibility.
+    { command: "agent", description: "Switch the active agent for this chat." },
   ];
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({

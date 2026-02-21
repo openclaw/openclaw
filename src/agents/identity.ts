@@ -49,11 +49,14 @@ export function resolveIdentityNamePrefix(
   cfg: OpenClawConfig,
   agentId: string,
 ): string | undefined {
-  const name = resolveAgentIdentity(cfg, agentId)?.name?.trim();
+  const identity = resolveAgentIdentity(cfg, agentId);
+  const name = identity?.name?.trim();
   if (!name) {
     return undefined;
   }
-  return `[${name}]`;
+  const emoji = identity?.emoji?.trim();
+  const label = name.toUpperCase();
+  return emoji ? `${emoji} ${label}\n` : `${label}\n`;
 }
 
 /** Returns just the identity name (without brackets) for template context. */

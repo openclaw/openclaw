@@ -22,6 +22,12 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import {
+  clearDynamicAgentOverride,
+  getCurrentDynamicAgent,
+  setDynamicAgentOverride,
+} from "../routing/dynamic-bindings.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -452,6 +458,116 @@ export const registerTelegramHandlers = ({
     }
     return false;
   };
+
+  // Intercept /agent command immediately — bypass message queue for instant switching.
+  bot.on("message:text", async (ctx, next) => {
+    const msg = ctx.message;
+    if (!msg?.text) {
+      return next();
+    }
+    const text = msg.text.trim();
+    const agentMatch = text.match(/^\/agent(?:@\w+)?(?:\s+(.*))?$/i);
+    if (!agentMatch) {
+      return next();
+    }
+
+    const chatId = msg.chat.id;
+    const senderId = msg.from?.id != null ? String(msg.from.id) : "";
+    const peerId = String(chatId);
+    const channel = "telegram";
+    const rawArg = agentMatch[1]?.trim() || "";
+
+    // List available agents from config
+    const currentCfg = loadConfig();
+    const agentsList = Array.isArray(currentCfg?.agents?.list)
+      ? currentCfg.agents.list
+          .map((a: { id?: string }) => a?.id?.trim())
+          .filter((id): id is string => Boolean(id))
+      : [];
+    const defaultAgentId = resolveDefaultAgentId(currentCfg);
+
+    const threadParams: Record<string, unknown> = {};
+    if (msg.message_thread_id) {
+      threadParams.message_thread_id = msg.message_thread_id;
+    }
+
+    const sendReply = async (replyText: string) => {
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, replyText, {
+            parse_mode: "Markdown",
+            ...threadParams,
+          }),
+      });
+    };
+
+    // /agent (no args) — show current + inline buttons
+    if (!rawArg) {
+      const currentOverride = getCurrentDynamicAgent(channel, peerId);
+      const lines: string[] = [];
+      if (currentOverride) {
+        lines.push(`Active agent: **${currentOverride}** (override)`);
+        lines.push(`Default: ${defaultAgentId}`);
+      } else {
+        lines.push(`Active agent: **${defaultAgentId}** (default)`);
+      }
+      if (agentsList.length > 0) {
+        lines.push(`\nAvailable: ${agentsList.join(", ")}`);
+      }
+
+      // Build inline keyboard with agent buttons
+      const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+      for (let i = 0; i < agentsList.length; i += 2) {
+        const slice = agentsList.slice(i, i + 2);
+        rows.push(
+          slice.map((id: string) => ({
+            text: id,
+            callback_data: `/agent ${id}`,
+          })),
+        );
+      }
+      rows.push([{ text: "↩ Default", callback_data: "/agent default" }]);
+      const replyMarkup = buildInlineKeyboard(rows);
+
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, lines.join("\n"), {
+            parse_mode: "Markdown",
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+            ...threadParams,
+          }),
+      });
+      return; // Don't propagate to message queue
+    }
+
+    // /agent default|reset — clear override
+    if (rawArg.toLowerCase() === "default" || rawArg.toLowerCase() === "reset") {
+      clearDynamicAgentOverride(channel, peerId);
+      await sendReply(`Agent reset to default routing (**${defaultAgentId}**).`);
+      return;
+    }
+
+    // /agent <id> — switch
+    const normalizedRequested = normalizeAgentId(rawArg);
+    const matchedAgent = agentsList.find(
+      (id: string) => normalizeAgentId(id) === normalizedRequested,
+    );
+
+    if (!matchedAgent) {
+      await sendReply(
+        `Agent "${rawArg}" not found.\n\nAvailable: ${agentsList.join(", ") || "(none)"}`,
+      );
+      return;
+    }
+
+    setDynamicAgentOverride(channel, peerId, matchedAgent);
+    await sendReply(`Switched to agent **${matchedAgent}**.`);
+    return; // Don't propagate
+  });
 
   // Handle emoji reactions to messages.
   bot.on("message_reaction", async (ctx) => {
@@ -885,6 +1001,37 @@ export const registerTelegramHandlers = ({
           const errStr = String(editErr);
           if (!errStr.includes("message is not modified")) {
             throw editErr;
+          }
+        }
+        return;
+      }
+
+      // Agent switch callback handler (/agent <id> from inline buttons)
+      const agentCallbackMatch = data.match(/^\/agent\s+(.+)$/i);
+      if (agentCallbackMatch) {
+        const rawArg = agentCallbackMatch[1].trim();
+        const peerId = String(chatId);
+        const currentCfg = loadConfig();
+        const agentsList = Array.isArray(currentCfg?.agents?.list)
+          ? currentCfg.agents.list
+              .map((a: { id?: string }) => a?.id?.trim())
+              .filter((id): id is string => Boolean(id))
+          : [];
+        const defaultAgent = resolveDefaultAgentId(currentCfg);
+
+        if (rawArg.toLowerCase() === "default" || rawArg.toLowerCase() === "reset") {
+          clearDynamicAgentOverride("telegram", peerId);
+          await editCallbackMessage(`Agent reset to default routing (${defaultAgent}).`);
+        } else {
+          const normalized = normalizeAgentId(rawArg);
+          const matched = agentsList.find(
+            (id: string) => normalizeAgentId(id) === normalized,
+          );
+          if (matched) {
+            setDynamicAgentOverride("telegram", peerId, matched);
+            await editCallbackMessage(`Switched to agent ${matched}.`);
+          } else {
+            await editCallbackMessage(`Agent "${rawArg}" not found.`);
           }
         }
         return;

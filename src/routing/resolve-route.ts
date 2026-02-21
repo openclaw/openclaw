@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
+import { getDynamicAgentOverride } from "./dynamic-bindings.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
@@ -46,6 +47,7 @@ export type ResolvedAgentRoute = {
   mainSessionKey: string;
   /** Match description for debugging/logging. */
   matchedBy:
+    | "dynamic-override"
     | "binding.peer"
     | "binding.peer.parent"
     | "binding.guild+roles"
@@ -349,6 +351,19 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       );
     }
   }
+  // Dynamic agent override: check if this chat has a runtime `/agent` override
+  if (peer?.id) {
+    const dynamicAgentId = getDynamicAgentOverride(channel, peer.id);
+    if (dynamicAgentId) {
+      if (shouldLogDebug) {
+        logDebug(
+          `[routing] dynamic override: channel=${channel} peer=${peer.id} → agent=${dynamicAgentId}`,
+        );
+      }
+      return choose(dynamicAgentId, "dynamic-override");
+    }
+  }
+
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
   const parentPeer = input.parentPeer
     ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }

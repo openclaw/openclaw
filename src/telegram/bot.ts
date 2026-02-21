@@ -100,6 +100,14 @@ export function getTelegramSequentialKey(ctx: {
     }
     return "telegram:control";
   }
+  // /agent command gets a separate sequential key so it bypasses the chat queue
+  const trimmedText = rawText?.trim() ?? "";
+  if (/^\/agent(?:@\w+)?(?:\s|$)/i.test(trimmedText)) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:agent-switch`;
+    }
+    return "telegram:agent-switch";
+  }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;
   const isForum = msg?.chat?.is_forum;
