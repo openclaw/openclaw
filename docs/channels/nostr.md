@@ -40,7 +40,7 @@ openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 
 Restart the Gateway after installing or enabling plugins.
 
-## Quick setup
+## Onboarding
 
 1. Generate a Nostr keypair (if needed):
 
@@ -69,7 +69,7 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 4. Restart the Gateway.
 
-## Configuration reference
+## Configuration
 
 | Key          | Type     | Default                                     | Description                         |
 | ------------ | -------- | ------------------------------------------- | ----------------------------------- |
