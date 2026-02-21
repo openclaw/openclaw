@@ -19,6 +19,7 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -144,6 +145,13 @@ export async function statusAllCommand(
     };
     const daemon = await readServiceSummary(resolveGatewayService());
     const nodeService = await readServiceSummary(resolveNodeService());
+    const nodeHostConfig = await loadNodeHostConfig().catch(() => null);
+    const nodeServiceLoaded =
+      nodeService?.loaded === true ||
+      (nodeService?.loaded === null && nodeService?.loadedText.includes("loaded")) ||
+      Boolean(nodeService?.runtime?.status || nodeService?.runtime?.pid);
+    const isNodeOnlyMode =
+      nodeService?.installed === true && nodeServiceLoaded && daemon?.installed === false;
     progress.tick();
 
     progress.setLabel("Scanning agents…");
@@ -178,13 +186,21 @@ export async function statusAllCommand(
       : {};
 
     progress.setLabel("Querying gateway…");
-    const health = gatewayReachable
-      ? await callGateway({
-          method: "health",
-          timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
-          ...callOverrides,
-        }).catch((err) => ({ error: String(err) }))
-      : { error: gatewayProbe?.error ?? "gateway unreachable" };
+    const nodeGatewayTarget = (() => {
+      const gateway = nodeHostConfig?.gateway;
+      return gateway?.host
+        ? `${gateway.host}:${gateway.port ?? 18789}`
+        : "(gateway address unknown)";
+    })();
+    const health = isNodeOnlyMode
+      ? { nodeMode: true, gatewayTarget: nodeGatewayTarget }
+      : gatewayReachable
+        ? await callGateway({
+            method: "health",
+            timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
+            ...callOverrides,
+          }).catch((err) => ({ error: String(err) }))
+        : { error: gatewayProbe?.error ?? "gateway unreachable" };
 
     const channelsStatus = gatewayReachable
       ? await callGateway({
@@ -241,6 +257,9 @@ export async function statusAllCommand(
         ? `unreachable (${gatewayProbe.error})`
         : "unreachable";
     const gatewayAuth = gatewayReachable ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
+    const gatewayValue = isNodeOnlyMode
+      ? `node → ${nodeGatewayTarget} · node service running`
+      : `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`;
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
         ? [
@@ -283,7 +302,7 @@ export async function statusAllCommand(
       { Item: "Update", Value: updateLine },
       {
         Item: "Gateway",
-        Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
+        Value: gatewayValue,
       },
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       gatewaySelfLine

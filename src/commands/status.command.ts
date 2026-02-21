@@ -14,6 +14,7 @@ import {
   resolveMemoryVectorState,
   type Tone,
 } from "../memory/status-format.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { renderTable } from "../terminal/table.js";
@@ -203,7 +204,37 @@ export async function statusCommand(
     return links.httpUrl;
   })();
 
+  const agentsValue = (() => {
+    const pending =
+      agentStatus.bootstrapPendingCount > 0
+        ? `${agentStatus.bootstrapPendingCount} bootstrapping`
+        : "no bootstraps";
+    const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
+    const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
+    const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
+    return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
+  })();
+
+  const [daemon, nodeDaemon] = await Promise.all([
+    getDaemonStatusSummary(),
+    getNodeDaemonStatusSummary(),
+  ]);
+  const nodeHostConfig = await loadNodeHostConfig().catch(() => null);
+  const nodeDaemonLoaded =
+    nodeDaemon.loaded === true ||
+    (nodeDaemon.loaded === null && nodeDaemon.loadedText.includes("loaded")) ||
+    nodeDaemon.runtimeShort != null;
+  const isNodeOnlyMode =
+    nodeDaemon.installed === true && nodeDaemonLoaded && daemon.installed === false;
+
   const gatewayValue = (() => {
+    if (isNodeOnlyMode) {
+      const gateway = nodeHostConfig?.gateway;
+      const target = gateway?.host
+        ? `${gateway.host}:${gateway.port ?? 18789}`
+        : "(gateway address unknown)";
+      return `node → ${target} · node service running`;
+    }
     const target = remoteUrlMissing
       ? `fallback ${gatewayConnection.url}`
       : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
@@ -230,22 +261,6 @@ export async function statusCommand(
     const suffix = self ? ` · ${self}` : "";
     return `${gatewayMode} · ${target} · ${reach}${auth}${suffix}`;
   })();
-
-  const agentsValue = (() => {
-    const pending =
-      agentStatus.bootstrapPendingCount > 0
-        ? `${agentStatus.bootstrapPendingCount} bootstrapping`
-        : "no bootstraps";
-    const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
-    const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
-    const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
-    return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
-  })();
-
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
-  ]);
   const daemonValue = (() => {
     if (daemon.installed === false) {
       return `${daemon.label} not installed`;

@@ -91,6 +91,18 @@ const mocks = vi.hoisted(() => ({
   }),
   resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
+  loadNodeHostConfig: vi.fn().mockResolvedValue(null),
+  resolveGatewayService: vi.fn().mockReturnValue({
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", pid: 1234 }),
+    readCommand: async () => ({
+      programArguments: ["node", "dist/entry.js", "gateway"],
+      sourcePath: "/tmp/Library/LaunchAgents/bot.molt.gateway.plist",
+    }),
+  }),
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
@@ -289,17 +301,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => ({
-    label: "LaunchAgent",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-    isLoaded: async () => true,
-    readRuntime: async () => ({ status: "running", pid: 1234 }),
-    readCommand: async () => ({
-      programArguments: ["node", "dist/entry.js", "gateway"],
-      sourcePath: "/tmp/Library/LaunchAgents/bot.molt.gateway.plist",
-    }),
-  }),
+  resolveGatewayService: mocks.resolveGatewayService,
 }));
 vi.mock("../daemon/node-service.js", () => ({
   resolveNodeService: () => ({
@@ -313,6 +315,9 @@ vi.mock("../daemon/node-service.js", () => ({
       sourcePath: "/tmp/Library/LaunchAgents/bot.molt.node.plist",
     }),
   }),
+}));
+vi.mock("../node-host/config.js", () => ({
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
@@ -405,6 +410,29 @@ describe("statusCommand", () => {
           l.includes("openclaw --profile isolated status --all"),
       ),
     ).toBe(true);
+  });
+
+  it("prints node-only gateway info when node service is running", async () => {
+    // Simulate node-only mode: gateway service not installed (readCommand returns null)
+    mocks.resolveGatewayService.mockReturnValueOnce({
+      label: "LaunchAgent",
+      loadedText: "loaded",
+      notLoadedText: "not loaded",
+      isLoaded: async () => false,
+      readRuntime: async () => undefined,
+      readCommand: async () => null,
+    });
+    mocks.loadNodeHostConfig.mockResolvedValueOnce({
+      version: 1,
+      nodeId: "node-1",
+      gateway: { host: "gateway.example.com", port: 19000 },
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(logs.some((line) => line.includes("node → gateway.example.com:19000"))).toBe(true);
+    expect(logs.some((line) => line.includes("unreachable"))).toBe(false);
   });
 
   it("shows gateway auth when reachable", async () => {
