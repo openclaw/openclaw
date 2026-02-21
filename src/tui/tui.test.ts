@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
+  createBackspaceDeduper,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveTuiSessionKey,
@@ -85,5 +86,37 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
     expect(state.pairingHint).toBeUndefined();
+  });
+});
+
+describe("createBackspaceDeduper", () => {
+  it("suppresses duplicate backspace events within the dedupe window", () => {
+    let now = 1000;
+    const dedupe = createBackspaceDeduper({
+      dedupeWindowMs: 8,
+      now: () => now,
+    });
+
+    expect(dedupe("\x7f")).toBe("\x7f");
+    now += 1;
+    expect(dedupe("\x08")).toBe("");
+  });
+
+  it("preserves backspace events outside the dedupe window", () => {
+    let now = 1000;
+    const dedupe = createBackspaceDeduper({
+      dedupeWindowMs: 8,
+      now: () => now,
+    });
+
+    expect(dedupe("\x7f")).toBe("\x7f");
+    now += 10;
+    expect(dedupe("\x7f")).toBe("\x7f");
+  });
+
+  it("never suppresses non-backspace keys", () => {
+    const dedupe = createBackspaceDeduper();
+    expect(dedupe("a")).toBe("a");
+    expect(dedupe("\x1b[A")).toBe("\x1b[A");
   });
 });
