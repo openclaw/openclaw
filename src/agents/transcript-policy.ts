@@ -126,7 +126,7 @@ export function resolveTranscriptPolicy(params: {
     dropThinkingBlocks,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
-    validateAnthropicTurns: !isOpenAi && isAnthropic,
+    validateAnthropicTurns: !isOpenAi,
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }
