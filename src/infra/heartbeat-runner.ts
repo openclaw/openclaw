@@ -910,6 +910,17 @@ export async function runHeartbeatOnce(opts: {
             ]),
       ],
       deps: opts.deps,
+      // Mirror outbound heartbeat messages into the session transcript so the agent
+      // remembers what it sent. This fixes context confusion when users reply to
+      // heartbeat-initiated messages. Only mirror when we have actual content to send.
+      mirror: shouldSkipMain
+        ? undefined
+        : {
+            sessionKey,
+            agentId,
+            text: normalized.text,
+            mediaUrls,
+          },
     });
 
     // Record last delivered heartbeat payload for dedupe.
