@@ -42,3 +42,15 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Listed plugins
+
+- **askcodex** — Per-chat Codex PTY sessions with handoff/resume/reset/new workflow.
+  npm: `@dougvk/askcodex`
+  repo: `https://github.com/dougvk/askcodex-public`
+  install: `openclaw plugins install @dougvk/askcodex`
+
+- **askpi** — Per-chat Pi RPC + tmux sessions with handoff/resume/reset/new workflow.
+  npm: `@dougvk/askpi`
+  repo: `https://github.com/dougvk/askpi-public`
+  install: `openclaw plugins install @dougvk/askpi`
