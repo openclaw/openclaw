@@ -94,8 +94,8 @@ export async function generateVoiceResponse(
   const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
   const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
-  // Resolve thinking level
-  const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model });
+  // Voice calls are latency-sensitive — always disable extended thinking
+  const thinkLevel = "off" as const;
 
   // Resolve agent identity for personalized prompt
   const identity = deps.resolveAgentIdentity(cfg, agentId);
