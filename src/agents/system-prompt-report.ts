@@ -43,6 +43,9 @@ function buildInjectedWorkspaceFiles(params: {
   const injectedByPath = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
   const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
+    if (!file.path) {
+      continue;
+    }
     const normalizedPath = file.path.replace(/\\/g, "/");
     const baseName = path.posix.basename(normalizedPath);
     if (!injectedByBaseName.has(baseName)) {
