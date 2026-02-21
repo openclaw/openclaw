@@ -12,7 +12,6 @@ const SENSITIVE_KEY_NAMES = new Set([
   "authtoken",
   "bearertoken",
   "apikey",
-  "key",
   "secret",
   "clientsecret",
   "password",
