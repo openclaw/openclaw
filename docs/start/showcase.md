@@ -351,8 +351,14 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 
 <Card title="Nix Packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
-  
+
   Batteries-included nixified OpenClaw configuration for reproducible deployments.
+</Card>
+
+<Card title="CrewClaw" icon="rocket" href="https://crewclaw.com">
+  **@mergisi** • `deployment` `multi-agent` `agents`
+
+  Deploy production-ready OpenClaw agents in minutes. Generate complete agent workspaces with SOUL.md, messaging integration (Telegram, WhatsApp, Slack, Discord), and deployment config. Single agents or multi-agent teams.
 </Card>
 
 <Card title="CalDAV Calendar" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
