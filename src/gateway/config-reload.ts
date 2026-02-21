@@ -250,7 +250,7 @@ export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
-  onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
+  onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -301,42 +301,53 @@ export function startGatewayConfigReloader(opts: {
       }
       const nextConfig = snapshot.config;
       const changedPaths = diffConfigPaths(currentConfig, nextConfig);
-      currentConfig = nextConfig;
-      settings = resolveGatewayReloadSettings(nextConfig);
+      const nextSettings = resolveGatewayReloadSettings(nextConfig);
       if (changedPaths.length === 0) {
+        currentConfig = nextConfig;
+        settings = nextSettings;
         return;
       }
 
       opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
       const plan = buildGatewayReloadPlan(changedPaths);
-      if (settings.mode === "off") {
+      if (nextSettings.mode === "off") {
         opts.log.info("config reload disabled (gateway.reload.mode=off)");
+        currentConfig = nextConfig;
+        settings = nextSettings;
         return;
       }
-      if (settings.mode === "restart") {
+      if (nextSettings.mode === "restart") {
         if (!restartQueued) {
           restartQueued = true;
-          opts.onRestart(plan, nextConfig);
+          await opts.onRestart(plan, nextConfig);
         }
+        currentConfig = nextConfig;
+        settings = nextSettings;
         return;
       }
       if (plan.restartGateway) {
-        if (settings.mode === "hot") {
+        if (nextSettings.mode === "hot") {
           opts.log.warn(
             `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
               ", ",
             )})`,
           );
+          currentConfig = nextConfig;
+          settings = nextSettings;
           return;
         }
         if (!restartQueued) {
           restartQueued = true;
-          opts.onRestart(plan, nextConfig);
+          await opts.onRestart(plan, nextConfig);
         }
+        currentConfig = nextConfig;
+        settings = nextSettings;
         return;
       }
 
       await opts.onHotReload(plan, nextConfig);
+      currentConfig = nextConfig;
+      settings = nextSettings;
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
