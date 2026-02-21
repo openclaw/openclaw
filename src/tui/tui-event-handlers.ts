@@ -29,6 +29,7 @@ type EventHandlerContext = {
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
+  onRunSettled?: (runId: string) => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -42,6 +43,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    onRunSettled,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -157,6 +159,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearActiveRunIfMatch(evt.runId);
         if (wasActiveRun) {
           setActivityStatus("idle");
+          onRunSettled?.(evt.runId);
         }
         void refreshSessionInfo?.();
         tui.requestRender();
@@ -173,6 +176,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearActiveRunIfMatch(evt.runId);
         if (wasActiveRun) {
           setActivityStatus("idle");
+          onRunSettled?.(evt.runId);
         }
         void refreshSessionInfo?.();
         tui.requestRender();
@@ -198,6 +202,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
         setActivityStatus(stopReason === "error" ? "error" : "idle");
+        onRunSettled?.(evt.runId);
       }
       // Refresh session info to update token counts in footer
       void refreshSessionInfo?.();
@@ -210,6 +215,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
         setActivityStatus("aborted");
+        onRunSettled?.(evt.runId);
       }
       void refreshSessionInfo?.();
       maybeRefreshHistoryForRun(evt.runId);
@@ -222,6 +228,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
         setActivityStatus("error");
+        onRunSettled?.(evt.runId);
       }
       void refreshSessionInfo?.();
       maybeRefreshHistoryForRun(evt.runId);
