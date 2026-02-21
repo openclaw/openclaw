@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "useDefineForClassFields": false,
+    "types": ["vite/client"]
+  },
+  "include": ["src"]
+}
