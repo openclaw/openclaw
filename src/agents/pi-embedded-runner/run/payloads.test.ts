@@ -49,4 +49,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("Write");
   });
+
+  it("keeps assistant reply when suppressToolErrors is enabled and exec fails", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastToolError: { toolName: "exec", error: "command not found", mutatingAction: true },
+      config: { messages: { suppressToolErrors: true } },
+      verboseLevel: "on",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBeUndefined();
+    expect(payloads[0]?.text).toBe("Done.");
+  });
 });
