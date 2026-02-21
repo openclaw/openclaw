@@ -217,7 +217,7 @@ struct NodeMenuRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(NodeMenuEntryFormatter.primaryName(self.entry))
-                        .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
+                        .font(.callout.weight(.semibold))
                         .foregroundStyle(self.primaryColor)
                         .lineLimit(1)
                         .truncationMode(.middle)
