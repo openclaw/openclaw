@@ -117,6 +117,20 @@ export type ChromeExtensionRelayServer = {
   stop: () => Promise<void>;
 };
 
+type RelayRuntime = {
+  server: ChromeExtensionRelayServer;
+  relayAuthToken: string;
+};
+
+function parseUrlPort(parsed: URL): number | null {
+  const port =
+    parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return null;
+  }
+  return port;
+}
+
 function parseBaseUrl(raw: string): {
   host: string;
   port: number;
@@ -127,9 +141,8 @@ function parseBaseUrl(raw: string): {
     throw new Error(`extension relay cdpUrl must be http(s), got ${parsed.protocol}`);
   }
   const host = parsed.hostname;
-  const port =
-    parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+  const port = parseUrlPort(parsed);
+  if (!port) {
     throw new Error(`extension relay cdpUrl has invalid port: ${parsed.port || "(empty)"}`);
   }
   return { host, port, baseUrl: parsed.toString().replace(/\/$/, "") };
@@ -157,17 +170,7 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
   }
 }
 
-const serversByPort = new Map<number, ChromeExtensionRelayServer>();
-const relayAuthTokensByPort = new Map<number, string>();
-
-function resolveUrlPort(parsed: URL): number | null {
-  const port =
-    parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-    return null;
-  }
-  return port;
-}
+const relayRuntimeByPort = new Map<number, RelayRuntime>();
 
 function isAddrInUseError(err: unknown): boolean {
   return (
@@ -184,11 +187,11 @@ function relayAuthTokenForUrl(url: string): string | null {
     if (!isLoopbackHost(parsed.hostname)) {
       return null;
     }
-    const port = resolveUrlPort(parsed);
-    if (!port || !serversByPort.has(port)) {
+    const port = parseUrlPort(parsed);
+    if (!port) {
       return null;
     }
-    return relayAuthTokensByPort.get(port) ?? null;
+    return relayRuntimeByPort.get(port)?.relayAuthToken ?? null;
   } catch {
     return null;
   }
@@ -210,9 +213,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
     throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
 
-  const existing = serversByPort.get(info.port);
+  const existing = relayRuntimeByPort.get(info.port);
   if (existing) {
-    return existing;
+    return existing.server;
   }
 
   const relayAuthToken = resolveRelayAuthTokenForPort(info.port);
@@ -757,12 +760,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
         cdpWsUrl: `ws://${info.host}:${info.port}/cdp`,
         extensionConnected: () => false,
         stop: async () => {
-          serversByPort.delete(info.port);
-          relayAuthTokensByPort.delete(info.port);
+          relayRuntimeByPort.delete(info.port);
         },
       };
-      serversByPort.set(info.port, existingRelay);
-      relayAuthTokensByPort.set(info.port, relayAuthToken);
+      relayRuntimeByPort.set(info.port, { server: existingRelay, relayAuthToken });
       return existingRelay;
     }
     throw err;
@@ -780,8 +781,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     cdpWsUrl: `ws://${host}:${port}/cdp`,
     extensionConnected: () => Boolean(extensionWs),
     stop: async () => {
-      serversByPort.delete(port);
-      relayAuthTokensByPort.delete(port);
+      relayRuntimeByPort.delete(port);
       try {
         extensionWs?.close(1001, "server stopping");
       } catch {
@@ -802,17 +802,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
     },
   };
 
-  serversByPort.set(port, relay);
-  relayAuthTokensByPort.set(port, relayAuthToken);
+  relayRuntimeByPort.set(port, { server: relay, relayAuthToken });
   return relay;
 }
 
 export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
   const info = parseBaseUrl(opts.cdpUrl);
-  const existing = serversByPort.get(info.port);
+  const existing = relayRuntimeByPort.get(info.port);
   if (!existing) {
     return false;
   }
-  await existing.stop();
+  await existing.server.stop();
   return true;
 }
