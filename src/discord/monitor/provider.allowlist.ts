@@ -1,3 +1,5 @@
+import type { DiscordGuildEntry } from "../../config/types.discord.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -6,9 +8,7 @@ import {
   resolveAllowlistIdAdditions,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
-import type { DiscordGuildEntry } from "../../config/types.discord.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 

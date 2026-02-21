@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
+import { timingSafeEqual } from "node:crypto";
 import {
   createReplyPrefixOptions,
   readJsonBodyWithLimit,

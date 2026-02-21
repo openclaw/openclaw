@@ -11,8 +11,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { collectTwitchStatusIssues } from "./status.js";
 import type { ChannelAccountSnapshot } from "./types.js";
+import { collectTwitchStatusIssues } from "./status.js";
 
 describe("status", () => {
   describe("collectTwitchStatusIssues", () => {

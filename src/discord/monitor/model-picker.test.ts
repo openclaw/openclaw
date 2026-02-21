@@ -2,8 +2,8 @@ import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsProviderData } from "../../auto-reply/reply/commands-models.js";
-import * as modelsCommandModule from "../../auto-reply/reply/commands-models.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as modelsCommandModule from "../../auto-reply/reply/commands-models.js";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,
   DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,

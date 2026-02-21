@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readBody, resolveTargetIdFromBody, resolveTargetIdFromQuery } from "./agent.shared.js";
 import type { BrowserRequest } from "./types.js";
+import { readBody, resolveTargetIdFromBody, resolveTargetIdFromQuery } from "./agent.shared.js";
 
 function requestWithBody(body: unknown): BrowserRequest {
   return {

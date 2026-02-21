@@ -1,5 +1,5 @@
-import path from "node:path";
 import { Command } from "commander";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const copyToClipboard = vi.fn();

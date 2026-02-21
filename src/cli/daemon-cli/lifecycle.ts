@@ -1,3 +1,4 @@
+import type { DaemonLifecycleOptions } from "./types.js";
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -15,7 +16,6 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
-import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = 8;
 const POST_RESTART_HEALTH_DELAY_MS = 450;

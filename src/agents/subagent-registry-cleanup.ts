@@ -1,8 +1,8 @@
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type DeferredCleanupDecision =
   | {

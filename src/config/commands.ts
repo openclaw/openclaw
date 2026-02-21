@@ -1,7 +1,7 @@
-import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import { isPlainObject } from "../infra/plain-object.js";
 import type { CommandsConfig, NativeCommandsSetting } from "./types.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
+import { isPlainObject } from "../infra/plain-object.js";
 
 export type CommandFlagKey = {
   [K in keyof CommandsConfig]-?: Exclude<CommandsConfig[K], undefined> extends boolean ? K : never;

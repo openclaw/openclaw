@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayRequestContext } from "./types.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { sendHandlers } from "./send.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),

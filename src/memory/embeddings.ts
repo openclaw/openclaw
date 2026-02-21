@@ -1,5 +1,5 @@
-import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
+import fsSync from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -228,7 +228,7 @@ export async function createEmbeddingProvider(
           };
         }
         // Non-auth errors are still fatal
-        throw new Error(combinedReason, { cause: fallbackErr });
+        throw new Error(combinedReason, { cause: primaryErr });
       }
     }
     // No fallback configured - check if we should degrade to FTS-only

@@ -1,7 +1,7 @@
+import { DisconnectReason } from "@whiskeysockets/baileys";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DisconnectReason } from "@whiskeysockets/baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
 import { createWaSocket, formatError, waitForWaConnection } from "./session.js";

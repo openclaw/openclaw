@@ -1,5 +1,5 @@
-import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 
 const REASONING_MESSAGE_PREFIX = "Reasoning:\n";

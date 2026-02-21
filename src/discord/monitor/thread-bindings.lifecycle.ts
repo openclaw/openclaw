@@ -1,3 +1,4 @@
+import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
@@ -20,7 +21,6 @@ import {
   setBindingRecord,
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
-import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
   const manager = getThreadBindingManager(accountId);
