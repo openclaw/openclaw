@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sleep } from "../utils.js";
 import {
   buildGroupDisplayName,
   deriveSessionKey,
@@ -470,6 +469,70 @@ describe("sessions", () => {
     }
   });
 
+  it("resolves cross-agent absolute sessionFile paths", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = path.resolve("/home/user/.openclaw");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const bot2Session = path.join(stateDir, "agents", "bot2", "sessions", "sess-1.jsonl");
+      // Agent bot1 resolves a sessionFile that belongs to agent bot2
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2Session },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(bot2Session);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.resolve("/different/state");
+    try {
+      const originalBase = path.resolve("/original/state");
+      const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
+      // sessionFile was created under a different state dir than current env
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2Session },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(bot2Session);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("rejects absolute sessionFile paths outside agent sessions directories", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.resolve("/home/user/.openclaw");
+    try {
+      expect(() =>
+        resolveSessionFilePath(
+          "sess-1",
+          { sessionFile: path.resolve("/etc/passwd") },
+          { agentId: "bot1" },
+        ),
+      ).toThrow(/within sessions directory/);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
   it("updateSessionStoreEntry merges concurrent patches", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await createCaseDir("updateSessionStoreEntry");
@@ -490,24 +553,39 @@ describe("sessions", () => {
       "utf-8",
     );
 
-    await Promise.all([
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: mainSessionKey,
-        update: async () => {
-          await sleep(10);
-          return { modelOverride: "anthropic/claude-opus-4-5" };
-        },
-      }),
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: mainSessionKey,
-        update: async () => {
-          await sleep(1);
-          return { thinkingLevel: "high" };
-        },
-      }),
-    ]);
+    const createDeferred = <T>() => {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+
+    const p1 = updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      update: async () => {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return { modelOverride: "anthropic/claude-opus-4-5" };
+      },
+    });
+    const p2 = updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      update: async () => {
+        await firstStarted.promise;
+        return { thinkingLevel: "high" };
+      },
+    });
+
+    await firstStarted.promise;
+    releaseFirst.resolve();
+    await Promise.all([p1, p2]);
 
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");

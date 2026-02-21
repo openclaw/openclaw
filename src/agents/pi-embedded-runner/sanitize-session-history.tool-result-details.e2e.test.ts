@@ -12,7 +12,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
         role: "assistant",
         content: [{ type: "toolUse", id: "call_1", name: "web_fetch", input: { url: "x" } }],
         timestamp: 1,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_1",
@@ -29,7 +29,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
         role: "user",
         content: "continue",
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
     ];
 
     const sanitized = await sanitizeSessionHistory({

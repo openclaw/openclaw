@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CommandArgValues } from "./commands-registry.types.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
+import type { CommandArgValues } from "./commands-registry.types.js";
 
 function formatArgs(key: keyof typeof COMMAND_ARG_FORMATTERS, values: Record<string, unknown>) {
   const formatter = COMMAND_ARG_FORMATTERS[key];

@@ -1,15 +1,12 @@
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
-
-type ReplyOpts =
-  | {
-      onReplyStart?: () => void | Promise<void>;
-    }
-  | undefined;
 
 const { sessionStorePath } = vi.hoisted(() => ({
   sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
@@ -76,6 +73,35 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest,
 }));
 
+const skillCommandsHoisted = vi.hoisted(() => ({
+  listSkillCommandsForAgents: vi.fn(() => []),
+}));
+export const listSkillCommandsForAgents = skillCommandsHoisted.listSkillCommandsForAgents;
+
+vi.mock("../auto-reply/skill-commands.js", () => ({
+  listSkillCommandsForAgents,
+}));
+
+const systemEventsHoisted = vi.hoisted(() => ({
+  enqueueSystemEventSpy: vi.fn(),
+}));
+export const enqueueSystemEventSpy: AnyMock = systemEventsHoisted.enqueueSystemEventSpy;
+
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: enqueueSystemEventSpy,
+}));
+
+const sentMessageCacheHoisted = vi.hoisted(() => ({
+  wasSentByBot: vi.fn(() => false),
+}));
+export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
+
+vi.mock("./sent-message-cache.js", () => ({
+  wasSentByBot,
+  recordSentMessage: vi.fn(),
+  clearSentMessageCache: vi.fn(),
+}));
+
 export const useSpy: MockFn<(arg: unknown) => void> = vi.fn();
 export const middlewareUseSpy: AnyMock = vi.fn();
 export const onSpy: AnyMock = vi.fn();
@@ -84,9 +110,9 @@ export const commandSpy: AnyMock = vi.fn();
 export const botCtorSpy: AnyMock = vi.fn();
 export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const sendChatActionSpy: AnyMock = vi.fn();
+export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 88 }));
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
-export const deleteMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
   username: "openclaw_bot",
   has_topics_enabled: true,
@@ -99,9 +125,9 @@ type ApiStub = {
   config: { use: (arg: unknown) => void };
   answerCallbackQuery: typeof answerCallbackQuerySpy;
   sendChatAction: typeof sendChatActionSpy;
+  editMessageText: typeof editMessageTextSpy;
   setMessageReaction: typeof setMessageReactionSpy;
   setMyCommands: typeof setMyCommandsSpy;
-  deleteMyCommands: typeof deleteMyCommandsSpy;
   getMe: typeof getMeSpy;
   sendMessage: typeof sendMessageSpy;
   sendAnimation: typeof sendAnimationSpy;
@@ -112,9 +138,9 @@ const apiStub: ApiStub = {
   config: { use: useSpy },
   answerCallbackQuery: answerCallbackQuerySpy,
   sendChatAction: sendChatActionSpy,
+  editMessageText: editMessageTextSpy,
   setMessageReaction: setMessageReactionSpy,
   setMyCommands: setMyCommandsSpy,
-  deleteMyCommands: deleteMyCommandsSpy,
   getMe: getMeSpy,
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
@@ -156,12 +182,16 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-export const replySpy: MockFn<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
-  async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  },
-);
+export const replySpy: MockFn<
+  (
+    ctx: MsgContext,
+    opts?: GetReplyOptions,
+    configOverride?: OpenClawConfig,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+> = vi.fn(async (_ctx, opts) => {
+  await opts?.onReplyStart?.();
+  return undefined;
+});
 
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: replySpy,
@@ -228,16 +258,31 @@ export function makeForumGroupMessageCtx(params?: {
 
 beforeEach(() => {
   resetInboundDedupe();
+  loadConfig.mockReset();
   loadConfig.mockReturnValue({
+    agents: {
+      defaults: {
+        envelopeTimezone: "utc",
+      },
+    },
     channels: {
       telegram: { dmPolicy: "open", allowFrom: ["*"] },
     },
   });
   loadWebMedia.mockReset();
+  readChannelAllowFromStore.mockReset();
+  readChannelAllowFromStore.mockResolvedValue([]);
+  upsertChannelPairingRequest.mockReset();
+  upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true } as const);
   onSpy.mockReset();
   commandSpy.mockReset();
   stopSpy.mockReset();
   useSpy.mockReset();
+  replySpy.mockReset();
+  replySpy.mockImplementation(async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  });
 
   sendAnimationSpy.mockReset();
   sendAnimationSpy.mockResolvedValue({ message_id: 78 });
@@ -254,13 +299,18 @@ beforeEach(() => {
   sendChatActionSpy.mockResolvedValue(undefined);
   setMyCommandsSpy.mockReset();
   setMyCommandsSpy.mockResolvedValue(undefined);
-  deleteMyCommandsSpy.mockReset();
-  deleteMyCommandsSpy.mockResolvedValue(undefined);
   getMeSpy.mockReset();
   getMeSpy.mockResolvedValue({
     username: "openclaw_bot",
     has_topics_enabled: true,
   });
+  editMessageTextSpy.mockReset();
+  editMessageTextSpy.mockResolvedValue({ message_id: 88 });
+  enqueueSystemEventSpy.mockReset();
+  wasSentByBot.mockReset();
+  wasSentByBot.mockReturnValue(false);
+  listSkillCommandsForAgents.mockReset();
+  listSkillCommandsForAgents.mockReturnValue([]);
   middlewareUseSpy.mockReset();
   sequentializeSpy.mockReset();
   botCtorSpy.mockReset();

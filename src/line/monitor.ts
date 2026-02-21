@@ -1,13 +1,12 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -26,6 +25,7 @@ import {
   createLocationMessage,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 export interface MonitorLineProviderOptions {
@@ -129,6 +129,15 @@ export async function monitorLineProvider(
     webhookPath,
   } = opts;
   const resolvedAccountId = accountId ?? "default";
+  const token = channelAccessToken.trim();
+  const secret = channelSecret.trim();
+
+  if (!token) {
+    throw new Error("LINE webhook mode requires a non-empty channel access token.");
+  }
+  if (!secret) {
+    throw new Error("LINE webhook mode requires a non-empty channel secret.");
+  }
 
   // Record starting state
   recordChannelRuntimeState({
@@ -142,8 +151,8 @@ export async function monitorLineProvider(
 
   // Create the bot
   const bot = createLineBot({
-    channelAccessToken,
-    channelSecret,
+    channelAccessToken: token,
+    channelSecret: secret,
     accountId,
     runtime,
     config,
@@ -281,7 +290,7 @@ export async function monitorLineProvider(
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: createLineNodeWebhookHandler({ channelSecret, bot, runtime }),
+    handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);

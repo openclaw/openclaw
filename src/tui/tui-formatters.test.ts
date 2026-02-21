@@ -95,6 +95,56 @@ describe("extractTextFromMessage", () => {
 
     expect(text).toBe("[binary data omitted]");
   });
+
+  it("strips leading inbound metadata blocks for user messages", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "abc123"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Someone"
+}
+\`\`\`
+
+Actual user message`,
+    });
+
+    expect(text).toBe("Actual user message");
+  });
+
+  it("keeps metadata-like blocks for non-user messages", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"abc123"}
+\`\`\`
+
+Assistant body`,
+    });
+
+    expect(text).toContain("Conversation info (untrusted metadata):");
+    expect(text).toContain("Assistant body");
+  });
+
+  it("does not strip metadata-like blocks that are not a leading prefix", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content:
+        'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    });
+
+    expect(text).toBe(
+      'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    );
+  });
 });
 
 describe("extractThinkingFromMessage", () => {
@@ -159,5 +209,28 @@ describe("sanitizeRenderableText", () => {
     const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
 
     expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("preserves long filesystem paths verbatim for copy safety", () => {
+    const input =
+      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long urls verbatim for copy safety", () => {
+    const input =
+      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long file-like underscore tokens for copy safety", () => {
+    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
   });
 });

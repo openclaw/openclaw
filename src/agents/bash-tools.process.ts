@@ -1,7 +1,11 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
+import { killProcessTree } from "../process/kill-tree.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
+  type ProcessSession,
   deleteSession,
   drainSession,
   getFinishedSession,
@@ -11,13 +15,8 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
-import {
-  deriveSessionName,
-  killSession,
-  pad,
-  sliceLogLines,
-  truncateMiddle,
-} from "./bash-tools.shared.js";
+import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
+import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 
 export type ProcessToolDefaults = {
@@ -65,8 +64,9 @@ const processSchema = Type.Object({
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
-    Type.Union([Type.Number(), Type.String()], {
+    Type.Number({
       description: "For poll: wait up to this many milliseconds before returning",
+      minimum: 0,
     }),
   ),
 });
@@ -86,6 +86,36 @@ function resolvePollWaitMs(value: unknown) {
   return 0;
 }
 
+function failText(text: string): AgentToolResult<unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
+    details: { status: "failed" },
+  };
+}
+
+function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
+  try {
+    const sessionState = getDiagnosticSessionState({ sessionId });
+    return recordCommandPoll(sessionState, sessionId, hasNewOutput);
+  } catch {
+    return undefined;
+  }
+}
+
+function resetPollRetrySuggestion(sessionId: string): void {
+  try {
+    const sessionState = getDiagnosticSessionState({ sessionId });
+    resetCommandPollCount(sessionState, sessionId);
+  } catch {
+    // Ignore diagnostics state failures for process tool behavior.
+  }
+}
+
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -94,8 +124,27 @@ export function createProcessTool(
     setJobTtlMs(defaults.cleanupMs);
   }
   const scopeKey = defaults?.scopeKey;
+  const supervisor = getProcessSupervisor();
   const isInScope = (session?: { scopeKey?: string } | null) =>
     !scopeKey || session?.scopeKey === scopeKey;
+
+  const cancelManagedSession = (sessionId: string) => {
+    const record = supervisor.getRecord(sessionId);
+    if (!record || record.state === "exited") {
+      return false;
+    }
+    supervisor.cancel(sessionId, "manual-cancel");
+    return true;
+  };
+
+  const terminateSessionFallback = (session: ProcessSession) => {
+    const pid = session.pid ?? session.child?.pid;
+    if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
+      return false;
+    }
+    killProcessTree(pid);
+    return true;
+  };
 
   return {
     name: "process",
@@ -126,7 +175,7 @@ export function createProcessTool(
         eof?: boolean;
         offset?: number;
         limit?: number;
-        timeout?: number | string;
+        timeout?: unknown;
       };
 
       if (params.action === "list") {
@@ -233,6 +282,7 @@ export function createProcessTool(
         case "poll": {
           if (!scopedSession) {
             if (scopedFinished) {
+              resetPollRetrySuggestion(params.sessionId);
               return {
                 content: [
                   {
@@ -258,26 +308,11 @@ export function createProcessTool(
                 },
               };
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            resetPollRetrySuggestion(params.sessionId);
+            return failText(`No session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
@@ -307,6 +342,13 @@ export function createProcessTool(
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const hasNewOutput = output.length > 0;
+          const retryInMs = exited
+            ? undefined
+            : recordPollRetrySuggestion(params.sessionId, hasNewOutput);
+          if (exited) {
+            resetPollRetrySuggestion(params.sessionId);
+          }
           return {
             content: [
               {
@@ -326,6 +368,7 @@ export function createProcessTool(
               exitCode: exited ? exitCode : undefined,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
+              ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             },
           };
         }
@@ -521,31 +564,31 @@ export function createProcessTool(
 
         case "kill": {
           if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`No active session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          killSession(scopedSession);
-          markExited(scopedSession, null, "SIGKILL", "failed");
+          const canceled = cancelManagedSession(scopedSession.id);
+          if (!canceled) {
+            const terminated = terminateSessionFallback(scopedSession);
+            if (!terminated) {
+              return failText(
+                `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
+              );
+            }
+            markExited(scopedSession, null, "SIGKILL", "failed");
+          }
+          resetPollRetrySuggestion(params.sessionId);
           return {
-            content: [{ type: "text", text: `Killed session ${params.sessionId}.` }],
+            content: [
+              {
+                type: "text",
+                text: canceled
+                  ? `Termination requested for session ${params.sessionId}.`
+                  : `Killed session ${params.sessionId}.`,
+              },
+            ],
             details: {
               status: "failed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
@@ -555,6 +598,7 @@ export function createProcessTool(
 
         case "clear": {
           if (scopedFinished) {
+            resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
             return {
               content: [{ type: "text", text: `Cleared session ${params.sessionId}.` }],
@@ -574,10 +618,31 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
-            killSession(scopedSession);
-            markExited(scopedSession, null, "SIGKILL", "failed");
+            const canceled = cancelManagedSession(scopedSession.id);
+            if (canceled) {
+              // Keep remove semantics deterministic: drop from process registry now.
+              scopedSession.backgrounded = false;
+              deleteSession(params.sessionId);
+            } else {
+              const terminated = terminateSessionFallback(scopedSession);
+              if (!terminated) {
+                return failText(
+                  `Unable to remove session ${params.sessionId}: no active supervisor run or process id.`,
+                );
+              }
+              markExited(scopedSession, null, "SIGKILL", "failed");
+              deleteSession(params.sessionId);
+            }
+            resetPollRetrySuggestion(params.sessionId);
             return {
-              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
+              content: [
+                {
+                  type: "text",
+                  text: canceled
+                    ? `Removed session ${params.sessionId} (termination requested).`
+                    : `Removed session ${params.sessionId}.`,
+                },
+              ],
               details: {
                 status: "failed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
@@ -585,6 +650,7 @@ export function createProcessTool(
             };
           }
           if (scopedFinished) {
+            resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
             return {
               content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],

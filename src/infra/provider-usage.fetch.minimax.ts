@@ -1,7 +1,11 @@
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 import { isRecord } from "../utils.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+  parseFiniteNumber,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -151,15 +155,9 @@ const WINDOW_MINUTE_KEYS = [
 
 function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string") {
-      const parsed = Number.parseFloat(value);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const parsed = parseFiniteNumber(record[key]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;
@@ -224,10 +222,7 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
   let scanned = 0;
 
   while (queue.length && scanned < MAX_SCAN_NODES) {
-    const next = queue.shift();
-    if (!next) {
-      break;
-    }
+    const next = queue.shift() as { value: unknown; depth: number };
     scanned += 1;
     const { value, depth } = next;
 
@@ -292,10 +287,7 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
   if (percentRaw !== undefined) {
     const normalized = clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
     if (fromCounts !== null) {
-      const inverted = clampPercent(100 - normalized);
-      if (Math.abs(normalized - fromCounts) <= 1 || Math.abs(inverted - fromCounts) <= 1) {
-        return fromCounts;
-      }
+      // Count-derived usage is more stable across provider percent field variations.
       return fromCounts;
     }
     return normalized;
@@ -324,12 +316,10 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
+      status: res.status,
+    });
   }
 
   const data = (await res.json().catch(() => null)) as MinimaxUsageResponse;

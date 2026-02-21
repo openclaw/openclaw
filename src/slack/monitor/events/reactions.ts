@@ -1,9 +1,9 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import type { SlackMonitorContext } from "../context.js";
-import type { SlackReactionEvent } from "../types.js";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
+import type { SlackMonitorContext } from "../context.js";
+import type { SlackReactionEvent } from "../types.js";
 
 export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;

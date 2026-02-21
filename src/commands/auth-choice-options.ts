@@ -1,6 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
 
@@ -69,6 +69,18 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "xAI (Grok)",
     hint: "API key",
     choices: ["xai-api-key"],
+  },
+  {
+    value: "volcengine",
+    label: "Volcano Engine",
+    hint: "API key",
+    choices: ["volcengine-api-key"],
+  },
+  {
+    value: "byteplus",
+    label: "BytePlus",
+    hint: "API key",
+    choices: ["byteplus-api-key"],
   },
   {
     value: "openrouter",
@@ -180,6 +192,8 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   { value: "openai-api-key", label: "OpenAI API key" },
   { value: "xai-api-key", label: "xAI (Grok) API key" },
+  { value: "volcengine-api-key", label: "Volcano Engine API key" },
+  { value: "byteplus-api-key", label: "BytePlus API key" },
   {
     value: "qianfan-api-key",
     label: "Qianfan API key",

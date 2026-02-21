@@ -1,3 +1,4 @@
+import { attachFooterText } from "./common.js";
 import type {
   Action,
   CardAction,
@@ -10,7 +11,6 @@ import type {
   FlexText,
   ListItem,
 } from "./types.js";
-import { attachFooterText } from "./common.js";
 
 /**
  * Create an info card with title, body, and optional footer

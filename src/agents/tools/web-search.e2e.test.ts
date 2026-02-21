@@ -1,29 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import { __testing } from "./web-search.js";
-
-function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
-  const prev: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(env)) {
-    prev[key] = process.env[key];
-    if (value === undefined) {
-      // Make tests hermetic even on machines with real keys set.
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    for (const [key, value] of Object.entries(prev)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
 
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -241,5 +218,27 @@ describe("web_search grok response parsing", () => {
     const result = extractGrokContent({});
     expect(result.text).toBeUndefined();
     expect(result.annotationCitations).toEqual([]);
+  });
+
+  it("extracts output_text blocks directly in output array (no message wrapper)", () => {
+    const result = extractGrokContent({
+      output: [
+        { type: "web_search_call" },
+        {
+          type: "output_text",
+          text: "direct output text",
+          annotations: [
+            {
+              type: "url_citation",
+              url: "https://example.com/direct",
+              start_index: 0,
+              end_index: 5,
+            },
+          ],
+        },
+      ],
+    } as Parameters<typeof extractGrokContent>[0]);
+    expect(result.text).toBe("direct output text");
+    expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
   });
 });

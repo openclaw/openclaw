@@ -3,13 +3,13 @@ import { resolveSandboxBrowserConfig } from "../agents/sandbox/config.js";
 import { validateConfigObject } from "./config.js";
 
 describe("sandbox docker config", () => {
-  it("accepts binds array in sandbox.docker config", () => {
+  it("accepts safe binds array in sandbox.docker config", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           sandbox: {
             docker: {
-              binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"],
+              binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
             },
           },
         },
@@ -29,13 +29,58 @@ describe("sandbox docker config", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.agents?.defaults?.sandbox?.docker?.binds).toEqual([
-        "/var/run/docker.sock:/var/run/docker.sock",
         "/home/user/source:/source:rw",
+        "/var/data/myapp:/data:ro",
       ]);
       expect(res.config.agents?.list?.[0]?.sandbox?.docker?.binds).toEqual([
         "/home/user/projects:/projects:ro",
       ]);
     }
+  });
+
+  it("rejects network host mode via Zod schema validation", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              network: "host",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects seccomp unconfined via Zod schema validation", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              seccompProfile: "unconfined",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects apparmor unconfined via Zod schema validation", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              apparmorProfile: "unconfined",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
   });
 
   it("rejects non-string values in binds array", () => {
@@ -131,5 +176,47 @@ describe("sandbox browser binds config", () => {
       agentBrowser: {},
     });
     expect(resolved.binds).toBeUndefined();
+  });
+
+  it("defaults browser network to dedicated sandbox network", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "agent",
+      globalBrowser: {},
+      agentBrowser: {},
+    });
+    expect(resolved.network).toBe("openclaw-sandbox-browser");
+  });
+
+  it("prefers agent browser network over global browser network", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "agent",
+      globalBrowser: { network: "openclaw-sandbox-browser-global" },
+      agentBrowser: { network: "openclaw-sandbox-browser-agent" },
+    });
+    expect(resolved.network).toBe("openclaw-sandbox-browser-agent");
+  });
+
+  it("merges cdpSourceRange with agent override", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "agent",
+      globalBrowser: { cdpSourceRange: "172.21.0.1/32" },
+      agentBrowser: { cdpSourceRange: "172.22.0.1/32" },
+    });
+    expect(resolved.cdpSourceRange).toBe("172.22.0.1/32");
+  });
+
+  it("rejects host network mode in sandbox.browser config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              network: "host",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
   });
 });

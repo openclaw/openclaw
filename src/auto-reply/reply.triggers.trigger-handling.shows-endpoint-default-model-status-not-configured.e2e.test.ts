@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
@@ -14,24 +15,22 @@ beforeAll(async () => {
 
 installTriggerHandlingE2eTestHooks();
 
+const modelStatusCtx = {
+  Body: "/model status",
+  From: "telegram:111",
+  To: "telegram:111",
+  ChatType: "direct",
+  Provider: "telegram",
+  Surface: "telegram",
+  SessionKey: "telegram:slash:111",
+  CommandAuthorized: true,
+} as const;
+
 describe("trigger handling", () => {
   it("shows endpoint default in /model status when not configured", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      const res = await getReplyFromConfig(
-        {
-          Body: "/model status",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: "telegram:slash:111",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
+      const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(normalizeTestText(text ?? "")).toContain("endpoint: default");
@@ -49,21 +48,8 @@ describe("trigger handling", () => {
             },
           },
         },
-      };
-      const res = await getReplyFromConfig(
-        {
-          Body: "/model status",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: "telegram:slash:111",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
+      } as unknown as OpenClawConfig;
+      const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       const normalized = normalizeTestText(text ?? "");
@@ -72,7 +58,7 @@ describe("trigger handling", () => {
       );
     });
   });
-  it("rejects /restart by default", async () => {
+  it("restarts by default", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       const res = await getReplyFromConfig(
@@ -86,14 +72,14 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("/restart is disabled");
+      expect(text?.startsWith("⚙️ Restarting") || text?.startsWith("⚠️ Restart failed")).toBe(true);
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
-  it("restarts when enabled", async () => {
+  it("rejects /restart when explicitly disabled", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const cfg = { ...makeCfg(home), commands: { restart: true } };
+      const cfg = { ...makeCfg(home), commands: { restart: false } } as OpenClawConfig;
       const res = await getReplyFromConfig(
         {
           Body: "/restart",
@@ -105,7 +91,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text?.startsWith("⚙️ Restarting") || text?.startsWith("⚠️ Restart failed")).toBe(true);
+      expect(text).toContain("/restart is disabled");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
+import { evaluateEntryMetadataRequirementsForCurrentPlatform } from "../shared/entry-status.js";
+import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -17,10 +18,7 @@ import {
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
 
-export type SkillStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
+export type SkillStatusConfigCheck = RequirementConfigCheck;
 
 export type SkillInstallOption = {
   id: string;
@@ -44,20 +42,8 @@ export type SkillStatusEntry = {
   disabled: boolean;
   blockedByAllowlist: boolean;
   eligible: boolean;
-  requirements: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
+  requirements: Requirements;
+  missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
 };
@@ -79,6 +65,7 @@ function selectPreferredInstallSpec(
   if (install.length === 0) {
     return undefined;
   }
+
   const indexed = install.map((spec, index) => ({ spec, index }));
   const findKind = (kind: SkillInstallSpec["kind"]) =>
     indexed.find((item) => item.spec.kind === kind);
@@ -87,23 +74,32 @@ function selectPreferredInstallSpec(
   const nodeSpec = findKind("node");
   const goSpec = findKind("go");
   const uvSpec = findKind("uv");
+  const downloadSpec = findKind("download");
+  const brewAvailable = hasBinary("brew");
 
-  if (prefs.preferBrew && hasBinary("brew") && brewSpec) {
-    return brewSpec;
+  // Table-driven preference chain; first match wins.
+  const pickers: Array<() => { spec: SkillInstallSpec; index: number } | undefined> = [
+    () => (prefs.preferBrew && brewAvailable ? brewSpec : undefined),
+    () => uvSpec,
+    () => nodeSpec,
+    // Only prefer brew when available to avoid guaranteed failure on Linux/Docker.
+    () => (brewAvailable ? brewSpec : undefined),
+    () => goSpec,
+    // Prefer download over an unavailable brew spec.
+    () => downloadSpec,
+    // Last resort: surface descriptive brew-missing error instead of "no installer found".
+    () => brewSpec,
+    () => indexed[0],
+  ];
+
+  for (const pick of pickers) {
+    const selected = pick();
+    if (selected) {
+      return selected;
+    }
   }
-  if (uvSpec) {
-    return uvSpec;
-  }
-  if (nodeSpec) {
-    return nodeSpec;
-  }
-  if (brewSpec) {
-    return brewSpec;
-  }
-  if (goSpec) {
-    return goSpec;
-  }
-  return indexed[0];
+
+  return undefined;
 }
 
 function normalizeInstallOptions(
@@ -183,39 +179,29 @@ function buildSkillStatus(
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
+  const isEnvSatisfied = (envName: string) =>
+    Boolean(
+      process.env[envName] ||
+      skillConfig?.env?.[envName] ||
+      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+    );
+  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
       : entry.skill.source === "openclaw-bundled";
 
-  const {
-    required,
-    missing,
-    eligible: requirementsSatisfied,
-    configChecks,
-  } = evaluateRequirementsFromMetadata({
+  const requirementStatus = evaluateEntryMetadataRequirementsForCurrentPlatform({
     always,
     metadata: entry.metadata,
+    frontmatter: entry.frontmatter,
     hasLocalBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
-    localPlatform: process.platform,
-    remotePlatforms: eligibility?.remote?.platforms,
-    isEnvSatisfied: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
-    isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
+    remote: eligibility?.remote,
+    isEnvSatisfied,
+    isConfigSatisfied,
   });
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    requirementStatus;
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
 
   return {

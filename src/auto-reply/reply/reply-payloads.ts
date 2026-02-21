@@ -1,9 +1,10 @@
+import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ReplyToMode } from "../../config/types.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
@@ -95,9 +96,29 @@ export function filterMessagingToolDuplicates(params: {
   return payloads.filter((payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts));
 }
 
-function normalizeAccountId(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
+export function filterMessagingToolMediaDuplicates(params: {
+  payloads: ReplyPayload[];
+  sentMediaUrls: string[];
+}): ReplyPayload[] {
+  const { payloads, sentMediaUrls } = params;
+  if (sentMediaUrls.length === 0) {
+    return payloads;
+  }
+  const sentSet = new Set(sentMediaUrls);
+  return payloads.map((payload) => {
+    const mediaUrl = payload.mediaUrl;
+    const mediaUrls = payload.mediaUrls;
+    const stripSingle = mediaUrl && sentSet.has(mediaUrl);
+    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(u));
+    if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
+      return payload; // No change
+    }
+    return {
+      ...payload,
+      mediaUrl: stripSingle ? undefined : mediaUrl,
+      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+    };
+  });
 }
 
 export function shouldSuppressMessagingToolReplies(params: {
@@ -114,7 +135,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   if (!originTarget) {
     return false;
   }
-  const originAccount = normalizeAccountId(params.accountId);
+  const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
     return false;
@@ -130,7 +151,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (!targetKey) {
       return false;
     }
-    const targetAccount = normalizeAccountId(target.accountId);
+    const targetAccount = normalizeOptionalAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }
