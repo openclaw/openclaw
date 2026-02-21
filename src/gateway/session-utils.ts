@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  GatewayAgentRow,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  SessionsListResult,
+} from "./session-utils.types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -29,12 +35,6 @@ import {
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
-import type {
-  GatewayAgentRow,
-  GatewaySessionRow,
-  GatewaySessionsDefaults,
-  SessionsListResult,
-} from "./session-utils.types.js";
 
 export {
   archiveFileOnDisk,
@@ -761,16 +761,30 @@ export function listSessionsFromStore(params: {
       const totalTokensFresh =
         typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
       const parsed = parseGroupKey(key);
-      const channel = entry?.channel ?? parsed?.channel;
+      const kind = classifySessionKey(key, entry);
+      const deliveryFields = normalizeSessionDeliveryFields(entry);
+      const origin = entry?.origin;
+      const originChannel = origin?.provider;
+      const channel =
+        kind === "group"
+          ? (entry?.channel ??
+            parsed?.channel ??
+            deliveryFields.lastChannel ??
+            deliveryFields.deliveryContext?.channel ??
+            originChannel)
+          : (deliveryFields.deliveryContext?.channel ??
+            deliveryFields.lastChannel ??
+            originChannel ??
+            entry?.channel ??
+            parsed?.channel);
       const subject = entry?.subject;
       const groupChannel = entry?.groupChannel;
       const space = entry?.space;
       const id = parsed?.id;
-      const origin = entry?.origin;
       const originLabel = origin?.label;
       const displayName =
         entry?.displayName ??
-        (channel
+        (kind === "group" && channel
           ? buildGroupDisplayName({
               provider: channel,
               subject,
@@ -782,7 +796,6 @@ export function listSessionsFromStore(params: {
           : undefined) ??
         entry?.label ??
         originLabel;
-      const deliveryFields = normalizeSessionDeliveryFields(entry);
       const parsedAgent = parseAgentSessionKey(key);
       const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
       const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
@@ -791,7 +804,7 @@ export function listSessionsFromStore(params: {
       return {
         key,
         entry,
-        kind: classifySessionKey(key, entry),
+        kind,
         label: entry?.label,
         displayName,
         channel,
