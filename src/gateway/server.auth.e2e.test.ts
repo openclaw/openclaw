@@ -363,6 +363,28 @@ describe("gateway server auth/connect", () => {
       await expectMissingScopeAfterConnect(port, { device: null });
     });
 
+    test("rejects node role when device identity is omitted", async () => {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      try {
+        const res = await connectReq(ws, {
+          role: "node",
+          token,
+          device: null,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("device identity required");
+      } finally {
+        ws.close();
+      }
+    });
+
     test("allows health when scopes are empty", async () => {
       const ws = await openWs(port);
       try {
