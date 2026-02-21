@@ -370,6 +370,24 @@ export function renderApp(state: AppViewState) {
                 cronStatus: state.cronStatus,
                 cronJobs: state.cronJobs,
                 cronError: state.cronError,
+                cronRunsJobId: state.cronRunsJobId,
+                cronRuns: state.cronRuns,
+                cronBusy: state.cronBusy,
+                sessions: state.sessionsResult,
+                onOpenSession: (sessionKey) => {
+                  state.sessionKey = sessionKey;
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey,
+                    lastActiveSessionKey: sessionKey,
+                  });
+                  state.setTab("chat");
+                },
+                onQueueTask: (agentId, task) => state.queueAgentTask(agentId, task),
+                onCronRun: (job) => runCronJob(state, job),
+                onCronDisable: (job) => toggleCronJob(state, job, false),
+                onCronRemove: (job) => removeCronJob(state, job),
+                onCronLoadRuns: (jobId) => loadCronRuns(state, jobId),
                 agentFilesLoading: state.agentFilesLoading,
                 agentFilesError: state.agentFilesError,
                 agentFilesList: state.agentFilesList,
