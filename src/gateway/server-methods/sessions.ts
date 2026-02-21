@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { GATEWAY_CLIENT_IDS, normalizeGatewayClientId } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -74,6 +75,10 @@ function rejectWebchatSessionMutation(params: {
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;
 }): boolean {
+  const clientName = normalizeGatewayClientId(params.client?.connect?.client?.id);
+  if (clientName === GATEWAY_CLIENT_IDS.CONTROL_UI) {
+    return false;
+  }
   if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
     return false;
   }
