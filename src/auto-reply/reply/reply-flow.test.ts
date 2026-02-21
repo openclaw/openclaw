@@ -449,7 +449,7 @@ describe("parseLineDirectives", () => {
         if (testCase.expectFooter) {
           expect(flexMessage?.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
         }
-        if (testCase.expectBodyContents) {
+        if ("expectBodyContents" in testCase && testCase.expectBodyContents) {
           expect(flexMessage?.contents?.body?.contents, testCase.name).toBeDefined();
         }
       }

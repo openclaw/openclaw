@@ -17,6 +17,7 @@ import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   isHeartbeatEnabledForAgent,
+  type HeartbeatDeps,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
@@ -439,7 +440,10 @@ describe("resolveHeartbeatSenderContext", () => {
 });
 
 describe("runHeartbeatOnce", () => {
-  const createHeartbeatDeps = (sendWhatsApp: ReturnType<typeof vi.fn>, nowMs = 0) => ({
+  const createHeartbeatDeps = (
+    sendWhatsApp: NonNullable<HeartbeatDeps["sendWhatsApp"]>,
+    nowMs = 0,
+  ): HeartbeatDeps => ({
     sendWhatsApp,
     getQueueSize: () => 0,
     nowMs: () => nowMs,
@@ -516,7 +520,7 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue([{ text: "Let me check..." }, { text: "Final alert" }]);
-      const sendWhatsApp = vi.fn().mockResolvedValue({
+      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
       });
@@ -569,7 +573,7 @@ describe("runHeartbeatOnce", () => {
         }),
       );
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn().mockResolvedValue({
+      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
       });
@@ -645,7 +649,7 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn().mockResolvedValue({
+      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
       });
@@ -749,7 +753,9 @@ describe("runHeartbeatOnce", () => {
 
         replySpy.mockReset();
         replySpy.mockResolvedValue([{ text: testCase.message }]);
-        const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+        const sendWhatsApp = vi
+          .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+          .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
         await runHeartbeatOnce({
           cfg,
@@ -811,7 +817,9 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+      const sendWhatsApp = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
       await runHeartbeatOnce({
         cfg,
@@ -827,7 +835,12 @@ describe("runHeartbeatOnce", () => {
   it("handles reasoning payload delivery variants", async () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cases = [
+      const cases: Array<{
+        name: string;
+        caseDir: string;
+        replies: Array<{ text: string }>;
+        expectedTexts: string[];
+      }> = [
         {
           name: "reasoning + final payload",
           caseDir: "hb-reasoning",
@@ -840,7 +853,7 @@ describe("runHeartbeatOnce", () => {
           replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
           expectedTexts: ["Reasoning:\n_Because it helps_"],
         },
-      ] as const;
+      ];
 
       for (const testCase of cases) {
         const tmpDir = await createCaseDir(testCase.caseDir);
@@ -876,7 +889,9 @@ describe("runHeartbeatOnce", () => {
 
         replySpy.mockReset();
         replySpy.mockResolvedValue(testCase.replies);
-        const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+        const sendWhatsApp = vi
+          .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+          .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
         await runHeartbeatOnce({
           cfg,
@@ -934,7 +949,7 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({
+      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
       });
@@ -1020,7 +1035,9 @@ describe("runHeartbeatOnce", () => {
 
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     replySpy.mockResolvedValue({ text: params.replyText ?? "Checked logs and PRs" });
-    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
       reason: params.reason,

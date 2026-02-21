@@ -407,7 +407,7 @@ describe("DirectoryCache", () => {
         ] as const,
         expected: { a: "value-a2", b: undefined, c: "value-c" },
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const cache = new DirectoryCache<string>(60_000, 2);
@@ -477,7 +477,7 @@ describe("buildOutboundResultEnvelope", () => {
         input: { delivery: discordDelivery, flattenDelivery: false },
         expected: { delivery: discordDelivery },
       },
-    ] as const;
+    ];
     for (const testCase of cases) {
       expect(buildOutboundResultEnvelope(testCase.input), testCase.name).toEqual(testCase.expected);
     }
@@ -519,7 +519,7 @@ describe("formatOutboundDeliverySummary", () => {
         },
         expected: "✅ Sent via Discord. Message ID: d1 (channel chan)",
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(formatOutboundDeliverySummary(testCase.channel, testCase.result), testCase.name).toBe(
@@ -581,7 +581,7 @@ describe("buildOutboundDeliveryJson", () => {
           timestamp: 123,
         },
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(buildOutboundDeliveryJson(testCase.input), testCase.name).toEqual(testCase.expected);
@@ -602,7 +602,7 @@ describe("formatGatewaySummary", () => {
         input: { action: "Poll sent", channel: "discord", messageId: "p1" },
         expected: "✅ Poll sent via gateway (discord). Message ID: p1",
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(formatGatewaySummary(testCase.input), testCase.name).toBe(testCase.expected);
@@ -844,7 +844,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
           },
         ],
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(normalizeOutboundPayloadsForJson(testCase.input)).toEqual(testCase.expected);
@@ -879,7 +879,7 @@ describe("formatOutboundPayloadLog", () => {
         },
         expected: "MEDIA:https://x.test/a.png",
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(formatOutboundPayloadLog(testCase.input), testCase.name).toBe(testCase.expected);

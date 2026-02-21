@@ -74,7 +74,11 @@ describe("sent-message-cache", () => {
 
 describe("buildInlineKeyboard", () => {
   it("normalizes keyboard inputs", () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      input: Parameters<typeof buildInlineKeyboard>[0];
+      expected: ReturnType<typeof buildInlineKeyboard>;
+    }> = [
       {
         name: "empty input",
         input: undefined,
@@ -141,7 +145,7 @@ describe("buildInlineKeyboard", () => {
           inline_keyboard: [[{ text: "Ok", callback_data: "cmd:ok" }]],
         },
       },
-    ] as const;
+    ];
     for (const testCase of cases) {
       expect(buildInlineKeyboard(testCase.input), testCase.name).toEqual(testCase.expected);
     }
@@ -539,7 +543,12 @@ describe("sendMessageTelegram", () => {
 
   it("applies reply markup and thread options to split video-note sends", async () => {
     const chatId = "123";
-    const cases = [
+    const cases: Array<{
+      text: string;
+      options: Partial<NonNullable<Parameters<typeof sendMessageTelegram>[2]>>;
+      expectedVideoNote: Record<string, unknown>;
+      expectedMessage: Record<string, unknown>;
+    }> = [
       {
         text: "Check this out",
         options: {
@@ -564,7 +573,7 @@ describe("sendMessageTelegram", () => {
           reply_to_message_id: 999,
         },
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const sendVideoNote = vi.fn().mockResolvedValue({
@@ -681,7 +690,19 @@ describe("sendMessageTelegram", () => {
   });
 
   it("routes audio media to sendAudio/sendVoice based on voice compatibility", async () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      chatId: string;
+      text: string;
+      mediaUrl: string;
+      contentType: string;
+      fileName: string;
+      asVoice?: boolean;
+      messageThreadId?: number;
+      replyToMessageId?: number;
+      expectedMethod: "sendAudio" | "sendVoice";
+      expectedOptions: Record<string, unknown>;
+    }> = [
       {
         name: "default audio send",
         chatId: "123",
@@ -732,7 +753,7 @@ describe("sendMessageTelegram", () => {
         expectedMethod: "sendVoice" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const sendAudio = vi.fn().mockResolvedValue({
@@ -1210,12 +1231,22 @@ describe("editMessageTelegram", () => {
   });
 
   it("handles button payload + parse fallback behavior", async () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      setup: () => {
+        text: string;
+        buttons: Parameters<typeof buildInlineKeyboard>[0];
+      };
+      expectedCalls: number;
+      firstExpectNoReplyMarkup?: boolean;
+      firstExpectReplyMarkup?: Record<string, unknown>;
+      secondExpectReplyMarkup?: Record<string, unknown>;
+    }> = [
       {
         name: "buttons undefined keeps existing keyboard",
         setup: () => {
           botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
-          return { text: "hi", buttons: undefined as [] | undefined };
+          return { text: "hi", buttons: undefined };
         },
         expectedCalls: 1,
         firstExpectNoReplyMarkup: true,
@@ -1224,7 +1255,7 @@ describe("editMessageTelegram", () => {
         name: "buttons empty clears keyboard",
         setup: () => {
           botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
-          return { text: "hi", buttons: [] as [] };
+          return { text: "hi", buttons: [] };
         },
         expectedCalls: 1,
         firstExpectReplyMarkup: { inline_keyboard: [] },
@@ -1235,13 +1266,13 @@ describe("editMessageTelegram", () => {
           botApi.editMessageText
             .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
             .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
-          return { text: "<bad> html", buttons: [] as [] };
+          return { text: "<bad> html", buttons: [] };
         },
         expectedCalls: 2,
         firstExpectReplyMarkup: { inline_keyboard: [] },
         secondExpectReplyMarkup: { inline_keyboard: [] },
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       botApi.editMessageText.mockReset();

@@ -48,9 +48,19 @@ describe("jaccardSimilarity", () => {
         expected: 1,
       },
       { name: "disjoint sets", left: new Set(["a", "b"]), right: new Set(["c", "d"]), expected: 0 },
-      { name: "two empty sets", left: new Set(), right: new Set(), expected: 1 },
-      { name: "left non-empty right empty", left: new Set(["a"]), right: new Set(), expected: 0 },
-      { name: "left empty right non-empty", left: new Set(), right: new Set(["a"]), expected: 0 },
+      { name: "two empty sets", left: new Set<string>(), right: new Set<string>(), expected: 1 },
+      {
+        name: "left non-empty right empty",
+        left: new Set(["a"]),
+        right: new Set<string>(),
+        expected: 0,
+      },
+      {
+        name: "left empty right non-empty",
+        left: new Set<string>(),
+        right: new Set(["a"]),
+        expected: 0,
+      },
       {
         name: "partial overlap",
         left: new Set(["a", "b", "c"]),
