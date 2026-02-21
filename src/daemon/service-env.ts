@@ -248,11 +248,17 @@ export function buildServiceEnvironment(params: {
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   const proxyEnv = readServiceProxyEnvironment(env);
+  // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
+  // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
+  // works correctly when running as a LaunchAgent without extra user configuration.
+  const nodeCaCerts =
+    env.NODE_EXTRA_CA_CERTS ?? (process.platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     ...proxyEnv,
+    NODE_EXTRA_CA_CERTS: nodeCaCerts,
     OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
@@ -274,11 +280,17 @@ export function buildNodeServiceEnvironment(params: {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   const proxyEnv = readServiceProxyEnvironment(env);
+  // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
+  // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
+  // works correctly when running as a LaunchAgent without extra user configuration.
+  const nodeCaCerts =
+    env.NODE_EXTRA_CA_CERTS ?? (process.platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     ...proxyEnv,
+    NODE_EXTRA_CA_CERTS: nodeCaCerts,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
