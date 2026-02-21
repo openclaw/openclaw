@@ -23,7 +23,7 @@ export interface FilterableSelectListTheme extends SelectListTheme {
 
 /**
  * Combines text input filtering with a select list.
- * User types to filter, arrows/j/k to navigate, Enter to select, Escape to clear/cancel.
+ * User types to filter, arrows/ctrl+p/ctrl+n to navigate, Enter to select, Escape to clear/cancel.
  */
 export class FilterableSelectList implements Component {
   private input: Input;
@@ -79,23 +79,13 @@ export class FilterableSelectList implements Component {
   }
 
   handleInput(keyData: string): void {
-    const allowVimNav = !this.filterText.trim();
-
-    // Navigation: arrows, vim j/k, or ctrl+p/ctrl+n
-    if (
-      matchesKey(keyData, "up") ||
-      matchesKey(keyData, "ctrl+p") ||
-      (allowVimNav && keyData === "k")
-    ) {
+    // Navigation: arrows or ctrl+p/ctrl+n (j/k removed to allow typing these letters in search)
+    if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
       this.selectList.handleInput("\x1b[A");
       return;
     }
 
-    if (
-      matchesKey(keyData, "down") ||
-      matchesKey(keyData, "ctrl+n") ||
-      (allowVimNav && keyData === "j")
-    ) {
+    if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
       this.selectList.handleInput("\x1b[B");
       return;
     }
