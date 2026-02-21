@@ -531,6 +531,13 @@ const memoryPlugin = {
       { commands: ["ltm"] },
     );
 
+    api.registerCli(
+      ({ program }) => {
+        api.runtime.tools.registerMemoryCli(program);
+      },
+      { commands: ["memory"] },
+    );
+
     // ========================================================================
     // Lifecycle Hooks
     // ========================================================================
