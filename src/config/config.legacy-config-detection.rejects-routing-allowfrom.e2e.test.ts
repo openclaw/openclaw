@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { migrateLegacyConfig, validateConfigObject } from "./config.js";
-import type { OpenClawConfig } from "./config.js";
 
 function getLegacyRouting(config: unknown) {
   return (config as { routing?: Record<string, unknown> } | undefined)?.routing;
