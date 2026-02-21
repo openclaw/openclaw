@@ -1,37 +1,84 @@
+"use client";
+
+import { ScrollReveal } from "./ascii-art";
+
+const CTA_ASCII = `
+  ╔════════════════════════════════════════════════════════╗
+  ║                                                        ║
+  ║   Ship the firewall first.                             ║
+  ║   Test it adversarially.                               ║
+  ║   Document every architectural decision.               ║
+  ║   Open the first PR publicly.                          ║
+  ║   Invite three builders personally.                    ║
+  ║                                                        ║
+  ║               — The Founding Commitment                ║
+  ║                                                        ║
+  ╚════════════════════════════════════════════════════════╝
+`;
+
 export function CTA() {
   return (
-    <section className="py-24 sm:py-32">
-      <div className="mx-auto max-w-4xl px-6 text-center">
-        <div className="rounded-2xl border border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent p-12 sm:p-16">
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            The moat is not the code.
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-lg text-neutral-400">
-            The moat is the first public contribution PR &mdash; with a verified firewall
-            log, a clean diff, and a community security review &mdash; that demonstrates
-            the privacy-preserving collective intelligence loop actually works.
-          </p>
-          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-12 items-center gap-2 rounded-lg bg-amber-500 px-8 text-sm font-semibold text-neutral-950 shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-400"
-            >
-              <GithubIcon />
-              Star queen-claw on GitHub
-            </a>
-            <a
-              href="#architecture"
-              className="inline-flex h-12 items-center rounded-lg border border-neutral-700 bg-neutral-900 px-8 text-sm font-semibold text-neutral-200 transition-all hover:border-neutral-600 hover:bg-neutral-800"
-            >
-              Read the Architecture
-            </a>
+    <section className="relative py-24 sm:py-32">
+      {/* Background glow */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="h-[500px] w-[500px] rounded-full bg-amber-500/[0.04] blur-[100px]" />
+      </div>
+
+      <div className="relative mx-auto max-w-4xl px-6 text-center">
+        <ScrollReveal>
+          <div className="overflow-hidden rounded-2xl border border-amber-500/20 bg-gradient-to-b from-amber-500/5 via-neutral-950 to-neutral-950 p-12 sm:p-16">
+            <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
+              The moat is not the code.
+            </h2>
+            <p className="mx-auto mt-4 max-w-2xl text-lg text-neutral-400">
+              The moat is the first public contribution PR &mdash; with a verified
+              firewall log, a clean diff, and a community security review &mdash; that
+              demonstrates the privacy-preserving collective intelligence loop
+              actually works.
+            </p>
+
+            {/* ASCII commitment */}
+            <pre className="mx-auto mt-8 max-w-xl font-mono text-[9px] leading-tight text-amber-500/40 sm:text-[11px]">
+              {CTA_ASCII}
+            </pre>
+
+            <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+              <a
+                href="https://github.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group inline-flex h-12 items-center gap-2 rounded-lg bg-amber-500 px-8 text-sm font-semibold text-neutral-950 shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-400 hover:shadow-amber-500/40 hover:scale-[1.02]"
+              >
+                <GithubIcon />
+                Star queen-claw on GitHub
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  className="transition-transform group-hover:translate-x-0.5"
+                >
+                  <path
+                    d="M6 3l5 5-5 5"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </a>
+              <a
+                href="#architecture"
+                className="inline-flex h-12 items-center rounded-lg border border-neutral-700 bg-neutral-900 px-8 text-sm font-semibold text-neutral-200 transition-all hover:border-neutral-600 hover:bg-neutral-800"
+              >
+                Read the Architecture
+              </a>
+            </div>
+            <p className="mt-8 font-mono text-xs text-neutral-600">
+              MIT Licensed // queen-claw // Privacy-first by design
+            </p>
           </div>
-          <p className="mt-8 text-sm text-neutral-500">
-            MIT Licensed &middot; Built on queen-claw &middot; Privacy-first by design
-          </p>
-        </div>
+        </ScrollReveal>
       </div>
     </section>
   );
