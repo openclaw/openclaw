@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
@@ -194,23 +195,6 @@ vi.mock("./onboarding.completion.js", () => ({
   setupOnboardingShellCompletion,
 }));
 
-function createWizardPrompter(overrides?: Partial<WizardPrompter>): WizardPrompter {
-  const select = vi.fn(
-    async (_params: WizardSelectParams<unknown>) => "quickstart",
-  ) as unknown as WizardPrompter["select"];
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select,
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
-}
-
 function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   if (opts?.throwsOnExit) {
     return {
@@ -266,7 +250,7 @@ describe("runOnboardingWizard", () => {
     const select = vi.fn(
       async (_params: WizardSelectParams<unknown>) => "quickstart",
     ) as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
+    const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
@@ -295,7 +279,7 @@ describe("runOnboardingWizard", () => {
       async (_params: WizardSelectParams<unknown>) => "quickstart",
     ) as unknown as WizardPrompter["select"];
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter = createWizardPrompter({ select, multiselect });
+    const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runOnboardingWizard(
@@ -338,7 +322,7 @@ describe("runOnboardingWizard", () => {
       return "quickstart";
     }) as unknown as WizardPrompter["select"];
 
-    const prompter = createWizardPrompter({ select });
+    const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runOnboardingWizard(
@@ -379,7 +363,7 @@ describe("runOnboardingWizard", () => {
 
     try {
       const note: WizardPrompter["note"] = vi.fn(async () => {});
-      const prompter = createWizardPrompter({ note });
+      const prompter = buildWizardPrompter({ note });
       const runtime = createRuntime();
 
       await runOnboardingWizard(
