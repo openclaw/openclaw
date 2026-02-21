@@ -4,7 +4,11 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
-import { registerAutoUpdateOptions, handleAutoUpdateOptions } from "./update-cli/auto-update.js";
+import {
+  registerAutoUpdateOptions,
+  handleAutoUpdateOptions,
+  displayAutoUpdateStatus,
+} from "./update-cli/auto-update.js";
 import {
   type UpdateCommandOptions,
   type UpdateStatusOptions,
@@ -147,6 +151,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),
         });
+        await displayAutoUpdateStatus();
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
