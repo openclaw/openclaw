@@ -226,6 +226,14 @@ export function createMattermostInteractionHandler(params: {
   accountId: string;
   callbackUrl: string;
   resolveSessionKey?: (channelId: string) => Promise<string>;
+  dispatchButtonClick?: (opts: {
+    channelId: string;
+    userId: string;
+    userName: string;
+    actionId: string;
+    actionName: string;
+    postId: string;
+  }) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { client, botUserId, accountId, log } = params;
@@ -326,24 +334,42 @@ export function createMattermostInteractionHandler(params: {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
     }
 
-    // Update the post via API to replace buttons with a completion indicator.
-    // We use the REST API directly rather than the callback response `update`
-    // field because Mattermost doesn't reliably process it.
+    // Fetch the original post to preserve its message and find the clicked button name.
     const userName = payload.user_name ?? payload.user_id;
+    let originalMessage = "";
+    let clickedButtonName = actionId; // fallback to action ID if we can't find the name
     try {
-      // Fetch the original post to preserve its message text
       const originalPost = await client.request<{
         message?: string;
         props?: Record<string, unknown>;
       }>(`/posts/${payload.post_id}`);
-      const originalMessage = originalPost?.message ?? "";
+      originalMessage = originalPost?.message ?? "";
 
+      // Find the clicked button's display name from the original attachments
+      const postAttachments = Array.isArray(originalPost?.props?.attachments)
+        ? (originalPost.props.attachments as Array<{
+            actions?: Array<{ id?: string; name?: string }>;
+          }>)
+        : [];
+      for (const att of postAttachments) {
+        const match = att.actions?.find((a) => a.id === actionId);
+        if (match?.name) {
+          clickedButtonName = match.name;
+          break;
+        }
+      }
+    } catch (err) {
+      log?.(`mattermost interaction: failed to fetch post ${payload.post_id}: ${String(err)}`);
+    }
+
+    // Update the post via API to replace buttons with a completion indicator.
+    try {
       await updateMattermostPost(client, payload.post_id, {
         message: originalMessage,
         props: {
           attachments: [
             {
-              text: `✓ **${actionId}** selected by @${userName}`,
+              text: `✓ **${clickedButtonName}** selected by @${userName}`,
             },
           ],
         },
@@ -356,5 +382,21 @@ export function createMattermostInteractionHandler(params: {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end("{}");
+
+    // Dispatch a synthetic inbound message so the agent responds to the button click.
+    if (params.dispatchButtonClick) {
+      try {
+        await params.dispatchButtonClick({
+          channelId: payload.channel_id,
+          userId: payload.user_id,
+          userName,
+          actionId,
+          actionName: clickedButtonName,
+          postId: payload.post_id,
+        });
+      } catch (err) {
+        log?.(`mattermost interaction: dispatchButtonClick failed: ${String(err)}`);
+      }
+    }
   };
 }

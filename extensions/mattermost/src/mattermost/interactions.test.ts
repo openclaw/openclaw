@@ -185,14 +185,16 @@ describe("buildButtonAttachments", () => {
     expect(action.integration.context._token).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("includes action_id in integration context", () => {
+  it("includes sanitized action_id in integration context", () => {
     const result = buildButtonAttachments({
       callbackUrl: "http://localhost:18789/cb",
       buttons: [{ id: "my_action", name: "Do It" }],
     });
 
     const action = result[0].actions![0];
-    expect(action.integration.context.action_id).toBe("my_action");
+    // sanitizeActionId strips hyphens and underscores (Mattermost routing bug #25747)
+    expect(action.integration.context.action_id).toBe("myaction");
+    expect(action.id).toBe("myaction");
   });
 
   it("merges custom context into integration context", () => {
