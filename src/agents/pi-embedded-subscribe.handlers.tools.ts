@@ -158,9 +158,28 @@ export async function handleToolExecutionStart(
     const filePath = filePathValue.trim();
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
+
+      // Track consecutive misuse
+      const currentCount = (ctx.state.toolMisuseCount?.get("read") ?? 0) + 1;
+      ctx.state.toolMisuseCount?.set("read", currentCount);
+
       ctx.log.warn(
-        `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
+        `read tool called without path (${currentCount}x): toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
       );
+
+      // After 3 consecutive failures, emit a stronger warning
+      if (currentCount >= 3 && ctx.state.lastToolMisuseWarned !== "read") {
+        ctx.state.lastToolMisuseWarned = "read";
+        ctx.log.warn(
+          `[DEFENSE] read tool misused ${currentCount} times consecutively. ` +
+            `The 'path' parameter is REQUIRED. Example: Read({ path: "/path/to/file" }). ` +
+            `Consider using a different approach or checking the file path.`,
+        );
+      }
+    } else {
+      // Reset counter on successful call
+      ctx.state.toolMisuseCount?.set("read", 0);
+      ctx.state.lastToolMisuseWarned = undefined;
     }
   }
 
