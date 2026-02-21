@@ -840,6 +840,252 @@ describe("handleCommands hooks", () => {
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "command", action: "new" }));
     spy.mockRestore();
   });
+
+  it("triggers session:end before command:new when previous session exists", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg);
+    // Add previous session entry
+    params.previousSessionEntry = {
+      sessionId: "prev-session-id",
+      sessionFile: "/tmp/prev-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    // Should trigger session:end, command:new, and session:start in order
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: "session", action: "end" });
+    expect(spy.mock.calls[1][0]).toMatchObject({ type: "command", action: "new" });
+    expect(spy.mock.calls[2][0]).toMatchObject({ type: "session", action: "start" });
+    spy.mockRestore();
+  });
+
+  it("triggers session:start with isReset context", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/reset", cfg);
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    // Find the session:start call
+    const sessionStartCall = spy.mock.calls.find(
+      (call) => call[0].type === "session" && call[0].action === "start",
+    );
+    expect(sessionStartCall).toBeDefined();
+    expect(sessionStartCall?.[0].context).toMatchObject({ isReset: true });
+    spy.mockRestore();
+  });
+
+  it("does not trigger session:end when no previous session exists", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg);
+    // No previousSessionEntry
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    // Should trigger command:new and session:start, but not session:end
+    const sessionEndCall = spy.mock.calls.find(
+      (call) => call[0].type === "session" && call[0].action === "end",
+    );
+    expect(sessionEndCall).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("session:end context includes reason, sessionId, sessionFile, and cfg", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg);
+    params.previousSessionEntry = {
+      sessionId: "prev-session-id",
+      sessionFile: "/tmp/prev-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    const sessionEndCall = spy.mock.calls.find(
+      (call) => call[0].type === "session" && call[0].action === "end",
+    );
+    expect(sessionEndCall).toBeDefined();
+    expect(sessionEndCall?.[0].context).toMatchObject({
+      sessionId: "prev-session-id",
+      sessionFile: "/tmp/prev-session.json",
+      reason: "new",
+      cfg,
+    });
+    spy.mockRestore();
+  });
+
+  it("session:end reason is 'reset' for /reset command", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/reset", cfg);
+    params.previousSessionEntry = {
+      sessionId: "prev-session-id",
+      sessionFile: "/tmp/prev-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    const sessionEndCall = spy.mock.calls.find(
+      (call) => call[0].type === "session" && call[0].action === "end",
+    );
+    expect(sessionEndCall).toBeDefined();
+    expect(sessionEndCall?.[0].context).toMatchObject({ reason: "reset" });
+    spy.mockRestore();
+  });
+
+  it("session:start context includes sessionId, sessionFile, isReset, and cfg", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg);
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    const sessionStartCall = spy.mock.calls.find(
+      (call) => call[0].type === "session" && call[0].action === "start",
+    );
+    expect(sessionStartCall).toBeDefined();
+    expect(sessionStartCall?.[0].context).toMatchObject({
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      isReset: false,
+      cfg,
+    });
+    spy.mockRestore();
+  });
+
+  it("/reset triggers all three hooks in order (session:end, command:reset, session:start)", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/reset", cfg);
+    params.previousSessionEntry = {
+      sessionId: "prev-session-id",
+      sessionFile: "/tmp/prev-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: "session", action: "end" });
+    expect(spy.mock.calls[1][0]).toMatchObject({ type: "command", action: "reset" });
+    expect(spy.mock.calls[2][0]).toMatchObject({ type: "session", action: "start" });
+    expect(spy.mock.calls[2][0].context).toMatchObject({ isReset: true });
+    spy.mockRestore();
+  });
+
+  it("does not trigger session:start when no sessionEntry exists", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg);
+    // No sessionEntry and no previousSessionEntry
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    const sessionStartCall = spy.mock.calls.find(
+      (call) => call[0].type === "session" && call[0].action === "start",
+    );
+    expect(sessionStartCall).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("does not trigger any hooks for unauthorized sender", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg, { CommandAuthorized: false });
+    params.sessionEntry = {
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.json",
+      channel: "whatsapp",
+      updatedAt: Date.now(),
+    };
+    // Override isAuthorizedSender since buildCommandContext may set it from allowFrom
+    params.command = { ...params.command, isAuthorizedSender: false };
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 });
 
 describe("handleCommands context", () => {

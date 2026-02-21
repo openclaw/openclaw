@@ -325,12 +325,22 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
 
+### Session Events
+
+Session lifecycle events fire when sessions are created or reset:
+
+- **`session:end`**: Fires **before** `/new` or `/reset` clears the session
+  - Context: `sessionEntry` (previous session), `sessionId`, `sessionFile`, `reason` (`"new"` or `"reset"`), etc.
+  - Use case: Save session context/transcripts to external memory systems before they're cleared
+
+- **`session:start`**: Fires when a new session begins (after `/new` or `/reset`)
+  - Context: `sessionEntry`, `sessionId`, `sessionFile`, `isReset` (`true` for `/reset`, `false` for `/new`), etc.
+  - Use case: Initialize session-specific resources, audit session lifecycle events
+
 ### Future Events
 
 Planned event types:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
 
 ## Creating Custom Hooks

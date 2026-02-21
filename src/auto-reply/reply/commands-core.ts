@@ -78,6 +78,22 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction = resetMatch?.[1] ?? "new";
+
+    // Trigger session:end for the previous session before reset
+    // This allows hooks to save session context/transcripts before they're cleared
+    if (params.previousSessionEntry) {
+      const sessionEndEvent = createInternalHookEvent("session", "end", params.sessionKey ?? "", {
+        sessionEntry: params.previousSessionEntry,
+        sessionId: params.previousSessionEntry.sessionId,
+        sessionFile: params.previousSessionEntry.sessionFile,
+        commandSource: params.command.surface,
+        senderId: params.command.senderId,
+        reason: commandAction, // "new" or "reset" depending on which command was used
+        cfg: params.cfg,
+      });
+      await triggerInternalHook(sessionEndEvent);
+    }
+
     const hookEvent = createInternalHookEvent("command", commandAction, params.sessionKey ?? "", {
       sessionEntry: params.sessionEntry,
       previousSessionEntry: params.previousSessionEntry,
@@ -86,6 +102,26 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       cfg: params.cfg, // Pass config for LLM slug generation
     });
     await triggerInternalHook(hookEvent);
+
+    // Trigger session:start for the new session after reset
+    // This allows hooks to initialize session-specific resources
+    if (params.sessionEntry) {
+      const sessionStartEvent = createInternalHookEvent(
+        "session",
+        "start",
+        params.sessionKey ?? "",
+        {
+          sessionEntry: params.sessionEntry,
+          sessionId: params.sessionEntry.sessionId,
+          sessionFile: params.sessionEntry.sessionFile,
+          commandSource: params.command.surface,
+          senderId: params.command.senderId,
+          isReset: commandAction === "reset", // true only for /reset, false for /new
+          cfg: params.cfg,
+        },
+      );
+      await triggerInternalHook(sessionStartEvent);
+    }
 
     // Send hook messages immediately if present
     if (hookEvent.messages.length > 0) {
