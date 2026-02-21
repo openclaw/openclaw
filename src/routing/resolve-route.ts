@@ -10,6 +10,7 @@ import {
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
+  normalizeAccountId,
   normalizeAgentId,
   sanitizeAgentId,
 } from "./session-key.js";
@@ -71,20 +72,20 @@ function normalizeId(value: unknown): string {
   return "";
 }
 
-function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
-}
-
 function matchesAccountId(match: string | undefined, actual: string): boolean {
+  // Check for wildcard BEFORE normalization since normalizeAccountId
+  // sanitizes "*" to "-" (which becomes DEFAULT_ACCOUNT_ID).
   const trimmed = (match ?? "").trim();
-  if (!trimmed) {
-    return actual === DEFAULT_ACCOUNT_ID;
-  }
   if (trimmed === "*") {
     return true;
   }
-  return trimmed === actual;
+  // Normalize the binding's accountId the same way as the input accountId
+  // to ensure case-insensitive matching (e.g., "Bot2" matches "bot2").
+  const normalized = normalizeAccountId(match);
+  if (normalized === DEFAULT_ACCOUNT_ID) {
+    return actual === DEFAULT_ACCOUNT_ID;
+  }
+  return normalized === actual;
 }
 
 export function buildAgentSessionKey(params: {
