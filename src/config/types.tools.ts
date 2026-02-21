@@ -389,8 +389,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
+      /** Search provider ("brave", "perplexity", "grok", or "google"). */
+      provider?: "brave" | "perplexity" | "grok" | "google";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -416,6 +416,13 @@ export type ToolsConfig = {
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** Google Custom Search configuration (used when provider="google"). */
+      google?: {
+        /** API key for Google Custom Search (defaults to GOOGLE_API_KEY env var). */
+        apiKey?: string;
+        /** Custom Search Engine ID (cx parameter; defaults to GOOGLE_SEARCH_ENGINE_ID env var). */
+        searchEngineId?: string;
       };
     };
     fetch?: {
