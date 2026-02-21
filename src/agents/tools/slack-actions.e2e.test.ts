@@ -33,7 +33,6 @@ vi.mock("../../slack/actions.js", () => ({
   sendSlackMessage,
   unpinSlackMessage,
 }));
-}));
 
 describe("handleSlackAction", () => {
   it("adds reactions", async () => {
