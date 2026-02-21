@@ -1852,6 +1852,24 @@
             ]
           }
         ]
+      },
+      {
+        "language": "ko",
+        "tabs": [
+          {
+            "tab": "시작하기",
+            "groups": [
+              {
+                "group": "개요",
+                "pages": ["ko-KR/index"]
+              },
+              {
+                "group": "초기 설정",
+                "pages": ["ko-KR/start/getting-started", "ko-KR/start/wizard"]
+              }
+            ]
+          }
+        ]
       }
     ]
   }
