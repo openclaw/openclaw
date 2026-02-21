@@ -307,13 +307,77 @@ export async function sendImageFeishu(params: {
 }
 
 /**
+ * Send an audio message using a file_key (native voice bubble)
+ * Requires the file to be uploaded with file_type: "opus"
+ */
+export async function sendAudioFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  fileKey: string;
+  replyToMessageId?: string;
+  accountId?: string;
+}): Promise<SendMediaResult> {
+  const { cfg, to, fileKey, replyToMessageId, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+  const receiveId = normalizeFeishuTarget(to);
+  if (!receiveId) {
+    throw new Error(`Invalid Feishu target: ${to}`);
+  }
+
+  const receiveIdType = resolveReceiveIdType(receiveId);
+  const content = JSON.stringify({ file_key: fileKey });
+
+  if (replyToMessageId) {
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: "audio",
+      },
+    });
+
+    if (response.code !== 0) {
+      throw new Error(`Feishu audio reply failed: ${response.msg || `code ${response.code}`}`);
+    }
+
+    return {
+      messageId: response.data?.message_id ?? "unknown",
+      chatId: receiveId,
+    };
+  }
+
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: "audio",
+    },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu audio send failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return {
+    messageId: response.data?.message_id ?? "unknown",
+    chatId: receiveId,
+  };
+}
+
+/**
  * Send a file message using a file_key
  */
 export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for audio/video files, "file" for documents */
+  /** Use "media" for video files, "file" for documents */
   msgType?: "file" | "media";
   replyToMessageId?: string;
   accountId?: string;
@@ -425,14 +489,27 @@ export async function sendMediaFeishu(params: {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
 
-  // Determine if it's an image based on extension
+  // Determine media type based on extension
   const ext = path.extname(name).toLowerCase();
   const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const isAudio = [".opus", ".ogg"].includes(ext);
+  const isVideo = [".mp4", ".mov", ".avi"].includes(ext);
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
-  } else {
+  } else if (isAudio) {
+    // Use msg_type "audio" for native voice bubble UI
+    const { fileKey } = await uploadFileFeishu({
+      cfg,
+      file: buffer,
+      fileName: name,
+      fileType: "opus",
+      accountId,
+    });
+    return sendAudioFeishu({ cfg, to, fileKey, replyToMessageId, accountId });
+  } else if (isVideo) {
+    // Use msg_type "media" for video files
     const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
       cfg,
@@ -441,13 +518,29 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType: "media",
+      replyToMessageId,
+      accountId,
+    });
+  } else {
+    // Use msg_type "file" for documents
+    const fileType = detectFileType(name);
+    const { fileKey } = await uploadFileFeishu({
+      cfg,
+      file: buffer,
+      fileName: name,
+      fileType,
+      accountId,
+    });
+    return sendFileFeishu({
+      cfg,
+      to,
+      fileKey,
+      msgType: "file",
       replyToMessageId,
       accountId,
     });
