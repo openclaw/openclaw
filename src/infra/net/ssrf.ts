@@ -279,32 +279,59 @@ function extractIpv4FromEmbeddedIpv6(hextets: number[]): number[] | null {
   return null;
 }
 
-function isPrivateIpv4(parts: number[]): boolean {
-  const [octet1, octet2] = parts;
-  if (octet1 === 0) {
-    return true;
+type Ipv4Cidr = {
+  base: readonly [number, number, number, number];
+  prefixLength: number;
+};
+
+function ipv4ToUint(parts: readonly number[]): number {
+  const [a, b, c, d] = parts;
+  return (((a << 24) >>> 0) | (b << 16) | (c << 8) | d) >>> 0;
+}
+
+function ipv4RangeFromCidr(cidr: Ipv4Cidr): readonly [start: number, end: number] {
+  const base = ipv4ToUint(cidr.base);
+  const hostBits = 32 - cidr.prefixLength;
+  const mask = cidr.prefixLength === 0 ? 0 : (0xffffffff << hostBits) >>> 0;
+  const start = (base & mask) >>> 0;
+  const end = (start | (~mask >>> 0)) >>> 0;
+  return [start, end];
+}
+
+const BLOCKED_IPV4_SPECIAL_USE_CIDRS: readonly Ipv4Cidr[] = [
+  { base: [0, 0, 0, 0], prefixLength: 8 },
+  { base: [10, 0, 0, 0], prefixLength: 8 },
+  { base: [100, 64, 0, 0], prefixLength: 10 },
+  { base: [127, 0, 0, 0], prefixLength: 8 },
+  { base: [169, 254, 0, 0], prefixLength: 16 },
+  { base: [172, 16, 0, 0], prefixLength: 12 },
+  { base: [192, 0, 0, 0], prefixLength: 24 },
+  { base: [192, 0, 2, 0], prefixLength: 24 },
+  { base: [192, 88, 99, 0], prefixLength: 24 },
+  { base: [192, 168, 0, 0], prefixLength: 16 },
+  { base: [198, 18, 0, 0], prefixLength: 15 },
+  { base: [198, 51, 100, 0], prefixLength: 24 },
+  { base: [203, 0, 113, 0], prefixLength: 24 },
+  { base: [224, 0, 0, 0], prefixLength: 4 },
+  { base: [240, 0, 0, 0], prefixLength: 4 },
+];
+
+const BLOCKED_IPV4_SPECIAL_USE_RANGES = BLOCKED_IPV4_SPECIAL_USE_CIDRS.map(ipv4RangeFromCidr);
+
+function isBlockedIpv4SpecialUse(parts: number[]): boolean {
+  if (parts.length !== 4) {
+    return false;
   }
-  if (octet1 === 10) {
-    return true;
-  }
-  if (octet1 === 127) {
-    return true;
-  }
-  if (octet1 === 169 && octet2 === 254) {
-    return true;
-  }
-  if (octet1 === 172 && octet2 >= 16 && octet2 <= 31) {
-    return true;
-  }
-  if (octet1 === 192 && octet2 === 168) {
-    return true;
-  }
-  if (octet1 === 100 && octet2 >= 64 && octet2 <= 127) {
-    return true;
+  const value = ipv4ToUint(parts);
+  for (const [start, end] of BLOCKED_IPV4_SPECIAL_USE_RANGES) {
+    if (value >= start && value <= end) {
+      return true;
+    }
   }
   return false;
 }
 
+// Returns true for private/internal and special-use non-global addresses.
 export function isPrivateIpAddress(address: string): boolean {
   let normalized = address.trim().toLowerCase();
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
@@ -345,7 +372,7 @@ export function isPrivateIpAddress(address: string): boolean {
 
     const embeddedIpv4 = extractIpv4FromEmbeddedIpv6(hextets);
     if (embeddedIpv4) {
-      return isPrivateIpv4(embeddedIpv4);
+      return isBlockedIpv4SpecialUse(embeddedIpv4);
     }
 
     // IPv6 private/internal ranges
@@ -367,7 +394,7 @@ export function isPrivateIpAddress(address: string): boolean {
 
   const ipv4 = parseIpv4(normalized);
   if (ipv4) {
-    return isPrivateIpv4(ipv4);
+    return isBlockedIpv4SpecialUse(ipv4);
   }
   // Reject non-canonical IPv4 literal forms (octal/hex/short/packed) by default.
   if (isUnsupportedLegacyIpv4Literal(normalized)) {
@@ -485,7 +512,7 @@ export async function resolvePinnedHostnameWithPolicy(
   }
 
   if (!allowPrivateNetwork && !isExplicitAllowed && isBlockedHostnameOrIp(normalized)) {
-    throw new SsrFBlockedError("Blocked hostname or private/internal IP address");
+    throw new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address");
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
@@ -497,7 +524,7 @@ export async function resolvePinnedHostnameWithPolicy(
   if (!allowPrivateNetwork && !isExplicitAllowed) {
     for (const entry of results) {
       if (isPrivateIpAddress(entry.address)) {
-        throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
+        throw new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address");
       }
     }
   }
