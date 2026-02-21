@@ -7,12 +7,12 @@ enum ExecAllowlistMatcher {
         let resolvedPath = resolution.resolvedPath
 
         for entry in entries {
-            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-            if pattern.isEmpty { continue }
-            let hasPath = pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
-            if hasPath {
+            switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
+            case .valid(let pattern):
                 let target = resolvedPath ?? rawExecutable
                 if self.matches(pattern: pattern, target: target) { return entry }
+            case .invalid:
+                continue
             }
         }
         return nil

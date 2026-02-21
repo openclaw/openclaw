@@ -39,7 +39,7 @@ struct ExecAllowlistTests {
     }
 
     @Test func matchIsCaseInsensitive() {
-        let entry = ExecAllowlistEntry(pattern: "RG")
+        let entry = ExecAllowlistEntry(pattern: "/OPT/HOMEBREW/BIN/RG")
         let resolution = ExecCommandResolution(
             rawExecutable: "rg",
             resolvedPath: "/opt/homebrew/bin/rg",
@@ -138,12 +138,12 @@ struct ExecAllowlistTests {
         let resolutions = [first, second]
 
         let partial = ExecAllowlistMatcher.matchAll(
-            entries: [ExecAllowlistEntry(pattern: "echo")],
+            entries: [ExecAllowlistEntry(pattern: "/usr/bin/echo")],
             resolutions: resolutions)
         #expect(partial.isEmpty)
 
         let full = ExecAllowlistMatcher.matchAll(
-            entries: [ExecAllowlistEntry(pattern: "echo"), ExecAllowlistEntry(pattern: "touch")],
+            entries: [ExecAllowlistEntry(pattern: "/USR/BIN/ECHO"), ExecAllowlistEntry(pattern: "/usr/bin/touch")],
             resolutions: resolutions)
         #expect(full.count == 2)
     }
