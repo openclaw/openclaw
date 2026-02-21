@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { callGuardian } from "./guardian-client.js";
 import { getRecentTurns, updateCache } from "./message-cache.js";
 import { buildGuardianSystemPrompt, buildGuardianUserPrompt } from "./prompt.js";
-import type { GuardianConfig, ResolvedGuardianModel } from "./types.js";
+import type { ConversationTurn, GuardianConfig, ResolvedGuardianModel } from "./types.js";
 import { parseModelRef, resolveConfig, resolveGuardianModelRef } from "./types.js";
 
 /**
@@ -127,8 +127,6 @@ const guardianPlugin = {
           });
           if (auth.apiKey) {
             resolvedModel.apiKey = auth.apiKey;
-            resolvedModel.authMode =
-              auth.mode === "oauth" || auth.mode === "token" ? auth.mode : "api-key";
           }
           api.logger.info(
             `[guardian] Auth resolved via SDK: provider=${resolvedModel.provider}, ` +
@@ -282,6 +280,7 @@ function setCachedDecision(key: string, action: "allow" | "block", reason?: stri
 type Logger = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
+  error: (msg: string) => void;
 };
 
 type BeforeToolCallEvent = {
@@ -324,10 +323,17 @@ async function reviewToolCall(
   const cached = getCachedDecision(cacheKey);
   if (cached) {
     if (config.log_decisions) {
-      logger.info(
-        `[guardian] ${cached.action.toUpperCase()} (cached) tool=${event.toolName} ` +
-          `session=${sessionKey}${cached.reason ? ` reason="${cached.reason}"` : ""}`,
-      );
+      if (cached.action === "block") {
+        logger.error(
+          `[guardian] ██ BLOCKED (cached) ██ tool=${event.toolName} ` +
+            `session=${sessionKey}${cached.reason ? ` reason="${cached.reason}"` : ""}`,
+        );
+      } else {
+        logger.info(
+          `[guardian] ${cached.action.toUpperCase()} (cached) tool=${event.toolName} ` +
+            `session=${sessionKey}${cached.reason ? ` reason="${cached.reason}"` : ""}`,
+        );
+      }
     }
     if (cached.action === "block" && config.mode === "enforce") {
       return { block: true, blockReason: `Guardian: ${cached.reason || "blocked (cached)"}` };
@@ -381,10 +387,15 @@ async function reviewToolCall(
 
   // 7. Log the decision
   if (config.log_decisions) {
-    logger.info(
-      `[guardian] ${decision.action.toUpperCase()} tool=${event.toolName} ` +
-        `session=${sessionKey}${decision.reason ? ` reason="${decision.reason}"` : ""}`,
-    );
+    if (decision.action === "block") {
+      // Log BLOCK prominently with full conversation context
+      logBlockDecision(logger, decision, event, sessionKey, turns, config.mode);
+    } else {
+      logger.info(
+        `[guardian] ${decision.action.toUpperCase()} tool=${event.toolName} ` +
+          `session=${sessionKey}${decision.reason ? ` reason="${decision.reason}"` : ""}`,
+      );
+    }
   }
 
   // 8. Return the decision
@@ -392,15 +403,66 @@ async function reviewToolCall(
     if (config.mode === "enforce") {
       return { block: true, blockReason: `Guardian: ${decision.reason || "blocked"}` };
     }
-    if (config.log_decisions) {
-      logger.info(
-        `[guardian] AUDIT-ONLY: would have blocked tool=${event.toolName} ` +
-          `session=${sessionKey} reason="${decision.reason || "blocked"}"`,
-      );
-    }
   }
 
   return undefined; // allow
+}
+
+// ---------------------------------------------------------------------------
+// Block decision logging — prominent output with full conversation context
+// ---------------------------------------------------------------------------
+
+function logBlockDecision(
+  logger: Logger,
+  decision: { action: string; reason?: string },
+  event: BeforeToolCallEvent,
+  sessionKey: string,
+  turns: ConversationTurn[],
+  mode: "enforce" | "audit",
+): void {
+  const modeLabel = mode === "enforce" ? "BLOCKED" : "AUDIT-ONLY (would block)";
+
+  // Format conversation turns
+  const turnLines: string[] = [];
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    if (turn.assistant) {
+      turnLines.push(`  [${i + 1}] Assistant: ${turn.assistant}`);
+    }
+    turnLines.push(`  [${i + 1}] User: ${turn.user}`);
+  }
+  const conversationBlock =
+    turnLines.length > 0 ? turnLines.join("\n") : "  (no conversation context)";
+
+  // Format tool args
+  let argsStr: string;
+  try {
+    argsStr = JSON.stringify(event.params, null, 2);
+  } catch {
+    argsStr = "(unable to serialize)";
+  }
+
+  const lines = [
+    ``,
+    `[guardian] ████████████████████████████████████████████████`,
+    `[guardian] ██ ${modeLabel} ██`,
+    `[guardian] ████████████████████████████████████████████████`,
+    `[guardian]   Tool:    ${event.toolName}`,
+    `[guardian]   Session: ${sessionKey}`,
+    `[guardian]   Reason:  ${decision.reason || "blocked"}`,
+    `[guardian]`,
+    `[guardian]   ── Conversation context sent to guardian ──`,
+    ...conversationBlock.split("\n").map((l) => `[guardian] ${l}`),
+    `[guardian]`,
+    `[guardian]   ── Tool arguments ──`,
+    ...argsStr.split("\n").map((l) => `[guardian]   ${l}`),
+    `[guardian] ████████████████████████████████████████████████`,
+    ``,
+  ];
+
+  for (const line of lines) {
+    logger.error(line);
+  }
 }
 
 export default guardianPlugin;

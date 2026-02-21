@@ -46,8 +46,8 @@
       },
       "max_user_messages": {
         "type": "number",
-        "default": 3,
-        "description": "Number of recent user messages to include in guardian prompt"
+        "default": 10,
+        "description": "Number of recent conversation turns to include in guardian prompt"
       },
       "max_arg_length": {
         "type": "number",

@@ -81,30 +81,18 @@ describe("message-cache", () => {
       expect(turns).toEqual([{ user: "Hello", assistant: "Session reset." }]);
     });
 
-    it("truncates long assistant messages", () => {
-      const longText = "x".repeat(1000);
+    it("preserves long assistant messages without truncation", () => {
+      const longText = "x".repeat(2000);
       const history = [
         { role: "assistant", content: longText },
         { role: "user", content: "Ok" },
       ];
 
       const turns = extractConversationTurns(history);
-      expect(turns[0].assistant!.length).toBeLessThan(900);
-      expect(turns[0].assistant).toContain("…(truncated)");
+      expect(turns[0].assistant).toBe(longText);
     });
 
-    it("does not truncate assistant messages under the limit", () => {
-      const text = "x".repeat(500);
-      const history = [
-        { role: "assistant", content: text },
-        { role: "user", content: "Ok" },
-      ];
-
-      const turns = extractConversationTurns(history);
-      expect(turns[0].assistant).toBe(text);
-    });
-
-    it("truncates after merging multiple assistant messages", () => {
+    it("preserves full merged content from multiple assistant messages", () => {
       const history = [
         { role: "assistant", content: "a".repeat(500) },
         { role: "assistant", content: "b".repeat(500) },
@@ -112,9 +100,8 @@ describe("message-cache", () => {
       ];
 
       const turns = extractConversationTurns(history);
-      // Merged = 500 + \n + 500 = 1001 chars, exceeds 800 limit
-      expect(turns[0].assistant!.length).toBeLessThan(900);
-      expect(turns[0].assistant).toContain("…(truncated)");
+      // Merged = 500 a's + \n + 500 b's = 1001 chars, fully preserved
+      expect(turns[0].assistant).toBe("a".repeat(500) + "\n" + "b".repeat(500));
     });
 
     it("handles multimodal assistant content", () => {

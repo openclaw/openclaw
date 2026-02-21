@@ -44,8 +44,6 @@ export type ResolvedGuardianModel = {
   /** May be undefined at registration time — resolved lazily via SDK. */
   baseUrl?: string;
   apiKey?: string;
-  /** Auth mode: "api-key" uses provider-native headers, "oauth"/"token" uses Authorization: Bearer */
-  authMode?: "api-key" | "oauth" | "token";
   api: string;
   headers?: Record<string, string>;
 };
@@ -94,7 +92,7 @@ export const GUARDIAN_DEFAULTS = {
   fallback_on_error: "allow" as const,
   log_decisions: true,
   mode: "enforce" as const,
-  max_user_messages: 3,
+  max_user_messages: 10,
   max_arg_length: 500,
 };
 

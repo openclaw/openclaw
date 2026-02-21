@@ -208,30 +208,21 @@ function extractTextContent(content: unknown): string | undefined {
 }
 
 /**
- * Merge multiple assistant text parts into a single string, then truncate.
+ * Merge multiple assistant text parts into a single string.
  *
  * An assistant turn may span multiple messages (e.g. text → tool call →
- * tool result → text). We concatenate all text parts and apply a single
- * truncation limit on the merged result. The guardian only needs enough
- * context to understand what the assistant proposed — not the full output.
+ * tool result → text). We concatenate all text parts so the guardian
+ * can see the full assistant reply for context.
  */
-const MAX_ASSISTANT_TEXT_LENGTH = 800;
-
 function mergeAssistantParts(parts: string[]): string | undefined {
   if (parts.length === 0) return undefined;
   const merged = parts.join("\n").trim();
   if (!merged) return undefined;
-  if (merged.length > MAX_ASSISTANT_TEXT_LENGTH) {
-    return merged.slice(0, MAX_ASSISTANT_TEXT_LENGTH) + "…(truncated)";
-  }
   return merged;
 }
 
 /**
  * Extract raw text from an assistant message's content field.
- *
- * Does NOT truncate — truncation happens in mergeAssistantParts() after
- * all assistant messages in a turn are collected.
  */
 function extractAssistantText(content: unknown): string | undefined {
   if (typeof content === "string") {

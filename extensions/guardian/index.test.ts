@@ -206,7 +206,8 @@ describe("guardian index — reviewToolCall", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("AUDIT-ONLY"));
+    // BLOCK decisions are logged via logger.error with prominent formatting
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("AUDIT-ONLY"));
   });
 
   it("applies fallback when session context is unknown", async () => {
