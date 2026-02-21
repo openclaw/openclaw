@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -143,48 +143,49 @@ describe("sessions.usage", () => {
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
-      const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-      fs.mkdirSync(agentSessionsDir, { recursive: true });
-      const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
-      fs.writeFileSync(sessionFile, "", "utf-8");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
 
-      // Swap the store mock for this test: the canonical key differs from the discovered key
-      // but points at the same sessionId.
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
-        storePath: "(multiple)",
-        store: {
-          [storeKey]: {
-            sessionId: "s-opus",
-            sessionFile: "s-opus.jsonl",
-            label: "Named session",
-            updatedAt: 999,
+        // Swap the store mock for this test: the canonical key differs from the discovered key
+        // but points at the same sessionId.
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            [storeKey]: {
+              sessionId: "s-opus",
+              sessionFile: "s-opus.jsonl",
+              label: "Named session",
+              updatedAt: 999,
+            },
           },
-        },
-      });
+        });
 
-      // Query via discovered key: agent:<id>:<sessionId>
-      const respond = await runSessionsUsage({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        key: "agent:opus:s-opus",
-        limit: 10,
-      });
+        // Query via discovered key: agent:<id>:<sessionId>
+        const respond = await runSessionsUsage({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          key: "agent:opus:s-opus",
+          limit: 10,
+        });
 
-      expect(respond).toHaveBeenCalledTimes(1);
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<{ key: string }> };
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0]?.key).toBe(storeKey);
-      expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
-      expect(
-        vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
-      ).toBe(true);
+        expect(respond).toHaveBeenCalledTimes(1);
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        const result = respond.mock.calls[0]?.[1] as unknown as {
+          sessions: Array<{ key: string }>;
+        };
+        expect(result.sessions).toHaveLength(1);
+        expect(result.sessions[0]?.key).toBe(storeKey);
+        expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
+        expect(
+          vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
+        ).toBe(true);
+      });
     } finally {
-      envSnapshot.restore();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });

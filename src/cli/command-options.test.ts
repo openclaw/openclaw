@@ -61,4 +61,31 @@ describe("inheritOptionFromParent", () => {
     });
     expect(getInherited()).toBeUndefined();
   });
+
+  it("inherits values from non-default ancestor sources (for example env)", () => {
+    const program = new Command().option("--token <token>", "Root token");
+    const gateway = program.command("gateway").option("--token <token>", "Gateway token");
+    const run = gateway.command("run").option("--token <token>", "Run token");
+
+    gateway.setOptionValueWithSource("token", "gateway-env-token", "env");
+
+    expect(inheritOptionFromParent<string>(run, "token")).toBe("gateway-env-token");
+  });
+
+  it("skips default-valued ancestor options and keeps traversing", async () => {
+    const program = new Command().option("--token <token>", "Root token");
+    const gateway = program
+      .command("gateway")
+      .option("--token <token>", "Gateway token", "default");
+    const getInherited = attachRunCommandAndCaptureInheritedToken(gateway);
+
+    await program.parseAsync(["--token", "root-token", "gateway", "run"], {
+      from: "user",
+    });
+    expect(getInherited()).toBe("root-token");
+  });
+
+  it("returns undefined when command is missing", () => {
+    expect(inheritOptionFromParent<string>(undefined, "token")).toBeUndefined();
+  });
 });

@@ -86,8 +86,7 @@ export class DiscordMessageListener extends MessageCreateListener {
 
   async handle(data: DiscordMessageEvent, client: Client) {
     const startedAt = Date.now();
-    const task = Promise.resolve(this.handler(data, client));
-    void task
+    await this.handler(data, client)
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));

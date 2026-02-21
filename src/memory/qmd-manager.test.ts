@@ -156,17 +156,17 @@ describe("QmdMemoryManager", () => {
     const baselineCalls = spawnMock.mock.calls.length;
 
     await manager.sync({ reason: "manual" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 1);
 
     await manager.sync({ reason: "manual-again" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 1);
 
     (manager as unknown as { lastUpdateAt: number | null }).lastUpdateAt =
       Date.now() - (resolved.qmd?.update.debounceMs ?? 0) - 10;
 
     await manager.sync({ reason: "after-wait" });
-    // By default we refresh embeddings less frequently than index updates.
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 3);
+    // `search` mode does not require qmd embed side effects.
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
 
     await manager.close();
   });
@@ -359,7 +359,7 @@ describe("QmdMemoryManager", () => {
     expect(addSessions?.[2]).toBe(path.join(stateDir, "agents", devAgentId, "qmd", "sessions"));
   });
 
-  it("rebinds sessions collection when qmd only reports collection names", async () => {
+  it("rebinds managed collections when qmd only reports collection names", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -396,6 +396,11 @@ describe("QmdMemoryManager", () => {
         args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
     );
     expect(removeSessions).toBeDefined();
+    const removeWorkspace = commands.find(
+      (args) =>
+        args[0] === "collection" && args[1] === "remove" && args[2] === `workspace-${agentId}`,
+    );
+    expect(removeWorkspace).toBeDefined();
 
     const addSessions = commands.find((args) => {
       if (args[0] !== "collection" || args[1] !== "add") {
@@ -415,6 +420,7 @@ describe("QmdMemoryManager", () => {
         backend: "qmd",
         qmd: {
           includeDefaultMemory: false,
+          searchMode: "query",
           update: {
             interval: "0s",
             debounceMs: 0,
@@ -792,23 +798,16 @@ describe("QmdMemoryManager", () => {
     const { manager, resolved } = await createManager();
 
     await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const searchCall = spawnMock.mock.calls.find(
-      (call: unknown[]) => (call[1] as string[])?.[0] === "search",
-    );
     const maxResults = resolved.qmd?.limits.maxResults;
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
-    expect(searchCall?.[1]).toEqual([
-      "search",
-      "test",
-      "--json",
-      "-n",
-      String(maxResults),
-      "-c",
-      "workspace-main",
-      "-c",
-      "notes-main",
+    const searchCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "search");
+    expect(searchCalls).toEqual([
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
     ]);
     await manager.close();
   });
@@ -904,17 +903,7 @@ describe("QmdMemoryManager", () => {
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search" || args[0] === "query");
     expect(searchAndQueryCalls).toEqual([
-      [
-        "search",
-        "test",
-        "--json",
-        "-n",
-        String(maxResults),
-        "-c",
-        "workspace-main",
-        "-c",
-        "notes-main",
-      ],
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
       ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
       ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
     ]);
@@ -941,6 +930,86 @@ describe("QmdMemoryManager", () => {
     expect(
       spawnMock.mock.calls.some((call: unknown[]) => (call[1] as string[])?.[0] === "query"),
     ).toBe(false);
+    await manager.close();
+  });
+
+  it("diversifies mixed session and memory search results so memory hits are retained", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search" && args.includes("workspace-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ docid: "m1", score: 0.6, snippet: "@@ -1,1\nmemory fact" }]),
+        );
+        return child;
+      }
+      if (args[0] === "search" && args.includes("sessions-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: "s1", score: 0.99, snippet: "@@ -1,1\nsession top 1" },
+            { docid: "s2", score: 0.95, snippet: "@@ -1,1\nsession top 2" },
+            { docid: "s3", score: 0.91, snippet: "@@ -1,1\nsession top 3" },
+            { docid: "s4", score: 0.88, snippet: "@@ -1,1\nsession top 4" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (_query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          switch (arg) {
+            case "m1":
+              return [{ collection: "workspace-main", path: "memory/facts.md" }];
+            case "s1":
+            case "s2":
+            case "s3":
+            case "s4":
+              return [
+                {
+                  collection: "sessions-main",
+                  path: `${String(arg)}.md`,
+                },
+              ];
+            default:
+              return [];
+          }
+        },
+      }),
+      close: () => {},
+    };
+
+    const results = await manager.search("fact", {
+      maxResults: 4,
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+
+    expect(results).toHaveLength(4);
+    expect(results.some((entry) => entry.source === "memory")).toBe(true);
+    expect(results.some((entry) => entry.source === "sessions")).toBe(true);
     await manager.close();
   });
 
@@ -981,6 +1050,70 @@ describe("QmdMemoryManager", () => {
     const resolvedSync = expect(syncPromise).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(20);
     await resolvedSync;
+    await manager.close();
+  });
+
+  it("skips qmd embed in search mode even for forced sync", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "status" });
+    await manager.sync({ reason: "manual", force: true });
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"]]);
+    await manager.close();
+  });
+
+  it("retries boot update when qmd reports a retryable lock error", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: {
+            interval: "0s",
+            debounceMs: 60_000,
+            onBoot: true,
+            waitForBootSync: true,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (updateCalls === 1) {
+          emitAndClose(child, "stderr", "SQLITE_BUSY: database is locked", 2);
+        } else {
+          emitAndClose(child, "stdout", "", 0);
+        }
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+
+    expect(updateCalls).toBe(2);
     await manager.close();
   });
 
@@ -1079,6 +1212,54 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
+  it("returns empty text when qmd files are missing before or during read", async () => {
+    const relPath = "qmd-window.md";
+    const absPath = path.join(workspaceDir, relPath);
+    await fs.writeFile(absPath, "one\ntwo\nthree", "utf-8");
+
+    const cases = [
+      {
+        name: "missing before read",
+        request: { relPath: "ghost.md" },
+        expectedPath: "ghost.md",
+      },
+      {
+        name: "disappears before partial read",
+        request: { relPath, from: 2, lines: 1 },
+        expectedPath: relPath,
+        installOpenSpy: () => {
+          const realOpen = fs.open;
+          let injected = false;
+          const openSpy = vi
+            .spyOn(fs, "open")
+            .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+              const [target, options] = args;
+              if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+                injected = true;
+                const err = new Error("gone") as NodeJS.ErrnoException;
+                err.code = "ENOENT";
+                throw err;
+              }
+              return realOpen(target, options);
+            });
+          return () => openSpy.mockRestore();
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const { manager } = await createManager();
+      const restoreOpen = "installOpenSpy" in testCase ? testCase.installOpenSpy() : undefined;
+      try {
+        const result = await manager.readFile(testCase.request);
+        expect(result, testCase.name).toEqual({ text: "", path: testCase.expectedPath });
+      } finally {
+        restoreOpen?.();
+        await manager.close();
+      }
+    }
+  });
+
   it("reuses exported session markdown files when inputs are unchanged", async () => {
     const writeFileSpy = vi.spyOn(fs, "writeFile");
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
@@ -1126,56 +1307,86 @@ describe("QmdMemoryManager", () => {
     writeFileSpy.mockRestore();
   });
 
-  it("throws when sqlite index is busy", async () => {
-    const { manager } = await createManager();
-    const inner = manager as unknown as {
-      db: { prepare: () => { get: () => never }; close: () => void } | null;
-      resolveDocLocation: (docid?: string) => Promise<unknown>;
-    };
-    inner.db = {
-      prepare: () => ({
-        get: () => {
-          throw new Error("SQLITE_BUSY: database is locked");
+  it("fails closed when sqlite index is busy during doc lookup or search", async () => {
+    const cases = [
+      {
+        name: "resolveDocLocation",
+        run: async (manager: QmdMemoryManager) => {
+          const inner = manager as unknown as {
+            db: {
+              prepare: () => {
+                all: () => never;
+                get: () => never;
+              };
+              close: () => void;
+            } | null;
+            resolveDocLocation: (docid?: string) => Promise<unknown>;
+          };
+          const busyStmt: { all: () => never; get: () => never } = {
+            all: () => {
+              throw new Error("SQLITE_BUSY: database is locked");
+            },
+            get: () => {
+              throw new Error("SQLITE_BUSY: database is locked");
+            },
+          };
+          inner.db = {
+            prepare: () => busyStmt,
+            close: () => {},
+          };
+          await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
+            "qmd index busy while reading results",
+          );
         },
-      }),
-      close: () => {},
-    };
-    await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
-      "qmd index busy while reading results",
-    );
-    await manager.close();
-  });
+      },
+      {
+        name: "search",
+        run: async (manager: QmdMemoryManager) => {
+          spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+            if (args[0] === "search") {
+              const child = createMockChild({ autoClose: false });
+              emitAndClose(
+                child,
+                "stdout",
+                JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
+              );
+              return child;
+            }
+            return createMockChild();
+          });
+          const inner = manager as unknown as {
+            db: { prepare: () => { all: () => never }; close: () => void } | null;
+          };
+          inner.db = {
+            prepare: () => ({
+              all: () => {
+                throw new Error("SQLITE_BUSY: database is locked");
+              },
+            }),
+            close: () => {},
+          };
+          await expect(
+            manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
+          ).rejects.toThrow("qmd index busy while reading results");
+        },
+      },
+    ] as const;
 
-  it("fails search when sqlite index is busy so caller can fallback", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
+    for (const testCase of cases) {
+      spawnMock.mockReset();
+      spawnMock.mockImplementation(() => createMockChild());
+      const { manager } = await createManager();
+      try {
+        await testCase.run(manager);
+      } catch (error) {
+        throw new Error(
+          `${testCase.name}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
         );
-        return child;
+      } finally {
+        await manager.close();
       }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-    const inner = manager as unknown as {
-      db: { prepare: () => { get: () => never }; close: () => void } | null;
-    };
-    inner.db = {
-      prepare: () => ({
-        get: () => {
-          throw new Error("SQLITE_BUSY: database is locked");
-        },
-      }),
-      close: () => {},
-    };
-    await expect(
-      manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).rejects.toThrow("qmd index busy while reading results");
-    await manager.close();
+    }
   });
 
   it("prefers exact docid match before prefix fallback for qmd document lookups", async () => {
@@ -1199,19 +1410,19 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
 
     const inner = manager as unknown as {
-      db: { prepare: (query: string) => { get: (arg: unknown) => unknown }; close: () => void };
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
     };
     inner.db = {
       prepare: (query: string) => {
         prepareCalls.push(query);
         return {
-          get: (arg: unknown) => {
+          all: (arg: unknown) => {
             if (query.includes("hash = ?")) {
-              return undefined;
+              return [];
             }
             if (query.includes("hash LIKE ?")) {
               expect(arg).toBe(`${exactDocid}%`);
-              return { collection: "workspace-main", path: "notes/welcome.md" };
+              return [{ collection: "workspace-main", path: "notes/welcome.md" }];
             }
             throw new Error(`unexpected sqlite query: ${query}`);
           },
@@ -1238,6 +1449,76 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("prefers collection hint when resolving duplicate qmd document hashes", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const duplicateDocid = "dup-123";
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search" && args.includes("workspace-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: duplicateDocid, score: 0.9, snippet: "@@ -3,1\nworkspace hit" },
+          ]),
+        );
+        return child;
+      }
+      if (args[0] === "search" && args.includes("notes-main")) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (typeof arg === "string" && arg.startsWith(duplicateDocid)) {
+            return [
+              { collection: "stale-workspace", path: "notes/welcome.md" },
+              { collection: "workspace-main", path: "notes/welcome.md" },
+            ];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+
+    const results = await manager.search("workspace", { sessionKey: "agent:main:slack:dm:u123" });
+    expect(results).toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.9,
+        snippet: "@@ -3,1\nworkspace hit",
+        source: "memory",
+      },
+    ]);
+    await manager.close();
+  });
+
   it("errors when qmd output exceeds command output safety cap", async () => {
     const noisyPayload = "x".repeat(240_000);
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
@@ -1257,58 +1538,30 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("treats plain-text no-results stdout as an empty result set", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "No results found.");
-        return child;
-      }
-      return createMockChild();
-    });
+  it("treats plain-text no-results markers from stdout/stderr as empty result sets", async () => {
+    const cases = [
+      { name: "stdout with punctuation", stream: "stdout", payload: "No results found." },
+      { name: "stdout without punctuation", stream: "stdout", payload: "No results found\n\n" },
+      { name: "stderr", stream: "stderr", payload: "No results found.\n" },
+    ] as const;
 
-    const { manager } = await createManager();
+    for (const testCase of cases) {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, testCase.stream, testCase.payload);
+          return child;
+        }
+        return createMockChild();
+      });
 
-    await expect(
-      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
-    await manager.close();
-  });
-
-  it("treats plain-text no-results stdout without punctuation as empty", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "No results found\n\n");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-
-    await expect(
-      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
-    await manager.close();
-  });
-
-  it("treats plain-text no-results stderr as an empty result set", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "No results found.\n");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-
-    await expect(
-      manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
-    await manager.close();
+      const { manager } = await createManager();
+      await expect(
+        manager.search("missing", { sessionKey: "agent:main:slack:dm:u123" }),
+        testCase.name,
+      ).resolves.toEqual([]);
+      await manager.close();
+    }
   });
 
   it("throws when stdout is empty without the no-results marker", async () => {
@@ -1359,56 +1612,68 @@ describe("QmdMemoryManager", () => {
       }
     });
 
-    it("symlinks default model cache into custom XDG_CACHE_HOME on first run", async () => {
-      const { manager } = await createManager({ mode: "full" });
-      expect(manager).toBeTruthy();
+    it("handles first-run symlink, existing dir preservation, and missing default cache", async () => {
+      const cases: Array<{
+        name: string;
+        setup?: () => Promise<void>;
+        assert: () => Promise<void>;
+      }> = [
+        {
+          name: "symlinks default cache on first run",
+          assert: async () => {
+            const stat = await fs.lstat(customModelsDir);
+            expect(stat.isSymbolicLink()).toBe(true);
+            const target = await fs.readlink(customModelsDir);
+            expect(target).toBe(defaultModelsDir);
+            const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
+            expect(content).toBe("fake-model");
+          },
+        },
+        {
+          name: "does not overwrite existing models directory",
+          setup: async () => {
+            await fs.mkdir(customModelsDir, { recursive: true });
+            await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
+          },
+          assert: async () => {
+            const stat = await fs.lstat(customModelsDir);
+            expect(stat.isSymbolicLink()).toBe(false);
+            expect(stat.isDirectory()).toBe(true);
+            const content = await fs.readFile(
+              path.join(customModelsDir, "custom-model.bin"),
+              "utf-8",
+            );
+            expect(content).toBe("custom");
+          },
+        },
+        {
+          name: "skips symlink when default models are absent",
+          setup: async () => {
+            await fs.rm(defaultModelsDir, { recursive: true, force: true });
+          },
+          assert: async () => {
+            await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+            expect(logWarnMock).not.toHaveBeenCalledWith(
+              expect.stringContaining("failed to symlink qmd models directory"),
+            );
+          },
+        },
+      ];
 
-      const stat = await fs.lstat(customModelsDir);
-      expect(stat.isSymbolicLink()).toBe(true);
-      const target = await fs.readlink(customModelsDir);
-      expect(target).toBe(defaultModelsDir);
-
-      // Models are accessible through the symlink.
-      const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
-      expect(content).toBe("fake-model");
-
-      await manager.close();
-    });
-
-    it("does not overwrite existing models directory", async () => {
-      // Pre-create the custom models dir with different content.
-      await fs.mkdir(customModelsDir, { recursive: true });
-      await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
-
-      const { manager } = await createManager({ mode: "full" });
-      expect(manager).toBeTruthy();
-
-      // Should still be a real directory, not a symlink.
-      const stat = await fs.lstat(customModelsDir);
-      expect(stat.isSymbolicLink()).toBe(false);
-      expect(stat.isDirectory()).toBe(true);
-
-      // Custom content should be preserved.
-      const content = await fs.readFile(path.join(customModelsDir, "custom-model.bin"), "utf-8");
-      expect(content).toBe("custom");
-
-      await manager.close();
-    });
-
-    it("skips symlink when no default models exist", async () => {
-      // Remove the default models dir.
-      await fs.rm(defaultModelsDir, { recursive: true, force: true });
-
-      const { manager } = await createManager({ mode: "full" });
-      expect(manager).toBeTruthy();
-
-      // Custom models dir should not exist (no symlink created).
-      await expect(fs.lstat(customModelsDir)).rejects.toThrow();
-      expect(logWarnMock).not.toHaveBeenCalledWith(
-        expect.stringContaining("failed to symlink qmd models directory"),
-      );
-
-      await manager.close();
+      for (const testCase of cases) {
+        await fs.rm(customModelsDir, { recursive: true, force: true });
+        await fs.mkdir(defaultModelsDir, { recursive: true });
+        await fs.writeFile(path.join(defaultModelsDir, "model.bin"), "fake-model");
+        logWarnMock.mockReset();
+        await testCase.setup?.();
+        const { manager } = await createManager({ mode: "full" });
+        expect(manager, testCase.name).toBeTruthy();
+        try {
+          await testCase.assert();
+        } finally {
+          await manager.close();
+        }
+      }
     });
   });
 });

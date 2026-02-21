@@ -44,4 +44,3 @@ public enum TailscaleNetwork {
         return nil
     }
 }
-

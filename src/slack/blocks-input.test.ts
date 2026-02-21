@@ -19,23 +19,39 @@ describe("parseSlackBlocksInput", () => {
     expect(parsed).toEqual([{ type: "section", text: { type: "mrkdwn", text: "hi" } }]);
   });
 
-  it("rejects invalid JSON", () => {
-    expect(() => parseSlackBlocksInput("{bad-json")).toThrow(/valid JSON/i);
-  });
+  it("rejects invalid block payloads", () => {
+    const cases = [
+      {
+        name: "invalid JSON",
+        input: "{bad-json",
+        expectedMessage: /valid JSON/i,
+      },
+      {
+        name: "non-array payload",
+        input: { type: "divider" },
+        expectedMessage: /must be an array/i,
+      },
+      {
+        name: "empty array",
+        input: [],
+        expectedMessage: /at least one block/i,
+      },
+      {
+        name: "non-object block",
+        input: ["not-a-block"],
+        expectedMessage: /must be an object/i,
+      },
+      {
+        name: "missing block type",
+        input: [{}],
+        expectedMessage: /non-empty string type/i,
+      },
+    ] as const;
 
-  it("rejects non-array payloads", () => {
-    expect(() => parseSlackBlocksInput({ type: "divider" })).toThrow(/must be an array/i);
-  });
-
-  it("rejects empty arrays", () => {
-    expect(() => parseSlackBlocksInput([])).toThrow(/at least one block/i);
-  });
-
-  it("rejects non-object blocks", () => {
-    expect(() => parseSlackBlocksInput(["not-a-block"])).toThrow(/must be an object/i);
-  });
-
-  it("rejects blocks without type", () => {
-    expect(() => parseSlackBlocksInput([{}])).toThrow(/non-empty string type/i);
+    for (const testCase of cases) {
+      expect(() => parseSlackBlocksInput(testCase.input), testCase.name).toThrow(
+        testCase.expectedMessage,
+      );
+    }
   });
 });

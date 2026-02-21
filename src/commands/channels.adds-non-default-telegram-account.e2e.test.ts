@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -23,8 +23,13 @@ import {
 } from "./channels.js";
 
 const runtime = createTestRuntime();
+let clackPrompterModule: typeof import("../wizard/clack-prompter.js");
 
 describe("channels command", () => {
+  beforeAll(async () => {
+    clackPrompterModule = await import("../wizard/clack-prompter.js");
+  });
+
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.writeConfigFile.mockClear();
@@ -176,9 +181,8 @@ describe("channels command", () => {
     });
 
     const prompt = { confirm: vi.fn().mockResolvedValue(true) };
-    const prompterModule = await import("../wizard/clack-prompter.js");
     const promptSpy = vi
-      .spyOn(prompterModule, "createClackPrompter")
+      .spyOn(clackPrompterModule, "createClackPrompter")
       .mockReturnValue(prompt as never);
 
     await channelsRemoveCommand({ channel: "discord", account: "default" }, runtime, {
@@ -498,9 +502,8 @@ describe("channels command", () => {
     });
 
     const prompt = { confirm: vi.fn().mockResolvedValue(true) };
-    const prompterModule = await import("../wizard/clack-prompter.js");
     const promptSpy = vi
-      .spyOn(prompterModule, "createClackPrompter")
+      .spyOn(clackPrompterModule, "createClackPrompter")
       .mockReturnValue(prompt as never);
 
     await channelsRemoveCommand({ channel: "telegram", account: "default" }, runtime, {
