@@ -14,6 +14,7 @@ services:
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "18792:18792"
     init: true
     restart: unless-stopped
     command:
@@ -44,3 +45,14 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  openclaw-browser:
+    image: openclaw-sandbox-browser:bookworm-slim
+    ports:
+      - "${OPENCLAW_BROWSER_CDP_PORT:-9222}:9222"
+      - "${OPENCLAW_BROWSER_VNC_PORT:-5900}:5900"
+      - "${OPENCLAW_BROWSER_NOVNC_PORT:-6080}:6080"
+    environment:
+      OPENCLAW_BROWSER_HEADLESS: "${OPENCLAW_BROWSER_HEADLESS:-0}"
+      OPENCLAW_BROWSER_ENABLE_NOVNC: "${OPENCLAW_BROWSER_ENABLE_NOVNC:-1}"
+    restart: unless-stopped
