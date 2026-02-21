@@ -553,6 +553,16 @@ final class TalkModeManager: NSObject {
             guard let self else { return }
             if let error {
                 let msg = error.localizedDescription
+                let lowered = msg.lowercased()
+                let isCancellation = lowered.contains("cancelled") || lowered.contains("canceled")
+                if isCancellation {
+                    GatewayDiagnostics.log("talk speech: cancelled")
+                    if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
+                        self.statusText = "Listening"
+                    }
+                    self.logger.debug("speech recognition cancelled")
+                    return
+                }
                 GatewayDiagnostics.log("talk speech: error=\(msg)")
                 if !self.isSpeaking {
                     if msg.localizedCaseInsensitiveContains("no speech detected") {
