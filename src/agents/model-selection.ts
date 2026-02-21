@@ -178,14 +178,26 @@ export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
 }): Set<string> | null {
-  const rawAllowlist = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+  const rawAllowlist = Object.entries(params.cfg?.agents?.defaults?.models ?? {});
   if (rawAllowlist.length === 0) {
     return null;
   }
 
   const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const key = resolveAllowlistModelKey(String(raw ?? ""), params.defaultProvider);
+  for (const [keyRaw, entryRaw] of rawAllowlist) {
+    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+
+    // Inverted format: key is shorthand, alias contains the full provider/model path
+    if (alias && alias.includes("/")) {
+      const parsed = parseModelRef(alias, params.defaultProvider);
+      if (parsed) {
+        keys.add(modelKey(parsed.provider, parsed.model));
+        continue;
+      }
+    }
+
+    // Standard format: key is the model identifier
+    const key = resolveAllowlistModelKey(String(keyRaw ?? ""), params.defaultProvider);
     if (key) {
       keys.add(key);
     }
@@ -202,12 +214,29 @@ export function buildModelAliasIndex(params: {
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
-    if (!parsed) {
-      continue;
-    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) {
+      continue;
+    }
+
+    // Inverted format: key is shorthand name (e.g., "flash"), alias is full path (e.g., "google/gemini-2.5-flash")
+    if (alias.includes("/")) {
+      const parsed = parseModelRef(alias, params.defaultProvider);
+      if (parsed) {
+        const aliasKey = normalizeAliasKey(String(keyRaw ?? ""));
+        // Store the short name (keyRaw) as the alias, not the full path
+        byAlias.set(aliasKey, { alias: String(keyRaw ?? ""), ref: parsed });
+        const key = modelKey(parsed.provider, parsed.model);
+        const existing = byKey.get(key) ?? [];
+        existing.push(String(keyRaw ?? ""));
+        byKey.set(key, existing);
+        continue;
+      }
+    }
+
+    // Standard format: key is full path, alias is shorthand
+    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
+    if (!parsed) {
       continue;
     }
     const aliasKey = normalizeAliasKey(alias);
@@ -388,8 +417,23 @@ export function buildAllowedModelSet(params: {
 
   const allowedKeys = new Set<string>();
   const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
+  const rawModels = params.cfg.agents?.defaults?.models ?? {};
+
   for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(String(raw), params.defaultProvider);
+    const entryRaw = rawModels[raw];
+    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+
+    // Inverted format: key is shorthand, alias contains the full provider/model path
+    let parsed: { provider: string; model: string } | null = null;
+    if (alias && alias.includes("/")) {
+      parsed = parseModelRef(alias, params.defaultProvider);
+    }
+
+    // Standard format: key is the model identifier
+    if (!parsed) {
+      parsed = parseModelRef(String(raw), params.defaultProvider);
+    }
+
     if (!parsed) {
       continue;
     }
