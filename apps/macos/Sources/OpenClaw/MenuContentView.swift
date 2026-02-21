@@ -62,7 +62,11 @@ struct MenuContent: View {
             }
             .disabled(self.state.connectionMode == .unconfigured)
 
-            Divider()
+            if MeetingDetector.shared.meetingDetectionEnabled {
+                Divider()
+                MeetingMenuItems()
+                Divider()
+            }
             Toggle(isOn: self.heartbeatsBinding) {
                 HStack(spacing: 8) {
                     Label("Send Heartbeats", systemImage: "waveform.path.ecg")

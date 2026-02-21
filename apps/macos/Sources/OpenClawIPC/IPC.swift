@@ -13,6 +13,7 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
     case speechRecognition
     case camera
     case location
+    case calendar
 }
 
 public enum CameraFacing: String, Codable, Sendable {

@@ -55,6 +55,10 @@ struct SettingsRootView: View {
                     .tabItem { Label("Skills", systemImage: "sparkles") }
                     .tag(SettingsTab.skills)
 
+                MeetingSettings()
+                    .tabItem { Label("Meetings", systemImage: "text.bubble") }
+                    .tag(SettingsTab.meetings)
+
                 PermissionsSettings(
                     status: self.permissionMonitor.status,
                     refresh: self.refreshPerms,
@@ -176,7 +180,7 @@ struct SettingsRootView: View {
 }
 
 enum SettingsTab: CaseIterable {
-    case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
+    case general, channels, skills, sessions, cron, config, instances, voiceWake, meetings, permissions, debug, about
     static let windowWidth: CGFloat = 824 // wider
     static let windowHeight: CGFloat = 790 // +10% (more room)
     var title: String {
@@ -189,6 +193,7 @@ enum SettingsTab: CaseIterable {
         case .config: "Config"
         case .instances: "Instances"
         case .voiceWake: "Voice Wake"
+        case .meetings: "Meetings"
         case .permissions: "Permissions"
         case .debug: "Debug"
         case .about: "About"
@@ -205,6 +210,7 @@ enum SettingsTab: CaseIterable {
         case .config: "slider.horizontal.3"
         case .instances: "network"
         case .voiceWake: "waveform.circle"
+        case .meetings: "text.bubble"
         case .permissions: "lock.shield"
         case .debug: "ant"
         case .about: "info.circle"

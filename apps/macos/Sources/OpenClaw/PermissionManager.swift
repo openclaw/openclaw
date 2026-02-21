@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import CoreGraphics
 import CoreLocation
+import EventKit
 import Foundation
 import Observation
 import OpenClawIPC
@@ -48,6 +49,8 @@ enum PermissionManager {
             await self.ensureCamera(interactive: interactive)
         case .location:
             await self.ensureLocation(interactive: interactive)
+        case .calendar:
+            await self.ensureCalendar(interactive: interactive)
         }
     }
 
@@ -174,6 +177,28 @@ enum PermissionManager {
         }
     }
 
+    private static func ensureCalendar(interactive: Bool) async -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        switch status {
+        case .fullAccess:
+            return true
+        case .notDetermined:
+            guard interactive else { return false }
+            do {
+                return try await EKEventStore().requestFullAccessToEvents()
+            } catch {
+                return false
+            }
+        case .denied, .restricted, .writeOnly:
+            if interactive {
+                CalendarPermissionHelper.openSettings()
+            }
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     static func voiceWakePermissionsGranted() -> Bool {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -221,6 +246,10 @@ enum PermissionManager {
                 let status = CLLocationManager().authorizationStatus
                 results[cap] = CLLocationManager.locationServicesEnabled()
                     && self.isLocationAuthorized(status: status, requireAlways: false)
+
+            case .calendar:
+                let status = EKEventStore.authorizationStatus(for: .event)
+                results[cap] = status == .fullAccess
             }
         }
         return results
@@ -261,6 +290,21 @@ enum CameraPermissionHelper {
     static func openSettings() {
         let candidates = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ]
+
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+}
+
+enum CalendarPermissionHelper {
+    static func openSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
             "x-apple.systempreferences:com.apple.preference.security",
         ]
 
