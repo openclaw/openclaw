@@ -228,8 +228,8 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "volcengine/doubao-seed-1-8-251228" } }
-  }
+    defaults: { model: { primary: "volcengine/doubao-seed-1-8-251228" } },
+  },
 }
 ```
 
@@ -261,8 +261,8 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "byteplus/seed-1-8-251228" } }
-  }
+    defaults: { model: { primary: "byteplus/seed-1-8-251228" } },
+  },
 }
 ```
 
