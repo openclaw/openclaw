@@ -138,7 +138,7 @@ See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration deta
 ## Timeouts
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agents.defaults.timeoutSeconds` default 600s; enforced in `runEmbeddedPiAgent` abort timer.
+- Agent runtime: `agents.defaults.timeoutSeconds` defaults to `0` (no timeout, represented internally as a timer-safe max delay); enforced in `runEmbeddedPiAgent` abort timer.
 
 ## Where things can end early
 

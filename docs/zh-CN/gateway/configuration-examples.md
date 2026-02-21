@@ -259,7 +259,7 @@ x-i18n:
       humanDelay: {
         mode: "natural",
       },
-      timeoutSeconds: 600,
+      timeoutSeconds: 0,
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,

@@ -688,7 +688,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
+      timeoutSeconds: 0,
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 3,
@@ -700,6 +700,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific: `temperature`, `maxTokens`).
 - `imageModel`: only used if the primary model lacks image input.
+- `timeoutSeconds`: default agent timeout (seconds). `0` means no timeout.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -1476,7 +1477,7 @@ Controls elevated (host) exec access:
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection.
+Tool-loop safety checks are **enabled by default**. Set `enabled: false` only if you explicitly want to disable detection.
 Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
 
 ```json5

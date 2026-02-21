@@ -91,7 +91,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       const request = vi.mocked(callGateway).mock.calls[0]?.[0] as { timeoutMs?: number };
-      expect(request.timeoutMs).toBe(2_147_000_000);
+      expect(request.timeoutMs).toBe(2_147_483_647);
     });
   });
 
