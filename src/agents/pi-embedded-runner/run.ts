@@ -804,16 +804,44 @@ export async function runEmbeddedPiAgent(
                           .filter(isMessageBranchEntry)
                           .filter(
                             (entry) =>
-                              (entry as Record<string, unknown>).message?.role !== "system",
+                              "message" in entry &&
+                              (
+                                entry as {
+                                  message?: { role?: string; text?: string; content?: string };
+                                }
+                              ).message?.role !== "system",
                           )
                           .map((entry) => ({
                             role:
-                              typeof (entry as Record<string, unknown>).message?.role === "string"
-                                ? (entry as Record<string, unknown>).message.role
+                              "message" in entry &&
+                              typeof (
+                                entry as {
+                                  message?: { role?: string; text?: string; content?: string };
+                                }
+                              ).message?.role === "string"
+                                ? (
+                                    entry as {
+                                      message?: { role?: string; text?: string; content?: string };
+                                    }
+                                  ).message.role
                                 : undefined,
                             text: messageTextFromUnknown(
-                              (entry as Record<string, unknown>).message?.text ??
-                                (entry as Record<string, unknown>).message?.content,
+                              "message" in entry
+                                ? ((
+                                    entry as {
+                                      message?: { role?: string; text?: string; content?: string };
+                                    }
+                                  ).message?.text ??
+                                    (
+                                      entry as {
+                                        message?: {
+                                          role?: string;
+                                          text?: string;
+                                          content?: string;
+                                        };
+                                      }
+                                    ).message?.content)
+                                : undefined,
                             ),
                             timestamp: entry.timestamp,
                           }));
