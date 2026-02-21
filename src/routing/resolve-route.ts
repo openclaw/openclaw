@@ -360,7 +360,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const dynamicAgentId = getDynamicAgentOverride(channel, peer.id);
     if (dynamicAgentId) {
       if (shouldLogDebug) {
-        logDebug(`[routing] dynamic override: channel=${channel} peer=${peer.id} → agent=${dynamicAgentId}`);
+        logDebug(
+          `[routing] dynamic override: channel=${channel} peer=${peer.id} → agent=${dynamicAgentId}`,
+        );
       }
       return choose(dynamicAgentId, "dynamic-override");
     }

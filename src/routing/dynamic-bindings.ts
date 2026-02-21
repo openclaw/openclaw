@@ -20,8 +20,7 @@ function resolveFilePath(): string {
     return cacheFilePath;
   }
   const stateDir =
-    process.env.OPENCLAW_STATE_DIR ||
-    path.join(process.env.HOME || "/root", ".openclaw", "state");
+    process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || "/root", ".openclaw", "state");
   cacheFilePath = path.join(stateDir, "agent-overrides.json");
   return cacheFilePath;
 }
@@ -70,11 +69,7 @@ export function getDynamicAgentOverride(channel: string, peerId: string): string
 /**
  * Set a dynamic agent override for a given channel + peer.
  */
-export function setDynamicAgentOverride(
-  channel: string,
-  peerId: string,
-  agentId: string,
-): void {
+export function setDynamicAgentOverride(channel: string, peerId: string, agentId: string): void {
   const map = loadOverrides();
   const key = buildKey(channel, peerId);
   map.set(key, agentId.trim());
