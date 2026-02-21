@@ -7,7 +7,13 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  initChatScrollObserver,
+  observeTopbar,
+  scheduleChatScroll,
+  scheduleLogsScroll,
+  teardownChatScrollObserver,
+} from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   attachThemeListener,
@@ -36,6 +42,7 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  chatScrollObserver: IntersectionObserver | null;
 };
 
 export function handleConnected(host: LifecycleHost) {
@@ -58,6 +65,7 @@ export function handleConnected(host: LifecycleHost) {
 
 export function handleFirstUpdated(host: LifecycleHost) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+  initChatScrollObserver(host as unknown as Parameters<typeof initChatScrollObserver>[0]);
 }
 
 export function handleDisconnected(host: LifecycleHost) {
@@ -66,11 +74,18 @@ export function handleDisconnected(host: LifecycleHost) {
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
+  teardownChatScrollObserver(host as unknown as Parameters<typeof teardownChatScrollObserver>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  // Re-attach the scroll observer when switching back to the chat tab,
+  // since Lit re-creates the .chat-thread DOM and the old sentinel is detached.
+  if (changed.has("tab") && host.tab === "chat") {
+    initChatScrollObserver(host as unknown as Parameters<typeof initChatScrollObserver>[0]);
+  }
+
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
