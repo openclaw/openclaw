@@ -1249,7 +1249,7 @@ describe("QmdMemoryManager", () => {
 
     for (const testCase of cases) {
       const { manager } = await createManager();
-      const restoreOpen = testCase.installOpenSpy?.();
+      const restoreOpen = "installOpenSpy" in testCase ? testCase.installOpenSpy() : undefined;
       try {
         const result = await manager.readFile(testCase.request);
         expect(result, testCase.name).toEqual({ text: "", path: testCase.expectedPath });

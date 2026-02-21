@@ -626,7 +626,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       });
       const cfg = makeCfg({
         storePath,
-        allowFrom: testCase.allowFrom,
+        allowFrom: [...testCase.allowFrom],
       });
 
       const result = await initSessionState({
