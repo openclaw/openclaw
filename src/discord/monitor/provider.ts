@@ -58,6 +58,7 @@ import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import { registerInstanceBotUserId, unregisterInstanceBotUserId } from "./instance-bot-registry.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -584,6 +585,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   try {
     const botUser = await client.fetchUser("@me");
     botUserId = botUser?.id;
+    if (botUserId) {
+      registerInstanceBotUserId(botUserId);
+    }
   } catch (err) {
     runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
   }
@@ -747,6 +751,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   } finally {
     unregisterGateway(account.accountId);
+    if (botUserId) {
+      unregisterInstanceBotUserId(botUserId);
+    }
     stopGatewayLogging();
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
