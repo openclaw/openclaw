@@ -563,4 +563,61 @@ describe("listSessionsFromStore search", () => {
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
   });
+
+  test("prefers delivery/origin channel for direct main sessions and avoids group-style names", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+        channel: "whatsapp",
+        origin: {
+          provider: "telegram",
+          label: "telegram:8457324560",
+        },
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:8457324560",
+        },
+        lastChannel: "telegram",
+        lastTo: "telegram:8457324560",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].kind).toBe("direct");
+    expect(result.sessions[0].channel).toBe("telegram");
+    expect(result.sessions[0].displayName).toBe("telegram:8457324560");
+    expect(result.sessions[0].displayName).not.toContain("g-agent-main-main");
+  });
+
+  test("keeps group display-name synthesis for group sessions", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:whatsapp:group:120363401234567890@g.us": {
+        sessionId: "sess-group",
+        updatedAt: now,
+        channel: "whatsapp",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].kind).toBe("group");
+    expect(result.sessions[0].channel).toBe("whatsapp");
+    expect(result.sessions[0].displayName).toBe("whatsapp:g-120363401234567890@g.us");
+  });
 });
