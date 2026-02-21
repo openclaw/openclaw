@@ -388,7 +388,15 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
+      if (!parsed) {
+        continue;
+      }
+      // Accept both direct Anthropic and Anthropic Claude models on Bedrock.
+      const isAnthropicDirect = parsed.provider === "anthropic";
+      const isAnthropicBedrock =
+        parsed.provider === "amazon-bedrock" &&
+        parsed.model.toLowerCase().includes("anthropic.claude");
+      if (!isAnthropicDirect && !isAnthropicBedrock) {
         continue;
       }
       const current = entry ?? {};
@@ -406,7 +414,11 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
     const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
+      const isPrimaryAnthropicDirect = parsedPrimary?.provider === "anthropic";
+      const isPrimaryAnthropicBedrock =
+        parsedPrimary?.provider === "amazon-bedrock" &&
+        parsedPrimary.model.toLowerCase().includes("anthropic.claude");
+      if (isPrimaryAnthropicDirect || isPrimaryAnthropicBedrock) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};

@@ -42,16 +42,20 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Mapping: "5m" → "short", "1h" → "long"
  *
- * Only applies to Anthropic provider (OpenRouter uses openai-completions API
- * with hardcoded cache_control, not the cacheRetention stream option).
+ * Only applies to Anthropic provider and Anthropic Claude models on Bedrock.
+ * (OpenRouter uses openai-completions API with hardcoded cache_control,
+ * not the cacheRetention stream option).
  *
- * Defaults to "short" for Anthropic provider when not explicitly configured.
+ * Defaults to "short" for Anthropic when not explicitly configured.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
 ): CacheRetention | undefined {
-  if (provider !== "anthropic") {
+  const isAnthropicDirect = provider === "anthropic";
+  const isAnthropicBedrock =
+    provider === "amazon-bedrock" && extraParams?.cacheRetention !== undefined;
+  if (!isAnthropicDirect && !isAnthropicBedrock) {
     return undefined;
   }
 
