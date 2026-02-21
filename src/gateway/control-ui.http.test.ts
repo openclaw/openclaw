@@ -231,4 +231,75 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it("rejects absolute-path escape attempts under basePath routes", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-root-"));
+    try {
+      const root = path.join(tmp, "ui");
+      const sibling = path.join(tmp, "ui-secrets");
+      await fs.mkdir(root, { recursive: true });
+      await fs.mkdir(sibling, { recursive: true });
+      await fs.writeFile(path.join(root, "index.html"), "<html>ok</html>\n");
+      const secretPath = path.join(sibling, "secret.txt");
+      await fs.writeFile(secretPath, "sensitive-data");
+
+      const secretPathUrl = secretPath.split(path.sep).join("/");
+      const absolutePathUrl = secretPathUrl.startsWith("/") ? secretPathUrl : `/${secretPathUrl}`;
+      const { res, end } = makeMockHttpResponse();
+
+      const handled = handleControlUiHttpRequest(
+        { url: `/openclaw/${absolutePathUrl}`, method: "GET" } as IncomingMessage,
+        res,
+        {
+          basePath: "/openclaw",
+          root: { kind: "resolved", path: root },
+        },
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(404);
+      expect(end).toHaveBeenCalledWith("Not Found");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlink escape attempts under basePath routes", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-root-"));
+    try {
+      const root = path.join(tmp, "ui");
+      const sibling = path.join(tmp, "outside");
+      await fs.mkdir(path.join(root, "assets"), { recursive: true });
+      await fs.mkdir(sibling, { recursive: true });
+      await fs.writeFile(path.join(root, "index.html"), "<html>ok</html>\n");
+      const secretPath = path.join(sibling, "secret.txt");
+      await fs.writeFile(secretPath, "sensitive-data");
+
+      const linkPath = path.join(root, "assets", "leak.txt");
+      try {
+        await fs.symlink(secretPath, linkPath, "file");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EPERM") {
+          return;
+        }
+        throw error;
+      }
+
+      const { res, end } = makeMockHttpResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: "/openclaw/assets/leak.txt", method: "GET" } as IncomingMessage,
+        res,
+        {
+          basePath: "/openclaw",
+          root: { kind: "resolved", path: root },
+        },
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(404);
+      expect(end).toHaveBeenCalledWith("Not Found");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
 });

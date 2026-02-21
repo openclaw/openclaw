@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+import { isWithinDir } from "../infra/path-safety.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -264,6 +265,9 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   const normalized = path.posix.normalize(relPath);
+  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
+    return false;
+  }
   if (normalized.startsWith("../") || normalized === "..") {
     return false;
   }
@@ -418,8 +422,8 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const filePath = path.join(root, fileRel);
-  if (!filePath.startsWith(root)) {
+  const filePath = path.resolve(root, fileRel);
+  if (!isWithinDir(root, filePath)) {
     respondNotFound(res);
     return true;
   }
