@@ -15,6 +15,7 @@ import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
 } from "./native-command.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
   const byProvider = new Map<string, Set<string>>();
@@ -70,6 +71,7 @@ function createModelPickerContext(): ModelPickerContext {
     discordConfig: cfg.channels?.discord ?? {},
     accountId: "default",
     sessionPrefix: "discord:slash",
+    threadBindings: createNoopThreadBindingManager("default"),
   };
 }
 

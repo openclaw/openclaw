@@ -539,12 +539,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordConfig: discordCfg,
       accountId: account.accountId,
       sessionPrefix,
+      threadBindings,
     }),
     createDiscordModelPickerFallbackSelect({
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
       sessionPrefix,
+      threadBindings,
     }),
   ];
   const modals: Modal[] = [];

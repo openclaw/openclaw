@@ -1,6 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -726,10 +725,7 @@ export function buildSubagentSystemPrompt(params: {
       ? params.task.replace(/\s+/g, " ").trim()
       : "{{TASK_DESCRIPTION}}";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
-  const maxSpawnDepth =
-    typeof params.maxSpawnDepth === "number"
-      ? params.maxSpawnDepth
-      : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const maxSpawnDepth = typeof params.maxSpawnDepth === "number" ? params.maxSpawnDepth : 1;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
 

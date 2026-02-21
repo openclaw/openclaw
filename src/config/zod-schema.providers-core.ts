@@ -385,6 +385,9 @@ export const DiscordAccountSchema = z
     slashCommand: z
       .object({
         ephemeral: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     threadBindings: z
       .object({
         ttlHours: z.number().nonnegative().optional(),
