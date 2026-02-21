@@ -92,6 +92,7 @@ export function registerCronAddCommand(cron: Command) {
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
+      .option("--direct-text", "Deliver text payloads directly (skip announce conversion)", false)
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
@@ -259,6 +260,7 @@ export function registerCronAddCommand(cron: Command) {
                       : undefined,
                   to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
+                  directText: opts.directText ? true : undefined,
                 }
               : undefined,
           };
