@@ -390,6 +390,9 @@ export function normalizeCronJobInput(
   stripLegacyTopLevelFields(next);
 
   if (options.applyDefaults) {
+    if (typeof next.enabled !== "boolean") {
+      next.enabled = true;
+    }
     if (!next.wakeMode) {
       next.wakeMode = "now";
     }

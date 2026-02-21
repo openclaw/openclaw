@@ -421,4 +421,33 @@ describe("normalizeCronJobPatch", () => {
     const schedule = normalized.schedule as Record<string, unknown>;
     expect(schedule.staggerMs).toBe(30_000);
   });
+
+  it("defaults enabled to true when omitted", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "no-enabled",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      payload: {
+        kind: "systemEvent",
+        text: "test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.enabled).toBe(true);
+  });
+
+  it("respects explicit enabled: false", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "disabled",
+      enabled: false,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      payload: {
+        kind: "systemEvent",
+        text: "test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.enabled).toBe(false);
+  });
 });
