@@ -350,6 +350,19 @@ Notes:
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
+Available plugin hook names:
+
+- `before_agent_start` (modifying): inject context or override system prompt before the run starts.
+- `agent_end` (void): inspect final message list and run metadata.
+- `message_received` (void): observe inbound messages before the run.
+- `message_sending` (modifying): adjust outbound message payload before delivery.
+- `message_sent` (void): observe successful outbound delivery.
+- `before_tool_call` (modifying): adjust tool params before execution.
+- `after_tool_call` (void): observe tool result metadata after execution.
+- `session_start` / `session_end` (void): session lifecycle boundaries.
+
+Use underscore names exactly (for example `message_received`, not `message:received`).
+
 ## Provider plugins (model auth)
 
 Plugins can register **model provider auth** flows so users can run OAuth or
