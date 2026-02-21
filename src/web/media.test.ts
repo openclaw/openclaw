@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { resolveStateDir } from "../config/paths.js";
 import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -50,7 +51,9 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
 }
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
+  fixtureRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
+  );
   largeJpegBuffer = await sharp({
     create: {
       width: 400,
@@ -334,7 +337,9 @@ describe("local media root guard", () => {
   });
 
   it("allows local paths under an explicit root", async () => {
-    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: [os.tmpdir()] });
+    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+      localRoots: [resolvePreferredOpenClawTmpDir()],
+    });
     expect(result.kind).toBe("image");
   });
 
