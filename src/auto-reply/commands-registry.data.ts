@@ -580,10 +580,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "agent",
-          description: "Agent id (e.g. main, ordera, security)",
+          description: "Agent id",
           type: "string",
+          choices: ({ cfg }) => {
+            const agents = cfg?.agents?.list;
+            if (!Array.isArray(agents)) {
+              return ["main"];
+            }
+            const ids = agents
+              .map((a: { id?: string }) => a?.id?.trim())
+              .filter((id): id is string => Boolean(id));
+            return [...ids, { value: "default", label: "↩ Default" }];
+          },
         },
       ],
+      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "model",
