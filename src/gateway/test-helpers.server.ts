@@ -43,18 +43,22 @@ async function getServerModule() {
   return await serverModulePromise;
 }
 
-let previousHome: string | undefined;
-let previousUserProfile: string | undefined;
-let previousStateDir: string | undefined;
-let previousConfigPath: string | undefined;
-let previousSkipBrowserControl: string | undefined;
-let previousSkipGmailWatcher: string | undefined;
-let previousSkipCanvasHost: string | undefined;
-let previousBundledPluginsDir: string | undefined;
-let previousSkipChannels: string | undefined;
-let previousSkipProviders: string | undefined;
-let previousSkipCron: string | undefined;
-let previousMinimalGateway: string | undefined;
+const GATEWAY_TEST_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+  "OPENCLAW_SKIP_GMAIL_WATCHER",
+  "OPENCLAW_SKIP_CANVAS_HOST",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_SKIP_CHANNELS",
+  "OPENCLAW_SKIP_PROVIDERS",
+  "OPENCLAW_SKIP_CRON",
+  "OPENCLAW_TEST_MINIMAL_GATEWAY",
+] as const;
+
+let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 
@@ -87,18 +91,7 @@ export async function writeSessionStore(params: {
 }
 
 async function setupGatewayTestHome() {
-  previousHome = process.env.HOME;
-  previousUserProfile = process.env.USERPROFILE;
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  previousSkipBrowserControl = process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-  previousSkipGmailWatcher = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-  previousSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
-  previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-  previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-  previousSkipCron = process.env.OPENCLAW_SKIP_CRON;
-  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  gatewayEnvSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -176,66 +169,8 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetLogger();
   if (options.restoreEnv) {
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
-    if (previousSkipBrowserControl === undefined) {
-      delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-    } else {
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = previousSkipBrowserControl;
-    }
-    if (previousSkipGmailWatcher === undefined) {
-      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    } else {
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previousSkipGmailWatcher;
-    }
-    if (previousSkipCanvasHost === undefined) {
-      delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-    } else {
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
-    }
-    if (previousBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-    }
-    if (previousSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-    } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-    }
-    if (previousSkipProviders === undefined) {
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    } else {
-      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-    }
-    if (previousSkipCron === undefined) {
-      delete process.env.OPENCLAW_SKIP_CRON;
-    } else {
-      process.env.OPENCLAW_SKIP_CRON = previousSkipCron;
-    }
-    if (previousMinimalGateway === undefined) {
-      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-    } else {
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
-    }
+    gatewayEnvSnapshot?.restore();
+    gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
     await fs.rm(tempHome, {
