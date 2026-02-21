@@ -67,6 +67,21 @@ async function writeMainSessionStore() {
   });
 }
 
+async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
+  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+}
+
+async function fetchHistoryMessages(
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+): Promise<unknown[]> {
+  const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+    sessionKey: "main",
+    limit: 1000,
+  });
+  expect(historyRes.ok).toBe(true);
+  return historyRes.payload?.messages ?? [];
+}
+
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
@@ -90,18 +105,8 @@ describe("gateway server chat", () => {
           }),
         );
       }
-      await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl"),
-        historyLines.join("\n"),
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, historyLines);
+      const messages = await fetchHistoryMessages(ws);
       const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
       expect(messages.length).toBeLessThan(60);
@@ -201,14 +206,8 @@ describe("gateway server chat", () => {
           ],
         },
       });
-      await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${oversizedLine}\n`, "utf-8");
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+      const messages = await fetchHistoryMessages(ws);
       expect(messages.length).toBe(1);
 
       const serialized = JSON.stringify(messages);
@@ -263,19 +262,8 @@ describe("gateway server chat", () => {
         }),
       );
 
-      await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl"),
-        `${lines.join("\n")}\n`,
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
       const serialized = JSON.stringify(messages);
       const bytes = Buffer.byteLength(serialized, "utf8");
 
@@ -326,18 +314,8 @@ describe("gateway server chat", () => {
           },
         }),
       ];
-      await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl"),
-        `${lines.join("\n")}\n`,
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
       expect(messages.length).toBe(4);
 
       const serialized = JSON.stringify(messages);
