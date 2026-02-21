@@ -6,6 +6,7 @@ import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { normalizeAccountId as normalizeSharedAccountId } from "../../routing/account-id.js";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {
@@ -41,11 +42,6 @@ function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): stri
   return path.join(stateDir, "discord", "model-picker-preferences.json");
 }
 
-function normalizeAccountId(value?: string): string {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || "default";
-}
-
 function normalizeId(value?: string): string {
   return value?.trim() ?? "";
 }
@@ -57,7 +53,7 @@ export function buildDiscordModelPickerPreferenceKey(
   if (!userId) {
     return null;
   }
-  const accountId = normalizeAccountId(scope.accountId);
+  const accountId = normalizeSharedAccountId(scope.accountId);
   const guildId = normalizeId(scope.guildId);
   if (guildId) {
     return `discord:${accountId}:guild:${guildId}:user:${userId}`;

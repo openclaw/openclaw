@@ -1,11 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  __testing as sessionBindingServiceTesting,
+  registerSessionBindingAdapter,
+} from "../infra/outbound/session-binding-service.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 type RequesterResolution = {
   requesterSessionKey: string;
   requesterOrigin?: Record<string, unknown>;
 } | null;
+type SubagentDeliveryTargetResult = {
+  origin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+};
 
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
@@ -23,6 +35,19 @@ const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
   countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
   resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
+};
+const subagentDeliveryTargetHookMock = vi.fn(
+  async (_event?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
+    undefined,
+);
+let hasSubagentDeliveryTargetHook = false;
+const hookRunnerMock = {
+  hasHooks: vi.fn(
+    (hookName: string) => hookName === "subagent_delivery_target" && hasSubagentDeliveryTargetHook,
+  ),
+  runSubagentDeliveryTarget: vi.fn((event: unknown, ctx: unknown) =>
+    subagentDeliveryTargetHookMock(event, ctx),
+  ),
 };
 const chatHistoryMock = vi.fn(async (_sessionKey?: string) => ({
   messages: [] as Array<unknown>,
@@ -103,6 +128,9 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("./pi-embedded.js", () => embeddedRunMock);
 
 vi.mock("./subagent-registry.js", () => subagentRegistryMock);
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookRunnerMock,
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -114,9 +142,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 describe("subagent announce formatting", () => {
   beforeEach(() => {
-    agentSpy.mockClear();
-    sendSpy.mockClear();
-    sessionsDeleteSpy.mockClear();
+    agentSpy
+      .mockReset()
+      .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+    sendSpy
+      .mockReset()
+      .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
+    sessionsDeleteSpy.mockReset().mockImplementation((_req: AgentCallRequest) => undefined);
     embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
@@ -124,9 +156,14 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.isSubagentSessionRunActive.mockReset().mockReturnValue(true);
     subagentRegistryMock.countActiveDescendantRuns.mockReset().mockReturnValue(0);
     subagentRegistryMock.resolveRequesterForChildSession.mockReset().mockReturnValue(null);
+    hasSubagentDeliveryTargetHook = false;
+    hookRunnerMock.hasHooks.mockClear();
+    hookRunnerMock.runSubagentDeliveryTarget.mockClear();
+    subagentDeliveryTargetHookMock.mockReset().mockResolvedValue(undefined);
     readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
     sessionStore = {};
+    sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     configOverride = {
       session: {
         mainKey: "main",
@@ -328,6 +365,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: 2" }] }],
     });
+    readLatestAssistantReplyMock.mockResolvedValue("");
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -351,6 +389,283 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("✅ Subagent main finished");
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
+  });
+
+  it("keeps completion-mode delivery coordinated when sibling runs are still active", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-coordinated",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-coordinated",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: 2" }] }],
+    });
+    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? 1 : 0,
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-coordinated",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
+    expect(msg).toContain("There are still 1 active subagent run for this session.");
+    expect(msg).toContain(
+      "If they are part of the same workflow, wait for the remaining results before sending a user update.",
+    );
+  });
+
+  it("keeps session-mode completion delivery on the bound destination when sibling runs are active", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-bound",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "bound answer: 2" }] }],
+    });
+    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? 1 : 0,
+    );
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "discord:acct-1:thread-bound-1",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "discord",
+                  accountId: "acct-1",
+                  conversationId: "thread-bound-1",
+                  parentConversationId: "parent-main",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-bound-direct",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:thread-bound-1");
+  });
+
+  it("does not duplicate to main channel when two active bound sessions complete from the same requester channel", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:child-a": {
+        sessionId: "child-session-a",
+      },
+      "agent:main:subagent:child-b": {
+        sessionId: "child-session-b",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-main",
+      },
+    };
+
+    // Simulate active sibling runs so non-bound paths would normally coordinate via agent().
+    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? 2 : 0,
+    );
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:subagent:child-a") {
+          return [
+            {
+              bindingId: "discord:acct-1:thread-child-a",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "discord",
+                accountId: "acct-1",
+                conversationId: "thread-child-a",
+                parentConversationId: "main-parent-channel",
+              },
+              status: "active",
+              boundAt: Date.now(),
+            },
+          ];
+        }
+        if (targetSessionKey === "agent:main:subagent:child-b") {
+          return [
+            {
+              bindingId: "discord:acct-1:thread-child-b",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "discord",
+                accountId: "acct-1",
+                conversationId: "thread-child-b",
+                parentConversationId: "main-parent-channel",
+              },
+              status: "active",
+              boundAt: Date.now(),
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    await Promise.all([
+      runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:child-a",
+        childRunId: "run-child-a",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:main-parent-channel",
+          accountId: "acct-1",
+        },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+        spawnMode: "session",
+      }),
+      runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:child-b",
+        childRunId: "run-child-b",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:main-parent-channel",
+          accountId: "acct-1",
+        },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+        spawnMode: "session",
+      }),
+    ]);
+
+    await expect.poll(() => sendSpy.mock.calls.length).toBe(2);
+    expect(agentSpy).not.toHaveBeenCalled();
+
+    const directTargets = sendSpy.mock.calls.map(
+      (call) => (call?.[0] as { params?: { to?: string } })?.params?.to,
+    );
+    expect(directTargets).toEqual(
+      expect.arrayContaining(["channel:thread-child-a", "channel:thread-child-b"]),
+    );
+    expect(directTargets).not.toContain("channel:main-parent-channel");
+  });
+
+  it("uses failure header for completion direct-send when subagent outcome is error", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-error",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-error",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "boom details" }] }],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("");
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-error",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      outcome: { status: "error", error: "boom" },
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(msg).toContain("❌ Subagent main failed this task (session remains active)");
+    expect(msg).toContain("boom details");
+    expect(msg).not.toContain("✅ Subagent main");
+  });
+
+  it("uses timeout header for completion direct-send when subagent outcome timed out", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-timeout",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-timeout",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "partial output" }] }],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("");
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      outcome: { status: "timeout" },
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(msg).toContain("⏱️ Subagent main timed out");
+    expect(msg).toContain("partial output");
+    expect(msg).not.toContain("✅ Subagent main finished");
   });
 
   it("ignores stale session thread hints for manual completion direct-send", async () => {
@@ -425,6 +740,197 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.threadId).toBe("99");
+  });
+
+  it("uses hook-provided thread target for completion direct-send", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "discord",
+        accountId: "acct-1",
+        to: "channel:777",
+        threadId: "777",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-thread-bound",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+        threadId: "777",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(subagentDeliveryTargetHookMock).toHaveBeenCalledWith(
+      {
+        childSessionKey: "agent:main:subagent:test",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:12345",
+          accountId: "acct-1",
+          threadId: "777",
+        },
+        childRunId: "run-direct-thread-bound",
+        spawnMode: "session",
+        expectsCompletionMessage: true,
+      },
+      {
+        runId: "run-direct-thread-bound",
+        childSessionKey: "agent:main:subagent:test",
+        requesterSessionKey: "agent:main:main",
+      },
+    );
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:777");
+    expect(call?.params?.threadId).toBe("777");
+    const message = typeof call?.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain("completed this task (session remains active)");
+    expect(message).not.toContain("finished");
+  });
+
+  it("uses hook-provided thread target when requester origin has no threadId", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "discord",
+        accountId: "acct-1",
+        to: "channel:777",
+        threadId: "777",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-thread-bound-single",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:777");
+    expect(call?.params?.threadId).toBe("777");
+  });
+
+  it("keeps requester origin when delivery-target hook returns no override", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce(undefined);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-thread-persisted",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
+  it("keeps requester origin when delivery-target hook returns non-deliverable channel", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "webchat",
+        to: "conversation:123",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-thread-multi-no-origin",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
+  it("uses hook-provided thread target when requester threadId does not match", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "discord",
+        accountId: "acct-1",
+        to: "channel:777",
+        threadId: "777",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-thread-no-match",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+        threadId: "999",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:777");
+    expect(call?.params?.threadId).toBe("777");
   });
 
   it("steers announcements into an active run when queue mode is steer", async () => {
@@ -623,13 +1129,14 @@ describe("subagent announce formatting", () => {
         },
       ],
     });
-    readLatestAssistantReplyMock.mockResolvedValue("assistant ignored fallback");
+    readLatestAssistantReplyMock.mockResolvedValue("");
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
       childRunId: "run-completion-assistant-output",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
       expectsCompletionMessage: true,
       ...defaultOutcomeAnnounce,
     });
@@ -663,6 +1170,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-completion-tool-output",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
       expectsCompletionMessage: true,
       ...defaultOutcomeAnnounce,
     });
@@ -672,6 +1180,36 @@ describe("subagent announce formatting", () => {
     const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("tool output only");
+  });
+
+  it("ignores user text when deriving fallback completion output", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "user prompt should not be announced" }],
+        },
+      ],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("");
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-ignore-user",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => sendSpy.mock.calls.length).toBe(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("✅ Subagent main finished");
+    expect(msg).not.toContain("user prompt should not be announced");
   });
 
   it("queues announce delivery back into requester subagent session", async () => {
@@ -856,6 +1394,34 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.to).toBeUndefined();
   });
 
+  it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
+      childRunId: "run-worker-nested-completion",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
+    const message = typeof call?.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain(
+      "Convert this completion into a concise internal orchestration update for your parent agent",
+    );
+  });
+
   it("retries reading subagent output when early lifecycle completion had no text", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValueOnce(true).mockReturnValue(false);
@@ -931,6 +1497,57 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(false);
     expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("defers completion-mode announce while the finished run still has active descendants", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:subagent:parent" ? 1 : 0,
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("waits for updated synthesized output before announcing nested subagent completion", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    let historyReads = 0;
+    chatHistoryMock.mockImplementation(async () => {
+      historyReads += 1;
+      if (historyReads < 3) {
+        return {
+          messages: [{ role: "assistant", content: "Waiting for child output..." }],
+        };
+      }
+      return {
+        messages: [{ role: "assistant", content: "Final synthesized answer." }],
+      };
+    });
+    readLatestAssistantReplyMock.mockResolvedValue(undefined);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-synth",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("Final synthesized answer.");
+    expect(msg).not.toContain("Waiting for child output...");
   });
 
   it("bubbles child announce to parent requester when requester subagent already ended", async () => {
@@ -1013,6 +1630,35 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
+  it("defers completion-mode announce when child run is still active after settle timeout", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-active",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-child-active-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "completion-context-stress-test",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
   it("prefers requesterOrigin channel over stale session lastChannel in queued announce", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
@@ -1031,7 +1677,7 @@ describe("subagent announce formatting", () => {
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-stale-channel",
       requesterSessionKey: "main",
-      requesterOrigin: { channel: "bluebubbles", to: "bluebubbles:chat_guid:123" },
+      requesterOrigin: { channel: "telegram", to: "telegram:123" },
       requesterDisplayKey: "main",
       ...defaultOutcomeAnnounce,
     });
@@ -1041,8 +1687,8 @@ describe("subagent announce formatting", () => {
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     // The channel should match requesterOrigin, NOT the stale session entry.
-    expect(call?.params?.channel).toBe("bluebubbles");
-    expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("telegram:123");
   });
 
   it("routes to parent subagent when parent run ended but session still exists (#18037)", async () => {

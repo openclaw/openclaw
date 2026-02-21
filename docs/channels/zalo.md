@@ -53,7 +53,7 @@ It is a good fit for support or notifications where you want deterministic routi
 - DMs share the agent's main session.
 - Groups are not yet supported (Zalo docs state "coming soon").
 
-## Setup (quick path)
+## Onboarding (quick path)
 
 ### 1) Create a bot token (Zalo Bot Platform)
 
