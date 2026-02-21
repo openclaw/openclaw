@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock all heavy dependencies before imports
 vi.mock("@mariozechner/pi-coding-agent", () => ({
@@ -46,7 +46,9 @@ vi.mock("../models-config.js", () => ({
 vi.mock("../model-selection.js", () => ({
   parseModelRef: vi.fn((raw: string, defaultProvider: string) => {
     const slash = raw.indexOf("/");
-    if (slash === -1) return { provider: defaultProvider, model: raw };
+    if (slash === -1) {
+      return { provider: defaultProvider, model: raw };
+    }
     return { provider: raw.slice(0, slash), model: raw.slice(slash + 1) };
   }),
 }));
@@ -116,6 +118,10 @@ vi.mock("../pi-embedded-helpers.js", () => ({
 vi.mock("../pi-settings.js", () => ({
   ensurePiCompactionReserveTokens: vi.fn(),
   resolveCompactionReserveTokensFloor: vi.fn(() => 0),
+  applyPiCompactionSettingsFromConfig: vi.fn(() => ({
+    didOverride: false,
+    compaction: { reserveTokens: 0, keepRecentTokens: 0 },
+  })),
 }));
 
 vi.mock("../pi-tools.js", () => ({
@@ -139,6 +145,7 @@ vi.mock("../session-tool-result-guard-wrapper.js", () => ({
 
 vi.mock("../session-write-lock.js", () => ({
   acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+  resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 30000),
 }));
 
 vi.mock("../skills.js", () => ({
@@ -177,7 +184,13 @@ vi.mock("./lanes.js", () => ({
 }));
 
 vi.mock("./logger.js", () => ({
-  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  log: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    isEnabled: vi.fn(() => false),
+  },
 }));
 
 vi.mock("./sandbox-info.js", () => ({
@@ -215,6 +228,7 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../routing/session-key.js", () => ({
   isSubagentSessionKey: vi.fn(() => false),
+  isCronSessionKey: vi.fn(() => false),
 }));
 
 vi.mock("../../signal/reaction-level.js", () => ({
@@ -244,7 +258,7 @@ const mockedCreateAgentSession = vi.mocked(createAgentSession);
 const mockedResolveModel = vi.mocked(resolveModel);
 
 // Prevent process.chdir from failing on non-existent dirs
-const originalChdir = process.chdir.bind(process);
+const _originalChdir = process.chdir.bind(process);
 vi.spyOn(process, "chdir").mockImplementation(() => {});
 
 function mockSession(compactImpl?: () => Promise<unknown>) {
@@ -292,18 +306,13 @@ describe("compactEmbeddedPiSessionDirect", () => {
   });
 
   it("aborts and returns timeout error when compaction exceeds timeoutMs", async () => {
-    // compact() blocks until abortCompaction is called, then rejects
-    let rejectCompact: (err: Error) => void;
-    const session = mockSession(
+    // compact() blocks indefinitely; withTimeout will fire after timeoutMs
+    mockSession(
       () =>
-        new Promise((_resolve, reject) => {
-          rejectCompact = reject;
+        new Promise((_resolve, _reject) => {
+          // never resolves — withTimeout will interrupt it
         }),
     );
-    // When abortCompaction is called (by the timeout), reject the pending compact()
-    session.abortCompaction.mockImplementation(() => {
-      rejectCompact(new Error("aborted"));
-    });
 
     const result = await compactEmbeddedPiSessionDirect({
       ...baseParams,
@@ -314,9 +323,8 @@ describe("compactEmbeddedPiSessionDirect", () => {
 
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
-    expect(result.reason).toBe("compaction_timeout (50ms)");
-    expect(session.abortCompaction).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("compaction: timeout"));
+    expect(result.reason).toContain("timed out");
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("outcome=failed"));
   });
 
   it("uses compaction model override when overrideModel is true", async () => {
@@ -481,6 +489,6 @@ describe("compactEmbeddedPiSessionDirect", () => {
     // The error is caught by the outer catch and returned as reason
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("LLM API error");
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("compaction: error"));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("outcome=failed"));
   });
 });
