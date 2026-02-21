@@ -97,6 +97,7 @@
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "release:check": "node --import tsx scripts/release-check.ts",
     "start": "node scripts/run-node.mjs",
+    "start:zeabur": "OPENCLAW_SKIP_CHANNELS=1 CLAWDBOT_SKIP_CHANNELS=1 node scripts/run-node.mjs gateway --bind lan --port $PORT",
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
