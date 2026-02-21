@@ -301,13 +301,13 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
+  const enabled = jobs.filter((j) => j.enabled && typeof j.state?.nextRunAtMs === "number");
   if (enabled.length === 0) {
     return undefined;
   }
   return enabled.reduce(
-    (min, j) => Math.min(min, j.state.nextRunAtMs as number),
-    enabled[0].state.nextRunAtMs as number,
+    (min, j) => Math.min(min, j.state?.nextRunAtMs as number),
+    enabled[0].state?.nextRunAtMs as number,
   );
 }
 
