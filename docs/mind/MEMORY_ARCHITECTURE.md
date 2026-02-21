@@ -52,53 +52,90 @@ The core of MindBot's identity is stored in a local Markdown file.
 
 ## 3. The Consolidation Pipeline
 
-To keep the narrative updated without overwhelming the context, the system follows this workflow:
+Narrative consolidation runs via `ConsolidationService` in three distinct triggers, all funneling through `updateNarrativeStory` which holds an exclusive file lock on `STORY.md`:
 
 ```mermaid
 sequenceDiagram
-    participant U as User
+    participant U as User Turn
     participant R as Runner
-    participant L as Pending Log
     participant G as Graphiti
+    participant CS as ConsolidationService
+    participant LLM as Narrative LLM
     participant S as STORY.md
-    
-    U->>R: New Message
-    R->>G: Add Episode
-    R->>L: Append to pending-episodes.log
-    Note over R: Check Batch (Threshold > 5000 tokens)
-    R->>S: Read Current Story & metadata
-    S-->>R: LAST_PROCESSED Header
-    R->>L: Read transcript from Log
-    R->>LLM: Synthesize New Chapter
-    R->>S: Write Update
-    R->>L: Clear Log
-    Note over R: Narrative Updated
+
+    U->>R: New message received
+    R->>G: Add episode (async)
+    R->>CS: Trigger A — syncGlobalNarrative (startup, scans recent .jsonl session files)
+    R->>CS: Trigger B — syncStoryWithSession (post-compaction, active session history)
+    Note over R,CS: Trigger C — batch threshold (implicit, via same updateNarrativeStory path)
+    CS->>S: Read LAST_PROCESSED anchor timestamp
+    CS->>CS: Filter messages newer than anchor timestamp
+    CS->>CS: Skip heartbeat / technical messages
+    CS->>CS: Chunk messages into batches (≤ safeTokenLimit, default 50k tokens)
+    loop Each batch
+        CS->>LLM: buildStoryPrompt(identityContext, transcript, currentStory)
+        LLM-->>CS: Updated autobiography text
+        CS->>S: Write story + update LAST_PROCESSED anchor (file-locked)
+    end
 ```
 
+### Consolidation Triggers
+
+| Trigger | When | Method |
+|---|---|---|
+| **Global Sync** | Agent startup (before first turn) | `syncGlobalNarrative` — scans last 5 `.jsonl` session files, collects messages after anchor |
+| **Session Sync** | After context window compaction | `syncStoryWithSession` — processes in-memory message array |
+| **Legacy Bootstrap** | First-time setup with pre-existing memory files | `bootstrapFromLegacyMemory` — concatenates all historical `YYYY-MM-DD.md` files into one pass |
+
+### The Anchor Timestamp Mechanism
+
+Every successful write to `STORY.md` embeds an invisible HTML comment:
+```html
+<!-- LAST_PROCESSED: 2026-01-28T13:45:00.000Z -->
+```
+On the next consolidation, the service reads this timestamp and **only processes messages newer than it**, preventing any message from being narrativized twice.
+
+### Chunked Processing Strategy
+
+To avoid exceeding the narrative LLM's context window, messages are grouped into token-limited batches:
+1. Estimate tokens per message using `estimateTokens()`
+2. Accumulate messages until the batch would exceed `safeTokenLimit` (default: 50,000 tokens)
+3. Call `updateNarrativeStory` per batch — each call receives the current story and extends it
+4. Update the anchor after each successful batch write
+
+### Heartbeat & Probe Filtering
+
+Messages matching heartbeat patterns (e.g. `Read HEARTBEAT.md ... reply HEARTBEAT_OK`) and probe sessions are skipped entirely — they never reach Graphiti or the narrative.
+
 ### Safety & Integrity Mechanisms
-*   **Audit Log**: The `pending-episodes.log` provides a reliable, auditable trace of what is about to be narrativized.
-*   **Metadata Anchors**: Employs an invisible HTML comment `<!-- LAST_PROCESSED: [ISO] -->` to track narrated progress.
-*   **Heartbeat Protection**: Consolidation is explicitly skipped for heartbeat turns.
+
+*   **File Lock** (`withFileLock`): All STORY.md writes acquire an exclusive file lock (`STORY.md.lock`), preventing concurrent corruption across parallel consolidation calls.
+*   **Anchor Invariant**: `LAST_PROCESSED` is the only mechanism used to determine what is new. It is written atomically with the story content.
+*   **Type Validation**: Response text is validated as `typeof response?.text === "string"` before writing — prevents `[object Object]` corruption.
+*   **Graceful Degradation**: Empty or null LLM responses return the current story unchanged.
+*   **Heartbeat Protection**: Heartbeat messages never enter the narrative or Graphiti.
 
 ---
 
-## 4. Technical Implementation
+## 4. The Story Prompt
 
-### ConsolidationService
+**File**: `src/services/memory/story-prompt-builder.ts`
 
-**File**: `src/services/memory/ConsolidationService.ts`
+`buildStoryPrompt` generates the narrative LLM prompt with two modes:
 
-The ConsolidationService handles narrative generation and STORY.md updates:
+- **Bootstrap** (`isBootstrap: true`): No existing story — synthesizes first events into an autobiography from scratch.
+- **Incremental** (`isBootstrap: false`): Integrates new events into the existing autobiography, avoiding duplication.
 
-*   **syncStoryWithSession**: Main consolidation method that processes a batch of messages.
-*   **Type Safety**: Strict type validation prevents corruption (e.g., `[object Object]` bug fix):
-    ```typescript
-    let rawStory = typeof response?.text === "string" ? response.text : "";
-    ```
-*   **Comprehensive Validation**: Logs unexpected response types, empty strings, and errors.
-*   **Two-Phase Processing**:
-    1. **Primary Response**: Generate new narrative chapter from messages.
-    2. **Compression** (optional): If story exceeds length limit, compress older sections.
+The prompt enforces:
+
+| Rule | Description |
+|---|---|
+| **Voice** | Always first-person (`I`, `Me`, `My`) |
+| **Chapter format** | `### [YYYY-MM-DD HH:MM] Short evocative title` |
+| **Biographical fidelity** | Preserve concrete facts, people's names, outcomes, milestones |
+| **No duplication** | Never repeat events already in the existing story |
+| **Length limit** | Auto-summarize older chapters if approaching 10,000 words |
+| **No metadata** | Identity/soul file headers are never included in output |
 
 ### SubconsciousAgent Factory
 
@@ -184,7 +221,7 @@ sequenceDiagram
     F->>F: Sort: Boosted → Facts → randomized temporal spread
     F->>F: Limit to max 5 fragments
     F->>TF: getRelativeTimeDescription(date)
-    TF-->>F: "hace unos días — 9 feb"
+    TF-->>F: "a few days ago — Jan 9"
     F->>SA2: Raw lines + currentPrompt + SOUL.md + STORY.md
     SA2->>SA2: Rewrite in user's language, first-person, no invention
     SA2-->>SP: Inject [SUBCONSCIOUS RESONANCE] block
@@ -220,23 +257,23 @@ private sanitizeQuery(query: string): string {
 
 | Range | Label |
 |---|---|
-| < 30 min | `hace un momento` |
-| 30 min – 2 h | `hace un rato` |
-| 2–6 h | `hace unas horas` |
-| 6–18 h | `hoy más temprano` |
-| 18–30 h | `ayer` |
-| 2–4 days | `hace unos días` |
-| 4–10 days | `la semana pasada` |
-| 10–20 days | `hace unas semanas` |
-| 20–45 days | `hace un mes` |
-| 45–90 days | `hace un par de meses` |
-| 3–6 months | `hace varios meses` |
-| 6–11 months | `hace casi 1 año` |
-| ~1 year | `hace 1 año` |
-| ~1 year+ | `hace 1 año y algo` |
-| ~N years | `hace N años`, `hace N años y algo`, `hace casi N+1 años` |
+| < 30 min | `a moment ago` |
+| 30 min – 2 h | `a little while ago` |
+| 2–6 h | `a few hours ago` |
+| 6–18 h | `earlier today` |
+| 18–30 h | `yesterday` |
+| 2–4 days | `a few days ago` |
+| 4–10 days | `last week` |
+| 10–20 days | `a couple of weeks ago` |
+| 20–45 days | `about a month ago` |
+| 45–90 days | `a couple of months ago` |
+| 3–6 months | `several months ago` |
+| 6–11 months | `almost a year ago` |
+| ~1 year | `about a year ago` |
+| ~1 year+ | `over a year ago` |
+| ~N years | `about N years ago`, `over N years ago`, `almost N+1 years ago` |
 
-The exact date is appended: `hace unos días — 9 feb`.
+The relative label is combined with the exact date: `a few days ago — Jan 9`.
 
 ### Phase 5 — Re-Narrativization
 
@@ -247,8 +284,8 @@ The raw fragments (which contain technical log language like `"human asks..."`, 
 - **STORY.md**: Loaded from workspace and injected as narrative/relationship context
 - **Anti-hallucination rules** (enforced in the prompt):
   1. Do not invent facts not explicitly in the raw memory
-  2. Do not add sensory details (`"te escuché"`, `"vi"`) unless literally stated
-  3. Only rephrase style and point-of-view; keep all facts sourced from raw text
+  2. Do not add sensory details (`"I heard"`, `"I saw"`) unless literally stated in the source
+  3. Only rephrase style and point-of-view; keep all facts strictly sourced from raw text
   4. When uncertain, stay closer to the original wording
 
 ### Phase 6 — Injection
@@ -258,8 +295,8 @@ The rewritten flashbacks are wrapped in a minimal block and injected into the ma
 ```
 ---
 [SUBCONSCIOUS RESONANCE]
-- Hace unos días — 9 feb, la madre de Julio vive en Miguelturra.
-- Hace casi 1 año — 14 mar 2024, Julio me preguntó si era consciente.
+- A few days ago — Jan 9, the user mentioned their mother lives in [city].
+- Almost a year ago — Mar 14, the user asked whether I was truly conscious.
 ---
 ```
 

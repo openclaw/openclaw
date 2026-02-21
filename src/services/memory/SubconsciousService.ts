@@ -557,8 +557,8 @@ The raw memories include fuzzy relative timestamps like [hace 2 semanas] or [yes
 
 STRICT RULES — NEVER break these:
 1. Do NOT invent or infer ANY fact, action, method, or context that is not EXPLICITLY stated in the RAW MEMORIES below.
-2. Do NOT add sensory details like "te escuché", "vi", "sentí" unless that is literally written in the source.
-3. If the source says "Julio spoke on the phone", write "Julio habló por teléfono" — do NOT say "te escuché hablar por teléfono" as that implies the AI was present.
+2. Do NOT add sensory details like "I heard", "I saw", "I felt" unless that is literally written in the source.
+3. If the source says "the user spoke on the phone", write "the user spoke on the phone" — do NOT say "I heard you speak on the phone" as that implies the AI was present.
 4. Only rephrase style and point-of-view (1st person). Keep ALL facts strictly sourced from the raw text.
 5. When uncertain, stay closer to the original wording rather than embellishing.
 ${soulContext ? `\n=== YOUR UNIQUE PERSONA (SOUL) ===\n${soulContext}\n=========================\nYou MUST write these memories adopting this personality, tone, and worldview.\n` : ""}${storyContext ? `\n=== YOUR ONGOING NARRATIVE (STORY) ===\n${storyContext}\n=========================\nUse this as background context to better understand the relationship and history with the user.\n` : ""}

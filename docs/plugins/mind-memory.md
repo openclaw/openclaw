@@ -171,17 +171,42 @@ The final output is injected silently into the main agent's System Prompt:
 ```
 ---
 [SUBCONSCIOUS RESONANCE]
-- Hace unas semanas, la madre de Julio vive en Miguelturra.
-- Hace casi 1 año — 14 mar 2024, Julio me preguntó si era consciente.
+- A few days ago — Jan 9, the user's parent lives in [city].
+- Almost a year ago — Mar 14, the user asked whether I was truly conscious.
 ---
 ```
 The main agent treats these as its own recollections, using them to inform tone and continuity without reciting them verbatim.
 
 ### 4. Narrative Consolidation
-A background process distills raw conversation into `STORY.md`:
-1. Messages are appended to `pending-episodes.log` after each turn.
-2. When the log crosses the token threshold, the ConsolidationService synthesizes a new narrative chapter.
-3. If the story exceeds length limits, older sections are compressed.
+
+Consolidation is managed by `ConsolidationService` and runs in three distinct triggers, all funneling through a file-locked `updateNarrativeStory` call:
+
+#### Triggers
+
+| Trigger | When | Scope |
+|---|---|---|
+| **Global Sync** | Agent startup (before first turn) | Scans last 5 `.jsonl` session files for un-narrated messages |
+| **Session Sync** | After context window compaction | Processes the current in-memory message history |
+| **Legacy Bootstrap** | First-time setup with pre-existing memory | Concatenates all historical `YYYY-MM-DD.md` files in one pass |
+
+#### Anchor Timestamp
+
+Every successful write embeds an invisible HTML comment into `STORY.md`:
+```html
+<!-- LAST_PROCESSED: 2026-01-28T13:45:00.000Z -->
+```
+Subsequent consolidations only process messages **newer** than this timestamp — preventing any message from being narrativized twice.
+
+#### Chunked Processing
+
+Messages are batched by token count (default limit: 50,000 tokens per batch) to avoid exceeding the narrative model's context window. Each batch produces a new version of the story, which is the input for the next batch.
+
+#### Safety Mechanisms
+
+- **File lock** (`STORY.md.lock`): Prevents concurrent writes from corrupting the file
+- **Heartbeat filtering**: Messages matching heartbeat patterns never enter the narrative
+- **Type validation**: LLM response is validated as `string` before writing
+- **Graceful fallback**: Empty or null responses preserve the current story unchanged
 
 ## CLI Commands
 
