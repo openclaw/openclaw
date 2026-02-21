@@ -342,6 +342,7 @@ describe("gateway agent handler", () => {
       | { message?: string; sessionId?: string }
       | undefined;
     expect(call?.message).toBe(BARE_SESSION_RESET_PROMPT);
+    expect(call?.message).toContain("Execute your Session Startup sequence now");
     expect(call?.sessionId).toBe("reset-session-id");
   });
 
