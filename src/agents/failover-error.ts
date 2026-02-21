@@ -71,6 +71,17 @@ function getStatusCode(err: unknown): number | undefined {
   if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
     return Number(candidate);
   }
+  // Fallback: extract status code from error message (e.g., "429 status code (no body)")
+  const message = getErrorMessage(err);
+  if (message) {
+    const statusMatch = message.match(/\b(\d{3})\s+(?:status\s*code|error\s+code|http\s+error|http)/i);
+    if (statusMatch) {
+      const code = Number(statusMatch[1]);
+      if (Number.isFinite(code) && code >= 100 && code < 600) {
+        return code;
+      }
+    }
+  }
   return undefined;
 }
 
@@ -149,12 +160,15 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (isFailoverError(err)) {
     return err.reason;
   }
-
+  // Extract status code from error object properties or error message
+  // Handles cases like "429 status code (no body)" where status is in the message
   const status = getStatusCode(err);
   if (status === 402) {
     return "billing";
   }
   if (status === 429) {
+    // Empty 429 responses (no body) are handled via exponential backoff cooldown
+    // in calculateAuthProfileCooldownMs() since reset time cannot be extracted
     return "rate_limit";
   }
   if (status === 401 || status === 403) {

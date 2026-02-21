@@ -173,7 +173,12 @@ export async function markAuthProfileUsed(params: {
   };
   saveAuthProfileStore(store, agentDir);
 }
-
+/**
+ * Calculate cooldown duration for rate limit errors using exponential backoff.
+ * Used when reset time cannot be extracted from error messages (e.g., empty 429 responses).
+ *
+ * Cooldown progression: 1min, 5min, 25min, max 1 hour.
+ */
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
   const normalized = Math.max(1, errorCount);
   return Math.min(
