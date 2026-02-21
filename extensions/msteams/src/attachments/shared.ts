@@ -1,9 +1,11 @@
+declare const Buffer: any;
+
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
   | {
       kind: "data";
-      data: Buffer;
+      data: InstanceType<typeof Buffer>;
       contentType?: string;
       placeholder: string;
     }
@@ -14,6 +16,11 @@ type InlineImageCandidate =
       fileHint?: string;
       placeholder: string;
     };
+
+type InlineImageLimitOptions = {
+  maxInlineBytes?: number;
+  maxInlineTotalBytes?: number;
+};
 
 export const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
@@ -163,25 +170,58 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function decodeDataImage(src: string): InlineImageCandidate | null {
+function estimateBase64DecodedBytes(value: string): number {
+  const normalized = value.replace(/\s+/g, "");
+  if (!normalized) {
+    return 0;
+  }
+  let padding = 0;
+  if (normalized.endsWith("==")) {
+    padding = 2;
+  } else if (normalized.endsWith("=")) {
+    padding = 1;
+  }
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
+function isLikelyBase64Payload(value: string): boolean {
+  return /^[A-Za-z0-9+/=\r\n]+$/.test(value);
+}
+
+function decodeDataImageWithLimits(
+  src: string,
+  opts: { maxInlineBytes?: number },
+): { candidate: InlineImageCandidate | null; estimatedBytes: number } {
   const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
   if (!match) {
-    return null;
+    return { candidate: null, estimatedBytes: 0 };
   }
   const contentType = match[1]?.toLowerCase();
   const isBase64 = Boolean(match[2]);
   if (!isBase64) {
-    return null;
+    return { candidate: null, estimatedBytes: 0 };
   }
   const payload = match[3] ?? "";
-  if (!payload) {
-    return null;
+  if (!payload || !isLikelyBase64Payload(payload)) {
+    return { candidate: null, estimatedBytes: 0 };
   }
+
+  const estimatedBytes = estimateBase64DecodedBytes(payload);
+  if (estimatedBytes <= 0) {
+    return { candidate: null, estimatedBytes: 0 };
+  }
+  if (typeof opts.maxInlineBytes === "number" && estimatedBytes > opts.maxInlineBytes) {
+    return { candidate: null, estimatedBytes };
+  }
+
   try {
     const data = Buffer.from(payload, "base64");
-    return { kind: "data", data, contentType, placeholder: "<media:image>" };
+    return {
+      candidate: { kind: "data", data, contentType, placeholder: "<media:image>" },
+      estimatedBytes,
+    };
   } catch {
-    return null;
+    return { candidate: null, estimatedBytes: 0 };
   }
 }
 
@@ -197,8 +237,10 @@ function fileHintFromUrl(src: string): string | undefined {
 
 export function extractInlineImageCandidates(
   attachments: MSTeamsAttachmentLike[],
+  limits?: InlineImageLimitOptions,
 ): InlineImageCandidate[] {
   const out: InlineImageCandidate[] = [];
+  let totalEstimatedInlineBytes = 0;
   for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
@@ -210,8 +252,18 @@ export function extractInlineImageCandidates(
       const src = match[1]?.trim();
       if (src && !src.startsWith("cid:")) {
         if (src.startsWith("data:")) {
-          const decoded = decodeDataImage(src);
+          const { candidate: decoded, estimatedBytes } = decodeDataImageWithLimits(src, {
+            maxInlineBytes: limits?.maxInlineBytes,
+          });
           if (decoded) {
+            const nextTotal = totalEstimatedInlineBytes + estimatedBytes;
+            if (
+              typeof limits?.maxInlineTotalBytes === "number" &&
+              nextTotal > limits.maxInlineTotalBytes
+            ) {
+              break;
+            }
+            totalEstimatedInlineBytes = nextTotal;
             out.push(decoded);
           }
         } else {
