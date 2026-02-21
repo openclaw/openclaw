@@ -244,18 +244,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
   );
 }
 
-function shouldRewriteBillingText(raw: string): boolean {
-  if (!isBillingErrorMessage(raw)) {
-    return false;
-  }
-  return (
-    isRawApiErrorPayload(raw) ||
-    isLikelyHttpErrorText(raw) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    BILLING_ERROR_HEAD_RE.test(raw)
-  );
-}
-
 type ErrorPayload = Record<string, unknown>;
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
@@ -552,13 +540,6 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  // Preserve legacy behavior for explicit billing-head text outside known
-  // error contexts (e.g., "billing: please upgrade your plan"), while
-  // keeping conversational billing mentions untouched.
-  if (shouldRewriteBillingText(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
   const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
@@ -765,12 +746,46 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+export function isModelNotFoundErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+
+  // Direct pattern matches from OpenClaw internals and common providers.
+  if (
+    lower.includes("unknown model") ||
+    lower.includes("model not found") ||
+    lower.includes("model_not_found") ||
+    lower.includes("not_found_error") ||
+    (lower.includes("does not exist") && lower.includes("model")) ||
+    (lower.includes("invalid model") && !lower.includes("invalid model reference"))
+  ) {
+    return true;
+  }
+
+  // Google Gemini: "models/X is not found for api version"
+  if (/models\/[^\s]+ is not found/i.test(raw)) {
+    return true;
+  }
+
+  // JSON error payloads: {"status": "NOT_FOUND"} or {"code": 404} combined with not-found text.
+  if (/\b404\b/.test(raw) && /not[-_ ]?found/i.test(raw)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "model_not_found";
   }
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.

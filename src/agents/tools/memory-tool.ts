@@ -50,7 +50,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute: async (_toolCallId, params) => {
       const query = readStringParam(params, "query", { required: true });
@@ -61,7 +61,7 @@ export function createMemorySearchTool(options: {
         agentId,
       });
       if (!manager) {
-        return jsonResult({ results: [], disabled: true, error });
+        return jsonResult(buildMemorySearchUnavailableResult(error));
       }
       try {
         const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -92,7 +92,7 @@ export function createMemorySearchTool(options: {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ results: [], disabled: true, error: message });
+        return jsonResult(buildMemorySearchUnavailableResult(message));
       }
     },
   };
@@ -190,6 +190,25 @@ function clampResultsByInjectedChars(
     }
   }
   return clamped;
+}
+
+function buildMemorySearchUnavailableResult(error: string | undefined) {
+  const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
+  const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  const warning = isQuotaError
+    ? "Memory search is unavailable because the embedding provider quota is exhausted."
+    : "Memory search is unavailable due to an embedding/provider error.";
+  const action = isQuotaError
+    ? "Top up or switch embedding provider, then retry memory_search."
+    : "Check embedding provider configuration and retry memory_search.";
+  return {
+    results: [],
+    disabled: true,
+    unavailable: true,
+    error: reason,
+    warning,
+    action,
+  };
 }
 
 function shouldIncludeCitations(params: {

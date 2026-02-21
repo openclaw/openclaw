@@ -306,7 +306,7 @@ enum ExecApprovalsStore {
     }
 
     static func ensureFile() -> ExecApprovalsFile {
-        var file = self.loadFile()
+        var file = self.normalizeIncoming(self.loadFile())
         if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
         let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if path.isEmpty {
@@ -315,6 +315,18 @@ enum ExecApprovalsStore {
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if token.isEmpty {
             file.socket?.token = self.generateToken()
+        }
+        if var agents = file.agents {
+            for (key, entry) in agents {
+                guard let allowlist = entry.allowlist else { continue }
+                let migrated = allowlist.map { self.migrateLegacyPattern($0) }
+                if migrated != allowlist {
+                    var next = entry
+                    next.allowlist = migrated
+                    agents[key] = next
+                }
+            }
+            file.agents = agents.isEmpty ? nil : agents
         }
         if file.agents == nil { file.agents = [:] }
         self.saveFile(file)
@@ -400,7 +412,7 @@ enum ExecApprovalsStore {
 
     static func addAllowlistEntry(agentId: String?, pattern: String) {
         let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, self.isPathPattern(trimmed) else { return }
         self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
@@ -453,7 +465,7 @@ enum ExecApprovalsStore {
                         lastUsedCommand: item.lastUsedCommand,
                         lastResolvedPath: item.lastResolvedPath)
                 }
-                .filter { !$0.pattern.isEmpty }
+                .filter { !$0.pattern.isEmpty && self.isPathPattern($0.pattern) }
             entry.allowlist = cleaned
             agents[key] = entry
             file.agents = agents
@@ -523,6 +535,37 @@ enum ExecApprovalsStore {
         return trimmed.isEmpty ? nil : trimmed.lowercased()
     }
 
+    private static func isPathPattern(_ pattern: String) -> Bool {
+        pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
+    }
+
+    private static func migrateLegacyPattern(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntry {
+        let trimmedPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedResolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedPattern.isEmpty else {
+            return ExecAllowlistEntry(
+                id: entry.id,
+                pattern: trimmedPattern,
+                lastUsedAt: entry.lastUsedAt,
+                lastUsedCommand: entry.lastUsedCommand,
+                lastResolvedPath: entry.lastResolvedPath)
+        }
+        if self.isPathPattern(trimmedPattern) || trimmedResolved.isEmpty || !self.isPathPattern(trimmedResolved) {
+            return ExecAllowlistEntry(
+                id: entry.id,
+                pattern: trimmedPattern,
+                lastUsedAt: entry.lastUsedAt,
+                lastUsedCommand: entry.lastUsedCommand,
+                lastResolvedPath: entry.lastResolvedPath)
+        }
+        return ExecAllowlistEntry(
+            id: entry.id,
+            pattern: trimmedResolved,
+            lastUsedAt: entry.lastUsedAt,
+            lastUsedCommand: entry.lastUsedCommand,
+            lastResolvedPath: entry.lastResolvedPath)
+    }
+
     private static func mergeAgents(
         current: ExecApprovalsAgent,
         legacy: ExecApprovalsAgent) -> ExecApprovalsAgent
@@ -552,101 +595,6 @@ enum ExecApprovalsStore {
     }
 }
 
-struct ExecCommandResolution: Sendable {
-    let rawExecutable: String
-    let resolvedPath: String?
-    let executableName: String
-    let cwd: String?
-
-    static func resolve(
-        command: [String],
-        rawCommand: String?,
-        cwd: String?,
-        env: [String: String]?) -> ExecCommandResolution?
-    {
-        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedRaw.isEmpty, let token = self.parseFirstToken(trimmedRaw) {
-            return self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
-        }
-        return self.resolve(command: command, cwd: cwd, env: env)
-    }
-
-    static func resolve(command: [String], cwd: String?, env: [String: String]?) -> ExecCommandResolution? {
-        guard let raw = command.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            return nil
-        }
-        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
-    }
-
-    private static func resolveExecutable(
-        rawExecutable: String,
-        cwd: String?,
-        env: [String: String]?) -> ExecCommandResolution?
-    {
-        let expanded = rawExecutable.hasPrefix("~") ? (rawExecutable as NSString).expandingTildeInPath : rawExecutable
-        let hasPathSeparator = expanded.contains("/") || expanded.contains("\\")
-        let resolvedPath: String? = {
-            if hasPathSeparator {
-                if expanded.hasPrefix("/") {
-                    return expanded
-                }
-                let base = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let root = (base?.isEmpty == false) ? base! : FileManager().currentDirectoryPath
-                return URL(fileURLWithPath: root).appendingPathComponent(expanded).path
-            }
-            let searchPaths = self.searchPaths(from: env)
-            return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
-        }()
-        let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
-        return ExecCommandResolution(
-            rawExecutable: expanded,
-            resolvedPath: resolvedPath,
-            executableName: name,
-            cwd: cwd)
-    }
-
-    private static func parseFirstToken(_ command: String) -> String? {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard let first = trimmed.first else { return nil }
-        if first == "\"" || first == "'" {
-            let rest = trimmed.dropFirst()
-            if let end = rest.firstIndex(of: first) {
-                return String(rest[..<end])
-            }
-            return String(rest)
-        }
-        return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
-    }
-
-    private static func searchPaths(from env: [String: String]?) -> [String] {
-        let raw = env?["PATH"]
-        if let raw, !raw.isEmpty {
-            return raw.split(separator: ":").map(String.init)
-        }
-        return CommandResolver.preferredPaths()
-    }
-}
-
-enum ExecCommandFormatter {
-    static func displayString(for argv: [String]) -> String {
-        argv.map { arg in
-            let trimmed = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "\"\"" }
-            let needsQuotes = trimmed.contains { $0.isWhitespace || $0 == "\"" }
-            if !needsQuotes { return trimmed }
-            let escaped = trimmed.replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"\(escaped)\""
-        }.joined(separator: " ")
-    }
-
-    static func displayString(for argv: [String], rawCommand: String?) -> String {
-        let trimmed = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmed.isEmpty { return trimmed }
-        return self.displayString(for: argv)
-    }
-}
-
 enum ExecApprovalHelpers {
     static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -668,71 +616,6 @@ enum ExecApprovalHelpers {
     static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {
         let pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? command.first ?? ""
         return pattern.isEmpty ? nil : pattern
-    }
-}
-
-enum ExecAllowlistMatcher {
-    static func match(entries: [ExecAllowlistEntry], resolution: ExecCommandResolution?) -> ExecAllowlistEntry? {
-        guard let resolution, !entries.isEmpty else { return nil }
-        let rawExecutable = resolution.rawExecutable
-        let resolvedPath = resolution.resolvedPath
-        let executableName = resolution.executableName
-
-        for entry in entries {
-            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-            if pattern.isEmpty { continue }
-            let hasPath = pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
-            if hasPath {
-                let target = resolvedPath ?? rawExecutable
-                if self.matches(pattern: pattern, target: target) { return entry }
-            } else if self.matches(pattern: pattern, target: executableName) {
-                return entry
-            }
-        }
-        return nil
-    }
-
-    private static func matches(pattern: String, target: String) -> Bool {
-        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        let expanded = trimmed.hasPrefix("~") ? (trimmed as NSString).expandingTildeInPath : trimmed
-        let normalizedPattern = self.normalizeMatchTarget(expanded)
-        let normalizedTarget = self.normalizeMatchTarget(target)
-        guard let regex = self.regex(for: normalizedPattern) else { return false }
-        let range = NSRange(location: 0, length: normalizedTarget.utf16.count)
-        return regex.firstMatch(in: normalizedTarget, options: [], range: range) != nil
-    }
-
-    private static func normalizeMatchTarget(_ value: String) -> String {
-        value.replacingOccurrences(of: "\\\\", with: "/").lowercased()
-    }
-
-    private static func regex(for pattern: String) -> NSRegularExpression? {
-        var regex = "^"
-        var idx = pattern.startIndex
-        while idx < pattern.endIndex {
-            let ch = pattern[idx]
-            if ch == "*" {
-                let next = pattern.index(after: idx)
-                if next < pattern.endIndex, pattern[next] == "*" {
-                    regex += ".*"
-                    idx = pattern.index(after: next)
-                } else {
-                    regex += "[^/]*"
-                    idx = next
-                }
-                continue
-            }
-            if ch == "?" {
-                regex += "."
-                idx = pattern.index(after: idx)
-                continue
-            }
-            regex += NSRegularExpression.escapedPattern(for: String(ch))
-            idx = pattern.index(after: idx)
-        }
-        regex += "$"
-        return try? NSRegularExpression(pattern: regex, options: [.caseInsensitive])
     }
 }
 

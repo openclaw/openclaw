@@ -11,6 +11,7 @@ import {
   evaluateSessionFreshness,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveAndPersistSessionFile,
   resolveChannelResetConfig,
   resolveThreadFlag,
   resolveSessionResetPolicy,
@@ -256,6 +257,8 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
     }
   }
 
@@ -352,13 +355,21 @@ export async function initSessionState(params: {
       console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
     }
   }
-  if (!sessionEntry.sessionFile) {
-    sessionEntry.sessionFile = resolveSessionTranscriptPath(
-      sessionEntry.sessionId,
-      agentId,
-      ctx.MessageThreadId,
-    );
-  }
+  const fallbackSessionFile = !sessionEntry.sessionFile
+    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+    : undefined;
+  const resolvedSessionFile = await resolveAndPersistSessionFile({
+    sessionId: sessionEntry.sessionId,
+    sessionKey,
+    sessionStore,
+    storePath,
+    sessionEntry,
+    agentId,
+    sessionsDir: path.dirname(storePath),
+    fallbackSessionFile,
+    activeSessionKey: sessionKey,
+  });
+  sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;

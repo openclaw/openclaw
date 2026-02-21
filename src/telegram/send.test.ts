@@ -297,20 +297,6 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("wraps chat-not-found with actionable context", async () => {
-    const chatId = "123";
-    const err = new Error("400: Bad Request: chat not found");
-    const sendMessage = vi.fn().mockRejectedValue(err);
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await expectChatNotFoundWithChatId(
-      sendMessageTelegram(chatId, "hi", { token: "tok", api }),
-      chatId,
-    );
-  });
-
   it("preserves thread params in plain text fallback", async () => {
     const chatId = "-1001234567890";
     const parseErr = new Error(
@@ -478,153 +464,139 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("sends video as video note when asVideoNote is true", async () => {
+  it("sends video notes when requested and regular videos otherwise", async () => {
     const chatId = "123";
-    const text = "ignored caption context";
 
-    const sendVideoNote = vi.fn().mockResolvedValue({
-      message_id: 101,
-      chat: { id: chatId },
-    });
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 102,
-      chat: { id: chatId },
-    });
-    const api = { sendVideoNote, sendMessage } as unknown as {
-      sendVideoNote: typeof sendVideoNote;
-      sendMessage: typeof sendMessage;
-    };
+    {
+      const text = "ignored caption context";
+      const sendVideoNote = vi.fn().mockResolvedValue({
+        message_id: 101,
+        chat: { id: chatId },
+      });
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 102,
+        chat: { id: chatId },
+      });
+      const api = { sendVideoNote, sendMessage } as unknown as {
+        sendVideoNote: typeof sendVideoNote;
+        sendMessage: typeof sendMessage;
+      };
 
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("fake-video"),
-      contentType: "video/mp4",
-      fileName: "video.mp4",
-    });
+      loadWebMedia.mockResolvedValueOnce({
+        buffer: Buffer.from("fake-video"),
+        contentType: "video/mp4",
+        fileName: "video.mp4",
+      });
 
-    const res = await sendMessageTelegram(chatId, text, {
-      token: "tok",
-      api,
-      mediaUrl: "https://example.com/video.mp4",
-      asVideoNote: true,
-    });
+      const res = await sendMessageTelegram(chatId, text, {
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/video.mp4",
+        asVideoNote: true,
+      });
 
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
-    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("102");
+      expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+      expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
+        parse_mode: "HTML",
+      });
+      expect(res.messageId).toBe("102");
+    }
+
+    {
+      const text = "my caption";
+      const sendVideo = vi.fn().mockResolvedValue({
+        message_id: 201,
+        chat: { id: chatId },
+      });
+      const api = { sendVideo } as unknown as {
+        sendVideo: typeof sendVideo;
+      };
+
+      loadWebMedia.mockResolvedValueOnce({
+        buffer: Buffer.from("fake-video"),
+        contentType: "video/mp4",
+        fileName: "video.mp4",
+      });
+
+      const res = await sendMessageTelegram(chatId, text, {
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/video.mp4",
+        asVideoNote: false,
+      });
+
+      expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
+        caption: expect.any(String),
+        parse_mode: "HTML",
+      });
+      expect(res.messageId).toBe("201");
+    }
   });
 
-  it("sends regular video when asVideoNote is false", async () => {
+  it("applies reply markup and thread options to split video-note sends", async () => {
     const chatId = "123";
-    const text = "my caption";
-
-    const sendVideo = vi.fn().mockResolvedValue({
-      message_id: 201,
-      chat: { id: chatId },
-    });
-    const api = { sendVideo } as unknown as {
-      sendVideo: typeof sendVideo;
-    };
-
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("fake-video"),
-      contentType: "video/mp4",
-      fileName: "video.mp4",
-    });
-
-    const res = await sendMessageTelegram(chatId, text, {
-      token: "tok",
-      api,
-      mediaUrl: "https://example.com/video.mp4",
-      asVideoNote: false,
-    });
-
-    expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: expect.any(String),
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("201");
-  });
-
-  it("adds reply_markup to separate text message for video notes", async () => {
-    const chatId = "123";
-    const text = "Check this out";
-
-    const sendVideoNote = vi.fn().mockResolvedValue({
-      message_id: 301,
-      chat: { id: chatId },
-    });
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 302,
-      chat: { id: chatId },
-    });
-    const api = { sendVideoNote, sendMessage } as unknown as {
-      sendVideoNote: typeof sendVideoNote;
-      sendMessage: typeof sendMessage;
-    };
-
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("fake-video"),
-      contentType: "video/mp4",
-      fileName: "video.mp4",
-    });
-
-    await sendMessageTelegram(chatId, text, {
-      token: "tok",
-      api,
-      mediaUrl: "https://example.com/video.mp4",
-      asVideoNote: true,
-      buttons: [[{ text: "Btn", callback_data: "dat" }]],
-    });
-
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
-    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[{ text: "Btn", callback_data: "dat" }]],
+    const cases = [
+      {
+        text: "Check this out",
+        options: {
+          buttons: [[{ text: "Btn", callback_data: "dat" }]],
+        },
+        expectedVideoNote: {},
+        expectedMessage: {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[{ text: "Btn", callback_data: "dat" }]],
+          },
+        },
       },
-    });
-  });
+      {
+        text: "Threaded reply",
+        options: {
+          replyToMessageId: 999,
+        },
+        expectedVideoNote: { reply_to_message_id: 999 },
+        expectedMessage: {
+          parse_mode: "HTML",
+          reply_to_message_id: 999,
+        },
+      },
+    ] as const;
 
-  it("threads video note and text message correctly", async () => {
-    const chatId = "123";
-    const text = "Threaded reply";
+    for (const testCase of cases) {
+      const sendVideoNote = vi.fn().mockResolvedValue({
+        message_id: 301,
+        chat: { id: chatId },
+      });
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 302,
+        chat: { id: chatId },
+      });
+      const api = { sendVideoNote, sendMessage } as unknown as {
+        sendVideoNote: typeof sendVideoNote;
+        sendMessage: typeof sendMessage;
+      };
 
-    const sendVideoNote = vi.fn().mockResolvedValue({
-      message_id: 401,
-      chat: { id: chatId },
-    });
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 402,
-      chat: { id: chatId },
-    });
-    const api = { sendVideoNote, sendMessage } as unknown as {
-      sendVideoNote: typeof sendVideoNote;
-      sendMessage: typeof sendMessage;
-    };
+      loadWebMedia.mockResolvedValueOnce({
+        buffer: Buffer.from("fake-video"),
+        contentType: "video/mp4",
+        fileName: "video.mp4",
+      });
 
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("fake-video"),
-      contentType: "video/mp4",
-      fileName: "video.mp4",
-    });
+      await sendMessageTelegram(chatId, testCase.text, {
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/video.mp4",
+        asVideoNote: true,
+        ...testCase.options,
+      });
 
-    await sendMessageTelegram(chatId, text, {
-      token: "tok",
-      api,
-      mediaUrl: "https://example.com/video.mp4",
-      asVideoNote: true,
-      replyToMessageId: 999,
-    });
-
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {
-      reply_to_message_id: 999,
-    });
-    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
-      parse_mode: "HTML",
-      reply_to_message_id: 999,
-    });
+      expect(sendVideoNote).toHaveBeenCalledWith(
+        chatId,
+        expect.anything(),
+        testCase.expectedVideoNote,
+      );
+      expect(sendMessage).toHaveBeenCalledWith(chatId, testCase.text, testCase.expectedMessage);
+    }
   });
 
   it("retries on transient errors with retry_after", async () => {
@@ -847,171 +819,144 @@ describe("sendMessageTelegram", () => {
     expect(sendAudio).not.toHaveBeenCalled();
   });
 
-  it("includes message_thread_id for forum topic messages", async () => {
-    const chatId = "-1001234567890";
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 55,
-      chat: { id: chatId },
-    });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+  it("keeps message_thread_id for forum/private/group sends", async () => {
+    const cases = [
+      {
+        name: "forum topic",
+        chatId: "-1001234567890",
+        text: "hello forum",
+        messageId: 55,
+      },
+      {
+        name: "private chat topic (#18974)",
+        chatId: "123456789",
+        text: "hello private",
+        messageId: 56,
+      },
+      {
+        // Group/supergroup chats have negative IDs.
+        name: "group chat (#17242)",
+        chatId: "-1001234567890",
+        text: "hello group",
+        messageId: 57,
+      },
+    ] as const;
 
-    await sendMessageTelegram(chatId, "hello forum", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-  });
-
-  it("keeps message_thread_id for private chat topic sends (#18974)", async () => {
-    const chatId = "123456789";
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 56,
-      chat: { id: chatId },
-    });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await sendMessageTelegram(chatId, "hello private", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-  });
-
-  it("keeps message_thread_id for group chat sends (#17242)", async () => {
-    // Group/supergroup chats have negative IDs.
-    const chatId = "-1001234567890";
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 57,
-      chat: { id: chatId },
-    });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await sendMessageTelegram(chatId, "hello group", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello group", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-  });
-
-  it("retries without message_thread_id when Telegram reports missing thread", async () => {
-    const chatId = "-100123";
-    const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 58,
-        chat: { id: chatId },
+    for (const testCase of cases) {
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: testCase.messageId,
+        chat: { id: testCase.chatId },
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
 
-    const res = await sendMessageTelegram(chatId, "hello forum", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
-
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "hello forum", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "hello forum", {
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("58");
-  });
-
-  it("retries private chat sends without message_thread_id on thread-not-found", async () => {
-    const chatId = "123456789";
-    const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 59,
-        chat: { id: chatId },
-      });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    const res = await sendMessageTelegram(chatId, "hello private", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
-
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "hello private", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "hello private", {
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("59");
-  });
-
-  it("does not retry thread-not-found when no message_thread_id was provided", async () => {
-    const chatId = "123";
-    const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await expect(
-      sendMessageTelegram(chatId, "hello forum", {
-        token: "tok",
-        api,
-      }),
-    ).rejects.toThrow("message thread not found");
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry without message_thread_id on chat-not-found", async () => {
-    const chatId = "123456789";
-    const chatErr = new Error("400: Bad Request: chat not found");
-    const sendMessage = vi.fn().mockRejectedValueOnce(chatErr);
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await expect(
-      sendMessageTelegram(chatId, "hello private", {
+      await sendMessageTelegram(testCase.chatId, testCase.text, {
         token: "tok",
         api,
         messageThreadId: 271,
-      }),
-    ).rejects.toThrow(/chat not found/i);
+      });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
+      expect(sendMessage, testCase.name).toHaveBeenCalledWith(testCase.chatId, testCase.text, {
+        parse_mode: "HTML",
+        message_thread_id: 271,
+      });
+    }
+  });
+
+  it("retries sends without message_thread_id on thread-not-found", async () => {
+    const cases = [
+      { name: "forum", chatId: "-100123", text: "hello forum", messageId: 58 },
+      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
+    ] as const;
+    const threadErr = new Error("400: Bad Request: message thread not found");
+
+    for (const testCase of cases) {
+      const sendMessage = vi
+        .fn()
+        .mockRejectedValueOnce(threadErr)
+        .mockResolvedValueOnce({
+          message_id: testCase.messageId,
+          chat: { id: testCase.chatId },
+        });
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      const res = await sendMessageTelegram(testCase.chatId, testCase.text, {
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      });
+
+      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
+        1,
+        testCase.chatId,
+        testCase.text,
+        {
+          parse_mode: "HTML",
+          message_thread_id: 271,
+        },
+      );
+      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
+        2,
+        testCase.chatId,
+        testCase.text,
+        {
+          parse_mode: "HTML",
+        },
+      );
+      expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
+    }
+  });
+
+  it("does not retry on non-retriable thread/chat errors", async () => {
+    const cases: Array<{
+      chatId: string;
+      text: string;
+      error: Error;
+      opts?: { messageThreadId?: number };
+      expectedError: RegExp | string;
+      expectedCallArgs: [string, string, { parse_mode: "HTML"; message_thread_id?: number }];
+    }> = [
+      {
+        chatId: "123",
+        text: "hello forum",
+        error: new Error("400: Bad Request: message thread not found"),
+        expectedError: "message thread not found",
+        expectedCallArgs: ["123", "hello forum", { parse_mode: "HTML" }],
+      },
+      {
+        chatId: "123456789",
+        text: "hello private",
+        error: new Error("400: Bad Request: chat not found"),
+        opts: { messageThreadId: 271 },
+        expectedError: /chat not found/i,
+        expectedCallArgs: [
+          "123456789",
+          "hello private",
+          { parse_mode: "HTML", message_thread_id: 271 },
+        ],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const sendMessage = vi.fn().mockRejectedValueOnce(testCase.error);
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      await expect(
+        sendMessageTelegram(testCase.chatId, testCase.text, {
+          token: "tok",
+          api,
+          ...testCase.opts,
+        }),
+      ).rejects.toThrow(testCase.expectedError);
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith(...testCase.expectedCallArgs);
+    }
   });
 
   it("sets disable_notification when silent is true", async () => {
@@ -1054,28 +999,6 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
       parse_mode: "HTML",
       message_thread_id: 271,
-    });
-  });
-
-  it("includes reply_to_message_id for threaded replies", async () => {
-    const chatId = "123";
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 56,
-      chat: { id: chatId },
-    });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await sendMessageTelegram(chatId, "reply text", {
-      token: "tok",
-      api,
-      replyToMessageId: 100,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
-      parse_mode: "HTML",
-      reply_to_message_id: 100,
     });
   });
 
@@ -1224,42 +1147,6 @@ describe("sendStickerTelegram", () => {
     expect(res.messageId).toBe("109");
   });
 
-  it("includes reply_to_message_id for threaded replies", async () => {
-    const chatId = "123";
-    const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 102,
-      chat: { id: chatId },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram(chatId, fileId, {
-      token: "tok",
-      api,
-      replyToMessageId: 500,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
-      reply_to_message_id: 500,
-    });
-  });
-
-  it("wraps chat-not-found with actionable context", async () => {
-    const chatId = "123";
-    const err = new Error("400: Bad Request: chat not found");
-    const sendSticker = vi.fn().mockRejectedValue(err);
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await expectChatNotFoundWithChatId(
-      sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
-      chatId,
-    );
-  });
-
   it("trims whitespace from fileId", async () => {
     const chatId = "123";
     const sendSticker = vi.fn().mockResolvedValue({
@@ -1276,6 +1163,84 @@ describe("sendStickerTelegram", () => {
     });
 
     expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", undefined);
+  });
+});
+
+describe("shared send behaviors", () => {
+  it("includes reply_to_message_id for threaded replies", async () => {
+    {
+      const chatId = "123";
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 56,
+        chat: { id: chatId },
+      });
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      await sendMessageTelegram(chatId, "reply text", {
+        token: "tok",
+        api,
+        replyToMessageId: 100,
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+        parse_mode: "HTML",
+        reply_to_message_id: 100,
+      });
+    }
+
+    {
+      const chatId = "123";
+      const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
+      const sendSticker = vi.fn().mockResolvedValue({
+        message_id: 102,
+        chat: { id: chatId },
+      });
+      const api = { sendSticker } as unknown as {
+        sendSticker: typeof sendSticker;
+      };
+
+      await sendStickerTelegram(chatId, fileId, {
+        token: "tok",
+        api,
+        replyToMessageId: 500,
+      });
+
+      expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
+        reply_to_message_id: 500,
+      });
+    }
+  });
+
+  it("wraps chat-not-found with actionable context", async () => {
+    {
+      const chatId = "123";
+      const err = new Error("400: Bad Request: chat not found");
+      const sendMessage = vi.fn().mockRejectedValue(err);
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      await expectChatNotFoundWithChatId(
+        sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+        chatId,
+      );
+    }
+
+    {
+      const chatId = "123";
+      const err = new Error("400: Bad Request: chat not found");
+      const sendSticker = vi.fn().mockRejectedValue(err);
+      const api = { sendSticker } as unknown as {
+        sendSticker: typeof sendSticker;
+      };
+
+      await expectChatNotFoundWithChatId(
+        sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+        chatId,
+      );
+    }
   });
 });
 

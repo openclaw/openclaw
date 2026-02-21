@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { saveSessionStore } from "../../config/sessions.js";
-import { isBotMentionedFromTargets, resolveMentionTargets } from "./mentions.js";
+import {
+  debugMention,
+  isBotMentionedFromTargets,
+  resolveMentionTargets,
+  resolveOwnerList,
+} from "./mentions.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
@@ -24,8 +29,26 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
     ...overrides,
   }) as WebInboundMsg;
 
+async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    return await run(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
+
+  function expectMentioned(
+    msg: WebInboundMsg,
+    cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number> },
+    expected: boolean,
+  ) {
+    const targets = resolveMentionTargets(msg);
+    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(expected);
+  }
 
   it("ignores regex matches when other mentions are present", () => {
     const msg = makeMsg({
@@ -34,8 +57,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(false);
+    expectMentioned(msg, mentionCfg, false);
   });
 
   it("matches explicit self mentions", () => {
@@ -45,8 +67,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+    expectMentioned(msg, mentionCfg, true);
   });
 
   it("falls back to regex when no mentions are present", () => {
@@ -55,8 +76,7 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+    expectMentioned(msg, mentionCfg, true);
   });
 
   it("ignores JID mentions in self-chat mode", () => {
@@ -67,55 +87,54 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
     });
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(false);
+    expectMentioned(msg, cfg, false);
 
     const msgTextMention = makeMsg({
       body: "openclaw ping",
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
     });
-    const targetsText = resolveMentionTargets(msgTextMention);
-    expect(isBotMentionedFromTargets(msgTextMention, cfg, targetsText)).toBe(true);
+    expectMentioned(msgTextMention, cfg, true);
+  });
+
+  it("matches fallback number mentions when regexes do not match", () => {
+    const msg = makeMsg({
+      body: "please check +1 555 123 4567",
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, { mentionRegexes: [] }, true);
   });
 });
 
 describe("resolveMentionTargets with @lid mapping", () => {
-  let authDir = "";
+  it("uses @lid reverse mapping for mentions and self identity", async () => {
+    await withTempDir("openclaw-lid-mapping-", async (authDir) => {
+      await fs.writeFile(
+        path.join(authDir, "lid-mapping-777_reverse.json"),
+        JSON.stringify("+1777"),
+      );
 
-  beforeAll(async () => {
-    authDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lid-mapping-"));
-    await fs.writeFile(path.join(authDir, "lid-mapping-777_reverse.json"), JSON.stringify("+1777"));
-  });
+      const mentionTargets = resolveMentionTargets(
+        makeMsg({
+          body: "ping",
+          mentionedJids: ["777@lid"],
+          selfE164: "+15551234567",
+          selfJid: "15551234567@s.whatsapp.net",
+        }),
+        authDir,
+      );
+      expect(mentionTargets.normalizedMentions).toContain("+1777");
 
-  afterAll(async () => {
-    if (!authDir) {
-      return;
-    }
-    await fs.rm(authDir, { recursive: true, force: true });
-    authDir = "";
-  });
-
-  it("uses @lid reverse mapping for mentions and self identity", () => {
-    const mentionTargets = resolveMentionTargets(
-      makeMsg({
-        body: "ping",
-        mentionedJids: ["777@lid"],
-        selfE164: "+15551234567",
-        selfJid: "15551234567@s.whatsapp.net",
-      }),
-      authDir,
-    );
-    expect(mentionTargets.normalizedMentions).toContain("+1777");
-
-    const selfTargets = resolveMentionTargets(
-      makeMsg({
-        body: "ping",
-        selfJid: "777@lid",
-      }),
-      authDir,
-    );
-    expect(selfTargets.selfE164).toBe("+1777");
+      const selfTargets = resolveMentionTargets(
+        makeMsg({
+          body: "ping",
+          selfJid: "777@lid",
+        }),
+        authDir,
+      );
+      expect(selfTargets.selfE164).toBe("+1777");
+    });
   });
 });
 
@@ -124,36 +143,37 @@ describe("getSessionSnapshot", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     try {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-snapshot-"));
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:whatsapp:dm:s1";
+      await withTempDir("openclaw-snapshot-", async (root) => {
+        const storePath = path.join(root, "sessions.json");
+        const sessionKey = "agent:main:whatsapp:dm:s1";
 
-      await saveSessionStore(storePath, {
-        [sessionKey]: {
-          sessionId: "snapshot-session",
-          updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-          lastChannel: "whatsapp",
-        },
-      });
-
-      const cfg = {
-        session: {
-          store: storePath,
-          reset: { mode: "daily", atHour: 4, idleMinutes: 240 },
-          resetByChannel: {
-            whatsapp: { mode: "idle", idleMinutes: 360 },
+        await saveSessionStore(storePath, {
+          [sessionKey]: {
+            sessionId: "snapshot-session",
+            updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+            lastChannel: "whatsapp",
           },
-        },
-      } as Parameters<typeof getSessionSnapshot>[0];
+        });
 
-      const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
-        sessionKey,
+        const cfg = {
+          session: {
+            store: storePath,
+            reset: { mode: "daily", atHour: 4, idleMinutes: 240 },
+            resetByChannel: {
+              whatsapp: { mode: "idle", idleMinutes: 360 },
+            },
+          },
+        } as Parameters<typeof getSessionSnapshot>[0];
+
+        const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
+          sessionKey,
+        });
+
+        expect(snapshot.resetPolicy.mode).toBe("idle");
+        expect(snapshot.resetPolicy.idleMinutes).toBe(360);
+        expect(snapshot.fresh).toBe(true);
+        expect(snapshot.dailyResetAt).toBeUndefined();
       });
-
-      expect(snapshot.resetPolicy.mode).toBe("idle");
-      expect(snapshot.resetPolicy.idleMinutes).toBe(360);
-      expect(snapshot.fresh).toBe(true);
-      expect(snapshot.dailyResetAt).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
@@ -161,6 +181,34 @@ describe("getSessionSnapshot", () => {
 });
 
 describe("web auto-reply util", () => {
+  describe("mentions diagnostics", () => {
+    it("returns normalized debug fields and mention outcome", () => {
+      const msg = makeMsg({
+        from: "777@lid",
+        body: "openclaw ping",
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      });
+      const result = debugMention(msg, { mentionRegexes: [/\bopenclaw\b/i] });
+      expect(result.wasMentioned).toBe(true);
+      expect(result.details.bodyClean).toBe("openclaw ping");
+      expect(result.details.normalizedMentionedJids).toBeNull();
+    });
+
+    it("resolves owner list from allowFrom or falls back to self", () => {
+      expect(
+        resolveOwnerList(
+          {
+            mentionRegexes: [],
+            allowFrom: ["*", " +1 555 000 1111 "],
+          },
+          null,
+        ),
+      ).toEqual(["+15550001111"]);
+      expect(resolveOwnerList({ mentionRegexes: [] }, "+1 555 000 2222")).toEqual(["+15550002222"]);
+    });
+  });
+
   describe("elide", () => {
     it("returns undefined for undefined input", () => {
       expect(elide(undefined)).toBe(undefined);

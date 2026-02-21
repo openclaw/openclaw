@@ -168,15 +168,19 @@ describe("resolveHeartbeatIntervalMs", () => {
 });
 
 describe("resolveHeartbeatPrompt", () => {
-  it("uses the default prompt when unset", () => {
-    expect(resolveHeartbeatPrompt({})).toBe(HEARTBEAT_PROMPT);
-  });
-
-  it("uses a trimmed override when configured", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
-    };
-    expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
+  it("uses default or trimmed override prompts", () => {
+    const cases = [
+      { cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
+      {
+        cfg: {
+          agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
+        } as OpenClawConfig,
+        expected: "ping",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(resolveHeartbeatPrompt(testCase.cfg)).toBe(testCase.expected);
+    }
   });
 });
 
@@ -323,67 +327,61 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
-  it("parses threadId from :topic: suffix in heartbeat to", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "-100111:topic:42" },
+  it("parses optional telegram :topic: threadId suffix", () => {
+    const cases = [
+      { to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
+      { to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
+    ] as const;
+    for (const testCase of cases) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { target: "telegram", to: testCase.to },
+          },
         },
-      },
-    };
-    const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
-    expect(result.channel).toBe("telegram");
-    expect(result.to).toBe("-100111");
-    expect(result.threadId).toBe(42);
+      };
+      const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
+      expect(result.channel).toBe("telegram");
+      expect(result.to).toBe(testCase.expectedTo);
+      expect(result.threadId).toBe(testCase.expectedThreadId);
+    }
   });
 
-  it("heartbeat to without :topic: has no threadId", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "-100111" },
+  it("handles explicit heartbeat accountId allow/deny", () => {
+    const cases = [
+      {
+        accountId: "work",
+        expected: {
+          channel: "telegram",
+          to: "123",
+          accountId: "work",
+          lastChannel: undefined,
+          lastAccountId: undefined,
         },
       },
-    };
-    const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
-    expect(result.to).toBe("-100111");
-    expect(result.threadId).toBeUndefined();
-  });
+      {
+        accountId: "missing",
+        expected: {
+          channel: "none",
+          reason: "unknown-account",
+          accountId: "missing",
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+    ] as const;
 
-  it("uses explicit heartbeat accountId when provided", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "123", accountId: "work" },
+    for (const testCase of cases) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { target: "telegram", to: "123", accountId: testCase.accountId },
+          },
         },
-      },
-      channels: { telegram: { accounts: { work: { botToken: "token" } } } },
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: "work",
-      lastChannel: undefined,
-      lastAccountId: undefined,
-    });
-  });
-
-  it("skips when explicit heartbeat accountId is unknown", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          heartbeat: { target: "telegram", to: "123", accountId: "missing" },
-        },
-      },
-      channels: { telegram: { accounts: { work: { botToken: "token" } } } },
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "none",
-      reason: "unknown-account",
-      accountId: "missing",
-      lastChannel: undefined,
-      lastAccountId: undefined,
-    });
+        channels: { telegram: { accounts: { work: { botToken: "token" } } } },
+      };
+      expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(testCase.expected);
+    }
   });
 
   it("prefers per-agent heartbeat overrides when provided", () => {
@@ -1372,7 +1370,7 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("skips heartbeat when HEARTBEAT.md does not exist (saves API calls)", async () => {
+  it("runs heartbeat when HEARTBEAT.md does not exist", async () => {
     const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
@@ -1409,7 +1407,7 @@ describe("runHeartbeatOnce", () => {
         ),
       );
 
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      replySpy.mockResolvedValue({ text: "Checked logs and PRs" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
@@ -1426,13 +1424,74 @@ describe("runHeartbeatOnce", () => {
         },
       });
 
-      // Should skip - no HEARTBEAT.md means nothing actionable
-      expect(res.status).toBe("skipped");
-      if (res.status === "skipped") {
-        expect(res.reason).toBe("no-heartbeat-file");
-      }
-      expect(replySpy).not.toHaveBeenCalled();
-      expect(sendWhatsApp).not.toHaveBeenCalled();
+      // Missing HEARTBEAT.md should still run so prompt/system instructions can drive work.
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("runs heartbeat when HEARTBEAT.md read fails with a non-ENOENT error", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      // Simulate a read failure path (readFile on a directory returns EISDIR).
+      await fs.mkdir(path.join(workspaceDir, "HEARTBEAT.md"), { recursive: true });
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      replySpy.mockResolvedValue({ text: "Checked logs and PRs" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      // Read errors other than ENOENT should not disable heartbeat runs.
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
     } finally {
       replySpy.mockRestore();
     }

@@ -43,6 +43,7 @@ export type IrcAccountConfig = {
   nickserv?: IrcNickServConfig;
   dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
+  defaultTo?: string;
   groupPolicy?: GroupPolicy;
   groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
