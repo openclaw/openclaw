@@ -361,39 +361,38 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
-  it("aborts send when abortSignal is already aborted", async () => {
+  it.each([
+    {
+      name: "send",
+      run: (abortSignal: AbortSignal) =>
+        runDrySend({
+          cfg: slackConfig,
+          actionParams: {
+            channel: "slack",
+            target: "#C12345678",
+            message: "hi",
+          },
+          abortSignal,
+        }),
+    },
+    {
+      name: "broadcast",
+      run: (abortSignal: AbortSignal) =>
+        runDryAction({
+          cfg: slackConfig,
+          action: "broadcast",
+          actionParams: {
+            targets: ["channel:C12345678"],
+            channel: "slack",
+            message: "hi",
+          },
+          abortSignal,
+        }),
+    },
+  ])("aborts $name when abortSignal is already aborted", async ({ run }) => {
     const controller = new AbortController();
     controller.abort();
-
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-          message: "hi",
-        },
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-  });
-
-  it("aborts broadcast when abortSignal is already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(
-      runDryAction({
-        cfg: slackConfig,
-        action: "broadcast",
-        actionParams: {
-          targets: ["channel:C12345678"],
-          channel: "slack",
-          message: "hi",
-        },
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(run(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 
