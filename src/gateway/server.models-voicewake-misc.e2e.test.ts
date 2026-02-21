@@ -81,12 +81,20 @@ const whatsappRegistry = createRegistry([
 const emptyRegistry = createRegistry([]);
 
 describe("gateway server models + voicewake", () => {
+  const withTempHome = async <T>(fn: (homeDir: string) => Promise<T>): Promise<T> => {
+    const tempHome = await createTempHomeEnv("openclaw-home-");
+    try {
+      return await fn(tempHome.home);
+    } finally {
+      await tempHome.restore();
+    }
+  };
+
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 60_000 },
     async () => {
-      const tempHome = await createTempHomeEnv("openclaw-home-");
-      try {
+      await withTempHome(async (homeDir) => {
         const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(initial.ok).toBe(true);
         expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
@@ -114,22 +122,16 @@ describe("gateway server models + voicewake", () => {
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
         const onDisk = JSON.parse(
-          await fs.readFile(
-            path.join(tempHome.home, ".openclaw", "settings", "voicewake.json"),
-            "utf8",
-          ),
+          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
         ) as { triggers?: unknown; updatedAtMs?: unknown };
         expect(onDisk.triggers).toEqual(["hi", "there"]);
         expect(typeof onDisk.updatedAtMs).toBe("number");
-      } finally {
-        await tempHome.restore();
-      }
+      });
     },
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
-    const tempHome = await createTempHomeEnv("openclaw-home-");
-    try {
+    await withTempHome(async () => {
       const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
       await new Promise<void>((resolve) => nodeWs.once("open", resolve));
       const firstEventP = onceMessage(
@@ -171,9 +173,7 @@ describe("gateway server models + voicewake", () => {
       ]);
 
       nodeWs.close();
-    } finally {
-      await tempHome.restore();
-    }
+    });
   });
 
   test("models.list returns model catalog", async () => {
