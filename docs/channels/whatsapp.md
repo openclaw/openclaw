@@ -339,6 +339,15 @@ Behavior notes:
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
 
+### Lifecycle status reactions
+
+WhatsApp also supports lifecycle status reactions (`queued → thinking → tool → done/error`) when `messages.statusReactions.enabled=true`.
+
+- uses the same trigger message and updates the reaction in place as the run progresses
+- the initial queued state uses `channels.whatsapp.ackReaction.emoji`
+- final state is kept (no post-reply reaction cleanup)
+- in broadcast groups, only the deterministic owner agent (first valid configured agent) writes lifecycle reactions
+
 ## Multi-account and credentials
 
 <AccordionGroup>
