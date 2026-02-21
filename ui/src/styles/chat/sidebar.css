@@ -2,9 +2,13 @@
 .chat-split-container {
   display: flex;
   gap: 0;
-  flex: 1;
+  /* Use flex-basis: 0% for better Firefox/Gecko compatibility */
+  flex: 1 1 0%;
   min-height: 0;
+  max-height: 100%;
   height: 100%;
+  /* Contain layout to prevent reflow issues in Gecko browsers */
+  contain: layout;
 }
 
 .chat-main {
@@ -12,6 +16,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Explicit height for Firefox stability */
+  min-height: 0;
+  max-height: 100%;
   /* Smooth transition when sidebar opens/closes */
   transition: flex 250ms ease-out;
 }

@@ -7,13 +7,18 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  flex: 1 1 0;
+  /* Use flex-basis: 0% for better Firefox/Gecko compatibility */
+  flex: 1 1 0%;
   height: 100%;
   min-height: 0; /* Allow flex shrinking */
+  /* Explicit min/max for Firefox stability */
+  max-height: 100%;
   overflow: hidden;
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
+  /* Force GPU layer for smoother rendering in Gecko browsers */
+  will-change: transform;
 }
 
 /* Chat header - fixed at top, transparent */
@@ -49,14 +54,19 @@
 
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
-  flex: 1 1 0; /* Grow, shrink, and use 0 base for proper scrolling */
+  /* Use flex-basis: 0% for better Firefox/Gecko compatibility */
+  flex: 1 1 0%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 4px;
   margin: 0 -4px;
   min-height: 0; /* Allow shrinking for flex scroll behavior */
+  /* Explicit height constraints for Firefox stability */
+  max-height: 100%;
   border-radius: 12px;
   background: transparent;
+  /* Contain layout to prevent reflow issues in Gecko browsers */
+  contain: layout style;
 }
 
 /* Focus mode exit button */
