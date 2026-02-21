@@ -54,7 +54,7 @@ See [Models](/providers/models) for pricing config and [Token use & costs](/refe
 
 Inbound media can be summarized/transcribed before the reply runs. This uses model/provider APIs.
 
-- Audio: OpenAI / Groq / Deepgram (now **auto-enabled** when keys exist).
+- Audio: OpenAI / Groq / Deepgram / AssemblyAI (now **auto-enabled** when keys exist).
 - Image: OpenAI / Anthropic / Google.
 - Video: Google.
 

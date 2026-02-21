@@ -28,7 +28,7 @@ OpenClaw auto-detects in this order and stops at the first working option:
    - `whisper-cli` (from `whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
    - `whisper` (Python CLI; downloads models automatically)
 2. **Gemini CLI** (`gemini`) using `read_many_files`
-3. **Provider keys** (OpenAI → Groq → Deepgram → Google)
+3. **Provider keys** (OpenAI → Groq → Deepgram → Google → AssemblyAI)
 
 To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
@@ -99,6 +99,8 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Provider auth follows the standard model auth order (auth profiles, env vars, `models.providers.*.apiKey`).
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used.
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
+- AssemblyAI picks up `ASSEMBLYAI_API_KEY` when `provider: "assemblyai"` is used.
+- AssemblyAI setup details: [AssemblyAI (audio transcription)](/providers/assemblyai).
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
