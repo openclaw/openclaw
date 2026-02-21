@@ -36,9 +36,10 @@ export async function loadAutoUpdateConfig(): Promise<AutoUpdateConfig> {
     const content = await fs.readFile(configPath, "utf-8");
     return JSON.parse(content);
   } catch (err) {
-    if (err instanceof Error) {
+    const error = err as Error & { code?: string };
+    if (error && error.code !== "ENOENT") {
       console.warn(
-        theme.warn(`Failed to load auto-update config: ${err.message}. Using defaults.`),
+        theme.warn(`Failed to load auto-update config: ${error.message}. Using defaults.`),
       );
     }
   }
