@@ -24,7 +24,7 @@ env:
 jobs:
   # Build amd64 image
   build-amd64:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       packages: write
       contents: read
@@ -83,7 +83,7 @@ jobs:
 
   # Build arm64 image
   build-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
     permissions:
       packages: write
       contents: read
@@ -142,7 +142,7 @@ jobs:
 
   # Create multi-platform manifest
   create-manifest:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       packages: write
       contents: read

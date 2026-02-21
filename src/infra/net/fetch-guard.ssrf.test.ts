@@ -8,6 +8,10 @@ function redirectResponse(location: string): Response {
   });
 }
 
+function okResponse(body = "ok"): Response {
+  return new Response(body, { status: 200 });
+}
+
 describe("fetchWithSsrFGuard hardening", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
 
@@ -16,6 +20,28 @@ describe("fetchWithSsrFGuard hardening", () => {
     await expect(
       fetchWithSsrFGuard({
         url: "http://127.0.0.1:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks legacy loopback literal URLs before fetch", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://0177.0.0.1:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsupported packed-hex loopback literal URLs before fetch", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://0x7f000001/internal",
         fetchImpl,
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
@@ -64,6 +90,66 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(result.response.status).toBe(200);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("strips sensitive headers when redirect crosses origins", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: {
+        headers: {
+          Authorization: "Bearer secret",
+          "Proxy-Authorization": "Basic c2VjcmV0",
+          Cookie: "session=abc",
+          Cookie2: "legacy=1",
+          "X-Trace": "1",
+        },
+      },
+    });
+
+    const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+    const headers = new Headers(secondInit.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("proxy-authorization")).toBeNull();
+    expect(headers.get("cookie")).toBeNull();
+    expect(headers.get("cookie2")).toBeNull();
+    expect(headers.get("x-trace")).toBe("1");
+    await result.release();
+  });
+
+  it("keeps headers when redirect stays on same origin", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("/next"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: {
+        headers: {
+          Authorization: "Bearer secret",
+        },
+      },
+    });
+
+    const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+    const headers = new Headers(secondInit.headers);
+    expect(headers.get("authorization")).toBe("Bearer secret");
     await result.release();
   });
 });

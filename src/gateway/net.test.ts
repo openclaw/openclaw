@@ -2,8 +2,10 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isPrivateOrLoopbackAddress,
+  isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveClientIp,
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
@@ -130,6 +132,77 @@ describe("isTrustedProxyAddress", () => {
   });
 });
 
+describe("resolveClientIp", () => {
+  it.each([
+    {
+      name: "returns remote IP when remote is not trusted proxy",
+      remoteAddr: "203.0.113.10",
+      forwardedFor: "10.0.0.2",
+      trustedProxies: ["127.0.0.1"],
+      expected: "203.0.113.10",
+    },
+    {
+      name: "uses right-most untrusted X-Forwarded-For hop",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "198.51.100.99, 10.0.0.9, 127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+      expected: "10.0.0.9",
+    },
+    {
+      name: "fails closed when all X-Forwarded-For hops are trusted proxies",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "127.0.0.1, ::1",
+      trustedProxies: ["127.0.0.1", "::1"],
+      expected: undefined,
+    },
+    {
+      name: "fails closed when trusted proxy omits forwarding headers",
+      remoteAddr: "127.0.0.1",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "ignores invalid X-Forwarded-For entries",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "garbage, 10.0.0.999",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "does not trust X-Real-IP by default",
+      remoteAddr: "127.0.0.1",
+      realIp: "[2001:db8::5]",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "uses X-Real-IP only when explicitly enabled",
+      remoteAddr: "127.0.0.1",
+      realIp: "[2001:db8::5]",
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      expected: "2001:db8::5",
+    },
+    {
+      name: "ignores invalid X-Real-IP even when fallback enabled",
+      remoteAddr: "127.0.0.1",
+      realIp: "not-an-ip",
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      expected: undefined,
+    },
+  ])("$name", (testCase) => {
+    const ip = resolveClientIp({
+      remoteAddr: testCase.remoteAddr,
+      forwardedFor: testCase.forwardedFor,
+      realIp: testCase.realIp,
+      trustedProxies: testCase.trustedProxies,
+      allowRealIpFallback: testCase.allowRealIpFallback,
+    });
+    expect(ip).toBe(testCase.expected);
+  });
+});
+
 describe("resolveGatewayListenHosts", () => {
   it("returns the input host when not loopback", async () => {
     const hosts = await resolveGatewayListenHosts("0.0.0.0", {
@@ -235,5 +308,44 @@ describe("isPrivateOrLoopbackAddress", () => {
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
     }
+  });
+});
+
+describe("isSecureWebSocketUrl", () => {
+  describe("wss:// (TLS) URLs", () => {
+    it("returns true for wss:// regardless of host", () => {
+      expect(isSecureWebSocketUrl("wss://127.0.0.1:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://localhost:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://remote.example.com:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("wss://192.168.1.100:18789")).toBe(true);
+    });
+  });
+
+  describe("ws:// (plaintext) URLs", () => {
+    it("returns true for ws:// to loopback addresses", () => {
+      expect(isSecureWebSocketUrl("ws://127.0.0.1:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://localhost:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://[::1]:18789")).toBe(true);
+      expect(isSecureWebSocketUrl("ws://127.0.0.42:18789")).toBe(true);
+    });
+
+    it("returns false for ws:// to non-loopback addresses (CWE-319)", () => {
+      expect(isSecureWebSocketUrl("ws://remote.example.com:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://192.168.1.100:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://10.0.0.5:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("ws://100.64.0.1:18789")).toBe(false);
+    });
+  });
+
+  describe("invalid URLs", () => {
+    it("returns false for invalid URLs", () => {
+      expect(isSecureWebSocketUrl("not-a-url")).toBe(false);
+      expect(isSecureWebSocketUrl("")).toBe(false);
+    });
+
+    it("returns false for non-WebSocket protocols", () => {
+      expect(isSecureWebSocketUrl("http://127.0.0.1:18789")).toBe(false);
+      expect(isSecureWebSocketUrl("https://127.0.0.1:18789")).toBe(false);
+    });
   });
 });

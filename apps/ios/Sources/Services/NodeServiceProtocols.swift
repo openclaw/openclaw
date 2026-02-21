@@ -73,6 +73,17 @@ struct WatchMessagingStatus: Sendable, Equatable {
     var activationState: String
 }
 
+struct WatchQuickReplyEvent: Sendable, Equatable {
+    var replyId: String
+    var promptId: String
+    var actionId: String
+    var actionLabel: String?
+    var sessionKey: String?
+    var note: String?
+    var sentAtMs: Int?
+    var transport: String
+}
+
 struct WatchNotificationSendResult: Sendable, Equatable {
     var deliveredImmediately: Bool
     var queuedForDelivery: Bool
@@ -81,11 +92,10 @@ struct WatchNotificationSendResult: Sendable, Equatable {
 
 protocol WatchMessagingServicing: AnyObject, Sendable {
     func status() async -> WatchMessagingStatus
+    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?)
     func sendNotification(
         id: String,
-        title: String,
-        body: String,
-        priority: OpenClawNotificationPriority?) async throws -> WatchNotificationSendResult
+        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

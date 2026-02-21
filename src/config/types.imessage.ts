@@ -33,6 +33,8 @@ export type IMessageAccountConfig = {
   dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for group senders or chat_id targets. */
   groupAllowFrom?: Array<string | number>;
   /**
@@ -50,6 +52,10 @@ export type IMessageAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
+  /** Allowed local iMessage attachment roots (supports single-segment `*` wildcards). */
+  attachmentRoots?: string[];
+  /** Allowed remote iMessage attachment roots for SCP fetches (supports `*`). */
+  remoteAttachmentRoots?: string[];
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /** Timeout for probe/RPC operations in milliseconds (default: 10000). */

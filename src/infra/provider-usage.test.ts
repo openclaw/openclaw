@@ -3,28 +3,42 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
   loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
+import { ignoredErrors } from "./provider-usage.shared.js";
 
 const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
+type ProviderAuth = NonNullable<
+  NonNullable<Parameters<typeof loadProviderUsageSummary>[0]>["auth"]
+>[number];
 
-function makeResponse(status: number, body: unknown): Response {
-  const payload = typeof body === "string" ? body : JSON.stringify(body);
-  const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-  return new Response(payload, { status, headers });
+async function loadUsageWithAuth(
+  auth: ProviderAuth[],
+  mockFetch: ReturnType<typeof createProviderUsageFetch>,
+) {
+  return await loadProviderUsageSummary({
+    now: usageNow,
+    auth,
+    fetch: mockFetch as unknown as typeof fetch,
+  });
 }
 
-function toRequestUrl(input: Parameters<typeof fetch>[0]): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+function expectSingleAnthropicProvider(summary: UsageSummary) {
+  expect(summary.providers).toHaveLength(1);
+  const claude = summary.providers[0];
+  expect(claude?.provider).toBe("anthropic");
+  return claude;
 }
 
 function createMinimaxOnlyFetch(payload: unknown) {
-  return vi.fn(async (input: string | Request | URL) => {
-    if (toRequestUrl(input).includes(minimaxRemainsEndpoint)) {
+  return createProviderUsageFetch(async (url) => {
+    if (url.includes(minimaxRemainsEndpoint)) {
       return makeResponse(200, payload);
     }
     return makeResponse(404, "not found");
@@ -38,11 +52,7 @@ async function expectMinimaxUsage(
 ) {
   const mockFetch = createMinimaxOnlyFetch(payload);
 
-  const summary = await loadProviderUsageSummary({
-    now: Date.UTC(2026, 0, 7, 0, 0, 0),
-    auth: [{ provider: "minimax", token: "token-1b" }],
-    fetch: mockFetch as unknown as typeof fetch,
-  });
+  const summary = await loadUsageWithAuth([{ provider: "minimax", token: "token-1b" }], mockFetch);
 
   const minimax = summary.providers.find((p) => p.provider === "minimax");
   expect(minimax?.windows[0]?.usedPercent).toBe(expectedUsedPercent);
@@ -113,8 +123,7 @@ describe("provider usage formatting", () => {
 
 describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
-    const mockFetch = vi.fn(async (input: string | Request | URL) => {
-      const url = toRequestUrl(input);
+    const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.anthropic.com")) {
         return makeResponse(200, {
           five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
@@ -152,15 +161,14 @@ describe("provider usage loading", () => {
       return makeResponse(404, "not found");
     });
 
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [
+    const summary = await loadUsageWithAuth(
+      [
         { provider: "anthropic", token: "token-1" },
         { provider: "minimax", token: "token-1b" },
         { provider: "zai", token: "token-2" },
       ],
-      fetch: mockFetch as unknown as typeof fetch,
-    });
+      mockFetch,
+    );
 
     expect(summary.providers).toHaveLength(3);
     const claude = summary.providers.find((p) => p.provider === "anthropic");
@@ -259,16 +267,7 @@ describe("provider usage loading", () => {
         });
         expect(listProfilesForProvider(store, "anthropic")).toContain("anthropic:default");
 
-        const makeResponse = (status: number, body: unknown): Response => {
-          const payload = typeof body === "string" ? body : JSON.stringify(body);
-          const headers =
-            typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-          return new Response(payload, { status, headers });
-        };
-
-        const mockFetch = vi.fn(async (input: string | Request | URL, init?: RequestInit) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        const mockFetch = createProviderUsageFetch(async (url, init) => {
           if (url.includes("api.anthropic.com/api/oauth/usage")) {
             const headers = (init?.headers ?? {}) as Record<string, string>;
             expect(headers.Authorization).toBe("Bearer token-1");
@@ -283,15 +282,13 @@ describe("provider usage loading", () => {
         });
 
         const summary = await loadProviderUsageSummary({
-          now: Date.UTC(2026, 0, 7, 0, 0, 0),
+          now: usageNow,
           providers: ["anthropic"],
           agentDir,
           fetch: mockFetch as unknown as typeof fetch,
         });
 
-        expect(summary.providers).toHaveLength(1);
-        const claude = summary.providers[0];
-        expect(claude?.provider).toBe("anthropic");
+        const claude = expectSingleAnthropicProvider(summary);
         expect(claude?.windows[0]?.label).toBe("5h");
         expect(mockFetch).toHaveBeenCalled();
       },
@@ -308,16 +305,7 @@ describe("provider usage loading", () => {
     const cookieSnapshot = process.env.CLAUDE_AI_SESSION_KEY;
     process.env.CLAUDE_AI_SESSION_KEY = "sk-ant-web-1";
     try {
-      const makeResponse = (status: number, body: unknown): Response => {
-        const payload = typeof body === "string" ? body : JSON.stringify(body);
-        const headers =
-          typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-        return new Response(payload, { status, headers });
-      };
-
-      const mockFetch = vi.fn(async (input: string | Request | URL) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(403, {
             type: "error",
@@ -340,15 +328,12 @@ describe("provider usage loading", () => {
         return makeResponse(404, "not found");
       });
 
-      const summary = await loadProviderUsageSummary({
-        now: Date.UTC(2026, 0, 7, 0, 0, 0),
-        auth: [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
-        fetch: mockFetch as unknown as typeof fetch,
-      });
+      const summary = await loadUsageWithAuth(
+        [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
+        mockFetch,
+      );
 
-      expect(summary.providers).toHaveLength(1);
-      const claude = summary.providers[0];
-      expect(claude?.provider).toBe("anthropic");
+      const claude = expectSingleAnthropicProvider(summary);
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
     } finally {
@@ -357,6 +342,133 @@ describe("provider usage loading", () => {
       } else {
         process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
       }
+    }
+  });
+
+  it("loads snapshots for copilot antigravity gemini codex and xiaomi", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.github.com/copilot_internal/user")) {
+        return makeResponse(200, {
+          quota_snapshots: { chat: { percent_remaining: 80 } },
+          copilot_plan: "Copilot Pro",
+        });
+      }
+      if (url.includes("cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")) {
+        return makeResponse(200, {
+          availablePromptCredits: 80,
+          planInfo: { monthlyPromptCredits: 100 },
+          currentTier: { name: "Antigravity Pro" },
+          cloudaicompanionProject: "projects/demo",
+        });
+      }
+      if (url.includes("cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")) {
+        return makeResponse(200, {
+          models: {
+            "gemini-2.5-pro": {
+              quotaInfo: { remainingFraction: 0.4, resetTime: "2026-01-08T01:00:00Z" },
+            },
+          },
+        });
+      }
+      if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
+        return makeResponse(200, {
+          buckets: [{ modelId: "gemini-2.5-pro", remainingFraction: 0.6 }],
+        });
+      }
+      if (url.includes("chatgpt.com/backend-api/wham/usage")) {
+        return makeResponse(200, {
+          rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 10800 } },
+          plan_type: "Plus",
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      [
+        { provider: "github-copilot", token: "copilot-token" },
+        { provider: "google-antigravity", token: "antigravity-token" },
+        { provider: "google-gemini-cli", token: "gemini-token" },
+        { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
+        { provider: "xiaomi", token: "xiaomi-token" },
+      ],
+      mockFetch,
+    );
+
+    expect(summary.providers.map((provider) => provider.provider)).toEqual([
+      "github-copilot",
+      "google-antigravity",
+      "google-gemini-cli",
+      "openai-codex",
+      "xiaomi",
+    ]);
+    expect(
+      summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
+    ).toEqual([{ label: "Chat", usedPercent: 20 }]);
+    expect(
+      summary.providers.find((provider) => provider.provider === "google-antigravity")?.windows
+        .length,
+    ).toBeGreaterThan(0);
+    expect(
+      summary.providers.find((provider) => provider.provider === "google-gemini-cli")?.windows[0]
+        ?.label,
+    ).toBe("Pro");
+    expect(
+      summary.providers.find((provider) => provider.provider === "openai-codex")?.windows[0]?.label,
+    ).toBe("3h");
+    expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
+      [],
+    );
+  });
+
+  it("returns empty provider list when auth resolves to none", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
+    const summary = await loadUsageWithAuth([], mockFetch);
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+  });
+
+  it("returns unsupported provider snapshots for unknown provider ids", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
+    const summary = await loadUsageWithAuth(
+      [{ provider: "unsupported-provider", token: "token-u" }] as unknown as ProviderAuth[],
+      mockFetch,
+    );
+    expect(summary.providers).toHaveLength(1);
+    expect(summary.providers[0]?.error).toBe("Unsupported provider");
+  });
+
+  it("filters errors that are marked as ignored", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.anthropic.com/api/oauth/usage")) {
+        return makeResponse(500, "boom");
+      }
+      return makeResponse(404, "not found");
+    });
+    ignoredErrors.add("HTTP 500");
+    try {
+      const summary = await loadUsageWithAuth(
+        [{ provider: "anthropic", token: "token-a" }],
+        mockFetch,
+      );
+      expect(summary.providers).toEqual([]);
+    } finally {
+      ignoredErrors.delete("HTTP 500");
+    }
+  });
+
+  it("throws when fetch is unavailable", async () => {
+    const previousFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", undefined);
+    try {
+      await expect(
+        loadProviderUsageSummary({
+          now: usageNow,
+          auth: [{ provider: "xiaomi", token: "token-x" }],
+          fetch: undefined,
+        }),
+      ).rejects.toThrow("fetch is not available");
+    } finally {
+      vi.stubGlobal("fetch", previousFetch);
     }
   });
 });

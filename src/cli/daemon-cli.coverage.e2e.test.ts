@@ -72,6 +72,25 @@ vi.mock("./progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
+const { registerDaemonCli } = await import("./daemon-cli.js");
+
+function createDaemonProgram() {
+  const program = new Command();
+  program.exitOverride();
+  registerDaemonCli(program);
+  return program;
+}
+
+async function runDaemonCommand(args: string[]) {
+  const program = createDaemonProgram();
+  await program.parseAsync(args, { from: "user" });
+}
+
+function parseFirstJsonRuntimeLine<T>() {
+  const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+  return JSON.parse(jsonLine ?? "{}") as T;
+}
+
 describe("daemon-cli coverage", () => {
   const originalEnv = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -118,12 +137,7 @@ describe("daemon-cli coverage", () => {
     resetRuntimeCapture();
     callGateway.mockClear();
 
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(["daemon", "status"], { from: "user" });
+    await runDaemonCommand(["daemon", "status"]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
@@ -147,12 +161,7 @@ describe("daemon-cli coverage", () => {
       sourcePath: "/tmp/bot.molt.gateway.plist",
     });
 
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(["daemon", "status", "--json"], { from: "user" });
+    await runDaemonCommand(["daemon", "status", "--json"]);
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -162,12 +171,11 @@ describe("daemon-cli coverage", () => {
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);
 
-    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const parsed = JSON.parse(jsonLine ?? "{}") as {
+    const parsed = parseFirstJsonRuntimeLine<{
       gateway?: { port?: number; portSource?: string; probeUrl?: string };
       config?: { mismatch?: boolean };
       rpc?: { url?: string; ok?: boolean };
-    };
+    }>();
     expect(parsed.gateway?.port).toBe(19001);
     expect(parsed.gateway?.portSource).toBe("service args");
     expect(parsed.gateway?.probeUrl).toBe("ws://127.0.0.1:19001");
@@ -179,12 +187,7 @@ describe("daemon-cli coverage", () => {
   it("passes deep scan flag for daemon status", async () => {
     findExtraGatewayServices.mockClear();
 
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(["daemon", "status", "--deep"], { from: "user" });
+    await runDaemonCommand(["daemon", "status", "--deep"]);
 
     expect(findExtraGatewayServices).toHaveBeenCalledWith(
       expect.anything(),
@@ -192,81 +195,53 @@ describe("daemon-cli coverage", () => {
     );
   });
 
-  it("installs the daemon when requested", async () => {
-    serviceIsLoaded.mockResolvedValueOnce(false);
-    serviceInstall.mockClear();
-
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(["daemon", "install", "--port", "18789"], {
-      from: "user",
-    });
-
-    expect(serviceInstall).toHaveBeenCalledTimes(1);
-  });
-
-  it("installs the daemon with json output", async () => {
+  it.each([
+    { label: "plain output", includeJsonFlag: false },
+    { label: "json output", includeJsonFlag: true },
+  ])("installs the daemon ($label)", async ({ includeJsonFlag }) => {
     resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
+    const args = includeJsonFlag
+      ? ["daemon", "install", "--port", "18789", "--json"]
+      : ["daemon", "install", "--port", "18789"];
+    await runDaemonCommand(args);
 
-    await program.parseAsync(["daemon", "install", "--port", "18789", "--json"], {
-      from: "user",
-    });
-
-    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const parsed = JSON.parse(jsonLine ?? "{}") as {
-      ok?: boolean;
-      action?: string;
-      result?: string;
-    };
-    expect(parsed.ok).toBe(true);
-    expect(parsed.action).toBe("install");
-    expect(parsed.result).toBe("installed");
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+    if (includeJsonFlag) {
+      const parsed = parseFirstJsonRuntimeLine<{
+        ok?: boolean;
+        action?: string;
+        result?: string;
+      }>();
+      expect(parsed.ok).toBe(true);
+      expect(parsed.action).toBe("install");
+      expect(parsed.result).toBe("installed");
+    }
   });
 
-  it("starts and stops the daemon via service helpers", async () => {
+  it.each([
+    { label: "plain output", includeJsonFlag: false },
+    { label: "json output", includeJsonFlag: true },
+  ])("starts and stops daemon ($label)", async ({ includeJsonFlag }) => {
+    resetRuntimeCapture();
     serviceRestart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
 
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(["daemon", "start"], { from: "user" });
-    await program.parseAsync(["daemon", "stop"], { from: "user" });
+    const startArgs = includeJsonFlag ? ["daemon", "start", "--json"] : ["daemon", "start"];
+    const stopArgs = includeJsonFlag ? ["daemon", "stop", "--json"] : ["daemon", "stop"];
+    await runDaemonCommand(startArgs);
+    await runDaemonCommand(stopArgs);
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("emits json for daemon start/stop", async () => {
-    resetRuntimeCapture();
-    serviceRestart.mockClear();
-    serviceStop.mockClear();
-    serviceIsLoaded.mockResolvedValue(true);
-
-    const { registerDaemonCli } = await import("./daemon-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerDaemonCli(program);
-
-    await program.parseAsync(["daemon", "start", "--json"], { from: "user" });
-    await program.parseAsync(["daemon", "stop", "--json"], { from: "user" });
-
-    const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
-    const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+    if (includeJsonFlag) {
+      const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
+      const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
+      expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
+      expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+    }
   });
 });

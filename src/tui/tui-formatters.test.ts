@@ -95,6 +95,56 @@ describe("extractTextFromMessage", () => {
 
     expect(text).toBe("[binary data omitted]");
   });
+
+  it("strips leading inbound metadata blocks for user messages", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "abc123"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Someone"
+}
+\`\`\`
+
+Actual user message`,
+    });
+
+    expect(text).toBe("Actual user message");
+  });
+
+  it("keeps metadata-like blocks for non-user messages", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"abc123"}
+\`\`\`
+
+Assistant body`,
+    });
+
+    expect(text).toContain("Conversation info (untrusted metadata):");
+    expect(text).toContain("Assistant body");
+  });
+
+  it("does not strip metadata-like blocks that are not a leading prefix", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content:
+        'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    });
+
+    expect(text).toBe(
+      'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    );
+  });
 });
 
 describe("extractThinkingFromMessage", () => {

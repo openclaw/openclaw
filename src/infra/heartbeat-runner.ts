@@ -41,7 +41,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
   buildCronEventPrompt,
@@ -261,7 +261,6 @@ function resolveHeartbeatSession(
   agentId?: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
-  noFallback?: boolean,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -294,25 +293,12 @@ function resolveHeartbeatSession(
     if (forcedCanonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
       if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-        const forcedEntry = store[forcedCanonical];
-        if (forcedEntry) {
-          return {
-            sessionKey: forcedCanonical,
-            storePath,
-            store,
-            entry: forcedEntry,
-          };
-        }
-        // Target session not found in store — fall back to main session
-        // so the event still gets delivered somewhere useful.
-        // Unless noFallback is set (e.g. watchdog — don't spam wrong session).
-        if (noFallback) {
-          return null;
-        }
-        log.warn(
-          `heartbeat: forced sessionKey "${forcedCanonical}" not found in store, falling back to main session`,
-        );
-        return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+        return {
+          sessionKey: forcedCanonical,
+          storePath,
+          store,
+          entry: store[forcedCanonical],
+        };
       }
     }
   }
@@ -340,20 +326,12 @@ function resolveHeartbeatSession(
   if (canonical !== "global") {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      const candidateEntry = store[canonical];
-      if (candidateEntry) {
-        return {
-          sessionKey: canonical,
-          storePath,
-          store,
-          entry: candidateEntry,
-        };
-      }
-      // Configured heartbeat session not found — fall back to main
-      log.warn(
-        `heartbeat: configured session "${canonical}" not found in store, falling back to main session`,
-      );
-      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+      return {
+        sessionKey: canonical,
+        storePath,
+        store,
+        entry: store[canonical],
+      };
     }
   }
 
@@ -503,10 +481,10 @@ type HeartbeatReasonFlags = {
   isWakeReason: boolean;
 };
 
-type HeartbeatSkipReason = "empty-heartbeat-file" | "no-heartbeat-file" | "session-not-found";
+type HeartbeatSkipReason = "empty-heartbeat-file";
 
 type HeartbeatPreflight = HeartbeatReasonFlags & {
-  session: ReturnType<typeof resolveHeartbeatSession> | null;
+  session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
@@ -535,23 +513,7 @@ async function resolveHeartbeatPreflight(params: {
     params.agentId,
     params.heartbeat,
     params.forcedSessionKey,
-    // Pass noFallback=true if reason is watchdog-stall so we don't spam main session
-    params.reason === "watchdog-stall",
   );
-
-  // If session is null (forced session not found + noFallback), we can't inspect events.
-  // Return early with skipReason.
-  if (!session) {
-    return {
-      ...reasonFlags,
-      session: null,
-      pendingEventEntries: [],
-      hasTaggedCronEvents: false,
-      shouldInspectPendingEvents: false,
-      skipReason: "session-not-found",
-    };
-  }
-
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -563,42 +525,39 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
     hasTaggedCronEvents;
-
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
-  try {
-    const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && !shouldBypassFileGates) {
-      return {
-        ...reasonFlags,
-        session,
-        pendingEventEntries,
-        hasTaggedCronEvents,
-        shouldInspectPendingEvents,
-        skipReason: "empty-heartbeat-file",
-      };
-    }
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT" && !shouldBypassFileGates) {
-      return {
-        ...reasonFlags,
-        session,
-        pendingEventEntries,
-        hasTaggedCronEvents,
-        shouldInspectPendingEvents,
-        skipReason: "no-heartbeat-file",
-      };
-    }
-    // For other read errors, proceed with heartbeat as before.
-  }
-
-  return {
+  const basePreflight = {
     ...reasonFlags,
     session,
     pendingEventEntries,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
-  };
+  } satisfies Omit<HeartbeatPreflight, "skipReason">;
+
+  if (shouldBypassFileGates) {
+    return basePreflight;
+  }
+
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  try {
+    const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
+      return {
+        ...basePreflight,
+        skipReason: "empty-heartbeat-file",
+      };
+    }
+  } catch (err: unknown) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      // Missing HEARTBEAT.md is intentional in some setups (for example, when
+      // heartbeat instructions live outside the file), so keep the run active.
+      // The heartbeat prompt already says "if it exists".
+      return basePreflight;
+    }
+    // For other read errors, proceed with heartbeat as before.
+  }
+
+  return basePreflight;
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -607,44 +566,31 @@ export async function runHeartbeatOnce(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
-  prompt?: string;
   deps?: HeartbeatDeps;
-  noFallback?: boolean;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
   if (!heartbeatsEnabled) {
-    log.warn("runHeartbeatOnce skipped: heartbeatsEnabled=false");
     return { status: "skipped", reason: "disabled" };
   }
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-    log.warn("runHeartbeatOnce skipped: agent not enabled", { agentId });
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-    log.warn("runHeartbeatOnce skipped: no interval configured");
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
-    log.warn("runHeartbeatOnce skipped: quiet-hours");
     return { status: "skipped", reason: "quiet-hours" };
   }
 
-  const isWatchdogStall = opts.reason === "watchdog-stall";
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0 && !isWatchdogStall) {
-    log.warn("runHeartbeatOnce skipped: requests-in-flight", { queueSize });
+  if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
-  // Skip heartbeat if HEARTBEAT.md exists but has no actionable content.
-  // This saves API calls/costs when the file is effectively empty (only comments/headers).
-  // EXCEPTION: Don't skip for exec events, cron events, explicit wake requests,
-  // watchdog stalls, or when an explicit prompt is provided - they have pending
-  // system events to process regardless of HEARTBEAT.md content.
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
   const preflight = await resolveHeartbeatPreflight({
     cfg,
@@ -653,32 +599,15 @@ export async function runHeartbeatOnce(opts: {
     forcedSessionKey: opts.sessionKey,
     reason: opts.reason,
   });
-  const isWatchdogReason = opts.reason === "watchdog-stall";
-  const hasExplicitPrompt = Boolean(opts.prompt);
-
-  // If preflight says skip, BUT we have watchdog or explicit prompt, override it.
-  // resolveHeartbeatPreflight handles file emptiness, but maybe not our custom watchdog logic?
-  // Let's trust preflight mostly but double check.
-  // Actually, resolveHeartbeatPreflight does NOT know about "watchdog-stall" in its
-  // shouldBypassFileGates logic unless we add it.
-
-  // Wait, I can't easily modify resolveHeartbeatPreflight here without changing the function definition above.
-  // But wait, the upstream code uses preflight completely.
-  // My local code had custom logic for watchdog skipping.
-
   if (preflight.skipReason) {
-    // Override skip for watchdog or explicit prompt which might not be covered by standard preflight
-    if (!isWatchdogReason && !hasExplicitPrompt) {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: preflight.skipReason,
-        durationMs: Date.now() - startedAt,
-      });
-      return { status: "skipped", reason: preflight.skipReason };
-    }
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: preflight.skipReason,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: preflight.skipReason };
   }
-
-  const { entry, sessionKey, storePath } = preflight.session!; // We know it won't be null here because preflight handles failures
+  const { entry, sessionKey, storePath } = preflight.session;
   const { isCronEventReason, pendingEventEntries } = preflight;
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
@@ -725,13 +654,11 @@ export async function runHeartbeatOnce(opts: {
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
-  const prompt = opts.prompt
-    ? opts.prompt
-    : hasExecCompletion
-      ? EXEC_EVENT_PROMPT
-      : hasCronEvents
-        ? buildCronEventPrompt(cronEvents)
-        : resolveHeartbeatPrompt(cfg, heartbeat);
+  const prompt = hasExecCompletion
+    ? EXEC_EVENT_PROMPT
+    : hasCronEvents
+      ? buildCronEventPrompt(cronEvents)
+      : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,

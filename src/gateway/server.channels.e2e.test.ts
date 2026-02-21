@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -48,20 +49,11 @@ const createStubChannelPlugin = (params: {
   summary?: Record<string, unknown>;
   logoutCleared?: boolean;
 }): ChannelPlugin => ({
-  id: params.id,
-  meta: {
+  ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-    isConfigured: async () => false,
-  },
+    config: { isConfigured: async () => false },
+  }),
   status: {
     buildChannelSummary: async () => ({
       configured: false,

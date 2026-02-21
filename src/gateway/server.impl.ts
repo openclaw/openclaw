@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -8,7 +7,6 @@ import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
   isNixMode,
@@ -18,7 +16,6 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -33,7 +30,7 @@ import { startHeartbeatRunner, runHeartbeatOnce } from "../infra/heartbeat-runne
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ReplyChainEnforcer } from "../infra/reply-chain-enforcer.js";
-import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
+import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
@@ -45,7 +42,6 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RuntimeEnv } from "../runtime.js";
 // -- Watchdog Imports --
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -459,113 +455,11 @@ export async function startGatewayServer(
   );
   replyEnforcer.start();
 
-  const sessionIdToKey = new Map<string, string>();
-  const resolveKeyFromId = (id: string) => {
-    if (sessionIdToKey.has(id)) {
-      return sessionIdToKey.get(id)!;
-    }
-
-    // Resolve directly from store to get the FULL key (with agent: prefix)
-    const cfg = loadConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
-    const store = loadSessionStore(storePath);
-    const found = Object.entries(store).find(([, entry]) => entry?.sessionId === id);
-    const fullKey = found?.[0];
-
-    if (fullKey) {
-      sessionIdToKey.set(id, fullKey);
-      return fullKey;
-    }
-
-    // Fallback to run-based resolution (might be stripped, but better than nothing)
-    const resolved = resolveSessionKeyForRun(id);
-    if (resolved) {
-      // If resolveSessionKeyForRun returned a stripped key, we might be in trouble,
-      // but it's a fallback.
-      sessionIdToKey.set(id, resolved);
-      return resolved;
-    }
-    return undefined;
-  };
-
-  const transcriptUnsub = onSessionTranscriptUpdate((evt) => {
-    try {
-      if (!fs.existsSync(evt.sessionFile)) {
-        return;
-      }
-
-      const content = fs.readFileSync(evt.sessionFile, "utf-8");
-      const lines = content.trim().split("\n");
-      if (lines.length === 0) {
-        return;
-      }
-
-      const lastLine = lines[lines.length - 1];
-      const entry = JSON.parse(lastLine);
-
-      // Extract sessionId from filename
-      const filename = path.basename(evt.sessionFile);
-      const sessionId = filename.replace(/\.jsonl$/, "").replace(/\.json$/, "");
-
-      // Resolve proper SessionKey
-      const sessionKey = resolveKeyFromId(sessionId) ?? sessionId;
-
-      const msg = entry.message || {};
-      const role = msg.role;
-      let text = "";
-
-      if (Array.isArray(msg.content)) {
-        text = msg.content
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .filter((c: any) => c.type === "text")
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((c: any) => c.text)
-          .join("\n");
-      } else if (typeof msg.content === "string") {
-        text = msg.content;
-      }
-      text = text?.trim() ?? "";
-
-      let source: "user" | "agent" | undefined;
-      if (role === "user") {
-        source = "user";
-      } else if (role === "assistant") {
-        source = "agent";
-      }
-
-      // Only feed user messages to the watchdog from the transcript path.
-      // Agent messages: Only disarm if NO_REPLY is found (buffer might be incomplete in lifecycle path).
-      // Lifecycle path (line ~548) handles arming on non-signoff, but transcript is the source of truth for completion.
-      if (sessionKey) {
-        if (source === "user") {
-          replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
-        } else if (source === "agent") {
-          // Transcript file is the single source of truth for arm/disarm.
-          // The lifecycle handler does NOT arm (buffer is unreliable).
-          replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
-        }
-      }
-    } catch (err) {
-      log.warn("Failed to process transcript update", { file: evt.sessionFile, err });
-    }
-  });
+  // Agent messages are handled via onChatFinal/onChatDelta callbacks in createAgentEventHandler.
+  // No transcript file watcher needed — avoids races with heartbeat transcript pruning.
 
   // Watchdog handler MUST be registered BEFORE createAgentEventHandler,
   // because the latter calls registry.shift() which removes the run entry.
-  const stallAgentEndUnsub = onAgentEvent((evt) => {
-    if (evt.stream === "lifecycle" && (evt.data?.phase === "end" || evt.data?.phase === "error")) {
-      const sessionKey = resolveSessionKeyForRun(evt.runId);
-      if (sessionKey) {
-        if (evt.data.phase === "error") {
-          replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
-        }
-        // Do NOT arm here. The transcript file watcher handles arming
-        // when the complete text is persisted to disk. Arming here races
-        // with the transcript watcher and can overwrite a valid disarm.
-      }
-    }
-  });
-
   const agentUnsub = onAgentEvent(
     createAgentEventHandler({
       broadcast,
@@ -576,14 +470,21 @@ export async function startGatewayServer(
       resolveSessionKeyForRun,
       clearAgentRunContext,
       toolEventRecipients,
+      onChatFinal: ({ sessionKey, text }) => {
+        replyEnforcer.onChatFinal(sessionKey, text);
+      },
+      onChatDelta: ({ sessionKey }) => {
+        replyEnforcer.onChatDelta(sessionKey);
+      },
     }),
   );
 
-  const stallAgentStartUnsub = onAgentEvent((evt) => {
-    if (evt.stream === "lifecycle" && evt.data?.phase === "start") {
+  // Watchdog: lifecycle error keeps the session armed (agent crashed mid-work).
+  const stallAgentErrorUnsub = onAgentEvent((evt) => {
+    if (evt.stream === "lifecycle" && evt.data?.phase === "error") {
       const sessionKey = resolveSessionKeyForRun(evt.runId);
       if (sessionKey) {
-        replyEnforcer.onAgentLifecycle({ sessionKey, phase: "start" });
+        replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
       }
     }
   });
@@ -786,9 +687,7 @@ export async function startGatewayServer(
         skillsRefreshTimer = null;
       }
       skillsChangeUnsub();
-      transcriptUnsub();
-      stallAgentEndUnsub();
-      stallAgentStartUnsub();
+      stallAgentErrorUnsub();
       replyEnforcer.stop();
       await close(opts);
     },

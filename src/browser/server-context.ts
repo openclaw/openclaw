@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -14,6 +15,11 @@ import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
+import {
+  assertBrowserNavigationAllowed,
+  InvalidBrowserNavigationUrlError,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -130,13 +136,19 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {
-        const page = await createPageViaPlaywright({ cdpUrl: profile.cdpUrl, url });
+        const page = await createPageViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          url,
+          ...ssrfPolicyOpts,
+        });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
         return {
@@ -151,6 +163,7 @@ function createProfileContext(
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
+      ...ssrfPolicyOpts,
     })
       .then((r) => r.targetId)
       .catch(() => null);
@@ -180,6 +193,7 @@ function createProfileContext(
     };
 
     const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
+    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const endpoint = endpointUrl.search
       ? (() => {
           endpointUrl.searchParams.set("url", url);
@@ -632,6 +646,12 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
   const getDefaultContext = () => forProfile();
 
   const mapTabError = (err: unknown) => {
+    if (err instanceof SsrFBlockedError) {
+      return { status: 400, message: err.message };
+    }
+    if (err instanceof InvalidBrowserNavigationUrlError) {
+      return { status: 400, message: err.message };
+    }
     const msg = String(err);
     if (msg.includes("ambiguous target id prefix")) {
       return { status: 409, message: "ambiguous target id prefix" };

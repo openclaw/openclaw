@@ -1,4 +1,5 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -273,6 +274,9 @@ export function extractTextFromMessage(
   const record = message as Record<string, unknown>;
   const text = extractTextBlocks(record.content, opts);
   if (text) {
+    if (record.role === "user") {
+      return stripLeadingInboundMetadata(text);
+    }
     return text;
   }
 

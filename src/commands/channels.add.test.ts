@@ -1,39 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
+import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const configMocks = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn().mockResolvedValue(undefined),
-}));
-
-const offsetMocks = vi.hoisted(() => ({
-  deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-    writeConfigFile: configMocks.writeConfigFile,
-  };
-});
-
-vi.mock("../telegram/update-offset-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../telegram/update-offset-store.js")>();
-  return {
-    ...actual,
-    deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
-  };
-});
-
-import { channelsAddCommand } from "./channels.js";
-
 const runtime = createTestRuntime();
+let channelsAddCommand: typeof import("./channels.js").channelsAddCommand;
 
 describe("channelsAddCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.writeConfigFile.mockClear();
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
@@ -41,6 +15,7 @@ describe("channelsAddCommand", () => {
     runtime.error.mockClear();
     runtime.exit.mockClear();
     setDefaultChannelPluginRegistryForTests();
+    ({ channelsAddCommand } = await import("./channels.js"));
   });
 
   it("clears telegram update offsets when the token changes", async () => {

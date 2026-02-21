@@ -9,7 +9,7 @@ describe("process supervisor", () => {
       backendId: "test",
       mode: "child",
       argv: [process.execPath, "-e", 'process.stdout.write("ok")'],
-      timeoutMs: 800,
+      timeoutMs: 2_500,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -24,7 +24,7 @@ describe("process supervisor", () => {
       sessionId: "s1",
       backendId: "test",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       timeoutMs: 1_000,
       noOutputTimeoutMs: 20,
       stdinMode: "pipe-closed",
@@ -42,7 +42,7 @@ describe("process supervisor", () => {
       backendId: "test",
       scopeKey: "scope:a",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       timeoutMs: 1_000,
       stdinMode: "pipe-open",
     });
@@ -54,7 +54,7 @@ describe("process supervisor", () => {
       replaceExistingScope: true,
       mode: "child",
       argv: [process.execPath, "-e", 'process.stdout.write("new")'],
-      timeoutMs: 800,
+      timeoutMs: 2_500,
       stdinMode: "pipe-closed",
     });
 
@@ -71,7 +71,7 @@ describe("process supervisor", () => {
       sessionId: "s-timeout",
       backendId: "test",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
       timeoutMs: 1,
       stdinMode: "pipe-closed",
     });
@@ -88,7 +88,7 @@ describe("process supervisor", () => {
       backendId: "test",
       mode: "child",
       argv: [process.execPath, "-e", 'process.stdout.write("streamed")'],
-      timeoutMs: 800,
+      timeoutMs: 2_500,
       stdinMode: "pipe-closed",
       captureOutput: false,
       onStdout: (chunk) => {

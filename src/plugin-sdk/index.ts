@@ -62,6 +62,16 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
+  ThreadBindingManager,
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
+} from "../discord/monitor/thread-bindings.js";
+export {
+  autoBindSpawnedDiscordSubagent,
+  listThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "../discord/monitor/thread-bindings.js";
+export type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginService,
@@ -88,8 +98,11 @@ export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTarget,
+  resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
+export type { WebhookTargetMatchResult } from "./webhook-targets.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -154,7 +167,7 @@ export { extractToolSend } from "./tool-send.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
-export { buildRandomTempFilePath } from "./temp-path.js";
+export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 export type { ChatType } from "../channels/chat-type.js";
 /** @deprecated Use ChatType instead */
 export type { RoutePeerKind } from "../routing/resolve-route.js";

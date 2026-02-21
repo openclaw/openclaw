@@ -221,6 +221,14 @@ export const OpenClawSchema = z
         attachOnly: z.boolean().optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
+        ssrfPolicy: z
+          .object({
+            allowPrivateNetwork: z.boolean().optional(),
+            allowedHostnames: z.array(z.string()).optional(),
+            hostnameAllowlist: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         profiles: z
           .record(
             z
@@ -396,6 +404,7 @@ export const OpenClawSchema = z
             z.literal("tailnet"),
           ])
           .optional(),
+        customBindHost: z.string().optional(),
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
@@ -441,6 +450,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        allowRealIpFallback: z.boolean().optional(),
         tools: z
           .object({
             deny: z.array(z.string()).optional(),

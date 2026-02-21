@@ -46,7 +46,8 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 
 Security note:
 
-- Always set a webhook password. If you expose the gateway through a reverse proxy (Tailscale Serve/Funnel, nginx, Cloudflare Tunnel, ngrok), the proxy may connect to the gateway over loopback. The BlueBubbles webhook handler treats requests with forwarding headers as proxied and will not accept passwordless webhooks.
+- Always set a webhook password.
+- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.password` (for example `?password=<password>` or `x-password`), regardless of loopback/proxy topology.
 
 ## Keeping Messages.app alive (VM / headless setups)
 

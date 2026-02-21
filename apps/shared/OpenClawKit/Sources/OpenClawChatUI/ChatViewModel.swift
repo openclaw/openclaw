@@ -189,8 +189,41 @@ public final class OpenClawChatViewModel {
     private static func decodeMessages(_ raw: [AnyCodable]) -> [OpenClawChatMessage] {
         let decoded = raw.compactMap { item in
             (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
+                .map { Self.stripInboundMetadata(from: $0) }
         }
         return Self.dedupeMessages(decoded)
+    }
+
+    private static func stripInboundMetadata(from message: OpenClawChatMessage) -> OpenClawChatMessage {
+        guard message.role.lowercased() == "user" else {
+            return message
+        }
+
+        let sanitizedContent = message.content.map { content -> OpenClawChatMessageContent in
+            guard let text = content.text else { return content }
+            let cleaned = ChatMarkdownPreprocessor.preprocess(markdown: text).cleaned
+            return OpenClawChatMessageContent(
+                type: content.type,
+                text: cleaned,
+                thinking: content.thinking,
+                thinkingSignature: content.thinkingSignature,
+                mimeType: content.mimeType,
+                fileName: content.fileName,
+                content: content.content,
+                id: content.id,
+                name: content.name,
+                arguments: content.arguments)
+        }
+
+        return OpenClawChatMessage(
+            id: message.id,
+            role: message.role,
+            content: sanitizedContent,
+            timestamp: message.timestamp,
+            toolCallId: message.toolCallId,
+            toolName: message.toolName,
+            usage: message.usage,
+            stopReason: message.stopReason)
     }
 
     private static func messageIdentityKey(for message: OpenClawChatMessage) -> String? {
@@ -435,8 +468,12 @@ public final class OpenClawChatViewModel {
         case let .agent(agent):
             self.handleAgentEvent(agent)
         case .seqGap:
-            self.errorText = "Event stream interrupted; try refreshing."
+            self.errorText = nil
             self.clearPendingRuns(reason: nil)
+            Task {
+                await self.refreshHistoryAfterRun()
+                await self.pollHealthIfNeeded(force: true)
+            }
         }
     }
 

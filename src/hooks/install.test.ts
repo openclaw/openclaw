@@ -238,6 +238,74 @@ describe("installHooksFromPath", () => {
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "my-hook"));
     expect(fs.existsSync(path.join(result.targetDir, "HOOK.md"))).toBe(true);
   });
+
+  it("rejects hook pack entries that traverse outside package directory", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const outsideHookDir = path.join(workDir, "outside");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideHookDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["../outside"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("openclaw.hooks entry escapes package directory");
+  });
+
+  it("rejects hook pack entries that escape via symlink", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const outsideHookDir = path.join(workDir, "outside");
+    const linkedDir = path.join(pkgDir, "linked");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideHookDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+    try {
+      fs.symlinkSync(outsideHookDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return;
+    }
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["./linked"] },
+      }),
+      "utf-8",
+    );
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("openclaw.hooks entry resolves outside package directory");
+  });
 });
 
 describe("installHooksFromNpmSpec", () => {
@@ -253,7 +321,16 @@ describe("installHooksFromNpmSpec", () => {
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
         return {
           code: 0,
-          stdout: `${packedName}\n`,
+          stdout: JSON.stringify([
+            {
+              id: "@openclaw/test-hooks@0.0.1",
+              name: "@openclaw/test-hooks",
+              version: "0.0.1",
+              filename: packedName,
+              integrity: "sha512-hook-test",
+              shasum: "hookshasum",
+            },
+          ]),
           stderr: "",
           signal: null,
           killed: false,
@@ -274,6 +351,8 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.hookPackId).toBe("test-hooks");
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/test-hooks@0.0.1");
+    expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
     expectSingleNpmPackIgnoreScriptsCall({
@@ -292,6 +371,46 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.error).toContain("unsupported npm spec");
+  });
+
+  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          id: "@openclaw/test-hooks@0.0.1",
+          name: "@openclaw/test-hooks",
+          version: "0.0.1",
+          filename: "test-hooks-0.0.1.tgz",
+          integrity: "sha512-new",
+          shasum: "newshasum",
+        },
+      ]),
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const onIntegrityDrift = vi.fn(async () => false);
+    const result = await installHooksFromNpmSpec({
+      spec: "@openclaw/test-hooks@0.0.1",
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+    });
+
+    expect(onIntegrityDrift).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("integrity drift");
   });
 });
 

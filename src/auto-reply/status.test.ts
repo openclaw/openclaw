@@ -90,6 +90,36 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("notes channel model overrides in status output", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "openai/gpt-4.1",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai/gpt-4.1",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        channel: "discord",
+        groupId: "123",
+      },
+      sessionKey: "agent:main:discord:channel:123",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: openai/gpt-4.1");
+    expect(normalized).toContain("channel override");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
@@ -190,7 +220,7 @@ describe("buildStatusMessage", () => {
     expect(optionsLine).not.toContain("elevated");
   });
 
-  it("prefers model overrides over last-run model", () => {
+  it("shows selected model and active runtime model when they differ", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -203,7 +233,67 @@ describe("buildStatusMessage", () => {
         modelOverride: "gpt-4.1-mini",
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
+        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
+        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+        fallbackNoticeReason: "rate limit",
         contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
+    expect(normalized).toContain("(rate limit)");
+    expect(normalized).not.toContain(" - Reason:");
+    expect(normalized).not.toContain("Active:");
+    expect(normalized).toContain("di_123...abc");
+  });
+
+  it("omits active fallback details when runtime drift does not match fallback state", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-4.1-mini",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "runtime-drift-only",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
+        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
+        fallbackNoticeReason: "rate limit",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).not.toContain("Fallback:");
+    expect(normalized).not.toContain("(rate limit)");
+  });
+
+  it("omits active lines when runtime matches selected model", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-4.1-mini",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "selected-active-same",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-4.1-mini",
+        fallbackNoticeReason: "unknown",
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -211,7 +301,8 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallback:");
   });
 
   it("keeps provider prefix from configured model", () => {

@@ -21,6 +21,9 @@ openclaw acp
 # Remote Gateway
 openclaw acp --url wss://gateway-host:18789 --token <token>
 
+# Remote Gateway (token from file)
+openclaw acp --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.token
+
 # Attach to an existing session key
 openclaw acp --session agent:main:main
 
@@ -40,7 +43,7 @@ It spawns the ACP bridge and lets you type prompts interactively.
 openclaw acp client
 
 # Point the spawned bridge at a remote Gateway
-openclaw acp client --server-args --url wss://gateway-host:18789 --token <token>
+openclaw acp client --server-args --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.token
 
 # Override the server command (default: openclaw)
 openclaw acp client --server "node" --server-args openclaw.mjs acp --url ws://127.0.0.1:19001
@@ -66,6 +69,8 @@ Example direct run (no config write):
 
 ```bash
 openclaw acp --url wss://gateway-host:18789 --token <token>
+# preferred for local process safety
+openclaw acp --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.token
 ```
 
 ## Selecting agents
@@ -153,13 +158,20 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 
 - `--url <url>`: Gateway WebSocket URL (defaults to gateway.remote.url when configured).
 - `--token <token>`: Gateway auth token.
+- `--token-file <path>`: read Gateway auth token from file.
 - `--password <password>`: Gateway auth password.
+- `--password-file <path>`: read Gateway auth password from file.
 - `--session <key>`: default session key.
 - `--session-label <label>`: default session label to resolve.
 - `--require-existing`: fail if the session key/label does not exist.
 - `--reset-session`: reset the session key before first use.
 - `--no-prefix-cwd`: do not prefix prompts with the working directory.
 - `--verbose, -v`: verbose logging to stderr.
+
+Security note:
+
+- `--token` and `--password` can be visible in local process listings on some systems.
+- Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
 
 ### `acp client` options
 

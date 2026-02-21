@@ -1,6 +1,11 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { NativeCommandsSetting } from "./types.js";
+import { isPlainObject } from "../infra/plain-object.js";
+import type { CommandsConfig, NativeCommandsSetting } from "./types.js";
+
+export type CommandFlagKey = {
+  [K in keyof CommandsConfig]-?: Exclude<CommandsConfig[K], undefined> extends boolean ? K : never;
+}[keyof CommandsConfig];
 
 function resolveAutoDefault(providerId?: ChannelId): boolean {
   const id = normalizeChannelId(providerId);
@@ -62,6 +67,24 @@ export function isNativeCommandsExplicitlyDisabled(params: {
   return false;
 }
 
-export function isRestartEnabled(config?: { commands?: { restart?: boolean } }): boolean {
-  return config?.commands?.restart !== false;
+function getOwnCommandFlagValue(
+  config: { commands?: unknown } | undefined,
+  key: CommandFlagKey,
+): unknown {
+  const { commands } = config ?? {};
+  if (!isPlainObject(commands) || !Object.hasOwn(commands, key)) {
+    return undefined;
+  }
+  return commands[key];
+}
+
+export function isCommandFlagEnabled(
+  config: { commands?: unknown } | undefined,
+  key: CommandFlagKey,
+): boolean {
+  return getOwnCommandFlagValue(config, key) === true;
+}
+
+export function isRestartEnabled(config?: { commands?: unknown }): boolean {
+  return getOwnCommandFlagValue(config, "restart") !== false;
 }

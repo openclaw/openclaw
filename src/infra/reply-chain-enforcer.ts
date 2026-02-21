@@ -6,6 +6,10 @@ type EnforcerState = {
   status: "armed" | "disarmed";
   lastActivityMs: number;
   reason: string;
+  /** The final agent text that caused arming (for diagnostics). */
+  armingText?: string;
+  /** Timestamp of the arming event. */
+  armedAtMs?: number;
 };
 
 export class ReplyChainEnforcer {
@@ -54,38 +58,59 @@ export class ReplyChainEnforcer {
     }
   }
 
-  public onTranscriptUpdate(evt: {
-    sessionKey: SessionKey;
-    source: "user" | "agent";
-    text?: string;
-  }) {
+  /**
+   * Agent is streaming — proof of life. Disarm and touch timer.
+   * Called on every chat delta (throttled by the 150ms dedup in server-chat).
+   */
+  public onChatDelta(sessionKey: SessionKey) {
+    if (!this.config.enabled) {
+      return;
+    }
+    // Only log transition, not every delta
+    const prev = this.states.get(sessionKey);
+    if (prev?.status === "armed") {
+      this.logger.info("DISARM (delta received while armed)", { key: sessionKey });
+    }
+    this.setState(sessionKey, "disarmed", "Agent streaming (delta)");
+  }
+
+  /**
+   * Agent finished its turn — the assembled final message.
+   * ARM if it said something meaningful. DISARM if it signed off.
+   */
+  public onChatFinal(sessionKey: SessionKey, text: string) {
     if (!this.config.enabled) {
       return;
     }
 
-    if (evt.source === "user") {
-      // User spoke -> Disarm immediately (It's the user's turn now)
-      if (this.states.has(evt.sessionKey)) {
-        this.setState(evt.sessionKey, "disarmed", "User message");
-      }
-    } else if (evt.source === "agent") {
-      const text = evt.text?.trim();
-      if (
-        !text ||
-        text === SILENT_REPLY_TOKEN ||
-        text === "NO_REPLY" ||
-        text === "HEARTBEAT_OK" ||
-        text.endsWith(SILENT_REPLY_TOKEN) ||
-        text.endsWith("NO_REPLY")
-      ) {
-        this.setState(evt.sessionKey, "disarmed", "Agent sign-off");
-      } else {
-        // Agent replied -> Reset timer AND ensure it is ARMED.
-        // We want to track "time since last agent token".
-        // If agent sends "Hello", timer starts.
-        // If 30s pass without user reply or agent NO_REPLY -> Trigger.
-        this.setState(evt.sessionKey, "armed", "Agent activity");
-      }
+    const trimmed = text?.trim() ?? "";
+    if (
+      !trimmed ||
+      trimmed === SILENT_REPLY_TOKEN ||
+      trimmed === "NO_REPLY" ||
+      trimmed === "HEARTBEAT_OK" ||
+      trimmed.endsWith(SILENT_REPLY_TOKEN) ||
+      trimmed.endsWith("NO_REPLY")
+    ) {
+      this.logger.info("DISARM (agent sign-off)", {
+        key: sessionKey,
+        signOff: trimmed.slice(0, 40) || "(empty)",
+      });
+      this.setState(sessionKey, "disarmed", "Agent sign-off");
+    } else {
+      const now = this.runtime.nowMs();
+      this.logger.info("ARM (agent final message without sign-off)", {
+        key: sessionKey,
+        textPreview: trimmed.slice(0, 120),
+        timeoutMs: this.config.timeoutMs,
+      });
+      this.states.set(sessionKey, {
+        status: "armed",
+        lastActivityMs: now,
+        reason: "Agent finished (awaiting follow-up)",
+        armingText: trimmed.slice(0, 200),
+        armedAtMs: now,
+      });
     }
   }
 
@@ -94,18 +119,14 @@ export class ReplyChainEnforcer {
       return;
     }
 
-    if (evt.phase === "start") {
-      // Do nothing on start. Wait for first token.
-    } else if (evt.phase === "error") {
+    if (evt.phase === "error") {
       // On error, keep armed — the agent crashed mid-work and may not have
       // communicated results. The watchdog should fire if nothing follows.
       this.touchActivity(evt.sessionKey);
-      this.logger.debug("Chain stays ARMED after lifecycle error", { key: evt.sessionKey });
+      this.logger.warn("Lifecycle error — staying armed", { key: evt.sessionKey });
     }
-    // phase === "end" → do nothing. The transcript update (onTranscriptUpdate)
-    // is the source of truth for arm/disarm. If the agent produced meaningful
-    // text, it stays armed until the user replies or agent sends NO_REPLY.
-    // If the agent produced empty/NO_REPLY text, transcript handler already disarmed.
+    // phase === "start" → do nothing. Deltas will disarm when they arrive.
+    // phase === "end" → do nothing. onChatFinal already handled arm/disarm.
   }
 
   private setState(key: SessionKey, status: "armed" | "disarmed", reason: string) {
@@ -136,14 +157,18 @@ export class ReplyChainEnforcer {
 
       const elapsed = now - state.lastActivityMs;
       if (elapsed > this.config.timeoutMs) {
-        this.logger.warn("Watchdog trigger!", {
+        this.logger.warn("TRIGGER — stall detected", {
           key,
           elapsed,
           timeout: this.config.timeoutMs,
+          armedAtMs: state.armedAtMs,
+          armedAtISO: state.armedAtMs ? new Date(state.armedAtMs).toISOString() : undefined,
+          armingReason: state.reason,
+          armingText: state.armingText,
           targetSession: key,
         });
 
-        // Disarm to prevent loop
+        // Disarm to prevent immediate re-trigger
         this.setState(key, "disarmed", "Watchdog Triggered");
 
         // Fire recovery — noFallback prevents redirecting to main session

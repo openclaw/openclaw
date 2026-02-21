@@ -73,4 +73,28 @@ describe("startGatewayMemoryBackend", () => {
       'qmd memory startup initialization armed for agent "ops"',
     );
   });
+
+  it("skips agents with memory search disabled", async () => {
+    const cfg = {
+      agents: {
+        defaults: { memorySearch: { enabled: true } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", memorySearch: { enabled: false } },
+        ],
+      },
+      memory: { backend: "qmd", qmd: {} },
+    } as OpenClawConfig;
+    const log = { info: vi.fn(), warn: vi.fn() };
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(log.info).toHaveBeenCalledWith(
+      'qmd memory startup initialization armed for agent "main"',
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
 });

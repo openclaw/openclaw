@@ -21,11 +21,12 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
-  authorizeGatewayConnect,
+  authorizeHttpGatewayConnect,
   isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -48,11 +49,11 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
-import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
+import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -97,9 +98,31 @@ function isCanvasPath(pathname: string): boolean {
   );
 }
 
-function hasAuthorizedWsClientForIp(clients: Set<GatewayWsClient>, clientIp: string): boolean {
+function isNodeWsClient(client: GatewayWsClient): boolean {
+  if (client.connect.role === "node") {
+    return true;
+  }
+  return normalizeGatewayClientMode(client.connect.client.mode) === GATEWAY_CLIENT_MODES.NODE;
+}
+
+function hasAuthorizedNodeWsClientForCanvasCapability(
+  clients: Set<GatewayWsClient>,
+  capability: string,
+): boolean {
+  const nowMs = Date.now();
   for (const client of clients) {
-    if (client.clientIp && client.clientIp === clientIp) {
+    if (!isNodeWsClient(client)) {
+      continue;
+    }
+    if (!client.canvasCapability || !client.canvasCapabilityExpiresAtMs) {
+      continue;
+    }
+    if (client.canvasCapabilityExpiresAtMs <= nowMs) {
+      continue;
+    }
+    if (safeEqualSecret(client.canvasCapability, capability)) {
+      // Sliding expiration while the connected node keeps using canvas.
+      client.canvasCapabilityExpiresAtMs = nowMs + CANVAS_CAPABILITY_TTL_MS;
       return true;
     }
   }
@@ -110,22 +133,38 @@ async function authorizeCanvasRequest(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
   trustedProxies: string[];
+  allowRealIpFallback: boolean;
   clients: Set<GatewayWsClient>;
+  canvasCapability?: string;
+  malformedScopedPath?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<GatewayAuthResult> {
-  const { req, auth, trustedProxies, clients, rateLimiter } = params;
-  if (isLocalDirectRequest(req, trustedProxies)) {
+  const {
+    req,
+    auth,
+    trustedProxies,
+    allowRealIpFallback,
+    clients,
+    canvasCapability,
+    malformedScopedPath,
+    rateLimiter,
+  } = params;
+  if (malformedScopedPath) {
+    return { ok: false, reason: "unauthorized" };
+  }
+  if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
     return { ok: true };
   }
 
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
-    const authResult = await authorizeGatewayConnect({
+    const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
       connectAuth: { token, password: token },
       req,
       trustedProxies,
+      allowRealIpFallback,
       rateLimiter,
     });
     if (authResult.ok) {
@@ -134,23 +173,7 @@ async function authorizeCanvasRequest(params: {
     lastAuthFailure = authResult;
   }
 
-  const clientIp = resolveGatewayClientIp({
-    remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: getHeader(req, "x-forwarded-for"),
-    realIp: getHeader(req, "x-real-ip"),
-    trustedProxies,
-  });
-  if (!clientIp) {
-    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-  }
-
-  // IP-based fallback is only safe for machine-scoped addresses.
-  // Only allow IP-based fallback for private/loopback addresses to prevent
-  // cross-session access in shared-IP environments (corporate NAT, cloud).
-  if (!isPrivateOrLoopbackAddress(clientIp)) {
-    return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-  }
-  if (hasAuthorizedWsClientForIp(clients, clientIp)) {
+  if (canvasCapability && hasAuthorizedNodeWsClientForCanvasCapability(clients, canvasCapability)) {
     return { ok: true };
   }
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
@@ -474,6 +497,8 @@ export function createGatewayHttpServer(opts: {
       });
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+    setDefaultSecurityHeaders(res);
+
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;
@@ -482,6 +507,15 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
+      if (scopedCanvas.malformedScopedPath) {
+        sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+        return;
+      }
+      if (scopedCanvas.rewrittenUrl) {
+        req.url = scopedCanvas.rewrittenUrl;
+      }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
         return;
@@ -490,6 +524,7 @@ export function createGatewayHttpServer(opts: {
         await handleToolsInvokeHttpRequest(req, res, {
           auth: resolvedAuth,
           trustedProxies,
+          allowRealIpFallback,
           rateLimiter,
         })
       ) {
@@ -504,11 +539,12 @@ export function createGatewayHttpServer(opts: {
         // their own auth when exposing sensitive functionality.
         if (requestPath.startsWith("/api/channels/")) {
           const token = getBearerToken(req);
-          const authResult = await authorizeGatewayConnect({
+          const authResult = await authorizeHttpGatewayConnect({
             auth: resolvedAuth,
             connectAuth: token ? { token, password: token } : null,
             req,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter,
           });
           if (!authResult.ok) {
@@ -526,6 +562,7 @@ export function createGatewayHttpServer(opts: {
             auth: resolvedAuth,
             config: openResponsesConfig,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter,
           })
         ) {
@@ -537,6 +574,7 @@ export function createGatewayHttpServer(opts: {
           await handleOpenAiHttpRequest(req, res, {
             auth: resolvedAuth,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter,
           })
         ) {
@@ -549,7 +587,10 @@ export function createGatewayHttpServer(opts: {
             req,
             auth: resolvedAuth,
             trustedProxies,
+            allowRealIpFallback,
             clients,
+            canvasCapability: scopedCanvas.capability,
+            malformedScopedPath: scopedCanvas.malformedScopedPath,
             rateLimiter,
           });
           if (!ok.ok) {
@@ -609,16 +650,29 @@ export function attachGatewayUpgradeHandler(opts: {
   const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
+      if (scopedCanvas.malformedScopedPath) {
+        writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
+        socket.destroy();
+        return;
+      }
+      if (scopedCanvas.rewrittenUrl) {
+        req.url = scopedCanvas.rewrittenUrl;
+      }
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
           const configSnapshot = loadConfig();
           const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
             trustedProxies,
+            allowRealIpFallback,
             clients,
+            canvasCapability: scopedCanvas.capability,
+            malformedScopedPath: scopedCanvas.malformedScopedPath,
             rateLimiter,
           });
           if (!ok.ok) {

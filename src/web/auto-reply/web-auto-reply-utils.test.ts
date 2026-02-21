@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { saveSessionStore } from "../../config/sessions.js";
 import { isBotMentionedFromTargets, resolveMentionTargets } from "./mentions.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
@@ -81,42 +81,41 @@ describe("isBotMentionedFromTargets", () => {
 });
 
 describe("resolveMentionTargets with @lid mapping", () => {
-  it("resolves mentionedJids via lid reverse mapping in authDir", async () => {
-    const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lid-mapping-"));
-    try {
-      await fs.writeFile(
-        path.join(authDir, "lid-mapping-777_reverse.json"),
-        JSON.stringify("+1777"),
-      );
-      const msg = makeMsg({
+  let authDir = "";
+
+  beforeAll(async () => {
+    authDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lid-mapping-"));
+    await fs.writeFile(path.join(authDir, "lid-mapping-777_reverse.json"), JSON.stringify("+1777"));
+  });
+
+  afterAll(async () => {
+    if (!authDir) {
+      return;
+    }
+    await fs.rm(authDir, { recursive: true, force: true });
+    authDir = "";
+  });
+
+  it("uses @lid reverse mapping for mentions and self identity", () => {
+    const mentionTargets = resolveMentionTargets(
+      makeMsg({
         body: "ping",
         mentionedJids: ["777@lid"],
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",
-      });
-      const targets = resolveMentionTargets(msg, authDir);
-      expect(targets.normalizedMentions).toContain("+1777");
-    } finally {
-      await fs.rm(authDir, { recursive: true, force: true });
-    }
-  });
+      }),
+      authDir,
+    );
+    expect(mentionTargets.normalizedMentions).toContain("+1777");
 
-  it("derives selfE164 from selfJid when selfJid is @lid and mapping exists", async () => {
-    const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lid-mapping-"));
-    try {
-      await fs.writeFile(
-        path.join(authDir, "lid-mapping-777_reverse.json"),
-        JSON.stringify("+1777"),
-      );
-      const msg = makeMsg({
+    const selfTargets = resolveMentionTargets(
+      makeMsg({
         body: "ping",
         selfJid: "777@lid",
-      });
-      const targets = resolveMentionTargets(msg, authDir);
-      expect(targets.selfE164).toBe("+1777");
-    } finally {
-      await fs.rm(authDir, { recursive: true, force: true });
-    }
+      }),
+      authDir,
+    );
+    expect(selfTargets.selfE164).toBe("+1777");
   });
 });
 
