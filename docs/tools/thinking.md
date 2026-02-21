@@ -49,7 +49,7 @@ title: "Thinking Levels"
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
-## Reasoning visibility (/reasoning)
+## Reasoning visibility (/tools/thinking#reasoning-visibility-reasoning)
 
 - Levels: `on|off|stream`.
 - Directive-only message toggles whether thinking blocks are shown in replies.
@@ -61,6 +61,7 @@ title: "Thinking Levels"
 ## Related
 
 - Elevated mode docs live in [Elevated mode](/tools/elevated).
+- Reasoning visibility behavior is documented in [Reasoning visibility](/tools/thinking#reasoning-visibility-reasoning).
 
 ## Heartbeats
 

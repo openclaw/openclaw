@@ -39,4 +39,33 @@ describe("stripEnvelopeFromMessage", () => {
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("note\n[message_id: 123]");
   });
+  test("removes inbound un-bracketed conversation info blocks from user messages", () => {
+    const input = {
+      role: "user",
+      content:
+        'Conversation info (untrusted metadata):\n```json\n{\n  "message_id": "123"\n}\n```\n\nHello there',
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Hello there");
+  });
+
+  test("removes all inbound metadata blocks before user text", () => {
+    const input = {
+      role: "user",
+      content:
+        'Thread starter (untrusted, for context):\n```json\n{"seed": 1}\n```\n\nSender (untrusted metadata):\n```json\n{"name": "alice"}\n```\n\nActual user message',
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Actual user message");
+  });
+
+  test("strips metadata-like blocks even when not a prefix", () => {
+    const input = {
+      role: "user",
+      content:
+        'Actual text\nConversation info (untrusted metadata):\n```json\n{"message_id": "123"}\n```\n\nFollow-up',
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Actual text\n\nFollow-up");
+  });
 });

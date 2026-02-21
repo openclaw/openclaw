@@ -36,7 +36,7 @@ OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
-## Setup
+## Onboarding
 
 1. Install the Matrix plugin:
    - From npm: `openclaw plugins install @openclaw/matrix`
@@ -270,7 +270,7 @@ Common failures:
 
 For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
-## Configuration reference (Matrix)
+## Configuration
 
 Full configuration: [Configuration](/gateway/configuration)
 
