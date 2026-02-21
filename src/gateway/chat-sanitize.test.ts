@@ -59,15 +59,13 @@ describe("stripEnvelopeFromMessage", () => {
     expect(result.content).toBe("Actual user message");
   });
 
-  test("does not strip metadata-like blocks that are not a prefix", () => {
+  test("strips metadata-like blocks even when not a prefix", () => {
     const input = {
       role: "user",
       content:
         'Actual text\nConversation info (untrusted metadata):\n```json\n{"message_id": "123"}\n```\n\nFollow-up',
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
-    expect(result.content).toBe(
-      'Actual text\nConversation info (untrusted metadata):\n```json\n{"message_id": "123"}\n```\n\nFollow-up',
-    );
+    expect(result.content).toBe("Actual text\n\nFollow-up");
   });
 });
