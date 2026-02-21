@@ -19,7 +19,7 @@ describe("loadModelCatalog", () => {
     expect(first).toEqual([]);
 
     const second = await loadModelCatalog({ config: cfg });
-    expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(second).toContainEqual({ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" });
     expect(getCallCount()).toBe(2);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
@@ -90,5 +90,77 @@ describe("loadModelCatalog", () => {
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+  });
+
+  it("adds google/gemini-3.1-pro-preview when missing from catalog", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "gemini-1.5-pro",
+                  provider: "google",
+                  name: "Gemini 1.5 Pro",
+                  reasoning: true,
+                  contextWindow: 1000000,
+                  input: ["text", "image"],
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "google",
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        reasoning: true,
+        contextWindow: 1_000_000,
+        input: ["text", "image"],
+      }),
+    );
+  });
+
+  it("does not add duplicate google/gemini-3.1-pro-preview if already present", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "gemini-3.1-pro-preview",
+                  provider: "google",
+                  name: "Gemini 3.1 Pro Preview",
+                  reasoning: true,
+                  contextWindow: 1000000,
+                  input: ["text", "image"],
+                },
+                {
+                  id: "gemini-1.5-pro",
+                  provider: "google",
+                  name: "Gemini 1.5 Pro",
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const injected = result.filter(
+      (entry) => entry.provider === "google" && entry.id === "gemini-3.1-pro-preview",
+    );
+    expect(injected).toHaveLength(1);
+    expect(injected[0]).toMatchObject({
+      contextWindow: 1000000,
+    });
   });
 });

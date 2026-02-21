@@ -63,7 +63,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries } from "./system-events.js";
+import { drainSystemEventEntries, peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -609,6 +609,19 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const { isCronEventReason, pendingEventEntries } = preflight;
+  const shouldDrainPendingEvents = preflight.shouldInspectPendingEvents;
+  let pendingSystemEventsDrained = false;
+  const drainPendingSystemEvents = () => {
+    if (!shouldDrainPendingEvents || pendingSystemEventsDrained) {
+      return;
+    }
+    pendingSystemEventsDrained = true;
+    drainSystemEventEntries(sessionKey);
+  };
+  const withDrainedPendingEvents = <T>(result: T): T => {
+    drainPendingSystemEvents();
+    return result;
+  };
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -750,7 +763,7 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return withDrainedPendingEvents({ status: "ran", durationMs: Date.now() - startedAt });
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
@@ -786,7 +799,7 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return withDrainedPendingEvents({ status: "ran", durationMs: Date.now() - startedAt });
     }
 
     const mediaUrls =
@@ -823,7 +836,7 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
       });
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return withDrainedPendingEvents({ status: "ran", durationMs: Date.now() - startedAt });
     }
 
     // Reasoning payloads are text-only; any attachments stay on the main reply.
@@ -843,7 +856,7 @@ export async function runHeartbeatOnce(opts: {
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
       });
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return withDrainedPendingEvents({ status: "ran", durationMs: Date.now() - startedAt });
     }
 
     if (!visibility.showAlerts) {
@@ -887,7 +900,7 @@ export async function runHeartbeatOnce(opts: {
           channel: delivery.channel,
           reason: readiness.reason,
         });
-        return { status: "skipped", reason: readiness.reason };
+        return withDrainedPendingEvents({ status: "skipped", reason: readiness.reason });
       }
     }
 
@@ -936,7 +949,7 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
-    return { status: "ran", durationMs: Date.now() - startedAt };
+    return withDrainedPendingEvents({ status: "ran", durationMs: Date.now() - startedAt });
   } catch (err) {
     const reason = formatErrorMessage(err);
     emitHeartbeatEvent({

@@ -25,7 +25,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -1629,6 +1629,97 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Provider).toBe("cron-event");
       expect(calledCtx.Body).toContain("scheduled reminder has been triggered");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("drains exec completion events after processing an event-driven heartbeat", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      enqueueSystemEvent("Exec finished (gateway id=abc, code 0)", {
+        sessionKey,
+        contextKey: "exec:abc",
+      });
+
+      replySpy.mockImplementation(({ Provider }) => {
+        if (Provider === "exec-event") {
+          return { text: "Command finished; relay result" };
+        }
+        return { text: "Heartbeat check-in" };
+      });
+
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const first = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      expect(first.status).toBe("ran");
+      const firstCalledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string };
+      expect(firstCalledCtx.Provider).toBe("exec-event");
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+
+      const second = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      expect(second.status).toBe("ran");
+      const secondCalledCtx = replySpy.mock.calls[1]?.[0] as { Provider?: string };
+      expect(secondCalledCtx.Provider).toBe("heartbeat");
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     } finally {
       replySpy.mockRestore();
     }
