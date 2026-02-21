@@ -444,6 +444,8 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway stop",
     "- openclaw gateway restart",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
+    "Do not use exec for gateway stop/restart/config — use the `gateway` tool instead.",
+    "The gateway tool preserves session context across restarts; exec does not.",
     "",
     ...skillsSection,
     ...memorySection,
@@ -453,8 +455,9 @@ export function buildAgentSystemPrompt(params: {
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
-          "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
+          "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), config.patch (safe partial config updates; merges with existing), update.run (update deps or git, then restart).",
           "After restart, OpenClaw pings the last active session automatically.",
+          "Config changes via config.apply/config.patch are validated before writing and restart automatically — never edit config files directly or restart manually after config changes.",
         ].join("\n")
       : "",
     hasGateway && !isMinimal ? "" : "",
