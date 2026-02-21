@@ -89,7 +89,7 @@ pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
 if command -v rolldown >/dev/null 2>&1; then
   rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 else
-  pnpm dlx "rolldown@1.0.0-rc.5" -c "$A2UI_APP_DIR/rolldown.config.mjs"
+  pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 fi
 
 echo "$current_hash" > "$HASH_FILE"
