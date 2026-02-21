@@ -2,6 +2,32 @@ import { describe, expect, it, type Mock, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
+  const defaultResolveEnvApiKey = (provider: string) => {
+    if (provider === "openai") {
+      return {
+        apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz",
+        source: "shell env: OPENAI_API_KEY",
+      };
+    }
+    if (provider === "anthropic") {
+      return {
+        apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890",
+        source: "env: ANTHROPIC_OAUTH_TOKEN",
+      };
+    }
+    return null;
+  };
+  const defaultLoadConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-5", fallbacks: [] },
+        models: { "anthropic/claude-opus-4-5": { alias: "Opus" } },
+      },
+    },
+    models: { providers: {} },
+    env: { shellEnv: { enabled: true } },
+  };
+
   const store = {
     version: 1,
     profiles: {
@@ -45,34 +71,13 @@ const mocks = vi.hoisted(() => {
     resolveAuthStorePathForDisplay: vi
       .fn()
       .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json"),
-    resolveEnvApiKey: vi.fn((provider: string) => {
-      if (provider === "openai") {
-        return {
-          apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz",
-          source: "shell env: OPENAI_API_KEY",
-        };
-      }
-      if (provider === "anthropic") {
-        return {
-          apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890",
-          source: "env: ANTHROPIC_OAUTH_TOKEN",
-        };
-      }
-      return null;
-    }),
+    defaultResolveEnvApiKey,
+    resolveEnvApiKey: vi.fn(defaultResolveEnvApiKey),
     getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
     getShellEnvAppliedKeys: vi.fn().mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
-    loadConfig: vi.fn().mockReturnValue({
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5", fallbacks: [] },
-          models: { "anthropic/claude-opus-4-5": { alias: "Opus" } },
-        },
-      },
-      models: { providers: {} },
-      env: { shellEnv: { enabled: true } },
-    }),
+    defaultLoadConfig,
+    loadConfig: vi.fn().mockReturnValue(defaultLoadConfig),
   };
 });
 
@@ -171,6 +176,33 @@ async function withAgentScopeOverrides<T>(
   }
 }
 
+function restoreResolveEnvApiKey(
+  original: ((provider: string) => { apiKey: string; source: string } | null) | undefined,
+): void {
+  if (original) {
+    mocks.resolveEnvApiKey.mockImplementation(original);
+    return;
+  }
+  mocks.resolveEnvApiKey.mockImplementation(mocks.defaultResolveEnvApiKey);
+}
+
+async function withLoadConfigOverride<T>(
+  nextConfig: Record<string, unknown>,
+  run: () => Promise<T>,
+) {
+  const original = mocks.loadConfig.getMockImplementation();
+  mocks.loadConfig.mockReturnValue(nextConfig);
+  try {
+    return await run();
+  } finally {
+    if (original) {
+      mocks.loadConfig.mockImplementation(original);
+    } else {
+      mocks.loadConfig.mockReturnValue(mocks.defaultLoadConfig);
+    }
+  }
+}
+
 describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
@@ -231,6 +263,156 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  it("does not mark cli providers as missing auth", async () => {
+    const localRuntime = createRuntime();
+    const originalProfiles = { ...mocks.store.profiles };
+    mocks.store.profiles = {};
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await withAgentScopeOverrides(
+        {
+          primary: "claude-cli/opus-4.6",
+          fallbacks: [],
+        },
+        async () => {
+          await modelsStatusCommand({ json: true, agent: "main" }, localRuntime as never);
+          const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0][0]));
+          expect(payload.auth.missingProvidersInUse).toEqual([]);
+        },
+      );
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      restoreResolveEnvApiKey(originalEnvImpl);
+    }
+  });
+
+  it("reports cli readiness issue for unresolved command", async () => {
+    const localRuntime = createRuntime();
+    const originalProfiles = { ...mocks.store.profiles };
+    mocks.store.profiles = {};
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await withLoadConfigOverride(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "claude-cli/opus-4.6", fallbacks: [] },
+              models: { "claude-cli/opus-4.6": { alias: "claude" } },
+              cliBackends: {
+                "claude-cli": {
+                  command: "definitely-missing-openclaw-cli",
+                },
+              },
+            },
+          },
+          models: { providers: {} },
+          env: { shellEnv: { enabled: true } },
+        },
+        async () => {
+          await modelsStatusCommand({ json: true, agent: "main" }, localRuntime as never);
+          const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0][0]));
+          expect(payload.auth.missingProvidersInUse).toEqual([]);
+          expect(payload.auth.cliReadiness.providersInUse).toContain("claude-cli");
+          const backend = payload.auth.cliReadiness.backends.find(
+            (entry: { provider: string }) => entry.provider === "claude-cli",
+          );
+          expect(backend?.status).toBe("command_unresolvable");
+          expect(String(backend?.detail ?? "")).toContain("not found");
+          expect(String(backend?.hint ?? "")).toContain('cliBackends["claude-cli"].command');
+        },
+      );
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      restoreResolveEnvApiKey(originalEnvImpl);
+    }
+  });
+
+  it("--check exits non-zero on cli readiness failure", async () => {
+    const localRuntime = createRuntime();
+    const originalProfiles = { ...mocks.store.profiles };
+    mocks.store.profiles = {};
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await withLoadConfigOverride(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "claude-cli/opus-4.6", fallbacks: [] },
+              models: { "claude-cli/opus-4.6": { alias: "claude" } },
+              cliBackends: {
+                "claude-cli": {
+                  command: "definitely-missing-openclaw-cli",
+                },
+              },
+            },
+          },
+          models: { providers: {} },
+          env: { shellEnv: { enabled: true } },
+        },
+        async () => {
+          await modelsStatusCommand(
+            { check: true, plain: true, agent: "main" },
+            localRuntime as never,
+          );
+          expect(localRuntime.exit).toHaveBeenCalledWith(1);
+        },
+      );
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      restoreResolveEnvApiKey(originalEnvImpl);
+    }
+  });
+
+  it("--check ignores stale oauth when active providers are cli-only", async () => {
+    const localRuntime = createRuntime();
+    const originalProfiles = { ...mocks.store.profiles };
+    mocks.store.profiles = {
+      ...originalProfiles,
+      "anthropic:default": {
+        ...originalProfiles["anthropic:default"],
+        expires: Date.now() - 60_000,
+      },
+    };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await withLoadConfigOverride(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "claude-cli/opus-4.6", fallbacks: [] },
+              models: { "claude-cli/opus-4.6": { alias: "claude" } },
+              cliBackends: {
+                "claude-cli": {
+                  command: process.execPath,
+                },
+              },
+            },
+          },
+          models: { providers: {} },
+          env: { shellEnv: { enabled: true } },
+        },
+        async () => {
+          await modelsStatusCommand(
+            { check: true, plain: true, agent: "main" },
+            localRuntime as never,
+          );
+          expect(localRuntime.exit).toHaveBeenCalledWith(0);
+        },
+      );
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      restoreResolveEnvApiKey(originalEnvImpl);
+    }
+  });
+
   it("labels defaults when --agent has no overrides", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(
@@ -267,11 +449,7 @@ describe("modelsStatusCommand auth overview", () => {
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
-      if (originalEnvImpl) {
-        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
-      } else {
-        mocks.resolveEnvApiKey.mockReset();
-      }
+      restoreResolveEnvApiKey(originalEnvImpl);
     }
   });
 });

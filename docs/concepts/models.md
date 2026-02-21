@@ -42,8 +42,8 @@ openclaw onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
-subscription** (OAuth) and **Anthropic** (API key recommended; `claude
-setup-token` also supported).
+subscription** (OAuth) and **Anthropic** (Claude Code OAuth, API key, or
+`claude setup-token`).
 
 ## Config keys (overview)
 
@@ -160,11 +160,18 @@ JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
-Preferred Anthropic auth is the Claude Code CLI setup-token (run anywhere; paste on the gateway host if needed):
+Preferred Anthropic subscription auth is Claude Code OAuth:
+
+```bash
+openclaw onboard --auth-choice claude-code-cli
+openclaw models status
+```
+
+If OAuth is unavailable for your environment, use setup-token as a fallback:
 
 ```bash
 claude setup-token
-openclaw models status
+openclaw models auth paste-token --provider anthropic
 ```
 
 ## Scanning (OpenRouter free models)

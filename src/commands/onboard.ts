@@ -4,7 +4,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
+import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
@@ -14,18 +14,19 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
   const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
+  if (opts.nonInteractive && originalAuthChoice === "codex-cli") {
     runtime.error(
       [
-        `Auth choice "${String(originalAuthChoice)}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
+        'Auth choice "codex-cli" is deprecated.',
+        'It maps to OpenAI Codex OAuth ("--auth-choice openai-codex"), which requires interactive mode.',
+        'For non-interactive onboarding, use "--auth-choice openai-api-key".',
       ].join("\n"),
     );
     runtime.exit(1);
     return;
   }
   if (originalAuthChoice === "claude-cli") {
-    runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
+    runtime.log('Auth choice "claude-cli" is deprecated; using "claude-code-cli" flow instead.');
   }
   if (originalAuthChoice === "codex-cli") {
     runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');

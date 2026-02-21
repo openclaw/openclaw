@@ -5,6 +5,8 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   getModelRefStatus,
+  isCliProvider,
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
@@ -25,6 +27,7 @@ import {
   maybeRemoveDeprecatedCliAuthProfiles,
   maybeRepairAnthropicOAuthProfileId,
   noteAuthProfileHealth,
+  noteCliProviderReadiness,
 } from "./doctor-auth.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -116,10 +119,55 @@ export async function doctorCommand(
 
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
   cfg = await maybeRemoveDeprecatedCliAuthProfiles(cfg, prompter);
+
+  const modelConfig = cfg.agents?.defaults?.model as
+    | { primary?: string; fallbacks?: string[] }
+    | string
+    | undefined;
+  const imageConfig = cfg.agents?.defaults?.imageModel as
+    | { primary?: string; fallbacks?: string[] }
+    | string
+    | undefined;
+  const modelPrimary =
+    typeof modelConfig === "string" ? modelConfig.trim() : (modelConfig?.primary?.trim() ?? "");
+  const modelFallbacks = typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const imagePrimary =
+    typeof imageConfig === "string" ? imageConfig.trim() : (imageConfig?.primary?.trim() ?? "");
+  const imageFallbacks = typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
+  const defaultResolved = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const providersInUse = new Set<string>();
+  for (const raw of [
+    modelPrimary || `${defaultResolved.provider}/${defaultResolved.model}`,
+    ...modelFallbacks,
+    imagePrimary,
+    ...imageFallbacks,
+  ]) {
+    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    if (parsed?.provider) {
+      providersInUse.add(parsed.provider);
+    }
+  }
+  providersInUse.add(defaultResolved.provider);
+  const cliProvidersInUse = Array.from(providersInUse)
+    .filter((provider) => isCliProvider(provider, cfg))
+    .toSorted((a, b) => a.localeCompare(b));
+  const nonCliProvidersInUse = Array.from(providersInUse)
+    .filter((provider) => !isCliProvider(provider, cfg))
+    .toSorted((a, b) => a.localeCompare(b));
+
+  await noteCliProviderReadiness({
+    cfg,
+    providersInUse: cliProvidersInUse,
+  });
   await noteAuthProfileHealth({
     cfg,
     prompter,
     allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
+    providers: nonCliProvidersInUse,
   });
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
   if (gatewayDetails.remoteFallbackNote) {

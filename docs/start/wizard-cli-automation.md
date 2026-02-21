@@ -34,6 +34,15 @@ Add `--json` for a machine-readable summary.
 ## Provider-specific examples
 
 <AccordionGroup>
+  <Accordion title="Claude Code CLI example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice claude-code-cli \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
   <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \

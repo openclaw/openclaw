@@ -53,10 +53,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 ### Anthropic
 
 - Provider: `anthropic`
-- Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
+- Auth: Claude Code OAuth (`claude-code-cli`), `claude setup-token`, or `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
+- CLI: `openclaw onboard --auth-choice claude-code-cli` (preferred for subscriptions), `openclaw onboard --auth-choice token` (setup-token paste), or `openclaw models auth paste-token --provider anthropic`
 
 ```json5
 {

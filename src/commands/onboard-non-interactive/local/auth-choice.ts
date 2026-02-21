@@ -6,6 +6,10 @@ import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { shortenHomePath } from "../../../utils.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
+import {
+  applyClaudeCodeCliDefaultConfig,
+  resolveClaudeCodeCliCommandPath,
+} from "../../auth-choice.claude-code-cli.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import { applyPrimaryModel } from "../../model-picker.js";
@@ -67,14 +71,21 @@ export async function applyNonInteractiveAuthChoice(params: {
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
 }): Promise<OpenClawConfig | null> {
-  const { authChoice, opts, runtime, baseConfig } = params;
+  const { opts, runtime, baseConfig } = params;
+  let authChoice = params.authChoice;
   let nextConfig = params.nextConfig;
 
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
+  if (authChoice === "claude-cli") {
+    runtime.log('Auth choice "claude-cli" is deprecated; using "claude-code-cli" flow instead.');
+    authChoice = "claude-code-cli";
+  }
+
+  if (authChoice === "codex-cli") {
     runtime.error(
       [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
+        'Auth choice "codex-cli" is deprecated.',
+        'It maps to OpenAI Codex OAuth ("--auth-choice openai-codex"), which requires interactive mode.',
+        'For non-interactive onboarding, use "--auth-choice openai-api-key".',
       ].join("\n"),
     );
     runtime.exit(1);
@@ -101,6 +112,20 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
     runtime.exit(1);
     return null;
+  }
+
+  if (authChoice === "claude-code-cli") {
+    const commandPath = resolveClaudeCodeCliCommandPath();
+    if (commandPath) {
+      runtime.log(`Detected Claude Code CLI at ${commandPath}.`);
+    } else {
+      runtime.log(
+        "Claude Code CLI was not detected in PATH. Configure now, then install/add `claude` before first run.",
+      );
+    }
+    return applyClaudeCodeCliDefaultConfig(nextConfig, {
+      commandPath,
+    });
   }
 
   if (authChoice === "apiKey") {

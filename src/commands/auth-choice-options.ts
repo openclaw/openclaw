@@ -31,8 +31,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "setup-token + API key",
-    choices: ["token", "apiKey"],
+    hint: "setup-token + API key + Claude Code CLI",
+    choices: ["token", "apiKey", "claude-code-cli"],
   },
   {
     value: "chutes",
@@ -179,6 +179,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "token",
     label: "Anthropic token (paste setup-token)",
     hint: "run `claude setup-token` elsewhere, then paste the token here",
+  },
+  {
+    value: "claude-code-cli",
+    label: "Claude Code CLI (local app subscription)",
+    hint: "Use local `claude` CLI as model provider (no Anthropic API key)",
   },
   {
     value: "openai-codex",

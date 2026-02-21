@@ -8,12 +8,24 @@ title: "Authentication"
 
 # Authentication
 
-OpenClaw supports OAuth and API keys for model providers. For Anthropic
-accounts, we recommend using an **API key**. For Claude subscription access,
-use the long‑lived token created by `claude setup-token`.
+OpenClaw supports OAuth and API keys for model providers. For Anthropic,
+OpenClaw supports three paths:
+
+1. **Claude Code OAuth** (preferred for Claude subscriptions)
+2. **setup-token** (manual/headless fallback)
+3. **API key** (usage-based billing; common for production/multi-user)
 
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
+
+## Anthropic: Claude Code OAuth (preferred for subscriptions)
+
+```bash
+openclaw onboard --auth-choice claude-code-cli
+```
+
+This configures `claude-cli/*` models so OpenClaw can use the official local
+`claude` CLI auth context on the gateway host.
 
 ## Recommended Anthropic setup (API key)
 
@@ -49,10 +61,9 @@ API keys for daemon use: `openclaw onboard`.
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.openclaw/.env`, systemd/launchd).
 
-## Anthropic: setup-token (subscription auth)
+## Anthropic: setup-token (manual subscription fallback)
 
-For Anthropic, the recommended path is an **API key**. If you’re using a Claude
-subscription, the setup-token flow is also supported. Run it on the **gateway host**:
+If Claude Code OAuth is unavailable for your environment, setup-token is supported. Run it on the **gateway host**:
 
 ```bash
 claude setup-token

@@ -12,6 +12,7 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { resolveCliProvidersReadiness } from "../agents/cli-backend-readiness.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
@@ -231,16 +232,28 @@ export async function noteAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
+  providers?: string[];
 }): Promise<void> {
   const store = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
+  const providerFilter = params.providers
+    ? new Set(params.providers.map((provider) => provider.trim()).filter(Boolean))
+    : null;
+  if (providerFilter && providerFilter.size === 0) {
+    return;
+  }
+
   const unusable = (() => {
     const now = Date.now();
     const out: string[] = [];
     for (const profileId of Object.keys(store.usageStats ?? {})) {
       const until = resolveProfileUnusableUntilForDisplay(store, profileId);
       if (!until || now >= until) {
+        continue;
+      }
+      const profileProvider = store.profiles[profileId]?.provider;
+      if (providerFilter && (!profileProvider || !providerFilter.has(profileProvider))) {
         continue;
       }
       const stats = store.usageStats?.[profileId];
@@ -265,6 +278,7 @@ export async function noteAuthProfileHealth(params: {
     store,
     cfg: params.cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    providers: providerFilter ? Array.from(providerFilter) : undefined,
   });
 
   const findIssues = () =>
@@ -312,6 +326,7 @@ export async function noteAuthProfileHealth(params: {
       }),
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      providers: providerFilter ? Array.from(providerFilter) : undefined,
     });
     issues = findIssues();
   }
@@ -331,4 +346,31 @@ export async function noteAuthProfileHealth(params: {
       "Model auth",
     );
   }
+}
+
+export async function noteCliProviderReadiness(params: {
+  cfg: OpenClawConfig;
+  providersInUse: string[];
+}): Promise<void> {
+  const readiness = resolveCliProvidersReadiness({
+    providers: params.providersInUse,
+    cfg: params.cfg,
+  });
+  const failures = readiness.filter((entry) => entry.status !== "ready");
+  if (failures.length === 0) {
+    return;
+  }
+
+  note(
+    failures
+      .map((entry) => {
+        const detail = `- ${entry.provider}: ${entry.detail}`;
+        if (!entry.hint) {
+          return detail;
+        }
+        return `${detail}\n  ${entry.hint}`;
+      })
+      .join("\n"),
+    "CLI backend",
+  );
 }

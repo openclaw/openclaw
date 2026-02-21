@@ -161,6 +161,32 @@ describe("applyAuthChoice", () => {
     });
   });
 
+  it("configures Claude Code CLI as the default model path", async () => {
+    await setupTempState();
+
+    const note = vi.fn(async () => {});
+    const prompter = createPrompter({ note });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "claude-code-cli",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result.config.agents?.defaults?.model?.primary).toBe("claude-cli/opus-4.6");
+    expect(result.config.agents?.defaults?.models?.["claude-cli/opus-4.6"]).toBeDefined();
+
+    const backend = result.config.agents?.defaults?.cliBackends?.["claude-cli"];
+    if (backend?.command) {
+      expect(backend.command.length).toBeGreaterThan(0);
+    }
+
+    expect(note).toHaveBeenCalled();
+  });
+
   it("prompts and writes MiniMax API key when selecting minimax-api", async () => {
     await setupTempState();
 
@@ -878,6 +904,10 @@ describe("resolvePreferredProviderForAuthChoice", () => {
 
   it("maps qwen-portal to the provider", () => {
     expect(resolvePreferredProviderForAuthChoice("qwen-portal")).toBe("qwen-portal");
+  });
+
+  it("maps claude-code-cli to claude-cli", () => {
+    expect(resolvePreferredProviderForAuthChoice("claude-code-cli")).toBe("claude-cli");
   });
 
   it("returns undefined for unknown choices", () => {

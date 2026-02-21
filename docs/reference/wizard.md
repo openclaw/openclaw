@@ -29,9 +29,9 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
   </Step>
   <Step title="Model/Auth">
     - **Anthropic API key (recommended)**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
-    - **Anthropic OAuth (Claude Code CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
+    - **Claude Code CLI (local app subscription)**: configures `claude-cli/*` models so OpenClaw can use the official local `claude` CLI (primary or fallback) without an Anthropic API key. Ensure `claude` is installed, on PATH, and signed in on the gateway host.
     - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
-    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
+    - **OpenAI Code (Codex CLI backend)**: optional local CLI path via `codex-cli/*` model refs; requires a working local Codex CLI login on the host.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
       - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.openclaw/.env` so launchd can read it.

@@ -377,7 +377,7 @@ export async function runOnboardingWizard(
     nextConfig = authResult.config;
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  if (authChoiceFromPrompt && authChoice !== "custom-api-key" && authChoice !== "claude-code-cli") {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,

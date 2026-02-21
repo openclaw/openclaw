@@ -22,10 +22,11 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.find((opt) => opt.value === "github-copilot")).toBeDefined();
   });
 
-  it("includes setup-token option for Anthropic", () => {
+  it("includes setup-token and Claude Code CLI options for Anthropic", () => {
     const options = getOptions();
 
     expect(options.some((opt) => opt.value === "token")).toBe(true);
+    expect(options.some((opt) => opt.value === "claude-code-cli")).toBe(true);
   });
 
   it.each([
