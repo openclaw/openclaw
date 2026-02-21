@@ -24,4 +24,27 @@ describe("appcast.xml", () => {
     const sparkleMatch = matchingItem?.match(/<sparkle:version>([^<]+)<\/sparkle:version>/);
     expect(sparkleMatch?.[1]).toBe(expectedSparkleVersion(shortVersion));
   });
+
+  it("all versions use date-based sparkle:version format (YYYYMMDD0)", () => {
+    const appcast = readFileSync(APPCAST_URL, "utf8");
+    const items = Array.from(appcast.matchAll(/<item>[\s\S]*?<\/item>/g)).map((match) => match[0]);
+
+    for (const item of items) {
+      const shortMatch = item.match(
+        /<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/,
+      );
+      const sparkleMatch = item.match(/<sparkle:version>([^<]+)<\/sparkle:version>/);
+
+      if (shortMatch && sparkleMatch) {
+        const shortVersion = shortMatch[1];
+        const sparkleVersion = sparkleMatch[1];
+        const expected = expectedSparkleVersion(shortVersion);
+
+        expect(
+          sparkleVersion,
+          `Version ${shortVersion} has incorrect sparkle:version (expected ${expected}, got ${sparkleVersion})`,
+        ).toBe(expected);
+      }
+    }
+  });
 });
