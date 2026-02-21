@@ -114,6 +114,35 @@ export const MessagesSchema = z
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
+    statusReactions: z
+      .object({
+        enabled: z.boolean().optional(),
+        emojis: z
+          .object({
+            thinking: z.string().optional(),
+            tool: z.string().optional(),
+            coding: z.string().optional(),
+            web: z.string().optional(),
+            done: z.string().optional(),
+            error: z.string().optional(),
+            stallSoft: z.string().optional(),
+            stallHard: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        timing: z
+          .object({
+            debounceMs: z.number().int().min(0).optional(),
+            stallSoftMs: z.number().int().min(0).optional(),
+            stallHardMs: z.number().int().min(0).optional(),
+            doneHoldMs: z.number().int().min(0).optional(),
+            errorHoldMs: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })

@@ -91,6 +91,8 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        reserveTokens: z.number().int().nonnegative().optional(),
+        keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
         memoryFlush: z
@@ -148,7 +150,7 @@ export const AgentDefaultsSchema = z
           .max(5)
           .optional()
           .describe(
-            "Maximum nesting depth for sub-agent spawning. 1 = no nesting (default), 2 = sub-agents can spawn sub-sub-agents.",
+            "Maximum nesting depth for sub-agent spawning. Default is 2 (sub-agents can spawn sub-sub-agents).",
           ),
         maxChildrenPerAgent: z
           .number()
