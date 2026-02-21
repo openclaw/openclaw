@@ -80,7 +80,13 @@ final class TalkModeManager: NSObject {
     private var noiseFloorReady: Bool = false
 
     private var chatSubscribedSessionKeys = Set<String>()
-    private var incrementalSpeechQueue: [String] = []
+    private struct PendingSegment {
+        let text: String
+        // Pre-fetched TTS stream (HTTP request started at enqueue time to hide per-segment latency).
+        let stream: AsyncThrowingStream<Data, Error>?
+    }
+
+    private var incrementalSpeechQueue: [PendingSegment] = []
     private var incrementalSpeechTask: Task<Void, Never>?
     private var incrementalSpeechActive = false
     private var incrementalSpeechUsed = false
@@ -1216,7 +1222,21 @@ final class TalkModeManager: NSObject {
     private func enqueueIncrementalSpeech(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        self.incrementalSpeechQueue.append(trimmed)
+
+        // Pre-start the TTS HTTP request immediately so the server begins generating audio
+        // while the previous segment is still playing, hiding the ~243ms per-segment latency.
+        let prefetchedStream: AsyncThrowingStream<Data, Error>?
+        if let baseUrl = self.ttsBaseUrl {
+            let voice = self.currentVoiceId ?? self.defaultVoiceId ?? "default"
+            let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
+            prefetchedStream = Self.openAITTSStream(
+                baseUrl: baseUrl, text: trimmed, model: model, voice: voice,
+                sampleRate: 24000, timeoutSeconds: 30)
+        } else {
+            prefetchedStream = nil
+        }
+
+        self.incrementalSpeechQueue.append(PendingSegment(text: trimmed, stream: prefetchedStream))
         self.incrementalSpeechUsed = true
         if self.incrementalSpeechTask == nil {
             self.startIncrementalSpeechTask()
@@ -1237,11 +1257,11 @@ final class TalkModeManager: NSObject {
             guard let self else { return }
             while !Task.isCancelled {
                 guard !self.incrementalSpeechQueue.isEmpty else { break }
-                let segment = self.incrementalSpeechQueue.removeFirst()
+                let pending = self.incrementalSpeechQueue.removeFirst()
                 self.statusText = "Speaking…"
                 self.isSpeaking = true
-                self.lastSpokenText = segment
-                await self.speakIncrementalSegment(segment)
+                self.lastSpokenText = pending.text
+                await self.speakIncrementalSegment(pending.text, prefetchedStream: pending.stream)
             }
             self.isSpeaking = false
             self.stopRecognition()
@@ -1356,25 +1376,31 @@ final class TalkModeManager: NSObject {
             canUseElevenLabs: canUseElevenLabs)
     }
 
-    private func speakIncrementalSegment(_ text: String) async {
+    private func speakIncrementalSegment(
+        _ text: String,
+        prefetchedStream: AsyncThrowingStream<Data, Error>? = nil
+    ) async {
+        // For the OpenAI TTS path, use the pre-fetched stream if available (HTTP request
+        // was already started at enqueue time, hiding per-segment startup latency).
+        if let stream = prefetchedStream ?? (self.ttsBaseUrl.map { baseUrl in
+            let voice = self.currentVoiceId ?? self.defaultVoiceId ?? "default"
+            let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
+            return Self.openAITTSStream(
+                baseUrl: baseUrl, text: text, model: model, voice: voice,
+                sampleRate: 24000, timeoutSeconds: 30)
+        }) {
+            GatewayDiagnostics.log("talk incremental tts: provider=openai-tts")
+            let finished = await OpenAITTSPlayerIOS.shared.play(
+                stream: stream, sampleRate: 24000.0, logger: self.logger)
+            self.logger.info("openai-tts incremental finished=\(finished, privacy: .public)")
+            return
+        }
+
         await self.updateIncrementalContextIfNeeded()
         guard let context = self.incrementalSpeechContext else {
             try? await TalkSystemSpeechSynthesizer.shared.speak(
                 text: text,
                 language: self.incrementalSpeechLanguage)
-            return
-        }
-
-        if let ttsBaseUrl = self.ttsBaseUrl {
-            GatewayDiagnostics.log("talk incremental tts: provider=openai-tts")
-            let voice = self.defaultVoiceId ?? self.currentVoiceId ?? "default"
-            let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
-            let stream = Self.openAITTSStream(
-                baseUrl: ttsBaseUrl, text: text, model: model, voice: voice,
-                sampleRate: 24000, timeoutSeconds: 30)
-            let finished = await OpenAITTSPlayerIOS.shared.play(
-                stream: stream, sampleRate: 24000.0, logger: self.logger)
-            self.logger.info("openai-tts incremental finished=\(finished, privacy: .public)")
             return
         }
 
