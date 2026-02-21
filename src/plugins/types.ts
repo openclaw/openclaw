@@ -314,6 +314,7 @@ export type PluginHookName =
   | "before_message_write"
   | "session_start"
   | "session_end"
+  | "provide_compaction_summary"
   | "gateway_start"
   | "gateway_stop";
 
@@ -324,6 +325,11 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** Request compaction of the current session. The compaction is deferred and
+   *  runs after the current agent run completes (to avoid lane deadlocks).
+   *  Returns false if compaction was already requested or is in progress.
+   *  Only available on agent-scoped hooks (agent_end, after_tool_call). */
+  requestCompaction?: (customInstructions?: string) => Promise<boolean>;
 };
 
 // before_model_resolve hook
@@ -427,6 +433,38 @@ export type PluginHookAfterCompactionEvent = {
    *  preserved on disk, so plugins can read and process them asynchronously
    *  without blocking the compaction pipeline. */
   sessionFile?: string;
+};
+
+// provide_compaction_summary hook
+/** Fired after before_compaction handlers have been dispatched, before the
+ *  compaction LLM call. A plugin can return a custom summary to bypass the
+ *  LLM entirely.
+ *
+ *  IMPORTANT: before_compaction is fire-and-forget. Async work started there
+ *  (e.g., memory extraction) may still be running. Plugins that need extraction
+ *  results must coordinate through their own shared state (e.g., a module-level
+ *  promise keyed by ctx.sessionId). */
+export type PluginHookProvideCompactionSummaryEvent = {
+  /** Total messages in the session */
+  messageCount: number;
+  /** Estimated tokens being compacted */
+  tokensBefore?: number;
+  /** Path to the session JSONL transcript (all messages on disk) */
+  sessionFile?: string;
+  /** Summary from the previous compaction cycle, if any (for iterative
+   *  compaction — plugin can incorporate or supersede it) */
+  previousSummary?: string;
+};
+
+export type PluginHookProvideCompactionSummaryResult = {
+  /** Custom compaction summary. If provided, the gateway writes this as the
+   *  compaction entry instead of calling the compaction LLM. The plugin is
+   *  responsible for producing a useful summary. */
+  summary?: string;
+  /** If true, skip compaction entirely this cycle. The gateway tracks consecutive
+   *  skips per session and forces a standard compaction after 3 consecutive
+   *  plugin skips to prevent unbounded context growth. */
+  skipCompaction?: boolean;
 };
 
 // Message context
@@ -597,6 +635,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  provide_compaction_summary: (
+    event: PluginHookProvideCompactionSummaryEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookProvideCompactionSummaryResult | void>
+    | PluginHookProvideCompactionSummaryResult
+    | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

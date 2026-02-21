@@ -1198,6 +1198,11 @@ export async function runEmbeddedAttempt(
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
         if (hookRunner?.hasHooks("agent_end")) {
+          // requestCompaction: deferred flag checked after agent_end completes.
+          // We cannot call compactEmbeddedPiSession inline here because we are
+          // already inside the session lane — re-entering would deadlock.
+          let compactionRequested = false;
+          let compactionCustomInstructions: string | undefined;
           hookRunner
             .runAgentEnd(
               {
@@ -1212,8 +1217,33 @@ export async function runEmbeddedAttempt(
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
+                requestCompaction: async (customInstructions?: string) => {
+                  if (compactionRequested) {
+                    return false;
+                  }
+                  compactionRequested = true;
+                  compactionCustomInstructions = customInstructions;
+                  return true;
+                },
               },
             )
+            .then(async () => {
+              // Deferred compaction: schedule outside the current lane after agent_end completes.
+              if (compactionRequested && params.sessionFile && params.sessionKey) {
+                const { compactEmbeddedPiSession: deferredCompact } = await import("../compact.js");
+                void deferredCompact({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.sessionFile,
+                  workspaceDir: params.workspaceDir,
+                  config: params.config,
+                  provider: params.provider,
+                  model: params.modelId,
+                  customInstructions: compactionCustomInstructions,
+                  trigger: "manual" as const, // TODO: add "plugin" trigger variant
+                });
+              }
+            })
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
             });

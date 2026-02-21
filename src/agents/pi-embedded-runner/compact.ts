@@ -83,6 +83,32 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
+// ---------------------------------------------------------------------------
+// Plugin skip-compaction safety gate
+// ---------------------------------------------------------------------------
+const MAX_PLUGIN_SKIP_COUNT = 3;
+/** Bounded map: evicts oldest entry when exceeding MAX_SKIP_MAP_SIZE to prevent
+ *  unbounded growth from abandoned sessions. */
+const MAX_SKIP_MAP_SIZE = 1000;
+const pluginSkipCounts = new Map<string, number>();
+
+function incrementPluginSkipCount(sessionId: string): number {
+  const count = (pluginSkipCounts.get(sessionId) ?? 0) + 1;
+  pluginSkipCounts.set(sessionId, count);
+  // Evict oldest entry if map grows too large (abandoned sessions).
+  if (pluginSkipCounts.size > MAX_SKIP_MAP_SIZE) {
+    const oldest = pluginSkipCounts.keys().next().value;
+    if (oldest !== undefined) {
+      pluginSkipCounts.delete(oldest);
+    }
+  }
+  return count;
+}
+
+function resetPluginSkipCount(sessionId: string): void {
+  pluginSkipCounts.delete(sessionId);
+}
+
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
   runId?: string;
@@ -641,6 +667,97 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
+        // Estimate tokens before compaction (used by plugin hook and diagnostics).
+        let estTokensBefore: number | undefined;
+        try {
+          estTokensBefore = 0;
+          for (const msg of preCompactionMessages) {
+            estTokensBefore += estimateTokens(msg);
+          }
+        } catch {
+          estTokensBefore = undefined;
+        }
+
+        // Extract previous compaction summary for iterative compaction support.
+        let previousSummary: string | undefined;
+        try {
+          const entries = sessionManager.getEntries();
+          for (let i = entries.length - 1; i >= 0; i--) {
+            const entry = entries[i];
+            if (entry && entry.type === "compaction" && typeof entry.summary === "string") {
+              previousSummary = entry.summary;
+              break;
+            }
+          }
+        } catch {
+          // Non-critical — leave undefined if entries can't be read.
+        }
+
+        // Ask memory plugin for a custom compaction summary (sequential, awaited).
+        // If the plugin returns a summary, we write it directly via appendCompaction()
+        // and skip the default LLM compaction call entirely.
+        let pluginSkipped = false;
+        let pluginSummary: string | undefined;
+        if (hookRunner?.hasHooks("provide_compaction_summary")) {
+          try {
+            const summaryResult = await Promise.race([
+              hookRunner.runProvideCompactionSummary(
+                {
+                  messageCount: preCompactionMessages.length,
+                  tokensBefore: estTokensBefore,
+                  sessionFile: params.sessionFile,
+                  previousSummary,
+                },
+                hookCtx,
+              ),
+              new Promise<undefined>((resolve) =>
+                setTimeout(() => resolve(undefined), EMBEDDED_COMPACTION_TIMEOUT_MS),
+              ),
+            ]);
+            if (summaryResult?.skipCompaction) {
+              pluginSkipped = true;
+            }
+            if (summaryResult?.summary) {
+              pluginSummary = summaryResult.summary;
+            }
+          } catch (hookErr) {
+            log.warn(`provide_compaction_summary hook failed: ${String(hookErr)}`);
+          }
+        }
+
+        // If plugin requested skip (without providing a summary), honor it
+        // with a safety gate: max 3 consecutive skips per session.
+        if (pluginSkipped && !pluginSummary) {
+          const skipCount = incrementPluginSkipCount(params.sessionId);
+          if (skipCount <= MAX_PLUGIN_SKIP_COUNT) {
+            // Fire after_compaction for consistency (matched pair with before_compaction).
+            if (hookRunner?.hasHooks("after_compaction")) {
+              hookRunner
+                .runAfterCompaction(
+                  {
+                    messageCount: session.messages.length,
+                    tokenCount: undefined,
+                    compactedCount: 0,
+                    sessionFile: params.sessionFile,
+                  },
+                  hookCtx,
+                )
+                .catch((hookErr) => {
+                  log.warn(`after_compaction hook failed: ${hookErr}`);
+                });
+            }
+            return {
+              ok: true,
+              compacted: false,
+              reason: "plugin_skipped",
+            };
+          }
+          log.warn(
+            `[compaction] Plugin skipped compaction ${skipCount} consecutive times — ` +
+              `forcing standard compaction (safety gate: max ${MAX_PLUGIN_SKIP_COUNT})`,
+          );
+        }
+
         const diagEnabled = log.isEnabled("debug");
         const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics) {
@@ -657,23 +774,60 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const compactStartedAt = Date.now();
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
-        );
-        // Estimate tokens after compaction by summing token estimates for remaining messages
+        let result;
+        if (pluginSummary) {
+          // Plugin provided a summary — write it directly as a compaction entry,
+          // bypassing the LLM call entirely. Uses sessionManager.appendCompaction()
+          // with fromHook=true to mark this as a plugin-provided compaction.
+          log.info(
+            `[compaction] Using plugin-provided summary (${pluginSummary.length} chars), skipping LLM compaction`,
+          );
+          const entries = sessionManager.getEntries();
+          const lastEntryId = entries.length > 0 ? (entries[entries.length - 1]?.id ?? "") : "";
+          sessionManager.appendCompaction(
+            pluginSummary,
+            lastEntryId,
+            estTokensBefore ?? 0,
+            undefined,
+            true, // fromHook
+          );
+          resetPluginSkipCount(params.sessionId);
+          // Build a result object compatible with the standard compaction path.
+          result = {
+            summary: pluginSummary,
+            firstKeptEntryId: lastEntryId,
+            tokensBefore: estTokensBefore ?? 0,
+            details: undefined,
+          };
+        } else {
+          result = await compactWithSafetyTimeout(() => session.compact(params.customInstructions));
+          resetPluginSkipCount(params.sessionId);
+        }
+        // Estimate tokens after compaction.
+        // For plugin-provided summaries, session.messages is NOT pruned in memory
+        // (pruning happens on next session load), so we estimate from the summary
+        // length instead of iterating the unpruned message set.
         let tokensAfter: number | undefined;
-        try {
-          tokensAfter = 0;
-          for (const message of session.messages) {
-            tokensAfter += estimateTokens(message);
+        let compactedCount: number;
+        if (pluginSummary) {
+          // Plugin path: estimate from summary length (~4 chars per token)
+          tokensAfter = Math.ceil(pluginSummary.length / 4);
+          compactedCount = preCompactionMessages.length;
+        } else {
+          // Standard LLM path: estimate from remaining messages
+          try {
+            tokensAfter = 0;
+            for (const message of session.messages) {
+              tokensAfter += estimateTokens(message);
+            }
+            // Sanity check: tokensAfter should be less than tokensBefore
+            if (tokensAfter > result.tokensBefore) {
+              tokensAfter = undefined; // Don't trust the estimate
+            }
+          } catch {
+            tokensAfter = undefined;
           }
-          // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
-            tokensAfter = undefined; // Don't trust the estimate
-          }
-        } catch {
-          // If estimation fails, leave tokensAfter undefined
-          tokensAfter = undefined;
+          compactedCount = limited.length - session.messages.length;
         }
         // Run after_compaction hooks (fire-and-forget).
         // Also includes sessionFile for plugins that only need to act after
@@ -682,9 +836,9 @@ export async function compactEmbeddedPiSessionDirect(
           hookRunner
             .runAfterCompaction(
               {
-                messageCount: session.messages.length,
+                messageCount: pluginSummary ? 1 : session.messages.length,
                 tokenCount: tokensAfter,
-                compactedCount: limited.length - session.messages.length,
+                compactedCount,
                 sessionFile: params.sessionFile,
               },
               hookCtx,
@@ -714,7 +868,7 @@ export async function compactEmbeddedPiSessionDirect(
           compacted: true,
           result: {
             summary: result.summary,
-            firstKeptEntryId: result.firstKeptEntryId,
+            firstKeptEntryId: result.firstKeptEntryId ?? "",
             tokensBefore: result.tokensBefore,
             tokensAfter,
             details: result.details,

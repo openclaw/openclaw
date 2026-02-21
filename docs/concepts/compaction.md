@@ -54,6 +54,16 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
 
+## Plugin-provided summaries
+
+Plugins can override the default compaction summary via the `provide_compaction_summary` hook. When a plugin returns a `summary` string, the LLM compaction call is skipped entirely and the plugin's summary is stored as the compaction entry.
+
+This is useful for memory plugins that already extract structured knowledge from conversations — they can produce a compact summary at a fraction of the token cost.
+
+A plugin can also request `skipCompaction` to defer compaction entirely. A safety gate forces standard compaction after 3 consecutive plugin skips to prevent unbounded context growth.
+
+See [Plugins](/tools/plugin#plugin-hooks) for hook registration and [Agent Loop](/concepts/agent-loop#hook-points) for all available hooks.
+
 ## Tips
 
 - Use `/compact` when sessions feel stale or context is bloated.
