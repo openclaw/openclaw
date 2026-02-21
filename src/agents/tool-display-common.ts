@@ -572,6 +572,10 @@ function isChdirCommand(head: string): boolean {
   return bin === "cd" || bin === "pushd" || bin === "popd";
 }
 
+function isPopdCommand(head: string): boolean {
+  return binaryName(splitShellWords(head, 2)[0]) === "popd";
+}
+
 type PreambleResult = {
   command: string;
   chdirPath?: string;
@@ -611,7 +615,13 @@ function stripShellPreamble(command: string): PreambleResult {
     }
 
     if (isChdir) {
-      chdirPath = parseChdirTarget(head) ?? chdirPath;
+      // popd returns to the previous directory, so inferred cwd from earlier
+      // preamble steps is no longer reliable.
+      if (isPopdCommand(head)) {
+        chdirPath = undefined;
+      } else {
+        chdirPath = parseChdirTarget(head) ?? chdirPath;
+      }
     }
 
     rest = first ? rest.slice(first.index + first.length).trimStart() : "";

@@ -141,6 +141,17 @@ describe("tool display details", () => {
     expect(detail).toBe("check git status (in /tmp)\n\n`pushd /tmp && git status`");
   });
 
+  it("clears inferred cwd when popd is stripped from preamble", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "pushd /tmp && popd && npm install" },
+      }),
+    );
+
+    expect(detail).toBe("install dependencies\n\n`pushd /tmp && popd && npm install`");
+  });
+
   it("moves cd path to context suffix with || separator", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
