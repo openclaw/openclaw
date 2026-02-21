@@ -8,7 +8,6 @@ import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 export { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-
 function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCredentialMap) {
   const withInMemory = AuthStorageLike as { inMemory?: (data?: unknown) => unknown };
   if (typeof withInMemory.inMemory === "function") {
