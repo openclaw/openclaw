@@ -64,6 +64,20 @@ describe("extra-params: Z.AI tool_stream support", () => {
     expect(payload).not.toHaveProperty("tool_stream");
   });
 
+  it("injects tool_stream=true for xai provider by default", () => {
+    const payload = runToolStreamCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4",
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.tool_stream).toBe(true);
+  });
+
   it("allows disabling tool_stream via params", () => {
     const payload = runToolStreamCase({
       applyProvider: "zai",

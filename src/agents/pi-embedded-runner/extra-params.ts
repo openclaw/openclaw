@@ -288,6 +288,7 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
  * progressive tool_call deltas, allowing users to see tool execution in real-time.
  *
  * @see https://docs.z.ai/api-reference#streaming
+ * @see https://docs.x.ai/docs/api-reference#streaming
  */
 function createZaiToolStreamWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -358,12 +359,12 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
 
-  // Enable Z.AI tool_stream for real-time tool call streaming.
-  // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
-  if (provider === "zai" || provider === "z-ai") {
+  // Enable Z.AI/xAI tool_stream for real-time tool call streaming.
+  // Enabled by default for these providers, can be disabled via params.tool_stream: false
+  if (provider === "zai" || provider === "z-ai" || provider === "xai") {
     const toolStreamEnabled = merged?.tool_stream !== false;
     if (toolStreamEnabled) {
-      log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
+      log.debug(`enabling Z.AI/xAI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
   }
