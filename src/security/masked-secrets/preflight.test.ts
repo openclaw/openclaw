@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SecretStore } from "./secret-store.js";
 import { preflightCheck } from "./preflight.js";
+import { SecretStore } from "./secret-store.js";
 
 describe("preflightCheck", () => {
   function makeStore(
@@ -85,10 +85,7 @@ describe("preflightCheck", () => {
     });
 
     it("respects blockSecretFileReads=false", () => {
-      const store = makeStore(
-        { KEY: "secret-value-123456" },
-        { blockSecretFileReads: false },
-      );
+      const store = makeStore({ KEY: "secret-value-123456" }, { blockSecretFileReads: false });
       const result = preflightCheck("cat .env", store);
 
       expect(result.allowed).toBe(true);
@@ -111,10 +108,7 @@ describe("preflightCheck", () => {
 
     it("warns about missing secret references", () => {
       const store = makeStore({});
-      const result = preflightCheck(
-        "curl -H '{{secret:UNKNOWN}}'",
-        store,
-      );
+      const result = preflightCheck("curl -H '{{secret:UNKNOWN}}'", store);
 
       expect(result.allowed).toBe(true);
       expect(result.warnings).toBeDefined();

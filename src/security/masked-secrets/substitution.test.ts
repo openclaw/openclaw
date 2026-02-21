@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SecretStore } from "./secret-store.js";
-import {
-  extractSecretRefs,
-  hasSecretRefs,
-  substituteSecrets,
-} from "./substitution.js";
+import { extractSecretRefs, hasSecretRefs, substituteSecrets } from "./substitution.js";
 
 describe("substituteSecrets", () => {
   function makeStore(secrets: Record<string, string>): SecretStore {
@@ -49,10 +45,7 @@ describe("substituteSecrets", () => {
 
   it("reports missing secrets without removing the reference", () => {
     const store = makeStore({});
-    const result = substituteSecrets(
-      "curl -H '{{secret:NONEXISTENT}}'",
-      store,
-    );
+    const result = substituteSecrets("curl -H '{{secret:NONEXISTENT}}'", store);
 
     expect(result.text).toBe("curl -H '{{secret:NONEXISTENT}}'");
     expect(result.substituted).toEqual([]);
@@ -86,9 +79,7 @@ describe("hasSecretRefs", () => {
 
 describe("extractSecretRefs", () => {
   it("extracts all referenced secret names", () => {
-    const refs = extractSecretRefs(
-      "{{secret:A}} and {{secret:B}} and {{secret:A}}",
-    );
+    const refs = extractSecretRefs("{{secret:A}} and {{secret:B}} and {{secret:A}}");
     expect(refs).toEqual(["A", "B", "A"]);
   });
 

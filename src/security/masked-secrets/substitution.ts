@@ -22,10 +22,7 @@ const SECRET_REF_PATTERN = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
  * Substitute all {{secret:NAME}} references in a string with real values.
  * Returns the substituted text and metadata about what was replaced.
  */
-export function substituteSecrets(
-  text: string,
-  store: SecretStore,
-): SubstitutionResult {
+export function substituteSecrets(text: string, store: SecretStore): SubstitutionResult {
   const substituted: string[] = [];
   const missing: string[] = [];
 

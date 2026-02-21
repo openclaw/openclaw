@@ -39,9 +39,9 @@ export type {
   PreflightResult,
 } from "./types.js";
 
-import { SecretStore } from "./secret-store.js";
 import { preflightCheck } from "./preflight.js";
 import { redactOutput } from "./redaction.js";
+import { SecretStore } from "./secret-store.js";
 import type { MaskedSecretsConfig, PreflightResult, RedactionResult } from "./types.js";
 
 /**
@@ -101,8 +101,6 @@ export class MaskedSecrets {
  * Factory function for creating a MaskedSecrets instance.
  * Preferred over direct constructor for clarity.
  */
-export function createMaskedSecrets(
-  config?: Partial<MaskedSecretsConfig>,
-): MaskedSecrets {
+export function createMaskedSecrets(config?: Partial<MaskedSecretsConfig>): MaskedSecrets {
   return new MaskedSecrets(config);
 }

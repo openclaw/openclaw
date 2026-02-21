@@ -53,12 +53,7 @@ export class SecretStore {
       enabled: config?.enabled ?? true,
       mask: config?.mask ?? [],
       outputPatterns: config?.outputPatterns ?? [],
-      blockedCommands: config?.blockedCommands ?? [
-        "env",
-        "printenv",
-        "set",
-        "export",
-      ],
+      blockedCommands: config?.blockedCommands ?? ["env", "printenv", "set", "export"],
       blockSecretFileReads: config?.blockSecretFileReads ?? true,
       secretFilePaths: config?.secretFilePaths ?? [
         ".env",
@@ -123,10 +118,7 @@ export class SecretStore {
     if (this.config.mask.length > 0) {
       return this.config.mask.some((pattern) => {
         if (pattern.includes("*")) {
-          const regex = new RegExp(
-            `^${pattern.replace(/\*/g, ".*")}$`,
-            "i",
-          );
+          const regex = new RegExp(`^${pattern.replace(/\*/g, ".*")}$`, "i");
           return regex.test(name);
         }
         return pattern === name;

@@ -3,6 +3,7 @@
 ## Overview
 
 This module provides three layers of secret protection:
+
 1. **Preflight** — Block dangerous commands, substitute `{{secret:NAME}}` refs
 2. **Redaction** — Scrub leaked secret values from command output
 3. **Store** — Load and manage secrets from .env / process.env / config
@@ -93,18 +94,13 @@ const { text: safeChunk } = maskedSecrets.redact(rawChunk);
 ```json5
 // openclaw.json
 {
-  "security": {
-    "maskedSecrets": {
-      "enabled": true,
-      "mask": [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GITHUB_TOKEN",
-        "BRAVE_API_KEY"
-      ],
-      "blockSecretFileReads": true
-    }
-  }
+  security: {
+    maskedSecrets: {
+      enabled: true,
+      mask: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "BRAVE_API_KEY"],
+      blockSecretFileReads: true,
+    },
+  },
 }
 ```
 
@@ -117,15 +113,15 @@ npx vitest run src/security/masked-secrets/
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `types.ts` | Type definitions |
-| `secret-store.ts` | Secret loading, storage, and matching |
-| `substitution.ts` | `{{secret:NAME}}` → real value replacement |
-| `redaction.ts` | Output scrubbing (exact match + pattern match) |
-| `preflight.ts` | Pre-execution command checks |
-| `index.ts` | Public API facade |
-| `*.test.ts` | Unit tests for each module |
+| File              | Purpose                                        |
+| ----------------- | ---------------------------------------------- |
+| `types.ts`        | Type definitions                               |
+| `secret-store.ts` | Secret loading, storage, and matching          |
+| `substitution.ts` | `{{secret:NAME}}` → real value replacement     |
+| `redaction.ts`    | Output scrubbing (exact match + pattern match) |
+| `preflight.ts`    | Pre-execution command checks                   |
+| `index.ts`        | Public API facade                              |
+| `*.test.ts`       | Unit tests for each module                     |
 
 ## Security Notes
 

@@ -41,10 +41,7 @@ function buildEnvEchoPattern(secretNames: string[]): RegExp | null {
   }
   const names = secretNames.map((n) => escapeRegex(n)).join("|");
   // Match: echo $NAME, echo ${NAME}, printf ... $NAME, etc.
-  return new RegExp(
-    `\\$\\{?(${names})\\}?`,
-    "g",
-  );
+  return new RegExp(`\\$\\{?(${names})\\}?`, "g");
 }
 
 /**
@@ -64,10 +61,7 @@ const FILE_READ_COMMANDS = [
   "code",
 ];
 
-function isSecretFileRead(
-  command: string,
-  secretFilePaths: string[],
-): boolean {
+function isSecretFileRead(command: string, secretFilePaths: string[]): boolean {
   const lowerCmd = command.toLowerCase().trim();
 
   for (const readCmd of FILE_READ_COMMANDS) {
@@ -78,9 +72,7 @@ function isSecretFileRead(
     for (const secretPath of secretFilePaths) {
       // Handle glob patterns
       if (secretPath.includes("*")) {
-        const regex = new RegExp(
-          secretPath.replace(/\./g, "\\.").replace(/\*/g, ".*"),
-        );
+        const regex = new RegExp(secretPath.replace(/\./g, "\\.").replace(/\*/g, ".*"));
         if (regex.test(lowerCmd)) {
           return true;
         }
@@ -97,10 +89,7 @@ function isSecretFileRead(
  * Run preflight checks on a command before execution.
  * Returns whether the command is allowed and the processed command.
  */
-export function preflightCheck(
-  command: string,
-  store: SecretStore,
-): PreflightResult {
+export function preflightCheck(command: string, store: SecretStore): PreflightResult {
   const config = store.getConfig();
   const warnings: string[] = [];
 
@@ -137,28 +126,23 @@ export function preflightCheck(
     // or the agent might be doing something legitimate
     warnings.push(
       "Command references masked environment variables directly. " +
-      "Consider using {{secret:NAME}} syntax instead for better security.",
+        "Consider using {{secret:NAME}} syntax instead for better security.",
     );
-    log.warn(
-      `Command references masked env vars: ${command.slice(0, 80)}`,
-    );
+    log.warn(`Command references masked env vars: ${command.slice(0, 80)}`);
   }
 
   // Check 4: Substitute {{secret:NAME}} references
-  const { text: processedCommand, substituted, missing } =
-    substituteSecrets(command, store);
+  const { text: processedCommand, substituted, missing } = substituteSecrets(command, store);
 
   if (missing.length > 0) {
     warnings.push(
       `Unknown secret reference(s): ${missing.join(", ")}. ` +
-      `Available secrets: ${store.listNames().join(", ")}`,
+        `Available secrets: ${store.listNames().join(", ")}`,
     );
   }
 
   if (substituted.length > 0) {
-    log.info(
-      `Substituted ${substituted.length} secret(s) in command: ${substituted.join(", ")}`,
-    );
+    log.info(`Substituted ${substituted.length} secret(s) in command: ${substituted.join(", ")}`);
   }
 
   return {

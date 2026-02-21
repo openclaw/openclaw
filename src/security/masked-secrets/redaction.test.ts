@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SecretStore } from "./secret-store.js";
 import { redactOutput } from "./redaction.js";
+import { SecretStore } from "./secret-store.js";
 
 describe("redactOutput", () => {
   function makeStore(secrets: Record<string, string>): SecretStore {
@@ -25,9 +25,7 @@ describe("redactOutput", () => {
         store,
       );
 
-      expect(result.text).toBe(
-        'Response: {"key": "[REDACTED]", "status": "ok"}',
-      );
+      expect(result.text).toBe('Response: {"key": "[REDACTED]", "status": "ok"}');
       expect(result.count).toBeGreaterThan(0);
       expect(result.redactedSecrets).toContain("API_KEY");
     });
@@ -50,10 +48,7 @@ describe("redactOutput", () => {
         SHORT: "secret-12345678",
         LONG: "secret-1234567890abcdef",
       });
-      const result = redactOutput(
-        "the value is secret-1234567890abcdef here",
-        store,
-      );
+      const result = redactOutput("the value is secret-1234567890abcdef here", store);
 
       expect(result.text).toBe("the value is [REDACTED] here");
     });
@@ -70,10 +65,7 @@ describe("redactOutput", () => {
   describe("pattern-based redaction", () => {
     it("redacts Anthropic API keys", () => {
       const store = makeStore({});
-      const result = redactOutput(
-        "key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
-        store,
-      );
+      const result = redactOutput("key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz", store);
 
       expect(result.text).toContain("[REDACTED]");
       expect(result.text).not.toContain("sk-ant-");
@@ -81,10 +73,7 @@ describe("redactOutput", () => {
 
     it("redacts GitHub tokens", () => {
       const store = makeStore({});
-      const result = redactOutput(
-        "token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-        store,
-      );
+      const result = redactOutput("token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", store);
 
       expect(result.text).toContain("[REDACTED]");
       expect(result.text).not.toContain("ghp_");
@@ -92,10 +81,7 @@ describe("redactOutput", () => {
 
     it("redacts AWS access keys", () => {
       const store = makeStore({});
-      const result = redactOutput(
-        "aws_key: AKIAIOSFODNN7EXAMPLE",
-        store,
-      );
+      const result = redactOutput("aws_key: AKIAIOSFODNN7EXAMPLE", store);
 
       expect(result.text).toContain("[REDACTED]");
       expect(result.text).not.toContain("AKIA");
@@ -103,14 +89,9 @@ describe("redactOutput", () => {
 
     it("does not redact normal text", () => {
       const store = makeStore({});
-      const result = redactOutput(
-        "Hello, this is normal output with no secrets",
-        store,
-      );
+      const result = redactOutput("Hello, this is normal output with no secrets", store);
 
-      expect(result.text).toBe(
-        "Hello, this is normal output with no secrets",
-      );
+      expect(result.text).toBe("Hello, this is normal output with no secrets");
       expect(result.count).toBe(0);
     });
   });

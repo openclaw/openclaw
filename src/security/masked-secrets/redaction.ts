@@ -46,10 +46,7 @@ const BUILT_IN_PATTERNS: RegExp[] = [
 /**
  * Redact known secret values and common patterns from text.
  */
-export function redactOutput(
-  text: string,
-  store: SecretStore,
-): RedactionResult {
+export function redactOutput(text: string, store: SecretStore): RedactionResult {
   let result = text;
   let count = 0;
   const redactedSecrets: string[] = [];
