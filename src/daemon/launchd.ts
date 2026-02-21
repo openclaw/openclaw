@@ -413,6 +413,14 @@ export async function installLaunchAgent({
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
   await fs.mkdir(path.dirname(plistPath), { recursive: true });
 
+  // Preserve custom EnvironmentVariables from the existing plist so that
+  // user-added keys (e.g. NODE_OPTIONS) survive daemon reinstalls / updates.
+  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  const mergedEnvironment: Record<string, string | undefined> = {
+    ...existing?.environment,
+    ...environment,
+  };
+
   const serviceDescription =
     description ??
     formatGatewayServiceDescription({
@@ -426,7 +434,7 @@ export async function installLaunchAgent({
     workingDirectory,
     stdoutPath,
     stderrPath,
-    environment,
+    environment: mergedEnvironment,
   });
   await fs.writeFile(plistPath, plist, "utf8");
 

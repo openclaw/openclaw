@@ -229,6 +229,76 @@ describe("launchd install", () => {
   });
 });
 
+  it("preserves custom EnvironmentVariables from existing plist on reinstall", async () => {
+    const originalPath = process.env.PATH;
+    const originalLogPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-env-test-"));
+    try {
+      const binDir = path.join(tmpDir, "bin");
+      const homeDir = path.join(tmpDir, "home");
+      const logPath = path.join(tmpDir, "launchctl.log");
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.mkdir(homeDir, { recursive: true });
+
+      await writeLaunchctlStub(binDir);
+
+      process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = logPath;
+      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+
+      const env: Record<string, string | undefined> = {
+        HOME: homeDir,
+        OPENCLAW_PROFILE: "default",
+      };
+
+      // First install with a custom NODE_OPTIONS env var
+      await installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "-e", "process.exit(0)"],
+        environment: {
+          NODE_OPTIONS: "--dns-result-order=ipv4first",
+          OPENCLAW_GATEWAY_TOKEN: "tok_original",
+        },
+      });
+
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const plistBefore = await fs.readFile(plistPath, "utf8");
+      expect(plistBefore).toContain("NODE_OPTIONS");
+      expect(plistBefore).toContain("--dns-result-order=ipv4first");
+
+      // Clear log for second install
+      await fs.writeFile(logPath, "", "utf8");
+
+      // Second install (simulating update) WITHOUT NODE_OPTIONS but with new token
+      await installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "-e", "process.exit(0)"],
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "tok_updated",
+        },
+      });
+
+      const plistAfter = await fs.readFile(plistPath, "utf8");
+      // Custom NODE_OPTIONS should be preserved from the previous plist
+      expect(plistAfter).toContain("NODE_OPTIONS");
+      expect(plistAfter).toContain("--dns-result-order=ipv4first");
+      // New token value should override the old one
+      expect(plistAfter).toContain("tok_updated");
+      expect(plistAfter).not.toContain("tok_original");
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalLogPath === undefined) {
+        delete process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
+      } else {
+        process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = originalLogPath;
+      }
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("resolveLaunchAgentPlistPath", () => {
   it("uses default label when OPENCLAW_PROFILE is default", () => {
     const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "default" };
