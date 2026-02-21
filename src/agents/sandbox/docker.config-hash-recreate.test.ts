@@ -106,6 +106,7 @@ function createSandboxConfig(dns: string[]): SandboxConfig {
       enabled: false,
       image: "openclaw-browser:test",
       containerPrefix: "oc-browser-",
+      network: "openclaw-sandbox-browser",
       cdpPort: 9222,
       vncPort: 5900,
       noVncPort: 6080,

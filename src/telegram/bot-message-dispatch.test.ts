@@ -63,6 +63,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     };
   }
 
+  function createSequencedDraftStream(startMessageId = 1001) {
+    let activeMessageId: number | undefined;
+    let nextMessageId = startMessageId;
+    return {
+      update: vi.fn().mockImplementation(() => {
+        if (activeMessageId == null) {
+          activeMessageId = nextMessageId++;
+        }
+      }),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => activeMessageId),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      forceNewMessage: vi.fn().mockImplementation(() => {
+        activeMessageId = undefined;
+      }),
+    };
+  }
+
   function setupDraftStreams(params?: { answerMessageId?: number; reasoningMessageId?: number }) {
     const answerDraftStream = createDraftStream(params?.answerMessageId);
     const reasoningDraftStream = createDraftStream(params?.reasoningMessageId);
@@ -172,7 +191,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
-        minInitialChars: 1,
+        minInitialChars: 30,
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
@@ -193,7 +212,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a higher initial debounce threshold in block stream mode", async () => {
+  it("uses 30-char preview debounce for legacy block stream mode", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -445,7 +464,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("forces new message when new assistant message starts after previous output", async () => {
+  it("forces new message for next assistant block in legacy block stream mode", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -464,11 +483,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
-    // Should force new message when assistant message starts after previous output
-    expect(draftStream.forceNewMessage).toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("does not force new message in partial mode when assistant message restarts", async () => {
+  it("forces new message in partial mode when assistant message restarts", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -484,7 +502,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not force new message on first assistant message start", async () => {
@@ -507,6 +525,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     // First message start shouldn't trigger forceNewMessage (no previous output)
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizes multi-message assistant stream to matching preview messages in order", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message C partial" });
+
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Message C final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      3,
+      123,
+      1003,
+      "Message C final",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it.each(["block", "partial"] as const)(

@@ -10,7 +10,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: (...args: Parameters<typeof actual.loadConfig>) => loadConfigMock(...args),
+    loadConfig: (..._args: unknown[]) => loadConfigMock(),
   };
 });
 
@@ -25,7 +25,7 @@ describe("sendDiscordComponentMessage", () => {
     vi.clearAllMocks();
   });
 
-  it("registers component entries for DM channel targets", async () => {
+  it("keeps direct-channel DM session keys on component entries", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
       type: ChannelType.DM,
@@ -48,6 +48,6 @@ describe("sendDiscordComponentMessage", () => {
 
     expect(registerMock).toHaveBeenCalledTimes(1);
     const args = registerMock.mock.calls[0]?.[0];
-    expect(args?.entries[0]).toBeDefined();
+    expect(args?.entries[0]?.sessionKey).toBe("agent:main:discord:channel:dm-1");
   });
 });

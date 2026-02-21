@@ -85,6 +85,13 @@ const CONTROL_UI_CLIENT = {
   mode: GATEWAY_CLIENT_MODES.WEBCHAT,
 };
 
+const NODE_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+  version: "1.0.0",
+  platform: "test",
+  mode: GATEWAY_CLIENT_MODES.NODE,
+};
+
 async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
   const ws = await openWs(port);
   try {
@@ -359,8 +366,57 @@ describe("gateway server auth/connect", () => {
       await expectMissingScopeAfterConnect(port, { scopes: [] });
     });
 
-    test("ignores requested scopes when device identity is omitted", async () => {
-      await expectMissingScopeAfterConnect(port, { device: null });
+    test("device-less auth matrix", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const matrix: Array<{
+        name: string;
+        opts: Parameters<typeof connectReq>[1];
+        expectConnectOk: boolean;
+        expectConnectError?: string;
+        expectStatusError?: string;
+      }> = [
+        {
+          name: "operator + valid shared token => connected with zero scopes",
+          opts: { role: "operator", token, device: null },
+          expectConnectOk: true,
+          expectStatusError: "missing scope",
+        },
+        {
+          name: "node + valid shared token => rejected without device",
+          opts: { role: "node", token, device: null, client: NODE_CLIENT },
+          expectConnectOk: false,
+          expectConnectError: "device identity required",
+        },
+        {
+          name: "operator + invalid shared token => unauthorized",
+          opts: { role: "operator", token: "wrong", device: null },
+          expectConnectOk: false,
+          expectConnectError: "unauthorized",
+        },
+      ];
+
+      for (const scenario of matrix) {
+        const ws = await openWs(port);
+        try {
+          const res = await connectReq(ws, scenario.opts);
+          expect(res.ok, scenario.name).toBe(scenario.expectConnectOk);
+          if (!scenario.expectConnectOk) {
+            expect(res.error?.message ?? "", scenario.name).toContain(
+              String(scenario.expectConnectError ?? ""),
+            );
+            continue;
+          }
+          if (scenario.expectStatusError) {
+            const status = await rpcReq(ws, "status");
+            expect(status.ok, scenario.name).toBe(false);
+            expect(status.error?.message ?? "", scenario.name).toContain(
+              scenario.expectStatusError,
+            );
+          }
+        } finally {
+          ws.close();
+        }
+      }
     });
 
     test("allows health when scopes are empty", async () => {
@@ -1055,15 +1111,18 @@ describe("gateway server auth/connect", () => {
     expect(operatorConnect.error?.message ?? "").toContain("pairing required");
 
     const pending = await listDevicePairing();
-    expect(pending.pending).toHaveLength(1);
-    expect(pending.pending[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
-    expect(pending.pending[0]?.scopes).toEqual(
+    const pendingForTestDevice = pending.pending.filter(
+      (entry) => entry.deviceId === identity.deviceId,
+    );
+    expect(pendingForTestDevice).toHaveLength(1);
+    expect(pendingForTestDevice[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(pendingForTestDevice[0]?.scopes).toEqual(
       expect.arrayContaining(["operator.read", "operator.write"]),
     );
-    if (!pending.pending[0]) {
+    if (!pendingForTestDevice[0]) {
       throw new Error("expected pending pairing request");
     }
-    await approveDevicePairing(pending.pending[0].requestId);
+    await approveDevicePairing(pendingForTestDevice[0].requestId);
 
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
@@ -1073,7 +1132,9 @@ describe("gateway server auth/connect", () => {
     expect(approvedOperatorConnect.ok).toBe(true);
 
     const afterApproval = await listDevicePairing();
-    expect(afterApproval.pending).toEqual([]);
+    expect(afterApproval.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual(
+      [],
+    );
 
     await server.close();
     restoreGatewayToken(prevToken);
@@ -1138,7 +1199,7 @@ describe("gateway server auth/connect", () => {
     ws2.close();
 
     const list = await listDevicePairing();
-    expect(list.pending).toEqual([]);
+    expect(list.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
 
     await server.close();
     restoreGatewayToken(prevToken);
