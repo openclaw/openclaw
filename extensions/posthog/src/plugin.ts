@@ -1,7 +1,7 @@
 import type { DiagnosticEventPayload, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { onDiagnosticEvent } from "openclaw/plugin-sdk";
-import type { PostHogPluginConfig, RunState } from "./types.js";
 import { buildAiGeneration, buildAiSpan, buildAiTrace } from "./events.js";
+import type { PostHogPluginConfig, RunState } from "./types.js";
 import { generateSpanId, generateTraceId, parseLastAssistant } from "./utils.js";
 
 const DEFAULT_HOST = "https://us.i.posthog.com";

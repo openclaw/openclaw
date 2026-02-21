@@ -10,8 +10,8 @@ import type {
   PluginHookLlmOutputEvent,
   PluginHookToolContext,
 } from "openclaw/plugin-sdk";
-import type { LastAssistantInfo, RunState } from "./types.js";
 import { buildAiGeneration, buildAiSpan, buildAiTrace, mapStopReason } from "./events.js";
+import type { LastAssistantInfo, RunState } from "./types.js";
 
 describe("buildAiGeneration", () => {
   const baseRunState: RunState = {
