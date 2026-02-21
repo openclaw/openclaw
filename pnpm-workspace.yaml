@@ -15,4 +15,12 @@ onlyBuiltDependencies:
   - protobufjs
   - sharp
 
-minimumReleaseAge: 2880
+updateConfig:
+  minimumReleaseAge: 1440
+  minimumReleaseAgeExclude:
+    - oxfmt
+    - oxlint
+    - oxlint-tsgolint
+    - "@oxfmt/*"
+    - "@oxlint/*"
+    - "@oxlint-tsgolint/*"

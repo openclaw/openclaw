@@ -53,7 +53,10 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
 
   it("forwards bearer token and returns true on successful auth", async () => {
     vi.mocked(getBearerToken).mockReturnValue("abc");
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+      ok: true,
+      method: "token",
+    });
 
     const ok = await authorizeGatewayBearerRequestOrReply({
       req: {} as IncomingMessage,
