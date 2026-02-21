@@ -4,7 +4,7 @@ export type VolcModelCatalogEntry = {
   id: string;
   name: string;
   reasoning: boolean;
-  input: readonly string[];
+  input: ReadonlyArray<ModelDefinitionConfig["input"][number]>;
   contextWindow: number;
   maxTokens: number;
 };
