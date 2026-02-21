@@ -28,6 +28,7 @@ import {
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
@@ -35,6 +36,8 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+
+const log = createSubsystemLogger("session-init");
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -339,8 +342,8 @@ export async function initSessionState(params: {
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey]
   ) {
-    console.warn(
-      `[session-init] forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+    log.warn(
+      `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
         `parentTokens=${sessionStore[parentSessionKey].totalTokens ?? "?"}`,
     );
     const forked = forkSessionFromParent({
@@ -352,7 +355,7 @@ export async function initSessionState(params: {
       sessionId = forked.sessionId;
       sessionEntry.sessionId = forked.sessionId;
       sessionEntry.sessionFile = forked.sessionFile;
-      console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
+      log.warn(`forked session created: file=${forked.sessionFile}`);
     }
   }
   const fallbackSessionFile = !sessionEntry.sessionFile
