@@ -8,7 +8,6 @@ import {
   verifyDeviceSignature,
 } from "../../../infra/device-identity.js";
 import {
-  approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
   requestDevicePairing,
@@ -654,6 +653,15 @@ export function attachGatewayWsMessageHandler(params: {
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade",
           ) => {
+            // CRITICAL-2: Always require explicit approval for device pairing.
+            // Previously local clients were auto-approved silently, which allowed
+            // any co-located process to pair without user confirmation.
+            if (isLocalClient && reason === "not-paired") {
+              process.stderr.write(
+                `[SECURITY AUDIT] device pairing requested from local client ` +
+                  `device=${device.id} — explicit approval required\n`,
+              );
+            }
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -664,48 +672,28 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              silent: false,
             });
             const context = buildRequestContext();
-            if (pairing.request.silent === true) {
-              const approved = await approveDevicePairing(pairing.request.requestId);
-              if (approved) {
-                logGateway.info(
-                  `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
-                );
-                context.broadcast(
-                  "device.pair.resolved",
-                  {
-                    requestId: pairing.request.requestId,
-                    deviceId: approved.device.deviceId,
-                    decision: "approved",
-                    ts: Date.now(),
-                  },
-                  { dropIfSlow: true },
-                );
-              }
-            } else if (pairing.created) {
+            if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
             }
-            if (pairing.request.silent !== true) {
-              setHandshakeState("failed");
-              setCloseCause("pairing-required", {
-                deviceId: device.id,
-                requestId: pairing.request.requestId,
-                reason,
-              });
-              send({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
-                  details: { requestId: pairing.request.requestId },
-                }),
-              });
-              close(1008, "pairing required");
-              return false;
-            }
-            return true;
+            setHandshakeState("failed");
+            setCloseCause("pairing-required", {
+              deviceId: device.id,
+              requestId: pairing.request.requestId,
+              reason,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
+                details: { requestId: pairing.request.requestId },
+              }),
+            });
+            close(1008, "pairing required");
+            return false;
           };
 
           const paired = await getPairedDevice(device.id);
