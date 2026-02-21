@@ -33,11 +33,14 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "opus-4.5": "claude-opus-4-5",
   "opus-4": "claude-opus-4-6",
 
+  // Claude Sonnet
+  sonnet: "claude-sonnet-4-6",
+  "sonnet-4.6": "claude-sonnet-4-6",
+  "sonnet-4": "claude-sonnet-4-6",
+
   // Legacy Claude aliases (OpenCode Zen rotates model catalogs; keep old keys working).
-  sonnet: "claude-opus-4-6",
-  "sonnet-4": "claude-opus-4-6",
-  haiku: "claude-opus-4-6",
-  "haiku-3.5": "claude-opus-4-6",
+  haiku: "claude-sonnet-4-6",
+  "haiku-3.5": "claude-sonnet-4-6",
 
   // GPT-5.x family
   gpt5: "gpt-5.2",
