@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Default required files — constants, extensible to config later
-const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
+type RequiredReadEntry = string | RegExp | { pattern: RegExp; label: string };
+const DEFAULT_REQUIRED_READS: RequiredReadEntry[] = [
   "WORKFLOW_AUTO.md",
-  /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
+  { pattern: /memory\/\d{4}-\d{2}-\d{2}\.md/, label: "memory/YYYY-MM-DD.md" },
 ];
 
 /**
@@ -14,7 +15,7 @@ const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
 export function auditPostCompactionReads(
   readFilePaths: string[],
   workspaceDir: string,
-  requiredReads: Array<string | RegExp> = DEFAULT_REQUIRED_READS,
+  requiredReads: RequiredReadEntry[] = DEFAULT_REQUIRED_READS,
 ): { passed: boolean; missingPatterns: string[] } {
   const normalizedReads = readFilePaths.map((p) => path.resolve(workspaceDir, p));
   const missingPatterns: string[] = [];
@@ -27,15 +28,17 @@ export function auditPostCompactionReads(
         missingPatterns.push(required);
       }
     } else {
-      // RegExp — match against relative paths from workspace
+      // RegExp or { pattern, label } — match against relative paths from workspace
+      const regex = required instanceof RegExp ? required : required.pattern;
+      const label = required instanceof RegExp ? required.source : required.label;
       const found = readFilePaths.some((p) => {
         const rel = path.relative(workspaceDir, path.resolve(workspaceDir, p));
         // Normalize to forward slashes for cross-platform RegExp matching
         const normalizedRel = rel.split(path.sep).join("/");
-        return required.test(normalizedRel);
+        return regex.test(normalizedRel);
       });
       if (!found) {
-        missingPatterns.push(required.source);
+        missingPatterns.push(label);
       }
     }
   }
