@@ -79,7 +79,7 @@ export function renderAgentsRunner(props: AgentsRunnerProps) {
                 return html`
                   <div class="table-row" style="align-items: start;">
                     <div>
-                      <div style="font-weight: 600;">${agent.label ?? agent.id}</div>
+                      <div style="font-weight: 600;">${agent.id}</div>
                       <div class="mono muted" style="font-size: 12px;">${agentId}</div>
                     </div>
 
