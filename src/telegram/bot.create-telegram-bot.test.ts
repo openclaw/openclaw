@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Chat, Message } from "@grammyjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   answerCallbackQuerySpy,
   botCtorSpy,
@@ -225,10 +226,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
   it("wraps inbound message with Telegram envelope", async () => {
-    const originalTz = process.env.TZ;
-    process.env.TZ = "Europe/Vienna";
-
-    try {
+    await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       onSpy.mockReset();
       replySpy.mockReset();
 
@@ -262,9 +260,7 @@ describe("createTelegramBot", () => {
         ),
       );
       expect(payload.Body).toContain("hello world");
-    } finally {
-      process.env.TZ = originalTz;
-    }
+    });
   });
   it("requests pairing by default for unknown DM senders", async () => {
     onSpy.mockReset();

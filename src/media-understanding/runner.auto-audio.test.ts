@@ -1,49 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
-import type { MsgContext } from "../auto-reply/templating.js";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(async () => ({ key: "test-key" })),
-  requireApiKey: vi.fn(() => "test-key"),
-  collectProviderApiKeysForExecution: vi.fn(() => [{ apiKey: "test-key", source: "config" }]),
-}));
-
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
-
-async function withAudioFixture(
-  run: (params: {
-    ctx: MsgContext;
-    media: ReturnType<typeof normalizeMediaAttachments>;
-    cache: ReturnType<typeof createMediaAttachmentCache>;
-  }) => Promise<void>,
-) {
-  const originalPath = process.env.PATH;
-  process.env.PATH = "";
-  const tmpPath = path.join(os.tmpdir(), `openclaw-auto-audio-${Date.now()}.wav`);
-  await fs.writeFile(tmpPath, Buffer.from("RIFF"));
-  const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
-  const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
-  });
-
-  try {
-    await run({ ctx, media, cache });
-  } finally {
-    process.env.PATH = originalPath;
-    await cache.cleanup();
-    await fs.unlink(tmpPath).catch(() => {});
-  }
-}
+import { buildProviderRegistry, runCapability } from "./runner.js";
+import { withAudioFixture } from "./runner.test-utils.js";
 
 function createOpenAiAudioProvider(
   transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>,
@@ -73,10 +31,7 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
-    vi.mocked(resolveApiKeyForProvider).mockResolvedValue({
-      key: "test-key",
-    } as never);
-    await withAudioFixture(async ({ ctx, media, cache }) => {
+    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
       let seenModel: string | undefined;
       const providerRegistry = createOpenAiAudioProvider(async (req) => {
         seenModel = req.model;
@@ -99,7 +54,7 @@ describe("runCapability auto audio entries", () => {
   });
 
   it("skips auto audio when disabled", async () => {
-    await withAudioFixture(async ({ ctx, media, cache }) => {
+    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
       const providerRegistry = createOpenAiAudioProvider(async () => ({
         text: "ok",
         model: "whisper-1",
@@ -128,10 +83,7 @@ describe("runCapability auto audio entries", () => {
   });
 
   it("prefers explicitly configured audio model entries", async () => {
-    vi.mocked(resolveApiKeyForProvider).mockResolvedValue({
-      key: "test-key",
-    } as never);
-    await withAudioFixture(async ({ ctx, media, cache }) => {
+    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
       let seenModel: string | undefined;
       const providerRegistry = createOpenAiAudioProvider(async (req) => {
         seenModel = req.model;
