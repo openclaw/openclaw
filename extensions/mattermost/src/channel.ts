@@ -23,6 +23,10 @@ import {
 } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
+  listMattermostDirectoryGroups,
+  listMattermostDirectoryPeers,
+} from "./mattermost/directory.js";
+import {
   buildButtonAttachments,
   resolveInteractionCallbackUrl,
   setInteractionSecret,
@@ -37,22 +41,30 @@ import { getMattermostRuntime } from "./runtime.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
-    const baseReactions = actionsConfig?.reactions;
-    const hasReactionCapableAccount = listMattermostAccountIds(cfg)
+    const enabledAccounts = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()))
-      .some((account) => {
-        const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-        return (accountActions?.reactions ?? baseReactions ?? true) !== false;
-      });
+      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 
-    if (!hasReactionCapableAccount) {
-      return [];
+    const actions: string[] = [];
+
+    // Send (buttons) is available whenever there's at least one enabled account
+    if (enabledAccounts.length > 0) {
+      actions.push("send");
     }
 
-    return ["react"];
+    // React requires per-account reactions config check
+    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+    const baseReactions = actionsConfig?.reactions;
+    const hasReactionCapableAccount = enabledAccounts.some((account) => {
+      const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+      return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+    });
+    if (hasReactionCapableAccount) {
+      actions.push("react");
+    }
+
+    return actions;
   },
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
@@ -331,6 +343,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     resolveRequireMention: resolveMattermostGroupRequireMention,
   },
   actions: mattermostMessageActions,
+  directory: {
+    listGroups: async (params) => listMattermostDirectoryGroups(params),
+    listGroupsLive: async (params) => listMattermostDirectoryGroups(params),
+    listPeers: async (params) => listMattermostDirectoryPeers(params),
+    listPeersLive: async (params) => listMattermostDirectoryPeers(params),
+  },
   messaging: {
     normalizeTarget: normalizeMattermostMessagingTarget,
     targetResolver: {
