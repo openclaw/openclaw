@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleSlackAction } from "./slack-actions.js";
 
@@ -17,52 +17,59 @@ const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
 vi.mock("../../slack/actions.js", () => ({
-  deleteSlackMessage,
-  editSlackMessage,
-  getSlackMemberInfo,
-  listSlackEmojis,
-  listSlackPins,
-  listSlackReactions,
-  pinSlackMessage,
-  reactSlackMessage,
-  readSlackMessages,
-  removeOwnSlackReactions,
-  removeSlackReaction,
-  sendSlackMessage,
-  unpinSlackMessage,
+  deleteSlackMessage: (...args: Parameters<typeof deleteSlackMessage>) =>
+    deleteSlackMessage(...args),
+  editSlackMessage: (...args: Parameters<typeof editSlackMessage>) => editSlackMessage(...args),
+  getSlackMemberInfo: (...args: Parameters<typeof getSlackMemberInfo>) =>
+    getSlackMemberInfo(...args),
+  listSlackEmojis: (...args: Parameters<typeof listSlackEmojis>) => listSlackEmojis(...args),
+  listSlackPins: (...args: Parameters<typeof listSlackPins>) => listSlackPins(...args),
+  listSlackReactions: (...args: Parameters<typeof listSlackReactions>) =>
+    listSlackReactions(...args),
+  pinSlackMessage: (...args: Parameters<typeof pinSlackMessage>) => pinSlackMessage(...args),
+  reactSlackMessage: (...args: Parameters<typeof reactSlackMessage>) => reactSlackMessage(...args),
+  readSlackMessages: (...args: Parameters<typeof readSlackMessages>) => readSlackMessages(...args),
+  removeOwnSlackReactions: (...args: Parameters<typeof removeOwnSlackReactions>) =>
+    removeOwnSlackReactions(...args),
+  removeSlackReaction: (...args: Parameters<typeof removeSlackReaction>) =>
+    removeSlackReaction(...args),
+  sendSlackMessage: (...args: Parameters<typeof sendSlackMessage>) => sendSlackMessage(...args),
+  unpinSlackMessage: (...args: Parameters<typeof unpinSlackMessage>) => unpinSlackMessage(...args),
 }));
 
 describe("handleSlackAction", () => {
-  it("adds reactions", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    await handleSlackAction(
-      {
-        action: "react",
-        channelId: "C1",
-        messageId: "123.456",
-        emoji: "✅",
+  function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
+    return {
+      channels: {
+        slack: {
+          botToken: "tok",
+          ...overrides,
+        },
       },
-      cfg,
-    );
-    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+    } as OpenClawConfig;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("strips channel: prefix for channelId params", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+  it.each([
+    { name: "raw channel id", channelId: "C1" },
+    { name: "channel: prefixed id", channelId: "channel:C1" },
+  ])("adds reactions for $name", async ({ channelId }) => {
     await handleSlackAction(
       {
         action: "react",
-        channelId: "channel:C1",
+        channelId,
         messageId: "123.456",
         emoji: "✅",
       },
-      cfg,
+      slackConfig(),
     );
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
 
   it("removes reactions on empty emoji", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await handleSlackAction(
       {
         action: "react",
@@ -70,13 +77,12 @@ describe("handleSlackAction", () => {
         messageId: "123.456",
         emoji: "",
       },
-      cfg,
+      slackConfig(),
     );
     expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456");
   });
 
   it("removes reactions when remove flag set", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await handleSlackAction(
       {
         action: "react",
@@ -85,13 +91,12 @@ describe("handleSlackAction", () => {
         emoji: "✅",
         remove: true,
       },
-      cfg,
+      slackConfig(),
     );
     expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
 
   it("rejects removes without emoji", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await expect(
       handleSlackAction(
         {
@@ -101,15 +106,12 @@ describe("handleSlackAction", () => {
           emoji: "",
           remove: true,
         },
-        cfg,
+        slackConfig(),
       ),
     ).rejects.toThrow(/Emoji is required/);
   });
 
   it("respects reaction gating", async () => {
-    const cfg = {
-      channels: { slack: { botToken: "tok", actions: { reactions: false } } },
-    } as OpenClawConfig;
     await expect(
       handleSlackAction(
         {
@@ -118,13 +120,12 @@ describe("handleSlackAction", () => {
           messageId: "123.456",
           emoji: "✅",
         },
-        cfg,
+        slackConfig({ actions: { reactions: false } }),
       ),
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
 
   it("passes threadTs to sendSlackMessage for thread replies", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await handleSlackAction(
       {
         action: "sendMessage",
@@ -132,7 +133,7 @@ describe("handleSlackAction", () => {
         content: "Hello thread",
         threadTs: "1234567890.123456",
       },
-      cfg,
+      slackConfig(),
     );
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
       mediaUrl: undefined,
@@ -141,74 +142,56 @@ describe("handleSlackAction", () => {
     });
   });
 
-  it("accepts blocks JSON and allows empty content", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    sendSlackMessage.mockClear();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        blocks: JSON.stringify([
-          { type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } },
-        ]),
-      },
-      cfg,
-    );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } }],
-    });
-  });
-
-  it("accepts blocks arrays directly", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    sendSlackMessage.mockClear();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        blocks: [{ type: "divider" }],
-      },
-      cfg,
-    );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
-      mediaUrl: undefined,
-      threadTs: undefined,
+  it.each([
+    {
+      name: "JSON blocks",
+      blocks: JSON.stringify([
+        { type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } },
+      ]),
+      expectedBlocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } }],
+    },
+    {
+      name: "array blocks",
       blocks: [{ type: "divider" }],
+      expectedBlocks: [{ type: "divider" }],
+    },
+  ])("accepts $name and allows empty content", async ({ blocks, expectedBlocks }) => {
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        blocks,
+      },
+      slackConfig(),
+    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: expectedBlocks,
     });
   });
 
-  it("rejects invalid blocks JSON", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+  it.each([
+    {
+      name: "invalid blocks JSON",
+      blocks: "{bad-json",
+      expectedError: /blocks must be valid JSON/i,
+    },
+    { name: "empty blocks arrays", blocks: "[]", expectedError: /at least one block/i },
+  ])("rejects $name", async ({ blocks, expectedError }) => {
     await expect(
       handleSlackAction(
         {
           action: "sendMessage",
           to: "channel:C123",
-          blocks: "{bad-json",
+          blocks,
         },
-        cfg,
+        slackConfig(),
       ),
-    ).rejects.toThrow(/blocks must be valid JSON/i);
-  });
-
-  it("rejects empty blocks arrays", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    await expect(
-      handleSlackAction(
-        {
-          action: "sendMessage",
-          to: "channel:C123",
-          blocks: "[]",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/at least one block/i);
+    ).rejects.toThrow(expectedError);
   });
 
   it("requires at least one of content, blocks, or mediaUrl", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await expect(
       handleSlackAction(
         {
@@ -216,13 +199,12 @@ describe("handleSlackAction", () => {
           to: "channel:C123",
           content: "",
         },
-        cfg,
+        slackConfig(),
       ),
     ).rejects.toThrow(/requires content, blocks, or mediaUrl/i);
   });
 
   it("rejects blocks combined with mediaUrl", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await expect(
       handleSlackAction(
         {
@@ -231,47 +213,38 @@ describe("handleSlackAction", () => {
           blocks: [{ type: "divider" }],
           mediaUrl: "https://example.com/image.png",
         },
-        cfg,
+        slackConfig(),
       ),
     ).rejects.toThrow(/does not support blocks with mediaUrl/i);
   });
 
-  it("passes blocks JSON to editSlackMessage with empty content", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    editSlackMessage.mockClear();
-    await handleSlackAction(
-      {
-        action: "editMessage",
-        channelId: "C123",
-        messageId: "123.456",
-        blocks: JSON.stringify([{ type: "section", text: { type: "mrkdwn", text: "Updated" } }]),
-      },
-      cfg,
-    );
-    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: "Updated" } }],
-    });
-  });
-
-  it("passes blocks arrays to editSlackMessage", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    editSlackMessage.mockClear();
-    await handleSlackAction(
-      {
-        action: "editMessage",
-        channelId: "C123",
-        messageId: "123.456",
-        blocks: [{ type: "divider" }],
-      },
-      cfg,
-    );
-    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+  it.each([
+    {
+      name: "JSON blocks",
+      blocks: JSON.stringify([{ type: "section", text: { type: "mrkdwn", text: "Updated" } }]),
+      expectedBlocks: [{ type: "section", text: { type: "mrkdwn", text: "Updated" } }],
+    },
+    {
+      name: "array blocks",
       blocks: [{ type: "divider" }],
+      expectedBlocks: [{ type: "divider" }],
+    },
+  ])("passes $name to editSlackMessage", async ({ blocks, expectedBlocks }) => {
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        blocks,
+      },
+      slackConfig(),
+    );
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+      blocks: expectedBlocks,
     });
   });
 
   it("requires content or blocks for editMessage", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await expect(
       handleSlackAction(
         {
@@ -280,7 +253,7 @@ describe("handleSlackAction", () => {
           messageId: "123.456",
           content: "",
         },
-        cfg,
+        slackConfig(),
       ),
     ).rejects.toThrow(/requires content or blocks/i);
   });
