@@ -190,168 +190,137 @@ describe("discord message actions", () => {
 });
 
 describe("handleDiscordMessageAction", () => {
-  it("forwards context accountId for send", async () => {
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        to: "channel:123",
-        message: "hi",
+  const embeds = [{ title: "Legacy", description: "Use components v2." }];
+  const forwardingCases = [
+    {
+      name: "forwards context accountId for send",
+      input: {
+        action: "send" as const,
+        params: { to: "channel:123", message: "hi" },
+        accountId: "ops",
       },
-      cfg: {} as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expected: {
         action: "sendMessage",
         accountId: "ops",
         to: "channel:123",
         content: "hi",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards legacy embeds for send", async () => {
-    const embeds = [{ title: "Legacy", description: "Use components v2." }];
-
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        to: "channel:123",
-        message: "hi",
-        embeds,
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards legacy embeds for send",
+      input: {
+        action: "send" as const,
+        params: { to: "channel:123", message: "hi", embeds },
+      },
+      expected: {
         action: "sendMessage",
         to: "channel:123",
         content: "hi",
         embeds,
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("falls back to params accountId when context missing", async () => {
-    await handleDiscordMessageAction({
-      action: "poll",
-      params: {
-        to: "channel:123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-        accountId: "marve",
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "falls back to params accountId when context missing",
+      input: {
+        action: "poll" as const,
+        params: {
+          to: "channel:123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          accountId: "marve",
+        },
+      },
+      expected: {
         action: "poll",
         accountId: "marve",
         to: "channel:123",
         question: "Ready?",
         answers: ["Yes", "No"],
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards accountId for thread replies", async () => {
-    await handleDiscordMessageAction({
-      action: "thread-reply",
-      params: {
-        channelId: "123",
-        message: "hi",
       },
-      cfg: {} as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards accountId for thread replies",
+      input: {
+        action: "thread-reply" as const,
+        params: { channelId: "123", message: "hi" },
+        accountId: "ops",
+      },
+      expected: {
         action: "threadReply",
         accountId: "ops",
         channelId: "123",
         content: "hi",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("accepts threadId for thread replies (tool compatibility)", async () => {
-    await handleDiscordMessageAction({
-      action: "thread-reply",
-      params: {
-        // The `message` tool uses `threadId`.
-        threadId: "999",
-        // Include a conflicting channelId to ensure threadId takes precedence.
-        channelId: "123",
-        message: "hi",
       },
-      cfg: {} as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "accepts threadId for thread replies (tool compatibility)",
+      input: {
+        action: "thread-reply" as const,
+        params: {
+          threadId: "999",
+          channelId: "123",
+          message: "hi",
+        },
+        accountId: "ops",
+      },
+      expected: {
         action: "threadReply",
         accountId: "ops",
         channelId: "999",
         content: "hi",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards thread-create message as content", async () => {
-    await handleDiscordMessageAction({
-      action: "thread-create",
-      params: {
-        to: "channel:123456789",
-        threadName: "Forum thread",
-        message: "Initial forum post body",
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards thread-create message as content",
+      input: {
+        action: "thread-create" as const,
+        params: {
+          to: "channel:123456789",
+          threadName: "Forum thread",
+          message: "Initial forum post body",
+        },
+      },
+      expected: {
         action: "threadCreate",
         channelId: "123456789",
         name: "Forum thread",
         content: "Initial forum post body",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards thread edit fields for channel-edit", async () => {
-    await handleDiscordMessageAction({
-      action: "channel-edit",
-      params: {
-        channelId: "123456789",
-        archived: true,
-        locked: false,
-        autoArchiveDuration: 1440,
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards thread edit fields for channel-edit",
+      input: {
+        action: "channel-edit" as const,
+        params: {
+          channelId: "123456789",
+          archived: true,
+          locked: false,
+          autoArchiveDuration: 1440,
+        },
+      },
+      expected: {
         action: "channelEdit",
         channelId: "123456789",
         archived: true,
         locked: false,
         autoArchiveDuration: 1440,
-      }),
-      expect.any(Object),
-    );
-  });
+      },
+    },
+  ] as const;
+
+  for (const testCase of forwardingCases) {
+    it(testCase.name, async () => {
+      await handleDiscordMessageAction({
+        ...testCase.input,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(handleDiscordAction).toHaveBeenCalledWith(
+        expect.objectContaining(testCase.expected),
+        expect.any(Object),
+      );
+    });
+  }
 
   it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
     await handleDiscordMessageAction({
