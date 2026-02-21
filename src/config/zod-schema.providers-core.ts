@@ -25,6 +25,7 @@ import {
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
+  SecretRefSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
   TtsConfigSchema,
@@ -554,7 +555,11 @@ export const GoogleChatAccountSchema = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), GoogleChatGroupSchema.optional()).optional(),
     defaultTo: z.string().optional(),
-    serviceAccount: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    serviceAccount: z
+      .union([z.string(), z.record(z.string(), z.unknown()), SecretRefSchema])
+      .optional()
+      .register(sensitive),
+    serviceAccountRef: SecretRefSchema.optional().register(sensitive),
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),

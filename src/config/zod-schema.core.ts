@@ -3,6 +3,49 @@ import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+const SECRET_REF_ID_PATTERN = /^[A-Za-z0-9_./:=-](?:[A-Za-z0-9_./:=~-]{0,127})$/;
+
+export const SecretRefSchema = z
+  .object({
+    source: z.enum(["env", "file"]),
+    id: z
+      .string()
+      .regex(
+        SECRET_REF_ID_PATTERN,
+        "Secret reference id must match /^[A-Za-z0-9_./:=-](?:[A-Za-z0-9_./:=~-]{0,127})$/",
+      ),
+  })
+  .strict();
+
+export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
+
+const SecretsEnvSourceSchema = z
+  .object({
+    type: z.literal("env").optional(),
+  })
+  .strict();
+
+const SecretsFileSourceSchema = z
+  .object({
+    type: z.literal("sops"),
+    path: z.string().min(1),
+    timeoutMs: z.number().int().positive().max(120000).optional(),
+  })
+  .strict();
+
+export const SecretsConfigSchema = z
+  .object({
+    sources: z
+      .object({
+        env: SecretsEnvSourceSchema.optional(),
+        file: SecretsFileSourceSchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelApiSchema = z.union([
   z.literal("openai-completions"),
   z.literal("openai-responses"),
@@ -58,7 +101,7 @@ export const ModelDefinitionSchema = z
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
-    apiKey: z.string().optional().register(sensitive),
+    apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
