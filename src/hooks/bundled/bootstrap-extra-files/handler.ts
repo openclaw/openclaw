@@ -1,4 +1,5 @@
 import {
+  type BootstrapTier,
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
 } from "../../../agents/workspace.js";
@@ -61,9 +62,11 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     if (extras.length === 0) {
       return;
     }
+    const tierOverride = context.cfg?.agents?.defaults?.bootstrapTier as BootstrapTier | undefined;
     context.bootstrapFiles = filterBootstrapFilesForSession(
       [...context.bootstrapFiles, ...extras],
       context.sessionKey,
+      tierOverride,
     );
   } catch (err) {
     log.warn(`failed: ${String(err)}`);
