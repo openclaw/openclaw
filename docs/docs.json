@@ -857,6 +857,7 @@
                 "pages": [
                   "install/fly",
                   "install/hetzner",
+                  "install/scaleway",
                   "install/gcp",
                   "install/macos-vm",
                   "install/exe-dev",
