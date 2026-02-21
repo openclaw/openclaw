@@ -114,6 +114,41 @@ async function handleFileConsentInvoke(
   return true;
 }
 
+/**
+ * Handle adaptive card action invokes (user clicked a button on an adaptive card).
+ * Stores the action data in a global queue so the copilot-studio plugin can
+ * continue the conversation with the same Copilot Studio conversationId.
+ */
+function handleAdaptiveCardInvoke(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): boolean {
+  const activity = context.activity;
+  if (activity.type !== "invoke" || activity.name !== "adaptiveCard/action") {
+    return false;
+  }
+
+  const actionData = activity.value;
+  deps.log.info("adaptive card invoke received", {
+    action:
+      typeof actionData === "object" && actionData !== null
+        ? (actionData as Record<string, unknown>).action
+        : "unknown",
+    from: activity.from?.id,
+  });
+
+  // Store invoke data in global queue for copilot-studio plugin to pick up.
+  const INVOKES_KEY = "__openclaw_copilot_pending_invokes";
+  const g = globalThis as unknown as Record<
+    string,
+    Array<{ actionData: unknown; timestamp: number }> | undefined
+  >;
+  if (!g[INVOKES_KEY]) g[INVOKES_KEY] = [];
+  g[INVOKES_KEY].push({ actionData, timestamp: Date.now() });
+
+  return true;
+}
+
 export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   handler: T,
   deps: MSTeamsMessageHandlerDeps,
@@ -125,22 +160,105 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   if (originalRun) {
     handler.run = async (context: unknown) => {
       const ctx = context as MSTeamsTurnContext;
-      // Handle file consent invokes before passing to normal flow
-      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
-        const handled = await handleFileConsentInvoke(ctx, deps.log);
-        if (handled) {
-          // Send invoke response for file consent
-          await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
-          return;
+
+      if (ctx.activity?.type === "invoke") {
+        // Handle file consent invokes
+        if (ctx.activity?.name === "fileConsent/invoke") {
+          const handled = await handleFileConsentInvoke(ctx, deps.log);
+          if (handled) {
+            await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
+            return;
+          }
+        }
+
+        // Handle adaptive card action invokes (e.g. consent card button clicks)
+        if (ctx.activity?.name === "adaptiveCard/action") {
+          const handled = handleAdaptiveCardInvoke(ctx, deps);
+          if (handled) {
+            // Send 200 invoke response so Teams knows we handled it
+            await ctx.sendActivity({
+              type: "invokeResponse",
+              value: { status: 200, body: {} },
+            });
+            // Route the invoke as a user message so the agent can follow up.
+            // The LLM will see this and re-invoke the tool, which will find
+            // the pending conversation and continue it.
+            const actionData = ctx.activity.value;
+            const actionVerb =
+              typeof actionData === "object" && actionData !== null
+                ? ((actionData as Record<string, unknown>).verb ??
+                  (actionData as Record<string, unknown>).action ??
+                  "approved")
+                : "approved";
+            const syntheticText = `I ${String(actionVerb)} the permission request. Please proceed with the action.`;
+            // Mutate activity properties directly — same approach as onMessage.
+            const savedType = ctx.activity.type;
+            const savedName = ctx.activity.name;
+            const savedActivityText = ctx.activity.text;
+            ctx.activity.type = "message";
+            ctx.activity.name = undefined;
+            ctx.activity.text = syntheticText;
+            try {
+              await handleTeamsMessage(ctx);
+            } catch (err) {
+              deps.runtime.error?.(`msteams adaptive card invoke handler failed: ${String(err)}`);
+            } finally {
+              ctx.activity.type = savedType;
+              ctx.activity.name = savedName;
+              ctx.activity.text = savedActivityText;
+            }
+            return;
+          }
         }
       }
+
       return originalRun.call(handler, context);
     };
   }
 
   handler.onMessage(async (context, next) => {
     try {
-      await handleTeamsMessage(context as MSTeamsTurnContext);
+      const ctx = context as MSTeamsTurnContext;
+      const activity = ctx.activity;
+
+      // Detect Action.Submit from adaptive cards: empty text + activity.value present.
+      // Copilot Studio consent cards use Action.Submit which sends a regular message
+      // with no text but data in activity.value (unlike Action.Execute which sends
+      // an invoke activity).
+      if (!activity.text?.trim() && activity.value != null && typeof activity.value === "object") {
+        deps.log.info("adaptive card Action.Submit received", {
+          from: activity.from?.id,
+          valueKeys: Object.keys(activity.value as Record<string, unknown>),
+        });
+
+        // Store invoke data in global queue for copilot-studio plugin to pick up.
+        const INVOKES_KEY = "__openclaw_copilot_pending_invokes";
+        const g = globalThis as unknown as Record<
+          string,
+          Array<{ actionData: unknown; timestamp: number }> | undefined
+        >;
+        if (!g[INVOKES_KEY]) g[INVOKES_KEY] = [];
+        g[INVOKES_KEY].push({ actionData: activity.value, timestamp: Date.now() });
+
+        // Determine the action from the submit data for a human-readable synthetic message.
+        const actionData = activity.value as Record<string, unknown>;
+        const actionVerb = actionData.verb ?? actionData.action ?? "approved";
+        const syntheticText = `I ${String(actionVerb)} the permission request. Please proceed with the action.`;
+
+        // Mutate activity.text directly on the original context. We can't
+        // replace ctx.activity (getter-only) and Proxy approaches break SDK
+        // internals (getConversationReference). But activity.text is a plain
+        // data property we can safely mutate and restore.
+        const savedText = activity.text;
+        activity.text = syntheticText;
+        try {
+          await handleTeamsMessage(ctx);
+        } finally {
+          activity.text = savedText;
+        }
+      } else {
+        await handleTeamsMessage(ctx);
+      }
     } catch (err) {
       deps.runtime.error?.(`msteams handler failed: ${String(err)}`);
     }

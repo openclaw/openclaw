@@ -242,6 +242,13 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
+
+  // Health check endpoint (before JWT auth so it's publicly accessible for monitoring)
+  const startedAt = new Date().toISOString();
+  expressApp.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", channel: "msteams", port, startedAt });
+  });
+
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {

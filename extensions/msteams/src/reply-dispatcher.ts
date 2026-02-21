@@ -23,6 +23,26 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
+/**
+ * Drain any pending adaptive cards from the copilot-studio plugin's global queue.
+ * Both plugins run in the same Node.js process, sharing state via globalThis.
+ */
+type PendingCardEntry = {
+  cards: Array<{ contentType: string; content: unknown; name?: string }>;
+  conversationId: string;
+  text?: string;
+  timestamp: number;
+};
+
+function drainPendingAdaptiveCards(): PendingCardEntry[] {
+  const GLOBAL_KEY = "__openclaw_pending_adaptive_cards";
+  const g = globalThis as unknown as Record<string, PendingCardEntry[] | undefined>;
+  const store = g[GLOBAL_KEY];
+  if (!store || store.length === 0) return [];
+  const entries = store.splice(0, store.length);
+  return entries;
+}
+
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -69,6 +89,35 @@ export function createMSTeamsReplyDispatcher(params: {
       ...prefixOptions,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
       deliver: async (payload) => {
+        // Send any pending adaptive cards as native Teams attachments.
+        // These come from the copilot-studio plugin (e.g. consent prompts).
+        const pendingCards = drainPendingAdaptiveCards();
+        if (pendingCards.length > 0) {
+          for (const entry of pendingCards) {
+            const attachments = entry.cards.map((card) => ({
+              contentType: card.contentType,
+              content: card.content,
+              ...(card.name ? { name: card.name } : {}),
+            }));
+            try {
+              await params.context.sendActivity({
+                type: "message",
+                attachments,
+                ...(entry.text ? { text: entry.text } : {}),
+              });
+              params.log.info("sent adaptive card(s)", {
+                count: attachments.length,
+                conversationId: entry.conversationId,
+              });
+            } catch (err) {
+              params.log.error("failed to send adaptive card", {
+                error: formatUnknownError(err),
+                conversationId: entry.conversationId,
+              });
+            }
+          }
+        }
+
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg: params.cfg,
           channel: "msteams",

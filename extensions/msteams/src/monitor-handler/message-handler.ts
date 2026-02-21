@@ -523,16 +523,80 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sharePointSiteId,
     });
 
+    // Send typing indicator so the user sees the bot is working while
+    // the LLM generates a response (especially helpful with slower local models).
+    context.sendActivity({ type: "typing" }).catch(() => {
+      // Best effort — typing indicators are non-critical.
+    });
+
+    // Tool status messages: show interim "Using <tool>..." messages that get
+    // deleted once the actual reply starts streaming.
+    // Controlled by messages.statusReactions.enabled (default: true).
+    const statusEnabled = cfg.messages?.statusReactions?.enabled !== false;
+    let statusActivityId: string | null = null;
+    const TOOL_LABELS: Record<string, string> = {
+      email: "Checking email",
+      web_search: "Searching the web",
+      calendar: "Checking calendar",
+      read: "Reading file",
+      write: "Writing file",
+      exec: "Running command",
+      grep: "Searching files",
+      find: "Finding files",
+    };
+    const deleteStatusMessage = async () => {
+      if (statusActivityId && context.deleteActivity) {
+        const id = statusActivityId;
+        statusActivityId = null;
+        try {
+          await context.deleteActivity(id);
+        } catch {
+          // Best effort — status message cleanup is non-critical.
+        }
+      }
+    };
+    const onToolStart = statusEnabled
+      ? async (payload: { name?: string; phase?: string }) => {
+          const toolName = payload.name ?? "tool";
+          const label = TOOL_LABELS[toolName] ?? `Using ${toolName}`;
+          try {
+            // Delete previous status message if any
+            await deleteStatusMessage();
+            const response = (await context.sendActivity(`_${label}..._`)) as
+              | { id?: string }
+              | undefined;
+            if (response?.id) {
+              statusActivityId = response.id;
+            }
+            // Also refresh typing indicator
+            context.sendActivity({ type: "typing" }).catch(() => {});
+          } catch {
+            // Best effort.
+          }
+        }
+      : undefined;
+    const onAssistantMessageStart = statusEnabled
+      ? async () => {
+          // Reply is starting to stream — remove any status message.
+          await deleteStatusMessage();
+        }
+      : undefined;
+
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions,
+        replyOptions: {
+          ...replyOptions,
+          ...(onToolStart ? { onToolStart } : {}),
+          ...(onAssistantMessageStart ? { onAssistantMessageStart } : {}),
+        },
       });
 
       markDispatchIdle();
+      await deleteStatusMessage();
       log.info("dispatch complete", { queuedFinal, counts });
 
       if (!queuedFinal) {
