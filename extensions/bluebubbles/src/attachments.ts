@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
 import {
@@ -57,6 +58,19 @@ function resolveAccount(params: BlueBubblesAttachmentOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
+function resolveRequestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
+    return input.url;
+  }
+  return String(input);
+}
+
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},
@@ -71,20 +85,30 @@ export async function downloadBlueBubblesAttachment(
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
     password,
   });
-  const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, opts.timeoutMs);
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(
-      `BlueBubbles attachment download failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
-  const contentType = res.headers.get("content-type") ?? undefined;
-  const buf = new Uint8Array(await res.arrayBuffer());
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
-  if (buf.byteLength > maxBytes) {
-    throw new Error(`BlueBubbles attachment too large (${buf.byteLength} bytes)`);
+  try {
+    const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
+      url,
+      filePathHint: attachment.transferName ?? attachment.guid ?? "attachment",
+      maxBytes,
+      fetchImpl: async (input, init) =>
+        await blueBubblesFetchWithTimeout(
+          resolveRequestUrl(input),
+          { ...init, method: init?.method ?? "GET" },
+          opts.timeoutMs,
+        ),
+    });
+    return {
+      buffer: new Uint8Array(fetched.buffer),
+      contentType: fetched.contentType ?? attachment.mimeType ?? undefined,
+    };
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    if (/(?:maxBytes|content length|payload exceeds)/i.test(text)) {
+      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
+    }
+    throw new Error(`BlueBubbles attachment download failed: ${text}`);
   }
-  return { buffer: buf, contentType: contentType ?? attachment.mimeType ?? undefined };
 }
 
 export type SendBlueBubblesAttachmentResult = {
