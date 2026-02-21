@@ -10,6 +10,31 @@ related:
 
 # Business Intelligence 누적 기록
 
+## 2026-02-22
+
+### 주요 시장 데이터
+
+- 베트남 화장품 위조품 단속 강화: 호치민시 긴급 규제 (25톤 적발)
+- 베트남 중국어 인력 수요 2023→2025 2배 증가, 한국어는 +20% 수준
+- 소셜커머스 CAGR 31.77% — YouTube Shopping ↔ Shopee 동남아 연동
+- Voice AI 시장 $20B+ (2026), Agentic AI 연말 40% 기업 적용 전망
+- 삼성SDS 디지털트윈 → 클라우드서비스사업부 이관, AI자율제조 컨퍼런스 3/4~6 코엑스
+- 베트남 2026년부터 대입에 TOPIK 공식 인정 (Korea Times 2/3)
+
+### 신규 기회
+
+1. MAIBEAUTY — 정품인증 기능으로 위조품 단속 분위기 활용
+2. MAITUTOR — TOPIK 특화 AI 튜터 (베트남 대입 인정 = 수요 폭발)
+3. MAISTAR7 — 중국어+한국어 이중언어 인력 매칭 프리미엄 니치
+4. MAITOK — Tikly → AI 세일즈 에이전트 패키지 확장 (Agentic Commerce)
+
+### 경쟁/위협
+
+- 베트남 북부 산업단지: 중국계 기업 장악 확대 → 한국기업 인력 경쟁력 약화 신호
+- YouTube Shopping+Shopee 연동: TikTok Shop 독점 깨질 가능성
+
+---
+
 ## 2026-02-21
 
 ### 주요 시장 데이터

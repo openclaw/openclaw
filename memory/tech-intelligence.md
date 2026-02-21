@@ -1,36 +1,43 @@
----
-type: intelligence
-project: MAIBOT
-tags: [technology, trends, ai, analysis]
-related:
-  - "[[business-intelligence|비즈니스 인텔리전스]]"
-  - "[[maioss|MAIOSS - OSS 보안]]"
-  - "[[maisecondbrain|MAISECONDBRAIN - 지식그래프]]"
----
+# Tech Intelligence 누적 기록
 
-# 테크 인텔리전스 누적 기록
+## 2026-02-22
 
-## 2026-02-21 스캔
+### 🚨 보안
 
-### 주요 발견
+- OpenClaw 6건 취약점 공개 (Endor Labs, 2026-02-18). CVE-2026-26322 (Gateway SSRF, 7.6), CVE-2026-26319, CVE-2026-26329 등. **v2026.2.14+ 패치 완료.**
 
-- **Kani-TTS-2** (2026-02-15): 400M param, 3GB VRAM, Apache 2.0, zero-shot voice cloning. edge-tts 대안 최유력 → MAIBEAUTY, MAIBOTALKS, MAITUTOR 적용 가능
-- **Hedra Character-3**: SadTalker 대체 최유력. Lip-sync + micro-expression 품질 최고
-- **Chatterbox-Turbo**: 오픈소스 TTS 커뮤니티 최고 평가 (Feb 2026)
-- **Zalo Business Solutions (ZBS)**: 2026년 공식 통합 솔루션 런칭. Zalo 규제 벌금 8.1억 VND (2026-01)
-- **MH-PPO (Multi-Head PPO)**: Digital Twin + RL 새 아키텍처 (arxiv 2602.03801)
-- **CVE-2026-1642**: NGINX OSS/Plus TLS 프록시 HIGH (8.2) — MAIOSS 관련
-- **Reachability analysis**: 2026 OSS 보안의 핵심 차별화 기능
-- **TikTok 2026 알고리즘 변경 + TAKO AI 기능**: 콘텐츠 도달률 변동
+### TTS
 
-### 적용 결정 대기
+- Kokoro TTS: 오픈웨이트, OpenAI 호환, $0.70/M chars — edge-tts 대안 1순위
+- S1-mini, NeuTTS-air/nano: 2026-02 커뮤니티 최고 평가 로컬 TTS
 
-- [ ] MAIBEAUTY: SadTalker → Hedra 전환 테스트
-- [ ] MAIBEAUTY: edge-tts → Kani-TTS-2 베트남어 테스트
-- [ ] MAISTAR7: Zalo 이탈 리스크 대비 멀티채널 전략
+### Talking Head
 
-### 📡 모니터링 워치리스트
+- SoulX-FlashHead: 실시간 스트리밍 talking head (논문 2026-02)
+- LivePortrait: SadTalker 대비 품질↑, 커뮤니티 추천
+- MuseTalk: 실시간 립싱크 특화
 
-- [ ] **Google NotebookLM 공식 API** — 출시 시 Mnemo 지식그래프와 통합 예정. NotebookLM에 축적된 지니님 자료를 Obsidian 볼트로 마이그레이션 + 실시간 연동 (2026-02-21 지니님 결정: 공식 API 나올 때까지 대기)
-- [ ] MAIOSS: CVE-2026-1642 탐지 룰 + reachability analysis 기능
-- [ ] MAIBOTALKS: Chatterbox-Turbo 로컬 벤치마크
+### STT
+
+- Whisper v4 Turbo: 로컬, 커스텀 어휘 99%+ 정확도
+- Parakeet V3 (NVIDIA): 로컬 ASR
+- ONNX ASR (OpenVoiceOS, 2026-02-16): fasterwhisper C++ 가속 오프라인
+
+### Zalo
+
+- Zalo OA 2026: 대규모 대화 분류, 멀티디바이스, 챗봇 심층 통합
+
+### Digital Twin / RL
+
+- HD현대 × Siemens: 조선소 DT + 합성데이터 RL, 2026 단계 도입
+- MDPI 종합 리뷰: DES + 다목적최적화 + 하이브리드 시뮬-최적화 + ML/RL + DT
+
+### 어학교육 AI
+
+- AI 챗봇 24/7 회화 연습 주류화. Langua, Copilot 등
+- 핵심: STT + LLM + TTS 파이프라인 저비용 구현 가능
+
+### TikTok
+
+- 2026-02 알고리즘 변화 → 도달률 하락 보고
+- Smart+ Ads API 통합 (GMV Max)

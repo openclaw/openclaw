@@ -16,11 +16,12 @@
 
 ### Active Tracking
 
-#### Obsidian 커뮤니티 플러그인 PR #10404
+#### Obsidian 커뮤니티 플러그인 PR #10406 (재제출)
 
-- **URL:** https://github.com/obsidianmd/obsidian-releases/pull/10404
-- **상태:** Open, 리뷰 대기
-- **체크:** `gh pr view 10404 -R obsidianmd/obsidian-releases --json state,reviews,comments`
+- **URL:** https://github.com/obsidianmd/obsidian-releases/pull/10406
+- **상태:** Open, 자동검증 봇 결과 대기
+- **이전 PR:** #10404 — 유니코드 깨짐 + 9회 검증 실패로 닫음
+- **체크:** `gh pr view 10406 -R obsidianmd/obsidian-releases --json state,reviews,comments`
 - **할 일:**
   1. 리뷰 코멘트 달리면 → 내용 분석 → 코드 수정 → push → 답변
   2. 변경 요청 시 → 수정 후 re-request review

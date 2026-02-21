@@ -104,8 +104,8 @@ related:
 
 ## 다음 액션
 
-- [ ] Apple Developer 가입 ($99/yr)
-- [ ] Google Play Developer 가입 ($25)
+- [ ] Apple Developer 가입 ($99/yr) — 신청 완료, 인증 절차 중 (2026-02-21)
+- [ ] Google Play Developer 가입 ($ — 신청 완료, 인증 절차 중 (2026-02-21)25)
 - [ ] EAS Build (iOS/Android)
 - [ ] 앱스토어 제출
 
