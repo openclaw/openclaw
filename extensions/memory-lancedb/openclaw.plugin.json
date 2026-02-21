@@ -26,6 +26,12 @@
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
     },
+    "captureMinChars": {
+      "label": "Capture Min Chars",
+      "help": "Minimum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "10"
+    },
     "captureMaxChars": {
       "label": "Capture Max Chars",
       "help": "Maximum message length eligible for auto-capture",
@@ -59,6 +65,11 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "captureMinChars": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000
       },
       "captureMaxChars": {
         "type": "number",
