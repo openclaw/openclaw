@@ -1,8 +1,8 @@
 import { randomUUID, createHash } from "node:crypto";
-import type { SearchConfig } from "./config.js";
-import type { EmbeddingProvider } from "./embedding.js";
 import { BM25Index } from "./bm25.js";
 import { ColdStore, type ColdStoreSegment } from "./cold-store.js";
+import type { SearchConfig } from "./config.js";
+import type { EmbeddingProvider } from "./embedding.js";
 import { extractEntities, type ExtractedEntity } from "./entity.js";
 import { type EvictionConfig, DEFAULT_EVICTION } from "./eviction.js";
 import { estimateTokens } from "./runtime.js";

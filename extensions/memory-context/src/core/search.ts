@@ -1,6 +1,6 @@
+import { selectWithinBudget, type BudgetSegment } from "./budget.js";
 import type { SearchConfig, BudgetConfig } from "./config.js";
 import type { SegmentSearchResult, WarmStore } from "./store.js";
-import { selectWithinBudget, type BudgetSegment } from "./budget.js";
 
 export type HybridSearchResult = SegmentSearchResult & {
   vectorScore: number;

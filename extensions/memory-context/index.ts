@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { sanitizeToolUseResultPairing } from "../../src/agents/session-transcript-repair.js";
 import {
   archiveCompactedMessages,

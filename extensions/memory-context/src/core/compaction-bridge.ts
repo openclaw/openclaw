@@ -6,12 +6,12 @@
  * session_before_compact fires.
  */
 
-import type { KnowledgeStore } from "./knowledge-store.js";
-import type { WarmStore, ConversationRole } from "./store.js";
 import { extractKnowledge, type LLMCallFn } from "./knowledge-extractor.js";
+import type { KnowledgeStore } from "./knowledge-store.js";
 import { applyKnowledgeUpdates } from "./knowledge-updater.js";
 import { maybeRedact } from "./redaction.js";
 import { extractText, stripChannelPrefix, isNoiseSegment } from "./shared.js";
+import type { WarmStore, ConversationRole } from "./store.js";
 
 export type AgentMessageLike = {
   role?: string;

@@ -9,8 +9,8 @@
  */
 
 import type { KnowledgeFact } from "./knowledge-store.js";
-import type { ConversationSegment } from "./store.js";
 import { estimateTokens, enforceHardCap } from "./runtime.js";
+import type { ConversationSegment } from "./store.js";
 
 export type RecallResult = {
   /** Formatted XML block ready for context injection. Empty string = nothing to inject. */
