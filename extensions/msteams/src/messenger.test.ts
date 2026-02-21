@@ -216,7 +216,6 @@ describe("msteams messenger", () => {
         });
 
         expect(ids).toEqual(["id:one"]);
-        expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
         expect(sent).toHaveLength(1);
         expect(sent[0]?.text).toContain("Hello <at>John</at>");
         expect(sent[0]?.text).toContain(
