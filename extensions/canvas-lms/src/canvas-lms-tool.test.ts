@@ -120,6 +120,31 @@ describe("canvas-lms-tool", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("allows maxRetries=0 and performs no retry", async () => {
+    const rateLimited = new Response(JSON.stringify([]), {
+      status: 429,
+      headers: { "retry-after": "0", "content-type": "application/json" },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(rateLimited);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          token: "tkn",
+          maxRetries: 0,
+          requestTimeoutMs: 10_000,
+        },
+      }),
+    );
+
+    await expect(tool.execute("call-no-retry", { action: "list_courses" })).rejects.toThrow(
+      /Canvas request failed \(429/,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("requires course id for assignments", async () => {
     vi.stubGlobal("fetch", vi.fn());
     const tool = createCanvasLmsTool(
