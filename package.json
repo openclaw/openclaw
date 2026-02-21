@@ -91,7 +91,7 @@
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "prepack": "pnpm build && pnpm ui:build",
-    "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
+    "prepare": "node scripts/prepare.js",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
@@ -209,7 +209,9 @@
     "vitest": "^4.0.18"
   },
   "peerDependencies": {
-    "@napi-rs/canvas": "^0.1.89",
+    "@napi-rs/canvas": "^0.1.89"
+  },
+  "optionalDependencies": {
     "node-llama-cpp": "3.15.1"
   },
   "engines": {
@@ -237,8 +239,6 @@
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
-      "koffi",
-      "node-llama-cpp",
       "protobufjs",
       "sharp"
     ]

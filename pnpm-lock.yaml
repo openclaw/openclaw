@@ -146,9 +146,6 @@ importers:
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
-      node-llama-cpp:
-        specifier: 3.15.1
-        version: 3.15.1(typescript@5.9.3)
       opusscript:
         specifier: ^0.0.8
         version: 0.0.8
@@ -258,6 +255,10 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
+    optionalDependencies:
+      node-llama-cpp:
+        specifier: 3.15.1
+        version: 3.15.1(typescript@5.9.3)
 
   extensions/bluebubbles:
     devDependencies:

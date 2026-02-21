@@ -10,12 +10,16 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     entry: "src/entry.ts",
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
@@ -23,12 +27,16 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     entry: "src/infra/warning-filter.ts",
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     entry: "src/plugin-sdk/index.ts",
@@ -36,6 +44,8 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     entry: "src/plugin-sdk/account-id.ts",
@@ -43,17 +53,23 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     entry: "src/extensionAPI.ts",
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
   {
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["@reflink/reflink", /^@reflink\/reflink-/],
+    inlineOnly: false,
   },
 ]);
