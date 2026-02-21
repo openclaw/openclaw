@@ -96,16 +96,16 @@ export class ReplyChainEnforcer {
 
     if (evt.phase === "start") {
       // Do nothing on start. Wait for first token.
-    } else if (evt.phase === "error" || evt.phase === "end") {
-      // Disarm on error OR normal end.
-      // Normal conversational turns (e.g. asking a question) end with "end" lifecycle,
-      // and we shouldn't force the user to reply within 30s.
-      // The watchdog remains armed only for mid-generation stalls or crashes.
-      this.setState(evt.sessionKey, "disarmed", `Lifecycle ${evt.phase}`);
-      if (evt.phase === "error") {
-        this.logger.debug("Chain DISARMED by lifecycle error", { key: evt.sessionKey });
-      }
+    } else if (evt.phase === "error") {
+      // On error, keep armed — the agent crashed mid-work and may not have
+      // communicated results. The watchdog should fire if nothing follows.
+      this.touchActivity(evt.sessionKey);
+      this.logger.debug("Chain stays ARMED after lifecycle error", { key: evt.sessionKey });
     }
+    // phase === "end" → do nothing. The transcript update (onTranscriptUpdate)
+    // is the source of truth for arm/disarm. If the agent produced meaningful
+    // text, it stays armed until the user replies or agent sends NO_REPLY.
+    // If the agent produced empty/NO_REPLY text, transcript handler already disarmed.
   }
 
   private setState(key: SessionKey, status: "armed" | "disarmed", reason: string) {
