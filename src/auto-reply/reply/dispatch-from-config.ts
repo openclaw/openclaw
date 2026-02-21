@@ -450,10 +450,16 @@ export async function dispatchReplyFromConfig(params: {
         });
         // Only send if TTS was actually applied (mediaUrl exists)
         if (ttsSyntheticReply.mediaUrl) {
-          // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
+          // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
+          // Exception: when audioAsVoice is true, include text so voice memo channels
+          // deliver text alongside the audio (block-streamed text arrives separately and
+          // won't pair with the voice bubble in the conversation UI).
           const ttsOnlyPayload: ReplyPayload = {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
+            ...(ttsSyntheticReply.audioAsVoice && accumulatedBlockText.trim()
+              ? { text: accumulatedBlockText.trim() }
+              : {}),
           };
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({

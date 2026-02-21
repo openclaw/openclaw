@@ -1,4 +1,7 @@
+import { execSync } from "node:child_process";
 import crypto from "node:crypto";
+import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, rmdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
@@ -92,6 +95,38 @@ export type SendBlueBubblesAttachmentResult = {
 };
 
 /**
+ * Convert MP3 buffer to Opus CAF format for iMessage voice memos.
+ * iMessage requires Opus@24000Hz mono in CAF container.
+ * BlueBubbles' built-in conversion produces PCM Int16@44100Hz which iMessage rejects.
+ */
+function convertMp3ToOpusCaf(mp3Buffer: Uint8Array): Uint8Array {
+  if (process.platform !== "darwin") {
+    throw new Error("afconvert requires macOS");
+  }
+  const tempDir = mkdtempSync(path.join(tmpdir(), "bb-voice-"));
+  const mp3Path = path.join(tempDir, "input.mp3");
+  const cafPath = path.join(tempDir, "output.caf");
+  try {
+    writeFileSync(mp3Path, mp3Buffer);
+    execSync(`/usr/bin/afconvert -f caff -d opus@24000 -c 1 "${mp3Path}" "${cafPath}"`, {
+      stdio: "pipe",
+      timeout: 30000,
+    });
+    return new Uint8Array(readFileSync(cafPath));
+  } finally {
+    try {
+      unlinkSync(mp3Path);
+    } catch {}
+    try {
+      unlinkSync(cafPath);
+    } catch {}
+    try {
+      rmdirSync(tempDir);
+    } catch {}
+  }
+}
+
+/**
  * Send an attachment via BlueBubbles API.
  * Supports sending media files (images, videos, audio, documents) to a chat.
  * When asVoice is true, expects MP3/CAF audio and marks it as an iMessage voice memo.
@@ -124,8 +159,18 @@ export async function sendBlueBubblesAttachment(params: {
       throw new Error("BlueBubbles voice messages require audio media (mp3 or caf).");
     }
     if (voiceInfo.isMp3) {
-      filename = ensureExtension(filename, ".mp3", fallbackName);
-      contentType = contentType ?? "audio/mpeg";
+      // Convert MP3 to Opus CAF — iMessage requires Opus@24000Hz for voice memos.
+      // BlueBubbles' built-in MP3->CAF produces PCM which iMessage rejects (0-second audio).
+      try {
+        buffer = convertMp3ToOpusCaf(buffer);
+        filename = ensureExtension(filename, ".caf", fallbackName);
+        contentType = "audio/x-caf";
+      } catch (err) {
+        console.error("BB_VOICE_CONVERT_FAIL", String(err));
+        // Fall back to MP3 (BB will convert, but voice memo will be broken)
+        filename = ensureExtension(filename, ".mp3", fallbackName);
+        contentType = contentType ?? "audio/mpeg";
+      }
     } else if (voiceInfo.isCaf) {
       filename = ensureExtension(filename, ".caf", fallbackName);
       contentType = contentType ?? "audio/x-caf";
