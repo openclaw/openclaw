@@ -3,6 +3,7 @@ import { getFinishedSession, getSession, markExited } from "../../agents/bash-pr
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
+import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { clampInt } from "../../utils.js";
@@ -186,7 +187,7 @@ export async function handleBashChatCommand(params: {
     failures: Array<{ gate: string; key: string }>;
   };
 }): Promise<ReplyPayload> {
-  if (params.cfg.commands?.bash !== true) {
+  if (!isCommandFlagEnabled(params.cfg, "bash")) {
     return {
       text: "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.openclaw.ai/tools/slash-commands#config",
     };

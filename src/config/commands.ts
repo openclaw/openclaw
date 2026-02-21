@@ -1,5 +1,6 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { isPlainObject } from "../infra/plain-object.js";
 import type { NativeCommandsSetting } from "./types.js";
 
 function resolveAutoDefault(providerId?: ChannelId): boolean {
@@ -62,6 +63,21 @@ export function isNativeCommandsExplicitlyDisabled(params: {
   return false;
 }
 
-export function isRestartEnabled(config?: { commands?: { restart?: boolean } }): boolean {
-  return config?.commands?.restart !== false;
+function getOwnCommandFlagValue(config: { commands?: unknown } | undefined, key: string): unknown {
+  const { commands } = config ?? {};
+  if (!isPlainObject(commands) || !Object.hasOwn(commands, key)) {
+    return undefined;
+  }
+  return commands[key];
+}
+
+export function isCommandFlagEnabled(
+  config: { commands?: unknown } | undefined,
+  key: string,
+): boolean {
+  return getOwnCommandFlagValue(config, key) === true;
+}
+
+export function isRestartEnabled(config?: { commands?: unknown }): boolean {
+  return getOwnCommandFlagValue(config, "restart") !== false;
 }

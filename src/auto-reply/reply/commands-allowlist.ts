@@ -3,6 +3,7 @@ import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
+import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   readConfigFileSnapshot,
@@ -519,7 +520,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  if (params.cfg.commands?.config !== true) {
+  if (!isCommandFlagEnabled(params.cfg, "config")) {
     return {
       shouldContinue: false,
       reply: { text: "⚠️ /allowlist edits are disabled. Set commands.config=true to enable." },
