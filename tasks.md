@@ -66,11 +66,11 @@ Risk: Medium
 
 ### Tasks
 
-- [ ] Reproduce failing check locally
-- [ ] Fix logger import/export mismatch cleanly
-- [ ] Fix guard config schema import/export mismatch cleanly
-- [ ] Run full required check command
-- [ ] Commit + push
+- [x] Reproduce failing check locally
+- [x] Fix logger import/export mismatch cleanly
+- [x] Fix guard config schema import/export mismatch cleanly
+- [x] Run full required check command
+- [x] Commit + push
 
 ### Validation
 
