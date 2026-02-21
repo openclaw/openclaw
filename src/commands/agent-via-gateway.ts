@@ -14,6 +14,7 @@ import {
 } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
+import { AgentCommandOpts } from "./agent/types.ts";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -178,7 +179,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
-  const localOpts = {
+  const localOpts: AgentCommandOpts = {
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
