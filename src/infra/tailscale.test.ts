@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -12,18 +13,15 @@ const {
 const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
 describe("tailscale helpers", () => {
-  const originalForcedBinary = process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY"]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
   });
 
   afterEach(() => {
-    if (originalForcedBinary === undefined) {
-      delete process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
-    } else {
-      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = originalForcedBinary;
-    }
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 
