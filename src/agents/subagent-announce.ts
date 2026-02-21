@@ -372,7 +372,8 @@ async function resolveSubagentCompletionOrigin(params: {
     if (hookOrigin.channel && !isDeliverableMessageChannel(hookOrigin.channel)) {
       return requesterOrigin;
     }
-    return mergeDeliveryContext(requesterOrigin, hookOrigin);
+    // Hook-provided origin should override requester defaults when present.
+    return mergeDeliveryContext(hookOrigin, requesterOrigin);
   } catch {
     return requesterOrigin;
   }
