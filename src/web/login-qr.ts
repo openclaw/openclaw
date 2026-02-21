@@ -31,7 +31,7 @@ type ActiveLogin = {
   error?: string;
   errorStatus?: number;
   waitPromise: Promise<void>;
-  restartAttempted: boolean;
+  restartCount: number;
   verbose: boolean;
 };
 
@@ -79,15 +79,26 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
     });
 }
 
+const MAX_515_RESTARTS = 3;
+const RESTART_DELAY_MS = 1500;
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
-  if (login.restartAttempted) {
+  if (login.restartCount >= MAX_515_RESTARTS) {
     return false;
   }
-  login.restartAttempted = true;
+  login.restartCount += 1;
   runtime.log(
-    info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
+    info(
+      `WhatsApp asked for a restart after pairing (code 515); retry ${login.restartCount}/${MAX_515_RESTARTS}…`,
+    ),
   );
   closeSocket(login.sock);
+  // Give WhatsApp servers a moment before reconnecting.
+  await sleep(RESTART_DELAY_MS);
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
@@ -96,6 +107,8 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
     login.connected = false;
     login.error = undefined;
     login.errorStatus = undefined;
+    // Reset the TTL so the retry has enough time.
+    login.startedAt = Date.now();
     attachLoginWaiter(login.accountId, login);
     return true;
   } catch (err) {
@@ -185,7 +198,7 @@ export async function startWebLoginWithQr(
     startedAt: Date.now(),
     connected: false,
     waitPromise: Promise.resolve(),
-    restartAttempted: false,
+    restartCount: 0,
     verbose: Boolean(opts.verbose),
   };
   activeLogins.set(account.accountId, login);
