@@ -33,13 +33,26 @@ export type HookSessionPolicyResolved = {
   allowedSessionKeyPrefixes?: string[];
 };
 
-export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
+export function resolveHooksConfig(
+  cfg: OpenClawConfig,
+  opts?: { logger?: { warn: (msg: string) => void } },
+): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
   }
   const token = cfg.hooks?.token?.trim();
   if (!token) {
-    throw new Error("hooks.enabled requires hooks.token");
+    // Graceful degradation: disable hooks instead of crashing the gateway.
+    // This allows other channels (WhatsApp, Telegram, etc.) to start normally.
+    const msg =
+      "hooks.enabled is true but hooks.token is missing; hooks feature disabled. " +
+      'Set hooks.token in config or run "openclaw hooks token" to generate one.';
+    if (opts?.logger) {
+      opts.logger.warn(msg);
+    } else {
+      console.warn(`[hooks] ${msg}`);
+    }
+    return null;
   }
   const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
