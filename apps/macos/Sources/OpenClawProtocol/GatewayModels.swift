@@ -1191,17 +1191,21 @@ public struct SessionsResetParams: Codable, Sendable {
 public struct SessionsDeleteParams: Codable, Sendable {
     public let key: String
     public let deletetranscript: Bool?
+    public let emitlifecyclehooks: Bool?
 
     public init(
         key: String,
-        deletetranscript: Bool?
+        deletetranscript: Bool?,
+        emitlifecyclehooks: Bool?
     ) {
         self.key = key
         self.deletetranscript = deletetranscript
+        self.emitlifecyclehooks = emitlifecyclehooks
     }
     private enum CodingKeys: String, CodingKey {
         case key
         case deletetranscript = "deleteTranscript"
+        case emitlifecyclehooks = "emitLifecycleHooks"
     }
 }
 

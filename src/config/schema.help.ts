@@ -345,6 +345,10 @@ export const FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
     "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
+  "session.threadBindings.enabled":
+    "Global master switch for thread-bound session routing features. Channel/provider keys (for example channels.discord.threadBindings.enabled) override this default. Default: true.",
+  "session.threadBindings.ttlHours":
+    "Default auto-unfocus TTL in hours for thread-bound sessions across providers/channels. Set 0 to disable (default: 24). Provider keys (for example channels.discord.threadBindings.ttlHours) override this.",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":
@@ -439,6 +443,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
+  "channels.discord.threadBindings.enabled":
+    "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+  "channels.discord.threadBindings.ttlHours":
+    "Auto-unfocus TTL in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable (default: 24). Overrides session.threadBindings.ttlHours when set.",
+  "channels.discord.threadBindings.spawnSubagentSessions":
+    "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":

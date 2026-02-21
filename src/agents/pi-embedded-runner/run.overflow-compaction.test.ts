@@ -1,5 +1,6 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
@@ -16,6 +17,7 @@ const mockedSessionLikelyHasOversizedToolResults = vi.mocked(sessionLikelyHasOve
 const mockedTruncateOversizedToolResultsInSession = vi.mocked(
   truncateOversizedToolResultsInSession,
 );
+const mockedPickFallbackThinkingLevel = vi.mocked(pickFallbackThinkingLevel);
 
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   beforeEach(() => {
@@ -105,5 +107,30 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.meta.error?.kind).toBe("context_overflow");
+  });
+
+  it("returns retry_limit when repeated retries never converge", async () => {
+    mockedRunEmbeddedAttempt.mockReset();
+    mockedCompactDirect.mockReset();
+    mockedPickFallbackThinkingLevel.mockReset();
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
+    );
+    mockedPickFallbackThinkingLevel.mockReturnValue("low");
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-1",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(result.payloads?.[0]?.isError).toBe(true);
   });
 });
