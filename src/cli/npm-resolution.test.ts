@@ -3,6 +3,8 @@ import {
   buildNpmInstallRecordFields,
   logPinnedNpmSpecMessages,
   mapNpmResolutionMetadata,
+  resolvePinnedNpmInstallRecord,
+  resolvePinnedNpmInstallRecordForCli,
   resolvePinnedNpmSpec,
 } from "./npm-resolution.js";
 
@@ -102,5 +104,67 @@ describe("npm-resolution helpers", () => {
 
     expect(logs).toEqual(["notice-1"]);
     expect(warns).toEqual(["warn-1"]);
+  });
+
+  it("resolves pinned install record and emits pin notice", () => {
+    const logs: string[] = [];
+    const warns: string[] = [];
+    const record = resolvePinnedNpmInstallRecord({
+      rawSpec: "@openclaw/plugin-alpha@latest",
+      pin: true,
+      installPath: "/tmp/openclaw/extensions/alpha",
+      version: "1.2.3",
+      resolution: {
+        name: "@openclaw/plugin-alpha",
+        version: "1.2.3",
+        resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+      },
+      log: (message) => logs.push(message),
+      warn: (message) => warns.push(message),
+    });
+
+    expect(record).toEqual({
+      source: "npm",
+      spec: "@openclaw/plugin-alpha@1.2.3",
+      installPath: "/tmp/openclaw/extensions/alpha",
+      version: "1.2.3",
+      resolvedName: "@openclaw/plugin-alpha",
+      resolvedVersion: "1.2.3",
+      resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+      integrity: undefined,
+      shasum: undefined,
+      resolvedAt: undefined,
+    });
+    expect(logs).toEqual(["Pinned npm install record to @openclaw/plugin-alpha@1.2.3."]);
+    expect(warns).toEqual([]);
+  });
+
+  it("resolves pinned install record for CLI and formats warning output", () => {
+    const logs: string[] = [];
+    const record = resolvePinnedNpmInstallRecordForCli(
+      "@openclaw/plugin-alpha@latest",
+      true,
+      "/tmp/openclaw/extensions/alpha",
+      "1.2.3",
+      undefined,
+      (message) => logs.push(message),
+      (message) => `[warn] ${message}`,
+    );
+
+    expect(record).toEqual({
+      source: "npm",
+      spec: "@openclaw/plugin-alpha@latest",
+      installPath: "/tmp/openclaw/extensions/alpha",
+      version: "1.2.3",
+      resolvedName: undefined,
+      resolvedVersion: undefined,
+      resolvedSpec: undefined,
+      integrity: undefined,
+      shasum: undefined,
+      resolvedAt: undefined,
+    });
+    expect(logs).toEqual([
+      "[warn] Could not resolve exact npm version for --pin; storing original npm spec.",
+    ]);
   });
 });
