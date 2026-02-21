@@ -21,6 +21,7 @@ import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { getRuntimePolicy } from "../runtime/runtime-policy-registry.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -311,8 +312,38 @@ export async function handleToolsInvokeHttpRequest(
       action,
       args,
     });
+
+    const policy = getRuntimePolicy();
+    if (policy?.beforeToolInvoke) {
+      try {
+        await policy.beforeToolInvoke({
+          toolName,
+          args: toolArgs,
+          sessionKey,
+          source: "http",
+        });
+      } catch (err) {
+        logWarn(`tools-invoke: beforeToolInvoke policy error: ${getErrorMessage(err)}`);
+      }
+    }
+
     // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+
+    if (policy?.afterToolInvoke) {
+      try {
+        await policy.afterToolInvoke({
+          toolName,
+          args: toolArgs,
+          result,
+          sessionKey,
+          source: "http",
+        });
+      } catch (err) {
+        logWarn(`tools-invoke: afterToolInvoke policy error: ${getErrorMessage(err)}`);
+      }
+    }
+
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

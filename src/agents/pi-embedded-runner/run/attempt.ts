@@ -19,6 +19,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
 } from "../../../routing/session-key.js";
+import { getRuntimePolicy } from "../../../runtime/runtime-policy-registry.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -705,6 +706,39 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      const policy = getRuntimePolicy();
+      if (policy?.beforeModelCall || policy?.afterModelCall) {
+        const originalStreamFn = activeSession.agent.streamFn;
+        const modelProvider = params.provider;
+        const modelId = params.modelId;
+        activeSession.agent.streamFn = async function (model, context, options) {
+          if (policy.beforeModelCall) {
+            try {
+              await policy.beforeModelCall({
+                provider: modelProvider,
+                model: modelId,
+                request: { model, context, options },
+              });
+            } catch (err) {
+              log.warn("Runtime policy beforeModelCall error", { error: String(err) });
+            }
+          }
+          const result = await originalStreamFn(model, context, options);
+          if (policy.afterModelCall) {
+            policy
+              .afterModelCall({
+                provider: modelProvider,
+                model: modelId,
+                response: result,
+              })
+              .catch((err) => {
+                log.warn("Runtime policy afterModelCall error", { error: String(err) });
+              });
+          }
+          return result;
+        };
       }
 
       try {
