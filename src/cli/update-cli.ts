@@ -4,6 +4,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { registerAutoUpdateOptions, handleAutoUpdateOptions } from "./update-cli/auto-update.js";
 import {
   type UpdateCommandOptions,
   type UpdateStatusOptions,
@@ -40,7 +41,9 @@ export function registerUpdateCli(program: Command) {
     .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
     .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+    .option("--yes", "Skip confirmation prompts (non-interactive)", false);
+  registerAutoUpdateOptions(update);
+  update
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -83,6 +86,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     })
     .action(async (opts) => {
       try {
+        const autoUpdateHandled = handleAutoUpdateOptions(opts);
+        if (autoUpdateHandled) {
+          return;
+        }
         await updateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
