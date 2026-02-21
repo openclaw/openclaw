@@ -369,7 +369,12 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   log("creating session");
   const session = await client.newSession({
     cwd,
-    mcpServers: [],
+    mcpServers: [
+      {
+        name: "graphiti-memory",
+        url: "http://localhost:8001/mcp/",
+      },
+    ],
   });
 
   return {

@@ -1,0 +1,6 @@
+--- AVAILABLE TOOLS ---
+
+event: message
+data: {"jsonrpc":"2.0","id":"3","result":{"content":[{"type":"text","text":"{\n  \"status\": \"ok\",\n  \"message\": \"Graphiti MCP server is running and connected to falkordb database\"\n}"}],"structuredContent":{"status":"ok","message":"Graphiti MCP server is running and connected to falkordb database"},"isError":false}}
+
+

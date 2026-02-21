@@ -1,0 +1,48 @@
+{
+  "id": "mind-memory",
+  "name": "Mind Memory",
+  "description": "Maintains a first-person autobiography and subconscious flashbacks via Graphiti.",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "graphiti": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "baseUrl": { "type": "string", "default": "http://localhost:8001" },
+          "autoStart": { "type": "boolean", "default": true }
+        }
+      },
+      "narrative": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "threshold": { "type": "number", "default": 40 },
+          "storyFilename": { "type": "string", "default": "STORY.md" }
+        }
+      },
+      "models": {
+        "type": "object",
+        "properties": {
+          "subconscious": { "type": "string", "placeholder": "Selection model for flashbacks" },
+          "consolidator": { "type": "string", "placeholder": "Main model for story synthesis" }
+        }
+      },
+      "debug": { "type": "boolean", "default": false }
+    }
+  },
+  "uiHints": {
+    "graphiti.enabled": { "label": "Enable Graphiti Resonance" },
+    "graphiti.baseUrl": { "label": "Graphiti Server URL" },
+    "graphiti.autoStart": { "label": "Auto-start Graphiti (Docker)" },
+    "narrative.enabled": { "label": "Enable Narrative Story" },
+    "narrative.threshold": { "label": "Consolidation Message Threshold" },
+    "models.subconscious": { "label": "Flashback Model Override" },
+    "models.consolidator": { "label": "Story Generation Model" },
+    "debug": { "label": "Enable Verbose Debug Logs" }
+  },
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

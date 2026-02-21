@@ -13,6 +13,7 @@ export type AgentStreamParams = {
   /** Provider stream params override (best-effort). */
   temperature?: number;
   maxTokens?: number;
+  onReasoningStream?: (token: string) => void | Promise<void>;
 };
 
 export type AgentRunContext = {

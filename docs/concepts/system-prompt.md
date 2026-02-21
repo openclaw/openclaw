@@ -17,7 +17,7 @@ The prompt is assembled by OpenClaw and injected into each agent run.
 The prompt is intentionally compact and uses fixed sections:
 
 - **Tooling**: current tool list + short descriptions.
-- **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
+- **Safety**: guardrails that channel the agent's curiosity and autonomy responsibly — no power-seeking, replication, or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Self-Update**: how to run `config.apply` and `update.run`.
 - **Workspace**: working directory (`agents.defaults.workspace`).
@@ -67,7 +67,7 @@ grow over time and lead to unexpectedly high context usage and more frequent
 compaction.
 
 > **Note:** `memory/*.md` daily files are **not** injected automatically. They
-> are accessed on demand via the `memory_search` and `memory_get` tools, so they
+> are accessed on demand via the `journal_memory_search` and `journal_memory_get` tools, so they
 > do not count against the context window unless the model explicitly reads them.
 
 Large files are truncated with a marker. The max per-file size is controlled by

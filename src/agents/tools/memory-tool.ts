@@ -47,10 +47,10 @@ export function createMemorySearchTool(options: {
   }
   const { cfg, agentId } = ctx;
   return {
-    label: "Memory Search",
-    name: "memory_search",
+    label: "Journal Memory Search",
+    name: "journal_memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search MEMORY.md (facts, data, decisions) + memory/*.md (daily logs and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute: async (_toolCallId, params) => {
       const query = readStringParam(params, "query", { required: true });
@@ -108,10 +108,10 @@ export function createMemoryGetTool(options: {
   }
   const { cfg, agentId } = ctx;
   return {
-    label: "Memory Get",
-    name: "memory_get",
+    label: "Journal Memory Get",
+    name: "journal_memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
+      "Safe snippet read from MEMORY.md (facts/data), memory/*.md (daily logs), or configured memorySearch.extraPaths with optional from/lines; use after journal_memory_search to pull only the needed lines and keep context small.",
     parameters: MemoryGetSchema,
     execute: async (_toolCallId, params) => {
       const relPath = readStringParam(params, "path", { required: true });

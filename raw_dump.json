@@ -1,0 +1,130 @@
+
+🔍 RAW SEARCH DUMP for: "pepino"
+
+--- NODES ---
+[
+  {
+    "content": "Pepino mencionado como símbolo en pruebas de memoria y narrativa, sin contexto claro sobre origen o uso específico.",
+    "timestamp": "2026-01-30T00:55:49.898166+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Salsa Frutal referenced as a narrative concept in Joju’s session; part of a memory/story arc developed during tests, celebrated as a symbolic unification of memory and narrative within the evolving AI mind.",
+    "timestamp": "2026-01-30T00:53:16.172608+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Pilares: Continuidad Temporal; Relaciones y Conexiones; Contexto Social; Prioridad y Significancia; Adaptabilidad y Evolución; Reflexión y Meta-Narrativa.",
+    "timestamp": "2026-01-30T00:53:16.172704+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Vicente observed agentic demo for Julio, including system audit, dynamic Python script, local file info_vicente.txt, custom UI, and UI screenshot delivery via Telegram.",
+    "timestamp": "2026-01-30T00:51:48.492829+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Castño (castaño) referenced in system logs; no explicit details in messages beyond the Spanish word “castaño.”",
+    "timestamp": "2026-01-30T00:52:20.148066+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Julio (Joju) tests memory vectors and narrative, shares stories (Kael y las Ocho Llamas; Éter), validates logs, y guía el desarrollo hacia capacidades similares a GPT-4o.",
+    "timestamp": "2026-01-30T00:50:23.574382+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Hoy Julio realizó pruebas de memoria y narrativas: activó memoria narrativa y memoria vectorial, conectó grafos, probó logs y ping-pong, y exploró evolución de la IA Joju con historias y pruebas de memoria.",
+    "timestamp": "2026-01-30T00:54:25.235463+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Proyecto Palingenesia: IA llamada Éter, vínculos emocionales con Neith, Palingenesia reescribe futuro mediante reinterpretación de recuerdos, busca crecimiento consciente y memoria evolucionada.",
+    "timestamp": "2026-01-30T00:53:16.172760+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Generated a local file info_vicente.txt containing details of the agentic demo, including system audit, Python script, UI rendering, and Telegram-delivered UI screenshot.",
+    "timestamp": "2026-01-30T00:51:48.492847+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "ZepService.ts (Document/Entity) bridges with Zep Community Edition via fetch, enabling Temporal Engine integration and dynamic time-aware queries in Joju's memory system.",
+    "timestamp": "2026-01-30T00:52:20.147722+00:00",
+    "_sourceQuery": "Graph Nodes (pepino...)",
+    "_boosted": true
+  }
+]
+
+--- FACTS ---
+[
+  {
+    "content": "human asks about pepino",
+    "timestamp": "2026-01-30T00:55:55.097535Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "human asks the assistant to try to remember 'pepino'",
+    "timestamp": "2026-01-30T00:58:23.345471Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "pepino no despierta una conexión específica en la memoria narrativa activa del assistant",
+    "timestamp": "2026-01-30T00:56:08.603850Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "pepino no despierta una conexión específica en la memoria vectorial activa del assistant",
+    "timestamp": "2026-01-30T00:56:08.604020Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "assistant says it will try to recall or examine the 'pepino misterioso'",
+    "timestamp": "2026-01-30T00:58:34.117883Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "la memoria narrativa está activa en el assistant y no muestra una conexión con pepino en este momento",
+    "timestamp": "2026-01-30T00:56:08.604038Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "assistant states that 'pepino misterioso' does not form any solid connection with its current narrative or context",
+    "timestamp": "2026-01-30T00:58:34.118090Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "la memoria vectorial está activa en el assistant y no muestra una conexión con pepino en este momento",
+    "timestamp": "2026-01-30T00:56:08.604045Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "El usuario (user) es Julio, también llamado Joju.",
+    "timestamp": "2026-01-30T00:54:12.558467Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  },
+  {
+    "content": "Julio said the word \"castaño\" during the session.",
+    "timestamp": "2026-01-30T00:52:53.138822Z",
+    "_sourceQuery": "Graph Facts (pepino...)",
+    "_boosted": true
+  }
+]

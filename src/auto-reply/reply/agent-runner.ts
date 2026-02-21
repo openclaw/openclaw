@@ -56,11 +56,12 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const TOOL_RESULT_DRAIN_TIMEOUT_MS = 8_000;
 const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
-  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
-  /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+  /\b(?:i\s*['']?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['']?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
 function hasUnbackedReminderCommitment(text: string): boolean {
@@ -177,6 +178,10 @@ export async function runReplyAgent(params: {
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
+  const toolResultDrainTimeoutMs =
+    typeof opts?.toolResultTimeoutMs === "number" && Number.isFinite(opts.toolResultTimeoutMs)
+      ? Math.max(0, Math.floor(opts.toolResultTimeoutMs))
+      : TOOL_RESULT_DRAIN_TIMEOUT_MS;
 
   const replyToChannel =
     sessionCtx.OriginatingChannel ??
@@ -422,7 +427,25 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      const settlePending = Promise.allSettled(pendingToolTasks);
+      if (toolResultDrainTimeoutMs <= 0) {
+        await settlePending;
+      } else {
+        const drainState = await new Promise<"settled" | "timeout">((resolve) => {
+          const timeoutId = setTimeout(() => {
+            resolve("timeout");
+          }, toolResultDrainTimeoutMs);
+          void settlePending.finally(() => {
+            clearTimeout(timeoutId);
+            resolve("settled");
+          });
+        });
+        if (drainState === "timeout") {
+          defaultRuntime.log(
+            `tool result drain timed out after ${toolResultDrainTimeoutMs}ms; continuing reply finalization`,
+          );
+        }
+      }
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -513,7 +536,6 @@ export async function runReplyAgent(params: {
       accountId: sessionCtx.AccountId,
     });
     const { replyPayloads } = payloadResult;
-    didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);

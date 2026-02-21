@@ -113,11 +113,15 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      "User-Agent": "GithubCopilot/1.243.0",
+      "Editor-Version": "vscode/1.95.0",
+      "Editor-Plugin-Version": "copilot-chat/0.22.4",
     },
   });
 
   if (!res.ok) {
-    throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
+    const errorBody = await res.text().catch(() => "(could not read body)");
+    throw new Error(`Copilot token exchange failed: HTTP ${res.status} - ${errorBody}`);
   }
 
   const json = parseCopilotTokenResponse(await res.json());

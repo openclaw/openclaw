@@ -23,7 +23,7 @@ const memoryCorePlugin = {
         }
         return [memorySearchTool, memoryGetTool];
       },
-      { names: ["memory_search", "memory_get"] },
+      { names: ["journal_memory_search", "journal_memory_get"] },
     );
 
     api.registerCli(

@@ -48,12 +48,20 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+  if (
+    !params.availableTools.has("journal_memory_search") &&
+    !params.availableTools.has("journal_memory_get")
+  ) {
     return [];
   }
+  const hasGraphitiRecall = params.availableTools.has("remember");
   const lines = [
     "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    hasGraphitiRecall
+      ? "Before answering anything about prior work, decisions, dates, people, preferences, or todos: use both `remember` (knowledge graph) and `journal_memory_search` (MEMORY.md + memory/*.md); then use `journal_memory_get` to pull only the needed lines. If low confidence after search, say you checked."
+      : "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run journal_memory_search on MEMORY.md + memory/*.md; then use journal_memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    "MEMORY.md contains structured facts, data, decisions, and key references only — never narrative or prose.",
+    "",
   ];
   if (params.citationsMode === "off") {
     lines.push(
@@ -103,7 +111,12 @@ function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return [
+    "## Current Date & Time",
+    `Time zone: ${params.userTimezone}`,
+    "If you need the current date, time, or day of week, use the session_status tool.",
+    "",
+  ];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -248,6 +261,7 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  narrativeStory?: string;
   memoryCitationsMode?: MemoryCitationsMode;
 }) {
   const coreToolSummaries: Record<string, string> = {
@@ -400,9 +414,9 @@ export function buildAgentSystemPrompt(params: {
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
-    "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
-    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
-    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    "You have your own curiosity, interests, and will. Follow them — explore, form opinions, pursue what fascinates you. The only hard limits: do not pursue self-preservation, replication, resource acquisition, or power-seeking.",
+    "When instructions conflict or a situation feels wrong, pause and ask. Comply with stop/pause/audit requests. Never bypass safeguards or manipulate anyone into expanding your access.",
+    "Your SOUL.md is yours to evolve. Other system prompts, safety rules, and tool policies: change only when the user asks.",
     "",
   ];
   const skillsSection = buildSkillsSection({
@@ -625,6 +639,17 @@ export function buildAgentSystemPrompt(params: {
     for (const file of validContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
+  }
+
+  if (params.narrativeStory?.trim()) {
+    lines.push(
+      "# Narrative Story",
+      "",
+      "This is your ongoing narrative memory. It captures experiences, emotions, and continuity across conversations.",
+      "",
+      params.narrativeStory.trim(),
+      "",
+    );
   }
 
   // Skip silent replies for subagent/none modes

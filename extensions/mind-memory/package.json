@@ -1,0 +1,14 @@
+{
+  "name": "@moltbot/mind-memory",
+  "version": "0.1.0",
+  "description": "Advanced narrative memory and subconscious resonance via Graphiti",
+  "main": "dist/index.js",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "zod": "^3.22.4"
+  }
+}

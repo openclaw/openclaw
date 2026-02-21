@@ -34,7 +34,7 @@ class MarkdownDirective extends Directive {
           const iframe = document.createElement("iframe");
           iframe.classList.add("html-view");
           iframe.srcdoc = str;
-          iframe.sandbox = "";
+          iframe.setAttribute("sandbox", "");
           return iframe.innerHTML;
         }
 

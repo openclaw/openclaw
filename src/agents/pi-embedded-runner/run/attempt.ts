@@ -467,6 +467,7 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
+      narrativeStory: params.narrativeStory,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({
@@ -736,6 +737,15 @@ export async function runEmbeddedAttempt(
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
+
+        // MIND INTEGRATION: Narrativize messages dropped by turn-limits
+        if (validated.length > limited.length && params.onHistoryTruncated) {
+          const dropped = validated.slice(0, validated.length - limited.length);
+          await params.onHistoryTruncated(dropped).catch((err) => {
+            log.warn(`Failed to narrativize truncated history: ${err}`);
+          });
+        }
+
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }

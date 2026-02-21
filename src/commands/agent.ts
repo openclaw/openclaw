@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -557,7 +558,26 @@ export async function agentCommand(
             resolvedThinkLevel,
             timeoutMs,
             runId,
-            opts,
+            opts: {
+              ...opts,
+              streamParams: {
+                ...opts?.streamParams,
+                onReasoningStream:
+                  opts?.streamParams?.onReasoningStream ??
+                  ((token: string) => {
+                    try {
+                      const json =
+                        JSON.stringify({
+                          type: "mind_event",
+                          stream: "thought",
+                          data: { text: token },
+                          timestamp: Date.now(),
+                        }) + "\n";
+                      fs.writeSync(1, json);
+                    } catch {}
+                  }),
+              },
+            },
             runContext,
             spawnedBy,
             messageChannel,
@@ -566,6 +586,28 @@ export async function agentCommand(
             agentDir,
             primaryProvider: provider,
             onAgentEvent: (evt) => {
+              // [MIND] Stream internal events for frontend visualization
+              try {
+                if (
+                  evt.stream === "lifecycle" ||
+                  evt.stream === "tool" ||
+                  evt.stream === "assistant" ||
+                  evt.stream === "auth-profile"
+                ) {
+                  // Use a distinct prefix or structure specific for the bridge
+                  const json =
+                    JSON.stringify({
+                      type: "mind_event",
+                      stream: evt.stream,
+                      data: evt.data,
+                      timestamp: Date.now(),
+                    }) + "\n";
+                  fs.writeSync(1, json);
+                }
+              } catch {
+                // Ignore serialization errors to strictly avoid breaking the run
+              }
+
               // Track lifecycle end for fallback emission below.
               if (
                 evt.stream === "lifecycle" &&

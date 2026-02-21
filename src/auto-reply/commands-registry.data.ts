@@ -198,7 +198,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     }),
     defineChatCommand({
       key: "export-session",
-      nativeName: "export-session",
+      nativeName: "export_session",
       description: "Export current session to HTML file with full system prompt.",
       textAliases: ["/export-session", "/export"],
       acceptsArgs: true,

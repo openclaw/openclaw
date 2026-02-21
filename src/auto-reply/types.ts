@@ -47,6 +47,8 @@ export type GetReplyOptions = {
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
+  /** Timeout for draining pending tool-result callbacks before finalizing a run (ms). */
+  toolResultTimeoutMs?: number;
   /** If provided, only load these skills for this session (empty = no skills). */
   skillFilter?: string[];
   /** Mutable ref to track if a reply was sent (for Slack "first" threading mode). */

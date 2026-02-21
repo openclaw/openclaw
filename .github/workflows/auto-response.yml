@@ -8,8 +8,11 @@ on:
 
 permissions: {}
 
+# Disabled in forks - only runs in upstream openclaw/openclaw repository
+
 jobs:
   auto-response:
+    if: github.repository == 'openclaw/openclaw'
     permissions:
       issues: write
       pull-requests: write

@@ -1393,7 +1393,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 | `group:runtime`    | `exec`, `process` (`bash` is accepted as an alias for `exec`)                            |
 | `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                   |
 | `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                                            |
+| `group:memory`     | `remember`, `journal_memory_search`, `journal_memory_get`                                |
 | `group:web`        | `web_search`, `web_fetch`                                                                |
 | `group:ui`         | `browser`, `canvas`                                                                      |
 | `group:automation` | `cron`, `gateway`                                                                        |

@@ -99,10 +99,14 @@ function generateHtml(sessionData: SessionData): string {
 
 function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {
   const normalized = commandBodyNormalized.trim();
-  if (normalized === "/export-session" || normalized === "/export") {
+  if (
+    normalized === "/export-session" ||
+    normalized === "/export_session" ||
+    normalized === "/export"
+  ) {
     return {};
   }
-  const args = normalized.replace(/^\/(export-session|export)\s*/, "").trim();
+  const args = normalized.replace(/^\/(export-session|export_session|export)\s*/, "").trim();
   // First non-flag argument is the output path
   const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
   return { outputPath };

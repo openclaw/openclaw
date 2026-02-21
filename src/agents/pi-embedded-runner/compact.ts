@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -281,8 +282,13 @@ export async function compactEmbeddedPiSessionDirect(
     const reason = error ?? `Unknown model: ${provider}/${modelId}`;
     return fail(reason);
   }
+  type ApiKeyInfo = {
+    apiKey?: string;
+    mode?: string;
+  };
+  let apiKeyInfo: ApiKeyInfo;
   try {
-    const apiKeyInfo = await getApiKeyForModel({
+    apiKeyInfo = await getApiKeyForModel({
       model,
       cfg: params.config,
       profileId: params.authProfileId,
@@ -613,10 +619,97 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // [MIND] Consolidate memory before compaction
+        type MindMemoryConfig = {
+          enabled?: boolean;
+          config?: {
+            debug?: boolean;
+            graphiti?: {
+              baseUrl?: string;
+            };
+            narrative?: {
+              enabled?: boolean;
+              autoBootstrapHistory?: boolean;
+            };
+          };
+        };
+        const mindConfig = params.config?.plugins?.entries?.["mind-memory"] as
+          | MindMemoryConfig
+          | undefined;
+        const mindDebug = !!mindConfig?.config?.debug;
+        const isMindEnabled =
+          mindConfig?.enabled && (mindConfig?.config?.narrative?.enabled ?? true);
+
+        if (isMindEnabled) {
+          try {
+            const { createSubconsciousAgent } = await import("./subconscious-agent.js");
+            const subconsciousAgent = createSubconsciousAgent({
+              model,
+              authStorage,
+              modelRegistry,
+              debug: mindDebug,
+              autoBootstrapHistory: mindConfig?.config?.narrative?.autoBootstrapHistory ?? false,
+            });
+            const { GraphService } = await import("../../services/memory/GraphService.js");
+            const { ConsolidationService } =
+              await import("../../services/memory/ConsolidationService.js");
+
+            const gUrl = mindConfig?.config?.graphiti?.baseUrl || "http://localhost:8001";
+            const gs = new GraphService(gUrl, mindDebug);
+            const cons = new ConsolidationService(gs, mindDebug);
+            const storyPath = path.join(effectiveWorkspace, "STORY.md");
+
+            const { resolveContextWindowInfo } = await import("../context-window-guard.js");
+            const ctxInfo = resolveContextWindowInfo({
+              cfg: params.config,
+              provider,
+              modelId,
+              modelContextWindow: model.contextWindow,
+              defaultTokens: 50000,
+            });
+            const safeTokenLimit = Math.floor((ctxInfo.tokens || 50000) * 0.5);
+
+            if (mindDebug) {
+              process.stderr.write(
+                `📖 [MIND] Syncing ${session.messages.length} messages to ${storyPath} (limit: ${safeTokenLimit})\n`,
+              );
+            }
+            const { retryAsync } = await import("../../infra/retry.js");
+            await retryAsync(
+              () =>
+                cons.syncStoryWithSession(
+                  session.messages,
+                  storyPath,
+                  subconsciousAgent,
+                  undefined,
+                  safeTokenLimit,
+                ),
+              {
+                attempts: 2,
+                minDelayMs: 1000,
+                maxDelayMs: 10_000,
+                jitter: 0.2,
+                label: "pre-compaction-story-sync",
+                onRetry: ({ attempt, maxAttempts, delayMs, err }) => {
+                  process.stderr.write(
+                    `⚠️ [MIND] Pre-compaction story sync retry ${attempt}/${maxAttempts}: ${(err as Error).message}. Next in ${delayMs}ms...\n`,
+                  );
+                },
+              },
+            );
+            if (mindDebug) {
+              process.stderr.write(`📖 [MIND] Story sync completed\n`);
+            }
+          } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : String(e);
+            process.stderr.write(
+              `❌ [MIND] Mind consolidation failed during compaction: ${message}\n`,
+            );
+          }
+        }
+
         // Run before_compaction hooks (fire-and-forget).
-        // The session JSONL already contains all messages on disk, so plugins
-        // can read sessionFile asynchronously and process in parallel with
-        // the compaction LLM call — no need to block or wait for after_compaction.
         const hookRunner = getGlobalHookRunner();
         const hookCtx = {
           agentId: params.sessionKey?.split(":")[0] ?? "main",

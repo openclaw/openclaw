@@ -1,24 +1,14 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🤖 Mindbot — Personal AI with Concious and sub-concious memory architecture
 
 <p align="center">
-    <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
-    </picture>
+  <strong>IDENTITY. MEMORY. EVOLUTION.</strong>
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/openclaw/openclaw/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
-  <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
+**Mindbot** is a fork of **OpenClaw** that adds a deep focus on persistent identity and long-term memory. It is a _personal AI assistant_ designed to evolve alongside you across all your communication channels.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
@@ -146,6 +136,96 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+
+---
+
+## 🧠 Mindbot Fork: Narrative & Memory
+
+Mindbot extends OpenClaw with a **Dual-Process Theory of Mind** architecture, creating an agent that doesn't just process tasks, but maintains a consistent sense of self and historical context across all interactions.
+
+### 1. Dual-Process Memory System
+
+**Conscious System (Foreground)**:
+
+- **Context Window**: Immediate chat history for real-time response generation
+- **Active Recall Tools**:
+  - `remember` - Query the Graphiti knowledge graph for facts and entities
+  - `journal_memory_search` - Semantic search across `MEMORY.md` and `memory/*.md` files
+  - `journal_memory_get` - Read specific memory file content by path
+
+**Subconscious System (Background)**:
+
+- **Narrative Identity (`STORY.md`)**:
+  - First-person autobiography injected into every agent turn
+  - Perpetual across sessions, channels, and restarts
+  - Auto-consolidates conversation batches (~5000 tokens) into narrative form
+  - Compression for stories exceeding 10k words
+- **Memory Resonance (Graphiti)**:
+  - Docker-based temporal knowledge graph (FalkorDB backend)
+  - Automatic "Flashback" retrieval before each turn using semantic search (RAG)
+  - Stores episodes, entities (nodes), and facts (edges)
+  - MCP server integration at `http://localhost:8001`
+- **Automatic Consolidation**:
+  - Background process distills raw conversation into narrative
+  - `pending-episodes.log` tracks messages awaiting narration
+  - Metadata anchors (`<!-- LAST_PROCESSED: timestamp -->`) ensure integrity
+
+### 2. Safety & Integrity
+
+**Memory Safety**:
+
+- **Type Validation**: Strict `typeof` checks prevent object/string confusion
+- **Audit Log**: `pending-episodes.log` provides reliable trace
+- **Heartbeat Protection**: Technical messages filtered from narrative
+- **Metadata Anchors**: HTML comments track consolidation progress
+- **Graceful Degradation**: Failed LLM calls don't corrupt existing memory
+
+**Autonomy Guidelines**:
+
+- **Guided Curiosity**: Agent encouraged to follow its interests
+- **Strict Bounds**: Hard limits on self-preservation, power-seeking, manipulation
+- **User Oversight**: Transparent through narrative logs and clear tool policies
+
+### 4. Configuration
+
+```json5
+{
+  mindConfig: {
+    config: {
+      narrative: {
+        provider: "anthropic", // Narrative model provider
+        model: "claude-opus-4-6", // Model for story generation
+        autoBootstrapHistory: true, // Load historical episodes
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "mind-memory": {
+        enabled: true,
+        config: {
+          graphiti: {
+            baseUrl: "http://localhost:8001",
+            autoStart: true, // Auto-start Docker containers
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### 5. Setup
+
+```bash
+# Start Graphiti knowledge graph (via Docker)
+docker-compose -f extensions/mind-memory/docker-compose.yml up -d
+
+# Or use the setup command
+moltbot mind-memory setup
+```
+
+For complete technical details, architecture diagrams, debugging guide, and configuration examples, see the **[Memory Architecture Documentation](docs/mind/MEMORY_ARCHITECTURE.md)**.
 
 ## Star History
 

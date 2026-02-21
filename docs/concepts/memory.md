@@ -22,7 +22,8 @@ The default workspace layout uses two memory layers:
   - Daily log (append-only).
   - Read today + yesterday at session start.
 - `MEMORY.md` (optional)
-  - Curated long-term memory.
+  - **Structured facts and data only** — decisions, preferences, people, projects, key dates.
+  - No narrative prose (narrative belongs in `STORY.md`).
   - **Only load in the main, private session** (never in group contexts).
 
 These files live under the workspace (`agents.defaults.workspace`, default
@@ -43,11 +44,78 @@ tool call in try/catch logic.
 
 ## When to write memory
 
-- Decisions, preferences, and durable facts go to `MEMORY.md`.
+- **Facts, decisions, preferences, and durable data** go to `MEMORY.md` as concise bullet points.
 - Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
+- **Narrative and story** go to `STORY.md` (managed by Mind's consolidation).
 - If someone says "remember this," write it down (do not keep it in RAM).
-- This area is still evolving. It helps to remind the model to store memories; it will know what to do.
+- `MEMORY.md` format: structured lists grouped by section (Personas, Hechos, Proyectos, Decisiones, Hitos). No prose.
 - If you want something to stick, **ask the bot to write it** into memory.
+
+## MindBot Fork: Narrative Memory & Graphiti
+
+MindBot extends OpenClaw with a **Dual-Process Memory System** that separates immediate conversational logic (conscious) from long-term narrative identity and semantic resonance (subconscious).
+
+### Subconscious System (Automatic)
+
+The subconscious system operates in the background without requiring explicit tool calls:
+
+- **Graphiti Knowledge Graph**: Docker-based temporal graph database (FalkorDB backend) that stores:
+  - **Episodes**: Raw chronological events from every conversation turn
+  - **Entities (Nodes)**: People, places, concepts extracted from conversations
+  - **Facts (Edges)**: Relationships and facts connecting entities
+- **Automatic Flashbacks**: Before each turn, the system queries Graphiti to retrieve relevant memories using semantic search (RAG), injecting "Flashbacks" into context
+- **STORY.md**: First-person narrative autobiography that consolidates all interactions
+  - Managed by automatic consolidation (triggers at ~5000 tokens in `pending-episodes.log`)
+  - Injected into system prompt every turn for historical continuity
+  - Global scope across all channels (`global-user-memory`)
+
+### Conscious Tools (Agent-accessible)
+
+The agent can explicitly search memory using these tools:
+
+- **`remember`**: Query the Graphiti knowledge graph for facts and entities from past conversations
+- **`journal_memory_search`**: Semantic search across `MEMORY.md` and `memory/*.md` files
+- **`journal_memory_get`**: Read specific memory file content by path with optional line ranges
+
+These tools allow the agent to actively recall information when needed, complementing the automatic Flashback system.
+
+### Configuration
+
+Enable the MindBot memory system by configuring the `mind-memory` plugin:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "mind-memory": {
+        enabled: true,
+        config: {
+          graphiti: {
+            baseUrl: "http://localhost:8001",
+            autoStart: true, // Auto-start Docker containers
+          },
+        },
+      },
+    },
+  },
+  mindConfig: {
+    config: {
+      narrative: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        autoBootstrapHistory: true,
+      },
+    },
+  },
+}
+```
+
+### Technical Documentation
+
+For complete technical details on the architecture, consolidation pipeline, model resolution, debugging, and safety mechanisms, see:
+
+- **[Memory Architecture](../mind/MEMORY_ARCHITECTURE.md)** - Complete technical documentation
+- **[Mind Memory Plugin](../plugins/mind-memory.md)** - Setup and configuration guide
 
 ## Automatic memory flush (pre-compaction ping)
 

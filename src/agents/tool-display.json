@@ -284,14 +284,19 @@
       "title": "Session Status",
       "detailKeys": ["sessionKey", "model"]
     },
-    "memory_search": {
-      "emoji": "🧠",
-      "title": "Memory Search",
+    "remember": {
+      "emoji": "💭",
+      "title": "Remember",
       "detailKeys": ["query"]
     },
-    "memory_get": {
+    "journal_memory_search": {
+      "emoji": "🧠",
+      "title": "Journal Memory Search",
+      "detailKeys": ["query"]
+    },
+    "journal_memory_get": {
       "emoji": "📓",
-      "title": "Memory Get",
+      "title": "Journal Memory Get",
       "detailKeys": ["path", "from", "lines"]
     },
     "web_search": {

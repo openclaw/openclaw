@@ -145,7 +145,7 @@ Available groups:
 - `group:runtime`: `exec`, `bash`, `process`
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
-- `group:memory`: `memory_search`, `memory_get`
+- `group:memory`: `remember`, `journal_memory_search`, `journal_memory_get`
 - `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
@@ -482,6 +482,19 @@ Notes:
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
 - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility: "spawned"`, OpenClaw clamps `tools.sessions.visibility` to `tree`.
+
+### `remember`
+
+Search the long-term knowledge graph (Graphiti) for facts, entities, and past conversations.
+
+- `query` (required)
+
+### `journal_memory_search` / `journal_memory_get`
+
+Search and read your persistent local diary (`MEMORY.md` and `memory/*.md`).
+
+- `journal_memory_search`: semantic/keyword search
+- `journal_memory_get`: read specific line ranges from a file
 
 ### `agents_list`
 

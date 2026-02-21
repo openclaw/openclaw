@@ -33,6 +33,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Installation + updates
 
 - [Docker](/install/docker)
+- [Docker Management (Automated)](/concepts/docker)
 - [Nix](/install/nix)
 - [Updating / rollback](/install/updating)
 - [Bun workflow (experimental)](/install/bun)
@@ -45,6 +46,8 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Agent runtime](/concepts/agent)
 - [Agent workspace](/concepts/agent-workspace)
 - [Memory](/concepts/memory)
+- [Memory Architecture](/mind/memory-architecture)
+- [Mind Memory (plugin)](/plugins/mind-memory)
 - [Agent loop](/concepts/agent-loop)
 - [Streaming + chunking](/concepts/streaming)
 - [Multi-agent routing](/concepts/multi-agent)
@@ -84,6 +87,13 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [WebChat](/web/webchat)
 - [Webhooks](/automation/webhook)
 - [Gmail Pub/Sub](/automation/gmail-pubsub)
+
+## Plugins (Extensions)
+
+- [Mind Memory](/plugins/mind-memory)
+- [Voice Call](/plugins/voice-call)
+- [Zalo Personal](/plugins/zalouser)
+- [Plugins Overview](/docs/plugin)
 
 ## Gateway + operations
 

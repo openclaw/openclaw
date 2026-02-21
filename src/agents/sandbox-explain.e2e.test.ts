@@ -55,8 +55,9 @@ describe("sandbox explain helpers", () => {
 
     const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
     expect(policy.allow).toEqual([
-      "memory_search",
-      "memory_get",
+      "remember",
+      "journal_memory_search",
+      "journal_memory_get",
       "read",
       "write",
       "edit",
@@ -76,16 +77,16 @@ describe("sandbox explain helpers", () => {
         sandbox: {
           tools: {
             allow: ["group:memory"],
-            deny: ["memory_get"],
+            deny: ["journal_memory_get"],
           },
         },
       },
     };
 
     const policy = resolveSandboxToolPolicyForAgent(cfg, "main");
-    expect(policy.allow).toContain("memory_search");
-    expect(policy.allow).toContain("memory_get");
-    expect(policy.deny).toContain("memory_get");
+    expect(policy.allow).toContain("journal_memory_search");
+    expect(policy.allow).toContain("journal_memory_get");
+    expect(policy.deny).toContain("journal_memory_get");
   });
 
   it("includes config key paths + main-session hint for non-main mode", () => {

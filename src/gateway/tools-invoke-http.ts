@@ -35,7 +35,7 @@ import {
 import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
-const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const MEMORY_TOOL_NAMES = new Set(["journal_memory_search", "journal_memory_get"]);
 
 type ToolsInvokeBody = {
   tool?: unknown;
