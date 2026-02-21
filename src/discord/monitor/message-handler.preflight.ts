@@ -488,33 +488,41 @@ export async function preflightDiscordMessage(
   // Preflight audio transcription for mention detection in guilds
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
-  const hasAudioAttachment = message.attachments?.some((att: { contentType?: string }) =>
-    att.contentType?.startsWith("audio/"),
-  );
+  // Discord voice messages have the IS_VOICE_MESSAGE flag (1 << 13 = 8192) but their
+  // attachments may lack a contentType field, so we check both contentType and flags.
+  const IS_VOICE_MESSAGE_FLAG = 1 << 13;
+  const isVoiceMessage =
+    typeof message.flags === "number" && (message.flags & IS_VOICE_MESSAGE_FLAG) !== 0;
+  const hasAudioAttachment =
+    isVoiceMessage ||
+    message.attachments?.some((att: { contentType?: string }) =>
+      att.contentType?.startsWith("audio/"),
+    );
+  // Treat media placeholder text (e.g. "<media:document> (1 file)") as empty for
+  // preflight transcription — it's not meaningful user text.
+  const hasOnlyMediaPlaceholder = Boolean(baseText && /^<media:\w+>/.test(baseText.trim()));
   const needsPreflightTranscription =
     !isDirectMessage &&
     shouldRequireMention &&
     hasAudioAttachment &&
-    !baseText &&
+    (!baseText || hasOnlyMediaPlaceholder) &&
     mentionRegexes.length > 0;
 
   if (needsPreflightTranscription) {
     try {
       const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
+      const isAudioAtt = (att: { contentType?: string }) =>
+        att.contentType?.startsWith("audio/") || isVoiceMessage;
       const audioPaths =
         message.attachments
-          ?.filter((att: { contentType?: string; url: string }) =>
-            att.contentType?.startsWith("audio/"),
-          )
+          ?.filter((att: { contentType?: string; url: string }) => isAudioAtt(att))
           .map((att: { url: string }) => att.url) ?? [];
       if (audioPaths.length > 0) {
         const tempCtx = {
           MediaUrls: audioPaths,
           MediaTypes: message.attachments
-            ?.filter((att: { contentType?: string; url: string }) =>
-              att.contentType?.startsWith("audio/"),
-            )
-            .map((att: { contentType?: string }) => att.contentType)
+            ?.filter((att: { contentType?: string; url: string }) => isAudioAtt(att))
+            .map((att: { contentType?: string }) => att.contentType ?? "audio/ogg")
             .filter(Boolean) as string[],
         };
         preflightTranscript = await transcribeFirstAudio({
