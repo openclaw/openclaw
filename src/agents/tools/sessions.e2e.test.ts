@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -22,10 +22,10 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 import { createSessionsListTool } from "./sessions-list-tool.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
-const loadResolveAnnounceTarget = async () => await import("./sessions-announce-target.js");
+let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["resolveAnnounceTarget"];
+let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 
 const installRegistry = async () => {
-  const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -89,6 +89,11 @@ describe("sanitizeTextContent", () => {
   });
 });
 
+beforeAll(async () => {
+  ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
+  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+});
+
 describe("extractAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {
@@ -134,7 +139,6 @@ describe("resolveAnnounceTarget", () => {
   });
 
   it("derives non-WhatsApp announce targets from the session key", async () => {
-    const { resolveAnnounceTarget } = await loadResolveAnnounceTarget();
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
@@ -144,7 +148,6 @@ describe("resolveAnnounceTarget", () => {
   });
 
   it("hydrates WhatsApp accountId from sessions.list when available", async () => {
-    const { resolveAnnounceTarget } = await loadResolveAnnounceTarget();
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {

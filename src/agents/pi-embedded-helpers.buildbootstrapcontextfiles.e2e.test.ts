@@ -118,38 +118,47 @@ describe("buildBootstrapContextFiles", () => {
   });
 });
 
-describe("resolveBootstrapMaxChars", () => {
-  it("returns default when unset", () => {
-    expect(resolveBootstrapMaxChars()).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
-  });
-  it("uses configured value when valid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapMaxChars: 12345 } },
-    } as OpenClawConfig;
-    expect(resolveBootstrapMaxChars(cfg)).toBe(12345);
-  });
-  it("falls back when invalid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapMaxChars: -1 } },
-    } as OpenClawConfig;
-    expect(resolveBootstrapMaxChars(cfg)).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
-  });
-});
+type BootstrapLimitResolverCase = {
+  name: "bootstrapMaxChars" | "bootstrapTotalMaxChars";
+  resolve: (cfg?: OpenClawConfig) => number;
+  defaultValue: number;
+};
 
-describe("resolveBootstrapTotalMaxChars", () => {
-  it("returns default when unset", () => {
-    expect(resolveBootstrapTotalMaxChars()).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
+const BOOTSTRAP_LIMIT_RESOLVERS: BootstrapLimitResolverCase[] = [
+  {
+    name: "bootstrapMaxChars",
+    resolve: resolveBootstrapMaxChars,
+    defaultValue: DEFAULT_BOOTSTRAP_MAX_CHARS,
+  },
+  {
+    name: "bootstrapTotalMaxChars",
+    resolve: resolveBootstrapTotalMaxChars,
+    defaultValue: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  },
+];
+
+describe("bootstrap limit resolvers", () => {
+  it("return defaults when unset", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      expect(resolver.resolve()).toBe(resolver.defaultValue);
+    }
   });
-  it("uses configured value when valid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapTotalMaxChars: 12345 } },
-    } as OpenClawConfig;
-    expect(resolveBootstrapTotalMaxChars(cfg)).toBe(12345);
+
+  it("use configured values when valid", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: { defaults: { [resolver.name]: 12345 } },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg)).toBe(12345);
+    }
   });
-  it("falls back when invalid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapTotalMaxChars: -1 } },
-    } as OpenClawConfig;
-    expect(resolveBootstrapTotalMaxChars(cfg)).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
+
+  it("fall back when values are invalid", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: { defaults: { [resolver.name]: -1 } },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
+    }
   });
 });

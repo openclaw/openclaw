@@ -98,7 +98,7 @@ describe("legacy config detection", () => {
           ?.groupPolicy,
       "allowlist",
     ],
-  ])("%s", (_name, config, readValue, expectedValue) => {
+  ])("defaults: %s", (_name, config, readValue, expectedValue) => {
     expectValidConfigValue({ config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", async () => {
@@ -149,7 +149,7 @@ describe("legacy config detection", () => {
       { channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } } },
       "channels.slack.allowFrom",
     ],
-  ])("%s", (_name, config, expectedPath) => {
+  ])("rejects: %s", (_name, config, expectedPath) => {
     expectInvalidIssuePath(config, expectedPath);
   });
 

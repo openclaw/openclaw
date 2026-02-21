@@ -115,15 +115,6 @@ describe("validateSeccompProfile", () => {
     expect(() => validateSeccompProfile("/tmp/seccomp.json")).not.toThrow();
     expect(() => validateSeccompProfile(undefined)).not.toThrow();
   });
-
-  it("blocks unconfined (case-insensitive)", () => {
-    expect(() => validateSeccompProfile("unconfined")).toThrow(
-      /seccomp profile "unconfined" is blocked/,
-    );
-    expect(() => validateSeccompProfile("Unconfined")).toThrow(
-      /seccomp profile "Unconfined" is blocked/,
-    );
-  });
 });
 
 describe("validateApparmorProfile", () => {
@@ -131,11 +122,23 @@ describe("validateApparmorProfile", () => {
     expect(() => validateApparmorProfile("openclaw-sandbox")).not.toThrow();
     expect(() => validateApparmorProfile(undefined)).not.toThrow();
   });
+});
 
-  it("blocks unconfined (case-insensitive)", () => {
-    expect(() => validateApparmorProfile("unconfined")).toThrow(
-      /apparmor profile "unconfined" is blocked/,
-    );
+describe("profile hardening", () => {
+  it.each([
+    {
+      name: "seccomp",
+      run: (value: string) => validateSeccompProfile(value),
+      expected: /seccomp profile ".+" is blocked/,
+    },
+    {
+      name: "apparmor",
+      run: (value: string) => validateApparmorProfile(value),
+      expected: /apparmor profile ".+" is blocked/,
+    },
+  ])("blocks unconfined profiles (case-insensitive): $name", ({ run, expected }) => {
+    expect(() => run("unconfined")).toThrow(expected);
+    expect(() => run("Unconfined")).toThrow(expected);
   });
 });
 

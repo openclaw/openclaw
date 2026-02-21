@@ -49,6 +49,36 @@ function expectConfigUnchanged(
   expect(applied.next).toEqual(cfg);
 }
 
+type SharedDefaultModelCase = {
+  apply: (cfg: OpenClawConfig) => { changed: boolean; next: OpenClawConfig };
+  defaultModel: string;
+  overrideConfig: OpenClawConfig;
+  alreadyDefaultConfig: OpenClawConfig;
+};
+
+const SHARED_DEFAULT_MODEL_CASES: SharedDefaultModelCase[] = [
+  {
+    apply: applyGoogleGeminiModelDefault,
+    defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
+    overrideConfig: {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    } as OpenClawConfig,
+    alreadyDefaultConfig: {
+      agents: { defaults: { model: { primary: GOOGLE_GEMINI_DEFAULT_MODEL } } },
+    } as OpenClawConfig,
+  },
+  {
+    apply: applyOpencodeZenModelDefault,
+    defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
+    overrideConfig: {
+      agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
+    } as OpenClawConfig,
+    alreadyDefaultConfig: {
+      agents: { defaults: { model: OPENCODE_ZEN_DEFAULT_MODEL } },
+    } as OpenClawConfig,
+  },
+];
+
 describe("applyDefaultModelChoice", () => {
   it("ensures allowlist entry exists when returning an agent override", async () => {
     const defaultModel = "vercel-ai-gateway/anthropic/claude-opus-4.6";
@@ -109,27 +139,27 @@ describe("applyDefaultModelChoice", () => {
   });
 });
 
-describe("applyGoogleGeminiModelDefault", () => {
-  it("sets gemini default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
-    const applied = applyGoogleGeminiModelDefault(cfg);
-    expectPrimaryModelChanged(applied, GOOGLE_GEMINI_DEFAULT_MODEL);
+describe("shared default model behavior", () => {
+  it("sets defaults when model is unset", () => {
+    for (const testCase of SHARED_DEFAULT_MODEL_CASES) {
+      const cfg: OpenClawConfig = { agents: { defaults: {} } };
+      const applied = testCase.apply(cfg);
+      expectPrimaryModelChanged(applied, testCase.defaultModel);
+    }
   });
 
-  it("overrides existing model", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-    };
-    const applied = applyGoogleGeminiModelDefault(cfg);
-    expectPrimaryModelChanged(applied, GOOGLE_GEMINI_DEFAULT_MODEL);
+  it("overrides existing models", () => {
+    for (const testCase of SHARED_DEFAULT_MODEL_CASES) {
+      const applied = testCase.apply(testCase.overrideConfig);
+      expectPrimaryModelChanged(applied, testCase.defaultModel);
+    }
   });
 
-  it("no-ops when already gemini default", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: GOOGLE_GEMINI_DEFAULT_MODEL } } },
-    };
-    const applied = applyGoogleGeminiModelDefault(cfg);
-    expectConfigUnchanged(applied, cfg);
+  it("no-ops when already on the target default", () => {
+    for (const testCase of SHARED_DEFAULT_MODEL_CASES) {
+      const applied = testCase.apply(testCase.alreadyDefaultConfig);
+      expectConfigUnchanged(applied, testCase.alreadyDefaultConfig);
+    }
   });
 });
 
@@ -200,28 +230,6 @@ describe("applyOpenAICodexModelDefault", () => {
 });
 
 describe("applyOpencodeZenModelDefault", () => {
-  it("sets opencode default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
-    const applied = applyOpencodeZenModelDefault(cfg);
-    expectPrimaryModelChanged(applied, OPENCODE_ZEN_DEFAULT_MODEL);
-  });
-
-  it("overrides existing model", () => {
-    const cfg = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
-    } as OpenClawConfig;
-    const applied = applyOpencodeZenModelDefault(cfg);
-    expectPrimaryModelChanged(applied, OPENCODE_ZEN_DEFAULT_MODEL);
-  });
-
-  it("no-ops when already opencode-zen default", () => {
-    const cfg = {
-      agents: { defaults: { model: OPENCODE_ZEN_DEFAULT_MODEL } },
-    } as OpenClawConfig;
-    const applied = applyOpencodeZenModelDefault(cfg);
-    expectConfigUnchanged(applied, cfg);
-  });
-
   it("no-ops when already legacy opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: "opencode-zen/claude-opus-4-5" } },

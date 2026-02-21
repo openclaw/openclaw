@@ -28,23 +28,25 @@ function makeAssistantMessage(
 }
 
 describe("extractAssistantText", () => {
-  it("strips Minimax tool invocation XML from text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `<invoke name="Bash">
+  it("strips tool-only Minimax invocation XML from text", () => {
+    const cases = [
+      `<invoke name="Bash">
 <parameter name="command">netstat -tlnp | grep 18789</parameter>
 </invoke>
 </minimax:tool_call>`,
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("");
+      `<invoke name="Bash">
+<parameter name="command">test</parameter>
+</invoke>
+</minimax:tool_call>`,
+    ];
+    for (const text of cases) {
+      const msg = makeAssistantMessage({
+        role: "assistant",
+        content: [{ type: "text", text }],
+        timestamp: Date.now(),
+      });
+      expect(extractAssistantText(msg)).toBe("");
+    }
   });
 
   it("strips multiple tool invocations", () => {
@@ -268,25 +270,6 @@ describe("extractAssistantText", () => {
     expect(result).toBe("Some text here.More text.");
   });
 
-  it("returns empty string when message is only tool invocations", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `<invoke name="Bash">
-<parameter name="command">test</parameter>
-</invoke>
-</minimax:tool_call>`,
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("");
-  });
-
   it("handles multiple text blocks", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -436,140 +419,62 @@ File contents here`,
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
-  it("strips thinking tags from text content", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "<think>El usuario quiere retomar una tarea...</think>Aquí está tu respuesta.",
-        },
-      ],
-      timestamp: Date.now(),
-    });
+  it("strips reasoning/thinking tag variants", () => {
+    const cases = [
+      {
+        name: "think tag",
+        text: "<think>El usuario quiere retomar una tarea...</think>Aquí está tu respuesta.",
+        expected: "Aquí está tu respuesta.",
+      },
+      {
+        name: "think tag with attributes",
+        text: `<think reason="deliberate">Hidden</think>Visible`,
+        expected: "Visible",
+      },
+      {
+        name: "unclosed think tag",
+        text: "<think>Pensando sobre el problema...",
+        expected: "",
+      },
+      {
+        name: "thinking tag",
+        text: "Before<thinking>internal reasoning</thinking>After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "antthinking tag",
+        text: "<antthinking>Some reasoning</antthinking>The actual answer.",
+        expected: "The actual answer.",
+      },
+      {
+        name: "final wrapper",
+        text: "<final>\nAnswer\n</final>",
+        expected: "Answer",
+      },
+      {
+        name: "thought tag",
+        text: "<thought>Internal deliberation</thought>Final response.",
+        expected: "Final response.",
+      },
+      {
+        name: "multiple think blocks",
+        text: "Start<think>first thought</think>Middle<think>second thought</think>End",
+        expected: "StartMiddleEnd",
+      },
+    ] as const;
 
-    const result = extractAssistantText(msg);
-    expect(result).toBe("Aquí está tu respuesta.");
-  });
-
-  it("strips thinking tags with attributes", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `<think reason="deliberate">Hidden</think>Visible`,
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("Visible");
-  });
-
-  it("strips thinking tags without closing tag", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "<think>Pensando sobre el problema...",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("");
-  });
-
-  it("strips thinking tags with various formats", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Before<thinking>internal reasoning</thinking>After",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("BeforeAfter");
-  });
-
-  it("strips antthinking tags", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "<antthinking>Some reasoning</antthinking>The actual answer.",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("The actual answer.");
-  });
-
-  it("strips final tags while keeping content", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "<final>\nAnswer\n</final>",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("Answer");
-  });
-
-  it("strips thought tags", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "<thought>Internal deliberation</thought>Final response.",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("Final response.");
-  });
-
-  it("handles nested or multiple thinking blocks", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Start<think>first thought</think>Middle<think>second thought</think>End",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("StartMiddleEnd");
+    for (const testCase of cases) {
+      const msg = makeAssistantMessage({
+        role: "assistant",
+        content: [{ type: "text", text: testCase.text }],
+        timestamp: Date.now(),
+      });
+      expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
 describe("formatReasoningMessage", () => {
-  it("returns empty string for empty input", () => {
-    expect(formatReasoningMessage("")).toBe("");
-  });
-
   it("returns empty string for whitespace-only input", () => {
     expect(formatReasoningMessage("   \n  \t  ")).toBe("");
   });
@@ -604,37 +509,51 @@ describe("formatReasoningMessage", () => {
 });
 
 describe("stripDowngradedToolCallText", () => {
-  it("strips [Historical context: ...] blocks", () => {
-    const text = `[Historical context: a different model called tool "exec" with arguments {"command":"git status"}]`;
-    expect(stripDowngradedToolCallText(text)).toBe("");
-  });
+  it("strips downgraded marker blocks while preserving surrounding user-facing text", () => {
+    const cases = [
+      {
+        name: "historical context only",
+        text: `[Historical context: a different model called tool "exec" with arguments {"command":"git status"}]`,
+        expected: "",
+      },
+      {
+        name: "text before historical context",
+        text: `Here is the answer.\n[Historical context: a different model called tool "read"]`,
+        expected: "Here is the answer.",
+      },
+      {
+        name: "text around historical context",
+        text: `Before.\n[Historical context: tool call info]\nAfter.`,
+        expected: "Before.\nAfter.",
+      },
+      {
+        name: "multiple historical context blocks",
+        text: `[Historical context: first tool call]\n[Historical context: second tool call]`,
+        expected: "",
+      },
+      {
+        name: "mixed tool call and historical context",
+        text: `Intro.\n[Tool Call: exec (ID: toolu_1)]\nArguments: { "command": "ls" }\n[Historical context: a different model called tool "read"]`,
+        expected: "Intro.",
+      },
+      {
+        name: "no markers",
+        text: "Just a normal response with no markers.",
+        expected: "Just a normal response with no markers.",
+      },
+    ] as const;
 
-  it("preserves text before [Historical context: ...] blocks", () => {
-    const text = `Here is the answer.\n[Historical context: a different model called tool "read"]`;
-    expect(stripDowngradedToolCallText(text)).toBe("Here is the answer.");
+    for (const testCase of cases) {
+      expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
+    }
   });
+});
 
-  it("preserves text around [Historical context: ...] blocks", () => {
-    const text = `Before.\n[Historical context: tool call info]\nAfter.`;
-    expect(stripDowngradedToolCallText(text)).toBe("Before.\nAfter.");
-  });
-
-  it("strips multiple [Historical context: ...] blocks", () => {
-    const text = `[Historical context: first tool call]\n[Historical context: second tool call]`;
-    expect(stripDowngradedToolCallText(text)).toBe("");
-  });
-
-  it("strips mixed [Tool Call: ...] and [Historical context: ...] blocks", () => {
-    const text = `Intro.\n[Tool Call: exec (ID: toolu_1)]\nArguments: { "command": "ls" }\n[Historical context: a different model called tool "read"]`;
-    expect(stripDowngradedToolCallText(text)).toBe("Intro.");
-  });
-
-  it("returns text unchanged when no markers are present", () => {
-    const text = "Just a normal response with no markers.";
-    expect(stripDowngradedToolCallText(text)).toBe("Just a normal response with no markers.");
-  });
-
-  it("returns empty string for empty input", () => {
-    expect(stripDowngradedToolCallText("")).toBe("");
+describe("empty input handling", () => {
+  it("returns empty string", () => {
+    const helpers = [formatReasoningMessage, stripDowngradedToolCallText];
+    for (const helper of helpers) {
+      expect(helper("")).toBe("");
+    }
   });
 });

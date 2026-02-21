@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
@@ -43,7 +43,15 @@ function expectWrittenPrimaryModel(model: string) {
   });
 }
 
+let modelsSetCommand: typeof import("./models/set.js").modelsSetCommand;
+let modelsFallbacksAddCommand: typeof import("./models/fallbacks.js").modelsFallbacksAddCommand;
+
 describe("models set + fallbacks", () => {
+  beforeAll(async () => {
+    ({ modelsSetCommand } = await import("./models/set.js"));
+    ({ modelsFallbacksAddCommand } = await import("./models/fallbacks.js"));
+  });
+
   beforeEach(() => {
     readConfigFileSnapshot.mockReset();
     writeConfigFile.mockClear();
@@ -52,7 +60,6 @@ describe("models set + fallbacks", () => {
   it("normalizes z.ai provider in models set", async () => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
-    const { modelsSetCommand } = await import("./models/set.js");
 
     await modelsSetCommand("z.ai/glm-4.7", runtime);
 
@@ -62,7 +69,6 @@ describe("models set + fallbacks", () => {
   it("normalizes z-ai provider in models fallbacks add", async () => {
     mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
     const runtime = makeRuntime();
-    const { modelsFallbacksAddCommand } = await import("./models/fallbacks.js");
 
     await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
 
@@ -79,7 +85,6 @@ describe("models set + fallbacks", () => {
   it("normalizes provider casing in models set", async () => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
-    const { modelsSetCommand } = await import("./models/set.js");
 
     await modelsSetCommand("Z.AI/glm-4.7", runtime);
 
