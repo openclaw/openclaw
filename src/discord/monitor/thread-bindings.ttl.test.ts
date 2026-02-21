@@ -66,6 +66,28 @@ describe("thread binding ttl", () => {
     vi.useRealTimers();
   });
 
+  const createDefaultSweeperManager = () =>
+    createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: true,
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+    });
+
+  const bindDefaultThreadTarget = async (
+    manager: ReturnType<typeof createThreadBindingManager>,
+  ) => {
+    await manager.bindTarget({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+  };
+
   it("includes ttl in intro text", () => {
     const intro = resolveThreadBindingIntroText({
       agentId: "main",
@@ -115,22 +137,8 @@ describe("thread binding ttl", () => {
   it("keeps binding when thread sweep probe fails transiently", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: true,
-        sessionTtlMs: 24 * 60 * 60 * 1000,
-      });
-
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
+      const manager = createDefaultSweeperManager();
+      await bindDefaultThreadTarget(manager);
 
       hoisted.restGet.mockRejectedValueOnce(new Error("ECONNRESET"));
 
@@ -146,22 +154,8 @@ describe("thread binding ttl", () => {
   it("unbinds when thread sweep probe reports unknown channel", async () => {
     vi.useFakeTimers();
     try {
-      const manager = createThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: true,
-        sessionTtlMs: 24 * 60 * 60 * 1000,
-      });
-
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
+      const manager = createDefaultSweeperManager();
+      await bindDefaultThreadTarget(manager);
 
       hoisted.restGet.mockRejectedValueOnce({
         status: 404,
