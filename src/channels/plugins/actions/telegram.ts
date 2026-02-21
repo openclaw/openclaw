@@ -223,6 +223,37 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       );
     }
 
+    if (action === "poll") {
+      const to =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "target") ??
+        readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion") ?? readStringParam(params, "question", { required: true });
+      const options = readStringArrayParam(params, "pollOption") ?? (params.options as string[] | undefined);
+      const pollMulti = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
+      const durationHours = readNumberParam(params, "pollDurationHours", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const threadId = readStringOrNumberParam(params, "threadId");
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          to: String(to),
+          question,
+          options,
+          maxSelections: pollMulti ? (options?.length ?? 10) : undefined,
+          durationSeconds: durationSeconds ?? undefined,
+          durationHours: durationHours ?? undefined,
+          isAnonymous: typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined,
+          silent,
+          messageThreadId: threadId != null ? String(threadId) : undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };
