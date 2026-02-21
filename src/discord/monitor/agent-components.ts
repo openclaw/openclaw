@@ -917,6 +917,17 @@ async function handleDiscordComponentEvent(params: {
   values?: string[];
   label: string;
 }): Promise<void> {
+  const interactionCtx = await resolveInteractionContextWithDmAuth({
+    ctx: params.ctx,
+    interaction: params.interaction,
+    label: params.label,
+    componentLabel: params.componentLabel,
+  });
+  if (!interactionCtx) {
+    return;
+  }
+  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+
   const parsed = parseDiscordComponentData(
     params.data,
     resolveInteractionCustomId(params.interaction),
@@ -926,7 +937,7 @@ async function handleDiscordComponentEvent(params: {
     try {
       await params.interaction.reply({
         content: "This component is no longer valid.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -939,7 +950,7 @@ async function handleDiscordComponentEvent(params: {
     try {
       await params.interaction.reply({
         content: "This component has expired.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -947,16 +958,6 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
-    interaction: params.interaction,
-    label: params.label,
-    componentLabel: params.componentLabel,
-  });
-  if (!interactionCtx) {
-    return;
-  }
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildEntries: params.ctx.guildEntries,
@@ -1054,6 +1055,18 @@ async function handleDiscordModalTrigger(params: {
   data: ComponentData;
   label: string;
 }): Promise<void> {
+  const interactionCtx = await resolveInteractionContextWithDmAuth({
+    ctx: params.ctx,
+    interaction: params.interaction,
+    label: params.label,
+    componentLabel: "form",
+    defer: false,
+  });
+  if (!interactionCtx) {
+    return;
+  }
+  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+
   const parsed = parseDiscordComponentData(
     params.data,
     resolveInteractionCustomId(params.interaction),
@@ -1063,7 +1076,7 @@ async function handleDiscordModalTrigger(params: {
     try {
       await params.interaction.reply({
         content: "This button is no longer valid.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -1075,7 +1088,7 @@ async function handleDiscordModalTrigger(params: {
     try {
       await params.interaction.reply({
         content: "This button has expired.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -1088,7 +1101,7 @@ async function handleDiscordModalTrigger(params: {
     try {
       await params.interaction.reply({
         content: "This form is no longer available.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -1096,17 +1109,6 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
-    interaction: params.interaction,
-    label: params.label,
-    componentLabel: "form",
-    defer: false,
-  });
-  if (!interactionCtx) {
-    return;
-  }
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildEntries: params.ctx.guildEntries,
@@ -1190,23 +1192,6 @@ export class AgentComponentButton extends Button {
   }
 
   async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
-    // Parse componentId from Carbon's parsed ComponentData
-    const parsed = parseAgentComponentData(data);
-    if (!parsed) {
-      logError("agent button: failed to parse component data");
-      try {
-        await interaction.reply({
-          content: "This button is no longer valid.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
-      return;
-    }
-
-    const { componentId } = parsed;
-
     const interactionCtx = await resolveInteractionContextWithDmAuth({
       ctx: this.ctx,
       interaction,
@@ -1226,6 +1211,23 @@ export class AgentComponentButton extends Button {
       isDirectMessage,
       memberRoleIds,
     } = interactionCtx;
+
+    // Parse componentId from Carbon's parsed ComponentData
+    const parsed = parseAgentComponentData(data);
+    if (!parsed) {
+      logError("agent button: failed to parse component data");
+      try {
+        await interaction.reply({
+          content: "This button is no longer valid.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
+      return;
+    }
+
+    const { componentId } = parsed;
 
     // Check user allowlist before processing component interaction
     // This prevents unauthorized users from injecting system events.
@@ -1279,23 +1281,6 @@ export class AgentSelectMenu extends StringSelectMenu {
   }
 
   async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
-    // Parse componentId from Carbon's parsed ComponentData
-    const parsed = parseAgentComponentData(data);
-    if (!parsed) {
-      logError("agent select: failed to parse component data");
-      try {
-        await interaction.reply({
-          content: "This select menu is no longer valid.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
-      return;
-    }
-
-    const { componentId } = parsed;
-
     const interactionCtx = await resolveInteractionContextWithDmAuth({
       ctx: this.ctx,
       interaction,
@@ -1315,6 +1300,23 @@ export class AgentSelectMenu extends StringSelectMenu {
       isDirectMessage,
       memberRoleIds,
     } = interactionCtx;
+
+    // Parse componentId from Carbon's parsed ComponentData
+    const parsed = parseAgentComponentData(data);
+    if (!parsed) {
+      logError("agent select: failed to parse component data");
+      try {
+        await interaction.reply({
+          content: "This select menu is no longer valid.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
+      return;
+    }
+
+    const { componentId } = parsed;
 
     // Check user allowlist before processing component interaction.
     const allowed = await ensureAgentComponentInteractionAllowed({
@@ -1517,11 +1519,17 @@ class DiscordComponentModal extends Modal {
   }
 
   async run(interaction: ModalInteraction, data: ComponentData): Promise<void> {
+    try {
+      await interaction.acknowledge();
+    } catch (err) {
+      logError(`discord component modal: failed to acknowledge: ${String(err)}`);
+    }
+
     const modalId = parseDiscordModalId(data, resolveInteractionCustomId(interaction));
     if (!modalId) {
       logError("discord component modal: missing modal id");
       try {
-        await interaction.reply({
+        await interaction.followUp({
           content: "This form is no longer valid.",
           ephemeral: true,
         });
@@ -1534,7 +1542,7 @@ class DiscordComponentModal extends Modal {
     const modalEntry = resolveDiscordModalEntry({ id: modalId, consume: false });
     if (!modalEntry) {
       try {
-        await interaction.reply({
+        await interaction.followUp({
           content: "This form has expired.",
           ephemeral: true,
         });
@@ -1582,7 +1590,7 @@ class DiscordComponentModal extends Modal {
     });
     if (!consumed) {
       try {
-        await interaction.reply({
+        await interaction.followUp({
           content: "This form has expired.",
           ephemeral: true,
         });
@@ -1590,12 +1598,6 @@ class DiscordComponentModal extends Modal {
         // Interaction may have expired
       }
       return;
-    }
-
-    try {
-      await interaction.acknowledge();
-    } catch (err) {
-      logError(`discord component modal: failed to acknowledge: ${String(err)}`);
     }
 
     const eventText = formatModalSubmissionText(consumed, interaction);
