@@ -170,7 +170,10 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       results: [],
       disabled: true,
+      unavailable: true,
       error: "openai embeddings failed: 429 insufficient_quota",
+      warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
+      action: "Top up or switch embedding provider, then retry memory_search.",
     });
   });
 
