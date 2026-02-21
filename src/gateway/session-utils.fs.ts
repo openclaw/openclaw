@@ -8,6 +8,7 @@ import {
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { stripInboundUserContext } from "../shared/chat-envelope.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
@@ -644,7 +645,7 @@ function buildPreviewItems(
       continue;
     }
     if (role === "user") {
-      trimmed = stripEnvelope(trimmed);
+      trimmed = stripInboundUserContext(stripEnvelope(trimmed));
     }
     trimmed = truncatePreviewText(trimmed, maxChars);
     items.push({ role, text: trimmed });
