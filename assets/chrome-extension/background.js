@@ -23,6 +23,12 @@ const tabBySession = new Map()
 /** @type {Map<string, number>} */
 const childSessionToTab = new Map()
 
+/** @type {{tabId:number, retryCount:number}|null} */
+let reconnectCandidate = null
+
+let autoReconnectTimer = null
+let autoReconnectInFlight = false
+
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map()
 
@@ -124,17 +130,109 @@ function onRelayClosed(reason) {
     p.reject(new Error(`Relay disconnected (${reason})`))
   }
 
-  for (const tabId of tabs.keys()) {
-    void chrome.debugger.detach({ tabId }).catch(() => {})
-    setBadge(tabId, 'connecting')
-    void chrome.action.setTitle({
-      tabId,
-      title: 'OpenClaw Browser Relay: disconnected (click to re-attach)',
-    })
+  let candidateTabId = null
+  let candidateAttachOrder = -1
+
+  // Choose one connected tab to keep reconnecting (most recently attached).
+  for (const [tabId, tab] of tabs.entries()) {
+    if (tab.state !== 'connected') continue
+    const order = tab.attachOrder || 0
+    if (order > candidateAttachOrder) {
+      candidateAttachOrder = order
+      candidateTabId = tabId
+    }
   }
+
+  for (const [tabId] of tabs.entries()) {
+    void chrome.debugger.detach({ tabId }).catch(() => {})
+    if (tabId === candidateTabId) {
+      setBadge(tabId, 'connecting')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: disconnected (auto-reconnecting…)',
+      })
+    } else {
+      setBadge(tabId, 'off')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay (click to attach/detach)',
+      })
+    }
+  }
+
+  // Now safe to clear active tracking
   tabs.clear()
   tabBySession.clear()
   childSessionToTab.clear()
+
+  reconnectCandidate = candidateTabId !== null ? { tabId: candidateTabId, retryCount: 0 } : null
+  scheduleAutoReconnect()
+}
+
+function scheduleAutoReconnect(delayMs = 2000) {
+  if (!reconnectCandidate) return
+  if (autoReconnectTimer) return
+  autoReconnectTimer = setTimeout(() => {
+    autoReconnectTimer = null
+    void runAutoReconnectPass()
+  }, delayMs)
+}
+
+function cancelAutoReconnect() {
+  reconnectCandidate = null
+  if (autoReconnectTimer) {
+    clearTimeout(autoReconnectTimer)
+    autoReconnectTimer = null
+  }
+}
+
+async function runAutoReconnectPass() {
+  if (!reconnectCandidate) return
+  if (autoReconnectInFlight) return
+  autoReconnectInFlight = true
+
+  try {
+    const candidate = reconnectCandidate
+
+    const tabId = candidate.tabId
+
+    // Stop retrying if tab no longer exists.
+    const tabExists = await chrome.tabs.get(tabId).catch(() => null)
+    if (!tabExists) {
+      reconnectCandidate = null
+      return
+    }
+
+    if (candidate.retryCount >= 5) {
+      setBadge(tabId, 'error')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: reconnect failed (click to attach again)',
+      })
+      reconnectCandidate = null
+      return
+    }
+
+    // Quick liveness probe before opening WebSocket connection.
+    try {
+      const port = await getRelayPort()
+      await fetch(`http://127.0.0.1:${port}/`, { method: 'HEAD', signal: AbortSignal.timeout(1000) })
+    } catch {
+      scheduleAutoReconnect()
+      return
+    }
+
+    try {
+      await ensureRelayConnection()
+      await attachTab(tabId)
+      reconnectCandidate = null
+    } catch {
+      candidate.retryCount += 1
+      scheduleAutoReconnect()
+    }
+  } finally {
+    autoReconnectInFlight = false
+  }
 }
 
 function sendToRelay(payload) {
@@ -257,11 +355,21 @@ async function attachTab(tabId, opts = {}) {
     })
   }
 
+  // A successful manual/automatic attach for this tab cancels any pending retry state.
+  if (reconnectCandidate?.tabId === tabId) {
+    cancelAutoReconnect()
+  }
+
   setBadge(tabId, 'on')
   return { sessionId, targetId }
 }
 
 async function detachTab(tabId, reason) {
+  // If manual toggle, remove from auto-reconnect queue
+  if (reason === 'toggle' && reconnectCandidate?.tabId === tabId) {
+    cancelAutoReconnect()
+  }
+
   const tab = tabs.get(tabId)
   if (tab?.sessionId && tab?.targetId) {
     try {
