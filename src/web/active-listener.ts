@@ -28,9 +28,25 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+const GLOBAL_KEY = "__openclaw_web_listeners__" as const;
+const GLOBAL_CUR_KEY = "__openclaw_web_current_listener__" as const;
 
-const listeners = new Map<string, ActiveWebListener>();
+type GlobalSingleton = {
+  [GLOBAL_KEY]?: Map<string, ActiveWebListener>;
+  [GLOBAL_CUR_KEY]?: ActiveWebListener | null;
+};
+
+const g = globalThis as typeof globalThis & GlobalSingleton;
+
+// Use globalThis to ensure a single shared Map even when the build system
+// code-splits this module into multiple chunks (each chunk gets its own
+// module-level scope, breaking singleton semantics).
+const listeners: Map<string, ActiveWebListener> = (g[GLOBAL_KEY] ??= new Map<
+  string,
+  ActiveWebListener
+>());
+
+let _currentListener: ActiveWebListener | null = g[GLOBAL_CUR_KEY] ?? null;
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -75,6 +91,7 @@ export function setActiveWebListener(
   }
   if (id === DEFAULT_ACCOUNT_ID) {
     _currentListener = listener;
+    g[GLOBAL_CUR_KEY] = listener;
   }
 }
 
