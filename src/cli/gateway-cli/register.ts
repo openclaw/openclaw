@@ -6,6 +6,7 @@ import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import { resolveWideAreaDiscoveryDomain } from "../../infra/widearea-dns.js";
 import { defaultRuntime } from "../../runtime.js";
+import { t } from "../../shared/i18n.js";
 import { styleHealthChannelLine } from "../../terminal/health-style.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
@@ -90,25 +91,23 @@ export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")
-      .description("Run, inspect, and query the WebSocket Gateway")
+      .description(t("cli.gateway.description"))
       .addHelpText(
         "after",
         () =>
-          `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-            ["openclaw gateway run", "Run the gateway in the foreground."],
-            ["openclaw gateway status", "Show service status and probe reachability."],
-            ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
-            ["openclaw gateway call health", "Call a gateway RPC method directly."],
-          ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
+          `\n${theme.heading(t("cli.common.examples"))}\n${formatHelpExamples([
+            ["openclaw gateway run", t("cli.gateway.run_help")],
+            ["openclaw gateway status", t("cli.gateway.status_help")],
+            ["openclaw gateway discover", t("cli.gateway.discover_help")],
+            ["openclaw gateway call health", t("cli.gateway.call_help")],
+          ])}\n\n${theme.muted(t("cli.common.docs"))} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
       ),
   );
 
-  addGatewayRunCommand(
-    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
-  );
+  addGatewayRunCommand(gateway.command("run").description(t("cli.gateway.run_description")));
 
   addGatewayServiceCommands(gateway, {
-    statusDescription: "Show gateway service status + probe the Gateway",
+    statusDescription: t("cli.gateway.status_description"),
   });
 
   gatewayCallOpts(

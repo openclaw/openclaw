@@ -503,6 +503,8 @@ export const ToolsLinksSchema = z
   .strict()
   .optional();
 
+export const LanguageSchema = z.string().optional();
+
 export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
 
 export const ProviderCommandsSchema = z

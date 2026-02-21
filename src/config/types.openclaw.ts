@@ -75,6 +75,8 @@ export type OpenClawConfig = {
       avatar?: string;
     };
   };
+  /** Preferred language for CLI output and AI system prompts (e.g., "en", "zh-TW"). */
+  language?: string;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
   models?: ModelsConfig;

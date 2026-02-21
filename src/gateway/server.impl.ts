@@ -45,6 +45,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { setLanguage } from "../shared/i18n.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -234,6 +235,7 @@ export async function startGatewayServer(
   }
 
   let cfgAtStart = loadConfig();
+  setLanguage(process.env.OPENCLAW_LANG ?? cfgAtStart.language ?? process.env.LANG);
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: cfgAtStart,
     env: process.env,

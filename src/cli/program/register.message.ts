@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { t } from "../../shared/i18n.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -24,29 +25,29 @@ import { registerMessageThreadCommands } from "./message/register.thread.js";
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
     .command("message")
-    .description("Send, read, and manage messages and channel actions")
+    .description(t("cli.message.description"))
     .addHelpText(
       "after",
       () =>
         `
-${theme.heading("Examples:")}
+${theme.heading(t("cli.common.examples"))}
 ${formatHelpExamples([
-  ['openclaw message send --target +15555550123 --message "Hi"', "Send a text message."],
+  ['openclaw message send --target +15555550123 --message "Hi"', t("cli.message.example_send")],
   [
     'openclaw message send --target +15555550123 --message "Hi" --media photo.jpg',
-    "Send a message with media.",
+    t("cli.message.example_media"),
   ],
   [
     'openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi',
-    "Create a Discord poll.",
+    t("cli.message.example_poll"),
   ],
   [
     'openclaw message react --channel discord --target 123 --message-id 456 --emoji "✅"',
-    "React to a message.",
+    t("cli.message.example_react"),
   ],
 ])}
 
-${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
+${theme.muted(t("cli.common.docs"))} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
     )
     .action(() => {
       message.help({ error: true });

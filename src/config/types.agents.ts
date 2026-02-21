@@ -21,6 +21,8 @@ export type AgentModelConfig =
 export type AgentConfig = {
   id: string;
   default?: boolean;
+  /** Preferred language for AI system prompts (e.g., "en", "zh-TW"). Overrides global language. */
+  language?: string;
   name?: string;
   workspace?: string;
   agentDir?: string;

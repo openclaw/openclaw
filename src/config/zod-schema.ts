@@ -105,6 +105,8 @@ const HttpUrlSchema = z
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
+    /** Preferred language for CLI output and AI system prompts (e.g., "en", "zh-TW"). */
+    language: z.string().optional(),
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),

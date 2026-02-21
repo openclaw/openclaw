@@ -2,6 +2,7 @@ import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { t, type LanguageCode } from "../shared/i18n.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -174,20 +175,33 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
+function buildDocsSection(params: {
+  docsPath?: string;
+  isMinimal: boolean;
+  readToolName: string;
+  lang?: LanguageCode;
+}) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
     return [];
   }
   return [
-    "## Documentation",
+    `## ${t("agent.system_prompt.docs", undefined, params.lang)}`,
     `OpenClaw docs: ${docsPath}`,
-    "Mirror: https://docs.openclaw.ai",
-    "Source: https://github.com/openclaw/openclaw",
-    "Community: https://discord.com/invite/clawd",
-    "Find new skills: https://clawhub.com",
-    "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
-    "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    t("agent.system_prompt.docs_mirror", { url: "https://docs.openclaw.ai" }, params.lang),
+    t(
+      "agent.system_prompt.docs_source",
+      { url: "https://github.com/openclaw/openclaw" },
+      params.lang,
+    ),
+    t(
+      "agent.system_prompt.docs_community",
+      { url: "https://discord.com/invite/clawd" },
+      params.lang,
+    ),
+    t("agent.system_prompt.docs_skills", { url: "https://clawhub.com" }, params.lang),
+    t("agent.system_prompt.docs_consult", undefined, params.lang),
+    t("agent.system_prompt.docs_status", undefined, params.lang),
     "",
   ];
 }
@@ -249,35 +263,36 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  language?: LanguageCode;
 }) {
+  const lang = params.language;
   const coreToolSummaries: Record<string, string> = {
-    read: "Read file contents",
-    write: "Create or overwrite files",
-    edit: "Make precise edits to files",
-    apply_patch: "Apply multi-file patches",
-    grep: "Search file contents for patterns",
-    find: "Find files by glob pattern",
-    ls: "List directory contents",
-    exec: "Run shell commands (pty available for TTY-required CLIs)",
-    process: "Manage background exec sessions",
-    web_search: "Search the web (Brave API)",
-    web_fetch: "Fetch and extract readable content from a URL",
+    read: t("agent.tools.read", undefined, lang),
+    write: t("agent.tools.write", undefined, lang),
+    edit: t("agent.tools.edit", undefined, lang),
+    apply_patch: t("agent.tools.apply_patch", undefined, lang),
+    grep: t("agent.tools.grep", undefined, lang),
+    find: t("agent.tools.find", undefined, lang),
+    ls: t("agent.tools.ls", undefined, lang),
+    exec: t("agent.tools.exec", undefined, lang),
+    process: t("agent.tools.process", undefined, lang),
+    web_search: t("agent.tools.web_search", undefined, lang),
+    web_fetch: t("agent.tools.web_fetch", undefined, lang),
     // Channel docking: add login tools here when a channel needs interactive linking.
-    browser: "Control web browser",
-    canvas: "Present/eval/snapshot the Canvas",
-    nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
-    message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running OpenClaw process",
-    agents_list: "List agent ids allowed for sessions_spawn",
-    sessions_list: "List other sessions (incl. sub-agents) with filters/last",
-    sessions_history: "Fetch history for another session/sub-agent",
-    sessions_send: "Send a message to another session/sub-agent",
-    sessions_spawn: "Spawn a sub-agent session",
-    subagents: "List, steer, or kill sub-agent runs for this requester session",
-    session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    image: "Analyze an image with the configured image model",
+    browser: t("agent.tools.browser", undefined, lang),
+    canvas: t("agent.tools.canvas", undefined, lang),
+    nodes: t("agent.tools.nodes", undefined, lang),
+    cron: t("agent.tools.cron", undefined, lang),
+    message: t("agent.tools.message", undefined, lang),
+    gateway: t("agent.tools.gateway", undefined, lang),
+    agents_list: t("agent.tools.agents_list", undefined, lang),
+    sessions_list: t("agent.tools.sessions_list", undefined, lang),
+    sessions_history: t("agent.tools.sessions_history", undefined, lang),
+    sessions_send: t("agent.tools.sessions_send", undefined, lang),
+    sessions_spawn: t("agent.tools.sessions_spawn", undefined, lang),
+    subagents: t("agent.tools.subagents", undefined, lang),
+    session_status: t("agent.tools.session_status", undefined, lang),
+    image: t("agent.tools.image", undefined, lang),
   };
 
   const toolOrder = [
@@ -399,10 +414,10 @@ export function buildAgentSystemPrompt(params: {
       ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
-    "## Safety",
-    "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
-    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
-    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    `## ${t("agent.system_prompt.safety", undefined, lang)}`,
+    t("agent.system_prompt.safety_goals", undefined, lang),
+    t("agent.system_prompt.safety_oversight", undefined, lang),
+    t("agent.system_prompt.safety_manipulation", undefined, lang),
     "",
   ];
   const skillsSection = buildSkillsSection({
@@ -424,15 +439,15 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return t("agent.system_prompt.identity", undefined, lang);
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    t("agent.system_prompt.identity", undefined, lang),
     "",
-    "## Tooling",
-    "Tool availability (filtered by policy):",
-    "Tool names are case-sensitive. Call tools exactly as listed.",
+    `## ${t("agent.system_prompt.tooling", undefined, lang)}`,
+    t("agent.system_prompt.tool_availability", undefined, lang),
+    t("agent.system_prompt.tool_case_sensitive", undefined, lang),
     toolLines.length > 0
       ? toolLines.join("\n")
       : [
@@ -459,10 +474,10 @@ export function buildAgentSystemPrompt(params: {
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
     "## Tool Call Style",
-    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
-    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
-    "Keep narration brief and value-dense; avoid repeating obvious steps.",
-    "Use plain human language for narration unless in a technical context.",
+    t("agent.system_prompt.narrate_routine", undefined, lang),
+    t("agent.system_prompt.narrate_help", undefined, lang),
+    t("agent.system_prompt.narrate_brief", undefined, lang),
+    t("agent.system_prompt.narrate_human", undefined, lang),
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
@@ -502,12 +517,17 @@ export function buildAgentSystemPrompt(params: {
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
-    "## Workspace",
-    `Your working directory is: ${displayWorkspaceDir}`,
+    `## ${t("agent.system_prompt.workspace", undefined, lang)}`,
+    t("agent.system_prompt.working_directory", { dir: displayWorkspaceDir }, lang),
     workspaceGuidance,
     ...workspaceNotes,
     "",
-    ...docsSection,
+    ...buildDocsSection({
+      docsPath: params.docsPath,
+      isMinimal,
+      readToolName,
+      lang,
+    }),
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [
@@ -630,8 +650,8 @@ export function buildAgentSystemPrompt(params: {
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {
     lines.push(
-      "## Silent Replies",
-      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
+      `## ${t("agent.system_prompt.silent_replies", undefined, lang)}`,
+      t("agent.system_prompt.silent_instruction", { token: SILENT_REPLY_TOKEN }, lang),
       "",
       "⚠️ Rules:",
       "- It must be your ENTIRE message — nothing else",
@@ -648,10 +668,9 @@ export function buildAgentSystemPrompt(params: {
   // Skip heartbeats for subagent/none modes
   if (!isMinimal) {
     lines.push(
-      "## Heartbeats",
+      `## ${t("agent.system_prompt.heartbeats", undefined, lang)}`,
       heartbeatPromptLine,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
+      t("agent.system_prompt.heartbeat_instruction", { token: "HEARTBEAT_OK" }, lang),
       'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
       'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
       "",
@@ -659,7 +678,7 @@ export function buildAgentSystemPrompt(params: {
   }
 
   lines.push(
-    "## Runtime",
+    `## ${t("agent.system_prompt.runtime", undefined, lang)}`,
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
