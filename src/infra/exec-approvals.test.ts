@@ -497,6 +497,22 @@ describe("exec approvals safe bins", () => {
       safeBins: ["grep"],
       executableName: "grep",
     },
+    {
+      name: "blocks grep file positional when pattern uses -e",
+      argv: ["grep", "-e", "needle", ".env"],
+      resolvedPath: "/usr/bin/grep",
+      expected: false,
+      safeBins: ["grep"],
+      executableName: "grep",
+    },
+    {
+      name: "blocks grep file positional after -- terminator",
+      argv: ["grep", "-e", "needle", "--", ".env"],
+      resolvedPath: "/usr/bin/grep",
+      expected: false,
+      safeBins: ["grep"],
+      executableName: "grep",
+    },
   ];
 
   for (const testCase of cases) {

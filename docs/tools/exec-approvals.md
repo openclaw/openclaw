@@ -146,6 +146,8 @@ Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 `grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
 their non-stdin workflows.
+For `grep` in safe-bin mode, provide the pattern with `-e`/`--regexp`; positional pattern form is
+rejected so file operands cannot be smuggled as ambiguous positionals.
 
 ## Control UI editing
 
