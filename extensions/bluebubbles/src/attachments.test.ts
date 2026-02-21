@@ -24,7 +24,11 @@ const fetchRemoteMediaMock = vi.fn(
     }
     const buffer = Buffer.from(await res.arrayBuffer());
     if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
-      throw new Error(`payload exceeds maxBytes ${params.maxBytes}`);
+      const error = new Error(`payload exceeds maxBytes ${params.maxBytes}`) as Error & {
+        code?: string;
+      };
+      error.code = "max_bytes";
+      throw error;
     }
     return {
       buffer,
