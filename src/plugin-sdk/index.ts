@@ -88,8 +88,11 @@ export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTarget,
+  resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
+export type { WebhookTargetMatchResult } from "./webhook-targets.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {

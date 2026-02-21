@@ -452,6 +452,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it("accepts URL-encoded payload wrappers", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          date: Date.now(),
+        },
+      };
+      const encodedBody = new URLSearchParams({
+        payload: JSON.stringify(payload),
+      }).toString();
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", encodedBody);
+      const res = createMockResponse();
+
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("ok");
+    });
+
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
       vi.useFakeTimers();
       try {
