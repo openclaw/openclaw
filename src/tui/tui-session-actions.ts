@@ -69,6 +69,7 @@ export function createSessionActions(context: SessionActionContext) {
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
+  let lastAppliedSessionKey: string | null = null;
 
   const applyAgentsResult = (result: GatewayAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
@@ -147,33 +148,30 @@ export function createSessionActions(context: SessionActionContext) {
   const applySessionInfo = (params: {
     entry?: SessionInfoEntry | null;
     defaults?: SessionInfoDefaults | null;
+    sessionKey?: string | null;
     force?: boolean;
   }) => {
     const entry = params.entry ?? undefined;
     const defaults = params.defaults ?? lastSessionDefaults ?? undefined;
-    const previousDefaults = lastSessionDefaults;
-    const defaultsChanged = params.defaults
-      ? previousDefaults?.model !== params.defaults.model ||
-        previousDefaults?.modelProvider !== params.defaults.modelProvider ||
-        previousDefaults?.contextTokens !== params.defaults.contextTokens
-      : false;
     if (params.defaults) {
       lastSessionDefaults = params.defaults;
     }
 
     const entryUpdatedAt = entry?.updatedAt ?? null;
     const currentUpdatedAt = state.sessionInfo.updatedAt ?? null;
-    const modelChanged =
-      (entry?.modelProvider !== undefined &&
-        entry.modelProvider !== state.sessionInfo.modelProvider) ||
-      (entry?.model !== undefined && entry.model !== state.sessionInfo.model);
+    const sessionKey = params.sessionKey ?? state.currentSessionKey;
+    const sameSessionAsLastApply =
+      typeof sessionKey === "string" &&
+      sessionKey.length > 0 &&
+      typeof lastAppliedSessionKey === "string" &&
+      lastAppliedSessionKey.length > 0 &&
+      sessionKey === lastAppliedSessionKey;
     if (
       !params.force &&
+      sameSessionAsLastApply &&
       entryUpdatedAt !== null &&
       currentUpdatedAt !== null &&
-      entryUpdatedAt < currentUpdatedAt &&
-      !defaultsChanged &&
-      !modelChanged
+      entryUpdatedAt < currentUpdatedAt
     ) {
       return;
     }
@@ -220,6 +218,9 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     state.sessionInfo = next;
+    if (typeof sessionKey === "string" && sessionKey.length > 0) {
+      lastAppliedSessionKey = sessionKey;
+    }
     updateAutocompleteProvider();
     updateFooter();
     tui.requestRender();
@@ -258,6 +259,7 @@ export function createSessionActions(context: SessionActionContext) {
       applySessionInfo({
         entry,
         defaults: result.defaults,
+        sessionKey: entry?.key ?? state.currentSessionKey,
       });
     } catch (err) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
@@ -290,7 +292,7 @@ export function createSessionActions(context: SessionActionContext) {
             model: resolved.model ?? result.entry.model,
           }
         : result.entry;
-    applySessionInfo({ entry, force: true });
+    applySessionInfo({ entry, force: true, sessionKey: result.key ?? state.currentSessionKey });
   };
 
   const loadHistory = async () => {
