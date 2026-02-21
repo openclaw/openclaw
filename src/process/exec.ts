@@ -117,6 +117,11 @@ export async function runCommandWithTimeout(
     return false;
   })();
 
+  const shouldSuppressCorePack = (() => {
+    const cmd = path.basename(argv[0] ?? "").replace(/\.(cmd|exe)$/, "");
+    return cmd === "pnpm" || cmd === "yarn" || cmd === "bun";
+  })();
+
   const mergedEnv = env ? { ...process.env, ...env } : { ...process.env };
   const resolvedEnv = Object.fromEntries(
     Object.entries(mergedEnv)
@@ -129,6 +134,11 @@ export async function runCommandWithTimeout(
     }
     if (resolvedEnv.npm_config_fund == null) {
       resolvedEnv.npm_config_fund = "false";
+    }
+  }
+  if (shouldSuppressCorePack) {
+    if (resolvedEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT == null) {
+      resolvedEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT = "0";
     }
   }
 
