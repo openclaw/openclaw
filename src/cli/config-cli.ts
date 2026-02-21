@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { danger, info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -300,6 +301,15 @@ export function registerConfigCli(program: Command) {
     .action(async (opts) => {
       const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
       await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+    });
+
+  cmd
+    .command("path")
+    .description("Print the active config file path")
+    .option("--absolute", "Print full path without shortening home", false)
+    .action((opts: { absolute?: boolean }) => {
+      const p = resolveConfigPath();
+      defaultRuntime.log(Boolean(opts.absolute) ? p : shortenHomePath(p));
     });
 
   cmd
