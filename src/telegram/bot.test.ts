@@ -746,6 +746,43 @@ describe("createTelegramBot", () => {
     expect(reactionHandler).toBeDefined();
   });
 
+  it("enqueues system event for edited messages", async () => {
+    onSpy.mockReset();
+    enqueueSystemEventSpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("edited_message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const editedMessage = {
+      chat: { id: 1234, type: "private" },
+      message_id: 88,
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      date: 1736380800,
+      text: "edited",
+    };
+
+    await handler({
+      update: { update_id: 550, edited_message: editedMessage },
+      editedMessage,
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+      "Telegram message edited in DM with Ada (@ada_bot).",
+      expect.objectContaining({
+        contextKey: expect.stringContaining("telegram:message:edited:1234:main:88"),
+      }),
+    );
+  });
+
   it("enqueues system event for reaction", async () => {
     onSpy.mockReset();
     enqueueSystemEventSpy.mockReset();
