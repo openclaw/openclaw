@@ -5,7 +5,6 @@ enum ExecAllowlistMatcher {
         guard let resolution, !entries.isEmpty else { return nil }
         let rawExecutable = resolution.rawExecutable
         let resolvedPath = resolution.resolvedPath
-        let executableName = resolution.executableName
 
         for entry in entries {
             let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -14,8 +13,6 @@ enum ExecAllowlistMatcher {
             if hasPath {
                 let target = resolvedPath ?? rawExecutable
                 if self.matches(pattern: pattern, target: target) { return entry }
-            } else if self.matches(pattern: pattern, target: executableName) {
-                return entry
             }
         }
         return nil
