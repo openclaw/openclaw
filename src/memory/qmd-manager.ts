@@ -407,24 +407,29 @@ export class QmdMemoryManager implements MemorySearchManager {
     const qmdSearchCommand = this.qmd.searchMode;
     let parsed: QmdQueryResult[];
     try {
-      if (qmdSearchCommand === "query" && collectionNames.length > 1) {
-        parsed = await this.runQueryAcrossCollections(trimmed, limit, collectionNames);
+      if (collectionNames.length > 1) {
+        // When multiple collections are configured, iterate each collection separately and merge
+        // results. Passing all collections as multiple -c flags to qmd search/vsearch causes a
+        // silent failure (exit 0, empty results) in QMD 1.0.x — see:
+        // https://github.com/openclaw/openclaw/issues/21865
+        parsed = await this.runQueryAcrossCollections(trimmed, limit, collectionNames, qmdSearchCommand);
       } else {
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
-        // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
-        // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         parsed = parseQmdQueryJson(result.stdout, result.stderr);
       }
     } catch (err) {
+      // Single-collection path: if the specific search mode rejects a flag, fall back to query.
       if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
         log.warn(
           `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
         );
         try {
           if (collectionNames.length > 1) {
-            parsed = await this.runQueryAcrossCollections(trimmed, limit, collectionNames);
+            // Same multi-collection guard as the main path: multiple -c flags silently fail in
+            // QMD 1.0.x, so iterate each collection individually and merge results.
+            parsed = await this.runQueryAcrossCollections(trimmed, limit, collectionNames, "query");
           } else {
             const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
             fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
@@ -1199,13 +1204,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     limit: number,
     collectionNames: string[],
+    searchMode: "query" | "search" | "vsearch" = "query",
   ): Promise<QmdQueryResult[]> {
     log.debug(
-      `qmd query multi-collection workaround active (${collectionNames.length} collections)`,
+      `qmd ${searchMode} multi-collection workaround active (${collectionNames.length} collections)`,
     );
     const bestByDocId = new Map<string, QmdQueryResult>();
     for (const collectionName of collectionNames) {
-      const args = this.buildSearchArgs("query", query, limit);
+      const args = this.buildSearchArgs(searchMode, query, limit);
       args.push("-c", collectionName);
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       const parsed = parseQmdQueryJson(result.stdout, result.stderr);
