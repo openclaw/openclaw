@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
-import { runWithModelFallback } from "./model-fallback.js";
+import { __resetRoundRobinCounterForTest, runWithModelFallback } from "./model-fallback.js";
 
 function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {
@@ -608,5 +608,79 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
+  });
+
+  describe("round-robin balancing", () => {
+    beforeEach(() => {
+      __resetRoundRobinCounterForTest();
+    });
+
+    function makeRoundRobinCfg(): OpenClawConfig {
+      return {
+        agents: {
+          defaults: {
+            model: {
+              primary: "rr1/model-a",
+              fallbacks: ["rr2/model-b", "rr3/model-c"],
+              balancing: "round-robin",
+            },
+            models: {
+              "rr1/model-a": {},
+              "rr2/model-b": {},
+              "rr3/model-c": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+    }
+
+    it("rotates starting candidate across consecutive calls", async () => {
+      const cfg = makeRoundRobinCfg();
+      const results: Array<{ provider: string; model: string }> = [];
+
+      for (let i = 0; i < 6; i++) {
+        const result = await runWithModelFallback({
+          cfg,
+          provider: "rr1",
+          model: "model-a",
+          run: async (provider, model) => ({ provider, model }),
+        });
+        results.push({ provider: result.provider, model: result.model });
+      }
+
+      expect(results[0]).toEqual({ provider: "rr1", model: "model-a" });
+      expect(results[1]).toEqual({ provider: "rr2", model: "model-b" });
+      expect(results[2]).toEqual({ provider: "rr3", model: "model-c" });
+      expect(results[3]).toEqual({ provider: "rr1", model: "model-a" });
+      expect(results[4]).toEqual({ provider: "rr2", model: "model-b" });
+      expect(results[5]).toEqual({ provider: "rr3", model: "model-c" });
+    });
+
+    it("does not rotate when balancing is none", async () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "rr1/model-a",
+              fallbacks: ["rr2/model-b"],
+              balancing: "none",
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const results: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const result = await runWithModelFallback({
+          cfg,
+          provider: "rr1",
+          model: "model-a",
+          run: async (provider) => provider,
+        });
+        results.push(result.provider);
+      }
+
+      expect(results).toEqual(["rr1", "rr1", "rr1"]);
+    });
   });
 });

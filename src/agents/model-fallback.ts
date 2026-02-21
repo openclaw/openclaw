@@ -23,6 +23,12 @@ import {
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
+let roundRobinCounter = 0;
+
+export function __resetRoundRobinCounterForTest(): void {
+  roundRobinCounter = 0;
+}
+
 type ModelCandidate = {
   provider: string;
   model: string;
@@ -243,6 +249,23 @@ function resolveFallbackCandidates(params: {
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
     addCandidate({ provider: primary.provider, model: primary.model }, false);
+  }
+
+  const balancing = (() => {
+    const model = params.cfg?.agents?.defaults?.model as
+      | { balancing?: string }
+      | string
+      | undefined;
+    if (model && typeof model === "object") {
+      return model.balancing;
+    }
+    return undefined;
+  })();
+
+  if (balancing === "round-robin" && candidates.length > 1) {
+    const index = roundRobinCounter++ % candidates.length;
+    const rotated = [...candidates.slice(index), ...candidates.slice(0, index)];
+    return rotated;
   }
 
   return candidates;

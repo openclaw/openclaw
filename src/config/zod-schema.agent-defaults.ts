@@ -18,6 +18,7 @@ export const AgentDefaultsSchema = z
       .object({
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
+        balancing: z.union([z.literal("none"), z.literal("round-robin")]).optional(),
       })
       .strict()
       .optional(),

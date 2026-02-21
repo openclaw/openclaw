@@ -23,6 +23,7 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  balancing?: "none" | "round-robin";
 };
 
 export type AgentContextPruningConfig = {
