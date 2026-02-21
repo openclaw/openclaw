@@ -33,6 +33,9 @@ daemon (`tailscale whois`) and matching it to the header before accepting it.
 OpenClaw only treats a request as Serve when it arrives from loopback with
 Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
+This tokenless flow assumes the gateway host is trusted. If untrusted local code
+may run on the same host, disable `gateway.auth.allowTailscale` and require
+token/password auth instead.
 To require explicit credentials, set `gateway.auth.allowTailscale: false` or
 force `gateway.auth.mode: "password"`.
 

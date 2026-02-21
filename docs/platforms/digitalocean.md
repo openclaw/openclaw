@@ -132,7 +132,7 @@ Open: `https://<magicdns>/`
 
 Notes:
 
-- Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers.
+- Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers (tokenless auth assumes trusted gateway host).
 - To require token/password instead, set `gateway.auth.allowTailscale: false` or use `gateway.auth.mode: "password"`.
 
 **Option C: Tailnet bind (no Serve)**

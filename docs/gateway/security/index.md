@@ -528,6 +528,11 @@ and matching it to the header. This only triggers for requests that hit loopback
 and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
 
+**Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
+Do not treat this as protection against hostile same-host processes. If untrusted
+local code may run on the gateway host, disable `gateway.auth.allowTailscale`
+and require token/password auth.
+
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
 `gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
