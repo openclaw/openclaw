@@ -236,6 +236,64 @@ describe("buildSandboxCreateArgs", () => {
     ).toThrow(/apparmor profile "unconfined" is blocked/);
   });
 
+  it("emits -e flags for configured docker env vars", () => {
+    const cfg: SandboxDockerConfig = {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      env: {
+        LANG: "C.UTF-8",
+        OPENCLAW_SANDBOX_TEST: "enabled",
+      },
+    };
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-env",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    const envFlags: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === "-e") {
+        const value = args[i + 1];
+        if (value) {
+          envFlags.push(value);
+        }
+      }
+    }
+    expect(envFlags).toEqual(
+      expect.arrayContaining(["LANG=C.UTF-8", "OPENCLAW_SANDBOX_TEST=enabled"]),
+    );
+  });
+
+  it("omits -e flags when docker env is undefined", () => {
+    const cfg: SandboxDockerConfig = {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+    };
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-no-env",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    const hasEnvFlag = args.includes("-e");
+    expect(hasEnvFlag).toBe(false);
+  });
+
   it("omits -v flags when binds is empty or undefined", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",

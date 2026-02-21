@@ -347,6 +347,9 @@ export function buildSandboxCreateArgs(params: {
       args.push("-v", bind);
     }
   }
+  for (const [key, value] of Object.entries(params.cfg.env ?? {})) {
+    args.push("-e", `${key}=${value}`);
+  }
   return args;
 }
 
