@@ -260,6 +260,7 @@ export async function runTui(opts: TuiOptions) {
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
+  let dailyCost: number | null = null;
   let lastCtrlCAt = 0;
   let activityStatus = "idle";
   let connectionStatus = "connecting";
@@ -649,6 +650,22 @@ export async function runTui(opts: TuiOptions) {
     renderStatus();
   };
 
+  const refreshDailyCost = async () => {
+    try {
+      const usage = await client.getUsageCost(1);
+      if (usage?.daily?.length) {
+        const today = usage.daily[usage.daily.length - 1];
+        dailyCost = today?.totalCost ?? null;
+      } else {
+        dailyCost = null;
+      }
+    } catch {
+      dailyCost = null;
+    }
+    updateFooter();
+    tui.requestRender();
+  };
+
   const updateFooter = () => {
     const sessionKeyLabel = formatSessionKey(currentSessionKey);
     const sessionLabel = sessionInfo.displayName
@@ -666,6 +683,7 @@ export async function runTui(opts: TuiOptions) {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const costLabel = dailyCost !== null ? `$${dailyCost.toFixed(2)} today` : null;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
@@ -674,6 +692,7 @@ export async function runTui(opts: TuiOptions) {
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
+      costLabel,
     ].filter(Boolean);
     footer.setText(theme.dim(footerParts.join(" | ")));
   };
@@ -829,6 +848,7 @@ export async function runTui(opts: TuiOptions) {
       await refreshAgents();
       updateHeader();
       await loadHistory();
+      await refreshDailyCost();
       setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
       tui.requestRender();
       if (!autoMessageSent && autoMessage) {
