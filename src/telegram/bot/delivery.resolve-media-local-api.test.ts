@@ -38,7 +38,7 @@ vi.mock("../sticker-cache.js", () => ({
 
 // Partially mock api-base: keep real helpers, override validateLocalFilePath.
 vi.mock("../api-base.js", async (importOriginal) => {
-  const actual = await importOriginal();
+  const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     validateLocalFilePath: (...args: unknown[]) => validateLocalFilePathMock(...args),
@@ -56,7 +56,12 @@ function makeVoiceCtx(getFile: TelegramContext["getFile"]): TelegramContext {
       chat: { id: 1, type: "private" },
       voice: { file_id: "v1", duration: 5, file_unique_id: "u1" },
     } as Message,
-    me: { id: 1, is_bot: true, first_name: "bot", username: "bot" },
+    me: {
+      id: 1,
+      is_bot: true as const,
+      first_name: "bot",
+      username: "bot",
+    } as TelegramContext["me"],
     getFile,
   };
 }
