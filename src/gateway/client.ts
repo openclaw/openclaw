@@ -158,6 +158,12 @@ export class GatewayClient {
         return undefined;
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
+    } else if (url.startsWith("wss://")) {
+      // Accept self-signed certificates when no fingerprint is configured.
+      // The gateway auto-generates self-signed certs by default, so without
+      // this the CLI probe (and any client without a pinned fingerprint)
+      // fails with 1006 abnormal closure.
+      wsOptions.rejectUnauthorized = false;
     }
     this.ws = new WebSocket(url, wsOptions);
 

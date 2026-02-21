@@ -129,11 +129,12 @@ export async function gatewayStatusCommand(
         tunnelFirst ||
         (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
 
+      const tunnelScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
       const tunnelTarget: GatewayStatusTarget | null = tunnel
         ? {
             id: "sshTunnel",
             kind: "sshTunnel",
-            url: `ws://127.0.0.1:${tunnel.localPort}`,
+            url: `${tunnelScheme}://127.0.0.1:${tunnel.localPort}`,
             active: true,
             tunnel: {
               kind: "ssh",
@@ -241,7 +242,8 @@ export async function gatewayStatusCommand(
               wsUrl: (() => {
                 const host = b.tailnetDns || b.lanHost || b.host;
                 const port = b.gatewayPort ?? 18789;
-                return host ? `ws://${host}:${port}` : null;
+                const scheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+                return host ? `${scheme}://${host}:${port}` : null;
               })(),
             })),
           },
