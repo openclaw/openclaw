@@ -92,8 +92,15 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       ? Math.floor(opts.maxBodyBytes)
       : DEFAULT_WEBHOOK_MAX_BODY_BYTES;
 
+  let lastWebhookError: string | null = null;
+
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === HEALTH_PATH) {
+      if (lastWebhookError) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "unhealthy", error: lastWebhookError }));
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("ok");
       return;
@@ -150,8 +157,11 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
 
       try {
         await onMessage(message);
+        lastWebhookError = null;
       } catch (err) {
-        onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        const errMsg = err instanceof Error ? err.message : formatError(err);
+        lastWebhookError = errMsg;
+        onError?.(err instanceof Error ? err : new Error(errMsg));
       }
     } catch (err) {
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
@@ -169,6 +179,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         return;
       }
       const error = err instanceof Error ? err : new Error(formatError(err));
+      lastWebhookError = error.message;
       onError?.(error);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json" });
