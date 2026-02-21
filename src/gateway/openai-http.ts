@@ -20,6 +20,7 @@ type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 };
 
@@ -162,6 +163,7 @@ export async function handleOpenAiHttpRequest(
     pathname: "/v1/chat/completions",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
     maxBodyBytes: opts.maxBodyBytes ?? 1024 * 1024,
   });

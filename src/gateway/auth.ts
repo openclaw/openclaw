@@ -15,8 +15,7 @@ import {
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveHostName,
-  parseForwardedForClientIp,
-  resolveGatewayClientIp,
+  resolveClientIp,
 } from "./net.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
@@ -71,6 +70,8 @@ export type AuthorizeGatewayConnectParams = {
   clientIp?: string;
   /** Optional limiter scope; defaults to shared-secret auth scope. */
   rateLimitScope?: string;
+  /** Trust X-Real-IP only when explicitly enabled. */
+  allowRealIpFallback?: boolean;
 };
 
 type TailscaleUser = {
@@ -89,34 +90,45 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
+
 function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   if (!req) {
     return undefined;
   }
-  const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
-  return forwardedFor ? parseForwardedForClientIp(forwardedFor) : undefined;
+  return resolveClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
+  });
 }
 
 function resolveRequestClientIp(
   req?: IncomingMessage,
   trustedProxies?: string[],
+  allowRealIpFallback = false,
 ): string | undefined {
   if (!req) {
     return undefined;
   }
-  return resolveGatewayClientIp({
+  return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     realIp: headerValue(req.headers?.["x-real-ip"]),
     trustedProxies,
+    allowRealIpFallback,
   });
 }
 
-export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): boolean {
   if (!req) {
     return false;
   }
-  const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
+  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
     return false;
   }
@@ -351,7 +363,11 @@ export async function authorizeGatewayConnect(
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const authSurface = params.authSurface ?? "http";
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
-  const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const localDirect = isLocalDirectRequest(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
 
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -379,7 +395,9 @@ export async function authorizeGatewayConnect(
 
   const limiter = params.rateLimiter;
   const ip =
-    params.clientIp ?? resolveRequestClientIp(req, trustedProxies) ?? req?.socket?.remoteAddress;
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
   const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
