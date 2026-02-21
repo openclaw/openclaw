@@ -4,6 +4,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
@@ -11,15 +12,7 @@ const runCommandWithTimeoutMock = vi.fn();
 const scanDirectoryWithSummaryMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.fn();
 
-const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
-
-afterEach(() => {
-  if (originalOpenClawStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-  }
-});
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -81,6 +74,7 @@ async function installZipDownloadSkill(params: {
 
 describe("installSkill download extraction safety", () => {
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     runCommandWithTimeoutMock.mockReset();
     scanDirectoryWithSummaryMock.mockReset();
     fetchWithSsrFGuardMock.mockReset();
@@ -91,6 +85,10 @@ describe("installSkill download extraction safety", () => {
       info: 0,
       findings: [],
     });
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it("rejects zip slip traversal", async () => {
