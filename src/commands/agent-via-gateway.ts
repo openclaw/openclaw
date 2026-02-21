@@ -14,7 +14,7 @@ import {
 } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
-import { AgentCommandOpts } from "./agent/types.ts";
+import { AgentCommandOpts } from "./agent/types.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
