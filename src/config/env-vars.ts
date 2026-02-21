@@ -1,3 +1,4 @@
+import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import type { OpenClawConfig } from "./types.js";
 
 export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, string> {
@@ -13,6 +14,9 @@ export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, strin
       if (!value) {
         continue;
       }
+      if (isDangerousHostEnvVarName(key)) {
+        continue;
+      }
       entries[key] = value;
     }
   }
@@ -22,6 +26,9 @@ export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, strin
       continue;
     }
     if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key)) {
       continue;
     }
     entries[key] = value;
