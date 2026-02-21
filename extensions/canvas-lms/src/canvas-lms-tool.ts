@@ -37,6 +37,7 @@ type CanvasLmsPluginConfig = {
   maxRetries?: number;
   allowInlineToken?: boolean;
   allowInsecureHttp?: boolean;
+  digestPublishSessionKeys?: string[];
 };
 
 type FetchLike = typeof fetch;
@@ -108,6 +109,16 @@ function readConfigString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item) => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 }
 
 function readPerPage(params: Record<string, unknown>, configured?: number): number {
@@ -561,8 +572,17 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
       ),
       publishSessionKey: Type.Optional(
         Type.String({
-          description: "Target session key for publication (Discord/Teams/etc) when publish=true.",
+          description:
+            "Single target session key for publication (Discord/Teams/WhatsApp/Telegram/etc) when publish=true.",
         }),
+      ),
+      publishSessionKeys: Type.Optional(
+        Type.Array(
+          Type.String({
+            description:
+              "Multiple target session keys for publication (Discord/Teams/WhatsApp/Telegram/etc) when publish=true.",
+          }),
+        ),
       ),
       timeZone: Type.Optional(
         Type.String({
@@ -766,9 +786,20 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
         const digestWindow =
           (readString(args, "digestWindow") as "today" | "week" | undefined) ?? "week";
         const publish = args.publish === true;
-        const publishSessionKey = readString(args, "publishSessionKey");
-        if (publish && !publishSessionKey) {
-          throw new Error("publishSessionKey is required when publish=true");
+        const legacyPublishSessionKey = readString(args, "publishSessionKey");
+        const requestedPublishSessionKeys = readStringArray(args.publishSessionKeys);
+        const configuredPublishSessionKeys = readStringArray(pluginConfig.digestPublishSessionKeys);
+        const publishSessionKeys = Array.from(
+          new Set([
+            ...(legacyPublishSessionKey ? [legacyPublishSessionKey] : []),
+            ...requestedPublishSessionKeys,
+            ...configuredPublishSessionKeys,
+          ]),
+        );
+        if (publish && publishSessionKeys.length === 0) {
+          throw new Error(
+            "At least one publish session key is required when publish=true (publishSessionKey, publishSessionKeys, or plugin digestPublishSessionKeys).",
+          );
         }
         const timeZone = readString(args, "timeZone") ?? "UTC";
         try {
@@ -851,21 +882,23 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
           timeZone,
         });
 
-        let published = false;
-        if (publish && publishSessionKey) {
-          const publishResult = (await callGateway({
-            config: api.config,
-            method: "chat.send",
-            params: {
-              sessionKey: publishSessionKey,
-              message: summary,
-              idempotencyKey: randomIdempotencyKey(),
-            },
-          })) as { ok?: boolean };
-          if (publishResult && publishResult.ok === false) {
-            throw new Error("Failed to publish digest to target session.");
+        const publishedSessionKeys: string[] = [];
+        if (publish) {
+          for (const sessionKey of publishSessionKeys) {
+            const publishResult = (await callGateway({
+              config: api.config,
+              method: "chat.send",
+              params: {
+                sessionKey,
+                message: summary,
+                idempotencyKey: randomIdempotencyKey(),
+              },
+            })) as { ok?: boolean };
+            if (publishResult && publishResult.ok === false) {
+              throw new Error(`Failed to publish digest to target session: ${sessionKey}`);
+            }
+            publishedSessionKeys.push(sessionKey);
           }
-          published = true;
         }
 
         return {
@@ -876,8 +909,9 @@ export function createCanvasLmsTool(api: OpenClawPluginApi) {
             timeZone,
             totalDue: dueItems.length,
             coursesScanned: courses.length,
-            published,
-            publishSessionKey: published ? publishSessionKey : undefined,
+            published: publishedSessionKeys.length > 0,
+            publishedCount: publishedSessionKeys.length,
+            publishSessionKeys: publishedSessionKeys,
           },
         };
       } else {

@@ -424,7 +424,7 @@ describe("canvas-lms-tool", () => {
     );
   });
 
-  it("builds digest and publishes to session when requested", async () => {
+  it("builds digest and publishes to multiple sessions when requested", async () => {
     const now = Date.now();
     const dueSoon = new Date(now + 24 * 60 * 60 * 1000).toISOString();
     const dueSoon2 = new Date(now + 2 * 24 * 60 * 60 * 1000).toISOString();
@@ -470,7 +470,11 @@ describe("canvas-lms-tool", () => {
       action: "sync_academic_digest",
       digestWindow: "week",
       publish: true,
-      publishSessionKey: "msteams:group:engineering",
+      publishSessionKeys: [
+        "msteams:group:engineering",
+        "telegram:chat:12345",
+        "whatsapp:chat:555111222",
+      ],
       timeZone: "UTC",
     });
 
@@ -479,18 +483,78 @@ describe("canvas-lms-tool", () => {
     expect(text).toContain("Entrega 1");
     expect(text).toContain("Entrega 2");
 
-    expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(1);
-    const publishCall = gatewayMocks.callGateway.mock.calls[0]?.[0] as {
+    expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(3);
+    const publishCall1 = gatewayMocks.callGateway.mock.calls[0]?.[0] as {
       method?: string;
       params?: { sessionKey?: string; message?: string; idempotencyKey?: string };
     };
-    expect(publishCall.method).toBe("chat.send");
-    expect(publishCall.params?.sessionKey).toBe("msteams:group:engineering");
-    expect(publishCall.params?.idempotencyKey).toBe("idem-sync");
-    expect(publishCall.params?.message).toContain("Academic sync");
+    const publishCall2 = gatewayMocks.callGateway.mock.calls[1]?.[0] as {
+      method?: string;
+      params?: { sessionKey?: string; message?: string; idempotencyKey?: string };
+    };
+    const publishCall3 = gatewayMocks.callGateway.mock.calls[2]?.[0] as {
+      method?: string;
+      params?: { sessionKey?: string; message?: string; idempotencyKey?: string };
+    };
+    expect(publishCall1.method).toBe("chat.send");
+    expect(publishCall1.params?.sessionKey).toBe("msteams:group:engineering");
+    expect(publishCall2.params?.sessionKey).toBe("telegram:chat:12345");
+    expect(publishCall3.params?.sessionKey).toBe("whatsapp:chat:555111222");
+    expect(publishCall1.params?.idempotencyKey).toBe("idem-sync");
+    expect(publishCall1.params?.message).toContain("Academic sync");
   });
 
-  it("requires publishSessionKey when publish is true for sync action", async () => {
+  it("uses plugin-configured publish targets when publishSessionKeys are not passed", async () => {
+    const now = Date.now();
+    const dueSoon = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    const coursesResponse = new Response(
+      JSON.stringify([{ id: 101, name: "Sistemas Distribuidos" }]),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const assignmentsResponse = new Response(
+      JSON.stringify([
+        {
+          id: 1,
+          name: "Laboratorio 1",
+          due_at: dueSoon,
+        },
+      ]),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(coursesResponse).mockResolvedValueOnce(assignmentsResponse),
+    );
+    gatewayMocks.callGateway.mockResolvedValue({ ok: true });
+
+    const tool = createCanvasLmsTool(
+      fakeApi({
+        config: {},
+        pluginConfig: {
+          baseUrl: "https://canvas.example.edu",
+          token: "tkn",
+          digestPublishSessionKeys: ["discord:channel:abc", "telegram:chat:67890"],
+        },
+      }),
+    );
+
+    await tool.execute("call-13", {
+      action: "sync_academic_digest",
+      publish: true,
+      timeZone: "UTC",
+    });
+
+    expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(2);
+    const sessionKeys = gatewayMocks.callGateway.mock.calls.map((call) =>
+      String((call[0] as { params?: { sessionKey?: string } }).params?.sessionKey ?? ""),
+    );
+    expect(sessionKeys).toEqual(["discord:channel:abc", "telegram:chat:67890"]);
+  });
+
+  it("requires at least one publish session key when publish is true for sync action", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -510,10 +574,10 @@ describe("canvas-lms-tool", () => {
     );
 
     await expect(
-      tool.execute("call-13", {
+      tool.execute("call-14", {
         action: "sync_academic_digest",
         publish: true,
       }),
-    ).rejects.toThrow(/publishSessionKey is required/);
+    ).rejects.toThrow(/At least one publish session key is required/);
   });
 });
