@@ -79,6 +79,15 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for fetch failed even with unrecognized cause", () => {
+    // This is the key fix: "fetch failed" should always be transient,
+    // even if the cause is not recognized as a known network error code.
+    // This happens when Telegram API is unreachable due to packet loss.
+    const cause = Object.assign(new Error("unknown network issue"), { code: "UNKNOWN" });
+    const error = Object.assign(new TypeError("fetch failed"), { cause });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for nested cause chain with network error", () => {
     const innerCause = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
     const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
