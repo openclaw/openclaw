@@ -156,7 +156,7 @@ export type ResolvedCaptureContent = {
  * Resolve captureContent config to granular booleans.
  * - `true` → all enabled
  * - `false` / `undefined` → all disabled
- * - object → each field defaults to `true` if omitted (opt-out model)
+ * - object → strict opt-in per field (`true` required; omitted/undefined = disabled)
  */
 export function resolveCaptureContent(
   raw: boolean | Record<string, boolean | undefined> | undefined,
@@ -180,11 +180,11 @@ export function resolveCaptureContent(
     };
   }
   return {
-    inputMessages: raw.inputMessages !== false,
-    outputMessages: raw.outputMessages !== false,
-    systemInstructions: raw.systemInstructions !== false,
-    toolDefinitions: raw.toolDefinitions !== false,
-    toolContent: raw.toolContent !== false,
+    inputMessages: raw.inputMessages === true,
+    outputMessages: raw.outputMessages === true,
+    systemInstructions: raw.systemInstructions === true,
+    toolDefinitions: raw.toolDefinitions === true,
+    toolContent: raw.toolContent === true,
   };
 }
 

@@ -167,7 +167,7 @@ export type DiagnosticsOtelConfig = {
    * Record gen_ai content on inference spans (opt-in, sensitive).
    * `true` enables all content capture. An object form allows granular control:
    * `{ inputMessages: true, outputMessages: true, systemInstructions: false, toolDefinitions: true, toolContent: true }`
-   * When using the object form, each field defaults to `true` if omitted.
+   * When using the object form, fields are strict opt-in (`true` required; omitted = disabled).
    */
   captureContent?:
     | boolean
