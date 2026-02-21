@@ -45,14 +45,14 @@ Venice offers two privacy levels — understanding this is key to choosing your 
 
 1. Sign up at [venice.ai](https://venice.ai)
 2. Go to **Settings → API Keys → Create new key**
-3. Copy your API key (format: `vapi_xxxxxxxxxxxx`)
+3. Copy your API key
 
 ### 2. Configure OpenClaw
 
 **Option A: Environment Variable**
 
 ```bash
-export VENICE_API_KEY="vapi_xxxxxxxxxxxx"
+export VENICE_API_KEY="your_api_key_here"
 ```
 
 **Option B: Interactive Setup (Recommended)**
@@ -73,7 +73,7 @@ This will:
 ```bash
 openclaw onboard --non-interactive \
   --auth-choice venice-api-key \
-  --venice-api-key "vapi_xxxxxxxxxxxx"
+  --venice-api-key "your_api_key_here"
 ```
 
 ### 3. Verify Setup
@@ -219,7 +219,7 @@ echo $VENICE_API_KEY
 openclaw models list | grep venice
 ```
 
-Ensure the key starts with `vapi_`.
+Ensure the key is valid and copied correctly from the Venice dashboard.
 
 ### Model not available
 
@@ -233,7 +233,7 @@ Venice API is at `https://api.venice.ai/api/v1`. Ensure your network allows HTTP
 
 ```json5
 {
-  env: { VENICE_API_KEY: "vapi_..." },
+  env: { VENICE_API_KEY: "your_api_key_here" },
   agents: { defaults: { model: { primary: "venice/llama-3.3-70b" } } },
   models: {
     mode: "merge",
