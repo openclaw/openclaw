@@ -2,6 +2,7 @@ import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "n
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -73,7 +74,9 @@ export type RunningChrome = {
   proc: ChildProcess;
 };
 
-function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
+export function resolveBrowserExecutable(
+  resolved: ResolvedBrowserConfig,
+): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
@@ -302,8 +305,26 @@ export async function launchOpenClawChrome(
 
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
+    const remoteProfiles = Object.entries(resolved.profiles)
+      .filter(([, p]) => {
+        const url = p.cdpUrl?.trim();
+        if (!url) {
+          return false;
+        }
+        try {
+          return !isLoopbackHost(new URL(url).hostname);
+        } catch {
+          return false;
+        }
+      })
+      .map(([name]) => name);
+    const hint =
+      remoteProfiles.length > 0
+        ? ` A remote browser profile is available: "${remoteProfiles[0]}". ` +
+          `Use profile="${remoteProfiles[0]}" or set browser.defaultProfile to "${remoteProfiles[0]}".`
+        : "";
     throw new Error(
-      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
+      `No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).${hint}`,
     );
   }
 

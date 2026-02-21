@@ -89,7 +89,13 @@ export const BrowserToolSchema = Type.Object({
   action: stringEnum(BROWSER_TOOL_ACTIONS),
   target: optionalStringEnum(BROWSER_TARGETS),
   node: Type.Optional(Type.String()),
-  profile: Type.Optional(Type.String()),
+  profile: Type.Optional(
+    Type.String({
+      description:
+        "Browser profile name. Omit to use the default profile (recommended). " +
+        "Use action=profiles to list available profiles.",
+    }),
+  ),
   targetUrl: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
