@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  readAllowFromStoreMock,
   sendMessageMock,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
@@ -107,5 +108,26 @@ describe("WhatsApp dmPolicy precedence", () => {
 
     const result = await checkUnauthorizedWorkDmSender();
     expectSilentlyBlocked(result);
+  });
+
+  it("does not merge persisted pairing approvals in allowlist mode", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          accounts: {
+            work: {
+              allowFrom: ["+15559999999"],
+            },
+          },
+        },
+      },
+    });
+    readAllowFromStoreMock.mockResolvedValue(["+15550001111"]);
+
+    const result = await checkUnauthorizedWorkDmSender();
+
+    expectSilentlyBlocked(result);
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });

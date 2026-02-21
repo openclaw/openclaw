@@ -794,6 +794,7 @@ export const registerTelegramHandlers = ({
       const groupAllowContext = await resolveTelegramGroupAllowFromContext({
         chatId,
         accountId,
+        dmPolicy: telegramCfg.dmPolicy ?? "pairing",
         isForum,
         messageThreadId,
         groupAllowFrom,
@@ -807,11 +808,12 @@ export const registerTelegramHandlers = ({
         effectiveGroupAllow,
         hasGroupAllowOverride,
       } = groupAllowContext;
+      const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
       const effectiveDmAllow = normalizeAllowFromWithStore({
         allowFrom: telegramCfg.allowFrom,
         storeAllowFrom,
+        dmPolicy,
       });
-      const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
       if (
@@ -1089,6 +1091,7 @@ export const registerTelegramHandlers = ({
       const groupAllowContext = await resolveTelegramGroupAllowFromContext({
         chatId: event.chatId,
         accountId,
+        dmPolicy: telegramCfg.dmPolicy ?? "pairing",
         isForum: event.isForum,
         messageThreadId: event.messageThreadId,
         groupAllowFrom,

@@ -332,6 +332,7 @@ export async function processMessage(
     allowFrom: account.config.allowFrom,
     groupAllowFrom: account.config.groupAllowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
   const groupAllowEntry = formatGroupAllowlistEntry({
     chatGuid: message.chatGuid,
@@ -1107,6 +1108,7 @@ export async function processReaction(
     allowFrom: account.config.allowFrom,
     groupAllowFrom: account.config.groupAllowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
   const accessDecision = resolveDmGroupAccessDecision({
     isGroup: reaction.isGroup,

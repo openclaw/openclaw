@@ -140,7 +140,7 @@ describe("agent components", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("allows DM interactions when pairing store allowlist matches", async () => {
+  it("blocks DM interactions when only pairing store entries match in allowlist mode", async () => {
     readAllowFromStoreMock.mockResolvedValue(["123456789"]);
     const button = createAgentComponentButton({
       cfg: createCfg(),
@@ -152,8 +152,9 @@ describe("agent components", () => {
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
-    expect(enqueueSystemEventMock).toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("matches tag-based allowlist entries for DM select menus", async () => {
