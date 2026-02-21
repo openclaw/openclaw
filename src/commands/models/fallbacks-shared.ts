@@ -84,6 +84,18 @@ export async function addFallbackCommand(
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
     const nextModels = { ...cfg.agents?.defaults?.models } as Record<string, unknown>;
+
+    // Ensure the currently-configured primary model is always present in the allowlist.
+    // Without this, adding the first fallback creates an allowlist that omits the primary,
+    // silently blocking all sessions that rely on it.
+    if (params.key === "model") {
+      const primaryKey = (cfg.agents?.defaults?.model as PrimaryFallbackConfig | undefined)
+        ?.primary;
+      if (primaryKey && !nextModels[primaryKey]) {
+        nextModels[primaryKey] = {};
+      }
+    }
+
     if (!nextModels[targetKey]) {
       nextModels[targetKey] = {};
     }

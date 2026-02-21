@@ -85,4 +85,34 @@ describe("models set + fallbacks", () => {
 
     expectWrittenPrimaryModel("zai/glm-4.7");
   });
+
+  it("fallbacks add includes existing primary model in allowlist", async () => {
+    // Regression: adding the first fallback used to create an allowlist that only
+    // contained the fallback, silently blocking the primary model.
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+    const { modelsFallbacksAddCommand } = await import("./models/fallbacks.js");
+
+    await modelsFallbacksAddCommand("openai/gpt-5.2", runtime);
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = getWrittenConfig() as {
+      agents: { defaults: { model: unknown; models: Record<string, unknown> } };
+    };
+    // Both the primary AND the new fallback must appear in the allowlist.
+    expect(written.agents.defaults.models).toMatchObject({
+      "anthropic/claude-opus-4-6": {},
+      "openai/gpt-5.2": {},
+    });
+    expect(written.agents.defaults.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["openai/gpt-5.2"],
+    });
+  });
 });
