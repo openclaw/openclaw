@@ -373,3 +373,24 @@ export function applyExtraParamsToAgent(
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
 }
+
+/**
+ * Create a streamFn wrapper that injects an X-Session-Key header on all
+ * outgoing provider requests. This allows reverse proxies to implement
+ * session-affine (sticky) routing so multi-turn conversations stay on the
+ * same upstream credential.
+ */
+export function createSessionKeyHeaderWrapper(
+  baseStreamFn: StreamFn | undefined,
+  sessionKey: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "X-Session-Key": sessionKey,
+      },
+    });
+}
