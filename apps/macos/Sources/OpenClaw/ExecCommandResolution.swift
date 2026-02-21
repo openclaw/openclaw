@@ -194,11 +194,13 @@ struct ExecCommandResolution: Sendable {
                 continue
             }
 
+            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: next) {
+                // Fail closed on command/process substitution in allowlist mode,
+                // including inside double-quoted shell strings.
+                return nil
+            }
+
             if !inSingle, !inDouble {
-                if self.shouldFailClosedForUnquotedShell(ch: ch, next: next) {
-                    // Fail closed on command/process substitution in allowlist mode.
-                    return nil
-                }
                 let prev: Character? = idx > 0 ? chars[idx - 1] : nil
                 if let delimiterStep = self.chainDelimiterStep(ch: ch, prev: prev, next: next) {
                     guard appendCurrent() else { return nil }
@@ -216,7 +218,7 @@ struct ExecCommandResolution: Sendable {
         return segments
     }
 
-    private static func shouldFailClosedForUnquotedShell(ch: Character, next: Character?) -> Bool {
+    private static func shouldFailClosedForShell(ch: Character, next: Character?) -> Bool {
         if ch == "`" {
             return true
         }

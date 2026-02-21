@@ -80,6 +80,26 @@ struct ExecAllowlistTests {
         #expect(resolutions.isEmpty)
     }
 
+    @Test func resolveForAllowlistFailsClosedOnQuotedCommandSubstitution() {
+        let command = ["/bin/sh", "-lc", "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\""]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\"",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.isEmpty)
+    }
+
+    @Test func resolveForAllowlistFailsClosedOnQuotedBackticks() {
+        let command = ["/bin/sh", "-lc", "echo \"ok `/usr/bin/id`\""]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "echo \"ok `/usr/bin/id`\"",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.isEmpty)
+    }
+
     @Test func resolveForAllowlistTreatsPlainShInvocationAsDirectExec() {
         let command = ["/bin/sh", "./script.sh"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
