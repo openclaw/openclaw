@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "openclaw": {
-    "extensions": ["../../dist/plugins/mind-memory/index.js"]
+    "extensions": ["./index.js"]
   },
   "dependencies": {
     "node-fetch": "^3.3.2",

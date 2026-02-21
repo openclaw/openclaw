@@ -43,6 +43,6 @@
     "debug": { "label": "Enable Verbose Debug Logs" }
   },
   "openclaw": {
-    "extensions": ["../../dist/plugins/mind-memory/index.js"]
+    "extensions": ["./index.js"]
   }
 }
