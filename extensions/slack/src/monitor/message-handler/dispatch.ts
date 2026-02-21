@@ -340,6 +340,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       const reply = resolveSendableOutboundReplyParts(payload);
       const slackBlocks = readSlackReplyBlocks(payload);
+      // Flush any in-flight draft send so messageId() is populated.
+      // Without this, a race between the fire-and-forget sendMessageSlack()
+      // and the deliver callback can cause canFinalizeViaPreviewEdit to
+      // evaluate false, resulting in a duplicate Slack message.
+      await draftStream?.flush();
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
       const finalText = reply.text;
