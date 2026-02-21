@@ -12,6 +12,7 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_MODEL_CATALOG,
 } from "../providers/kilocode-shared.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -405,16 +406,17 @@ export function normalizeProviders(params: {
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
     let normalizedProvider = provider;
+    const configuredApiKey = normalizedProvider.apiKey;
 
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
-      normalizedProvider.apiKey &&
-      normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
+      typeof configuredApiKey === "string" &&
+      normalizeApiKeyConfig(configuredApiKey) !== configuredApiKey
     ) {
       mutated = true;
       normalizedProvider = {
         ...normalizedProvider,
-        apiKey: normalizeApiKeyConfig(normalizedProvider.apiKey),
+        apiKey: normalizeApiKeyConfig(configuredApiKey),
       };
     }
 
@@ -422,7 +424,9 @@ export function normalizeProviders(params: {
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    if (hasModels && !normalizedProvider.apiKey?.trim()) {
+    const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
+    const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
+    if (hasModels && !hasConfiguredApiKey) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {
