@@ -405,12 +405,6 @@ importers:
       '@microsoft/agents-hosting':
         specifier: ^1.2.3
         version: 1.2.3
-      '@microsoft/agents-hosting-express':
-        specifier: ^1.2.3
-        version: 1.2.3
-      '@microsoft/agents-hosting-extensions-teams':
-        specifier: ^1.2.3
-        version: 1.2.3
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -1559,14 +1553,6 @@ packages:
 
   '@microsoft/agents-activity@1.2.3':
     resolution: {integrity: sha512-XRQF+AVn6f9sGDUsfDQFiwLtmqqWNhM9JIwZRzK9XQLPTQmoWwjoWz8KMKc5fuvj5Ybly3974VrqYUbDOeMyTg==}
-    engines: {node: '>=20.0.0'}
-
-  '@microsoft/agents-hosting-express@1.2.3':
-    resolution: {integrity: sha512-aBgvyDJ+3ifeUKy/56qQuLJPAizN9UfGV3/1GVrhmyAqUKvphusK3LMxiRTpHDhAaUvuzFOr1AJ8XiRhOl9l3w==}
-    engines: {node: '>=20.0.0'}
-
-  '@microsoft/agents-hosting-extensions-teams@1.2.3':
-    resolution: {integrity: sha512-fZcn8JcU50VfjBgz6jTlCRiQReAZzj2f2Atudwa+ymxJQhfBb7NToJcY7OdLqM8hlnQhzAg71HJtGhPR/L2p1g==}
     engines: {node: '>=20.0.0'}
 
   '@microsoft/agents-hosting@1.2.3':
@@ -7400,21 +7386,6 @@ snapshots:
       uuid: 11.1.0
       zod: 3.25.75
     transitivePeerDependencies:
-      - supports-color
-
-  '@microsoft/agents-hosting-express@1.2.3':
-    dependencies:
-      '@microsoft/agents-hosting': 1.2.3
-      express: 5.2.1
-    transitivePeerDependencies:
-      - debug
-      - supports-color
-
-  '@microsoft/agents-hosting-extensions-teams@1.2.3':
-    dependencies:
-      '@microsoft/agents-hosting': 1.2.3
-    transitivePeerDependencies:
-      - debug
       - supports-color
 
   '@microsoft/agents-hosting@1.2.3':
