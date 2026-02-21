@@ -5,4 +5,6 @@ export type ControlUiBootstrapConfig = {
   assistantName: string;
   assistantAvatar: string;
   assistantAgentId: string;
+  /** Gateway token injected by reverse proxy (only present when injectTokenFromHeader is enabled). */
+  token?: string;
 };

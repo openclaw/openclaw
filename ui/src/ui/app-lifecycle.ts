@@ -9,6 +9,7 @@ import {
 } from "./app-polling.ts";
 import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
+  applySettings,
   applySettingsFromUrl,
   attachThemeListener,
   detachThemeListener,
@@ -18,10 +19,12 @@ import {
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
 
 type LifecycleHost = {
   basePath: string;
   tab: Tab;
+  settings: UiSettings;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
@@ -40,13 +43,11 @@ type LifecycleHost = {
 
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
-  void loadControlUiBootstrapConfig(host);
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
-  connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
@@ -54,6 +55,26 @@ export function handleConnected(host: LifecycleHost) {
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
+  // Fetch bootstrap config (may include a reverse-proxy-injected token), then connect.
+  // If the user already has a token (from localStorage or URL), connect immediately
+  // and fetch bootstrap config in the background for identity updates.
+  if (host.settings.token) {
+    void loadControlUiBootstrapConfig(host);
+    connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+  } else {
+    void loadBootstrapThenConnect(host);
+  }
+}
+
+async function loadBootstrapThenConnect(host: LifecycleHost) {
+  const result = await loadControlUiBootstrapConfig(host);
+  if (result.token && !host.settings.token) {
+    applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+      ...host.settings,
+      token: result.token,
+    });
+  }
+  connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
 }
 
 export function handleFirstUpdated(host: LifecycleHost) {

@@ -15,6 +15,7 @@ import {
   normalizeControlUiBasePath,
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
+import { getHeader } from "./http-utils.js";
 
 const ROOT_PREFIX = "/";
 
@@ -224,6 +225,18 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  // Extract token from reverse proxy header when configured.
+  // Uses getHeader() which handles both string and string[] header values.
+  const injectionConfig = opts?.config?.gateway?.auth?.injectTokenFromHeader;
+  let injectedToken: string | undefined;
+  if (injectionConfig?.enabled) {
+    const headerName = injectionConfig.headerName ?? "x-openclaw-token";
+    const headerValue = getHeader(req, headerName)?.trim();
+    if (headerValue) {
+      injectedToken = headerValue;
+    }
+  }
+
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
@@ -276,6 +289,7 @@ export function handleControlUiHttpRequest(
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
+      ...(injectedToken ? { token: injectedToken } : {}),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

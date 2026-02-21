@@ -26,6 +26,12 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
+  "gateway.auth.injectTokenFromHeader":
+    "Server-side token injection for reverse proxy (SSO) deployments. Reads the gateway token from an HTTP header and injects it into Control UI HTML.",
+  "gateway.auth.injectTokenFromHeader.enabled":
+    "Enable reading the gateway token from a reverse proxy header and injecting it into the Control UI HTML (default: false).",
+  "gateway.auth.injectTokenFromHeader.headerName":
+    'HTTP header name to read the token from (case-insensitive, default: "x-openclaw-token").',
   "agents.defaults.sandbox.browser.network":
     "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
   "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",

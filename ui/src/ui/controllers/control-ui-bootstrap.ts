@@ -12,12 +12,19 @@ export type ControlUiBootstrapState = {
   assistantAgentId: string | null;
 };
 
-export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
+export type ControlUiBootstrapResult = {
+  /** Gateway token provided by reverse proxy header injection. */
+  token?: string;
+};
+
+export async function loadControlUiBootstrapConfig(
+  state: ControlUiBootstrapState,
+): Promise<ControlUiBootstrapResult> {
   if (typeof window === "undefined") {
-    return;
+    return {};
   }
   if (typeof fetch !== "function") {
-    return;
+    return {};
   }
 
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -32,7 +39,7 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
       credentials: "same-origin",
     });
     if (!res.ok) {
-      return;
+      return {};
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
     const normalized = normalizeAssistantIdentity({
@@ -43,7 +50,9 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
     state.assistantAgentId = normalized.agentId ?? null;
+    return { token: parsed.token };
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
+    return {};
   }
 }
