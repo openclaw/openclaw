@@ -44,8 +44,9 @@ async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
+  action?: "new" | "reset";
 }): Promise<{ files: string[]; memoryContent: string }> {
-  const event = createHookEvent("command", "new", "agent:main:main", {
+  const event = createHookEvent("command", params.action ?? "new", "agent:main:main", {
     cfg:
       params.cfg ??
       ({
@@ -66,6 +67,7 @@ async function runNewWithPreviousSessionEntry(params: {
 async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
+  action?: "new" | "reset";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await makeTempWorkspace("openclaw-session-memory-");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -86,6 +88,7 @@ async function runNewWithPreviousSession(params: {
   const { files, memoryContent } = await runNewWithPreviousSessionEntry({
     tempDir,
     cfg,
+    action: params.action,
     previousSessionEntry: {
       sessionId: "test-123",
       sessionFile,
@@ -156,6 +159,21 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
+  });
+
+  it("creates memory file with session content on /reset command", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Please reset and keep notes" },
+      { role: "assistant", content: "Captured before reset" },
+    ]);
+    const { files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      action: "reset",
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Please reset and keep notes");
+    expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {
