@@ -328,3 +328,180 @@ Notes:
 - Use TTL settings for automatic unfocus policy control.
 
 This model keeps subagent lifecycle orchestration generic while giving Discord a full thread bound interaction path.
+
+## Long term production architecture
+
+This section describes the target design for strict channel separation and predictable routing under concurrency.
+
+Status:
+
+- planned architecture target
+- partially implemented today
+- remaining items should be completed in follow up refactors
+
+### 1. Core Session Binding service
+
+Introduce a channel agnostic binding service in core and make channel plugins implement adapters.
+
+Binding record model (canonical):
+
+- `bindingId: string` (stable unique id)
+- `targetSessionKey: string`
+- `targetKind: "subagent" | "acp" | "session"`
+- `channel: string` (for example `discord`)
+- `accountId: string`
+- `threadId: string`
+- `channelId?: string`
+- `status: "active" | "ending" | "ended"`
+- `boundAt: number`
+- `expiresAt?: number`
+- `metadata?: object` (channel specific, for example webhook identity)
+
+Core service contract:
+
+- `bind(params) -> BindingRecord`
+- `resolveBySession(params) -> BindingRecord[]`
+- `resolveByConversation(params) -> BindingRecord | null`
+- `unbind(params) -> BindingRecord[]`
+- `touch(params) -> void` (activity/update timestamp)
+
+Key invariant:
+
+- one session may have multiple active bindings
+- binding selection must be deterministic for a specific inbound origin
+- no hidden fallback from bound destination to unbound main channel
+
+### 2. Single routing authority
+
+All outbound subagent related delivery must go through one router in core.
+
+Router inputs:
+
+- event kind (`spawn_ack`, `task_completion`, future `subagent_message`)
+- requester origin
+- target session key
+- spawn mode
+- binding records
+- policy flags (best effort, fail closed)
+
+Router outputs:
+
+- `destination` (channel/account/to/thread/session)
+- `deliveryMode` (`channel_send` or `webhook_send` or future adapter modes)
+- `idempotencyEnvelope` (see section 7)
+- `routingReason` (for logs and test assertions)
+
+Rule:
+
+- content policy and routing policy are separate concerns
+- sibling coordination can delay or rewrite content, but cannot change destination from bound thread to main channel
+
+### 3. Strict content policy separation
+
+Split current completion logic into two pure phases:
+
+- `buildCompletionPayload(...) -> message/instruction`
+- `resolveCompletionDestination(...) -> destination`
+
+Production invariant:
+
+- if a persistent thread bound destination exists for the completed run, completion delivery targets that binding first
+- if delivery fails, handle by explicit policy (`retry`, `queue`, or `error`), never by implicit reroute to requester main channel
+
+### 4. Credential provider for adapters
+
+Channel adapters must not capture credentials in long lived closures.
+
+Contract:
+
+- adapter API calls fetch credentials at call time from a credential provider (or refreshed account runtime state)
+- manager reuse across restart/hot reload must use latest token automatically
+
+Required regression test:
+
+- create manager with token A, reuse same account with token B, verify bind and sweep API calls use token B
+
+### 5. Fail closed delivery semantics
+
+Bound session routing should fail closed by default.
+
+If bound delivery cannot be performed:
+
+- emit structured routing error event
+- keep binding state unchanged unless explicitly invalid
+- do not post completion to fallback main channel unless operator policy explicitly enables fallback
+
+Recommended policy defaults:
+
+- `session.threadBindings.failClosed: true`
+- explicit per channel override only when needed
+
+### 6. Unified outbound activity accounting
+
+All outbound paths must call one accounting hook.
+
+Applies to:
+
+- normal bot sends
+- webhook sends
+- voice sends
+- future adapter specific sends
+
+Activity fields:
+
+- channel
+- accountId
+- direction
+- transport mode
+- session key or binding id when available
+
+### 7. Delivery idempotency envelope
+
+Every subagent delivery event should carry a deterministic delivery key:
+
+- `deliveryKey = bindingId + runId + eventKind + sequence`
+
+Use this in:
+
+- outbound dedupe cache
+- retry scheduling
+- observability logs
+
+Goal:
+
+- prevent duplicate thread and main channel emissions during retry races or concurrent lifecycle paths
+
+### 8. Contract tests at routing boundary
+
+Add cross module contract tests that validate behavior from hook event to channel delivery.
+
+Minimum cases:
+
+- two concurrent bound sessions for same requester channel; each completion goes only to its bound thread
+- completion for one bound run while sibling run remains active; destination stays bound thread
+- adapter credential rotation on reused manager
+- webhook send path updates activity timestamps
+- fail closed behavior when bound delivery fails
+
+### 9. Migration phases
+
+Phase 1:
+
+- introduce core binding interface and adapter registry
+- keep Discord implementation behind adapter
+
+Phase 2:
+
+- move completion destination choice into single router
+- keep existing message generation temporarily
+
+Phase 3:
+
+- split content policy from routing policy
+- enforce fail closed default
+- migrate all outbound paths to unified activity accounting
+
+Phase 4:
+
+- add full contract test suite
+- remove legacy fallback branches that bypass router decisions
