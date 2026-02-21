@@ -38,8 +38,14 @@ function decodeEntities(value: string): string {
     .replace(/&#39;/gi, "'")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/gi, (_, dec) => String.fromCharCode(Number.parseInt(dec, 10)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const cp = Number.parseInt(hex, 16);
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&#(\d+);/gi, (_, dec) => {
+      const cp = Number.parseInt(dec, 10);
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    });
 }
 
 function stripTags(value: string): string {
@@ -107,7 +113,16 @@ export function truncateText(
   if (value.length <= maxChars) {
     return { text: value, truncated: false };
   }
-  return { text: value.slice(0, maxChars), truncated: true };
+  // Avoid splitting a UTF-16 surrogate pair: if the char at the cut point is a
+  // high surrogate (0xD800–0xDBFF), step back one position so the pair stays intact.
+  let end = maxChars;
+  if (end > 0 && end < value.length) {
+    const code = value.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      end -= 1;
+    }
+  }
+  return { text: value.slice(0, end), truncated: true };
 }
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
