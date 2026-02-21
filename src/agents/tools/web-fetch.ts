@@ -155,11 +155,13 @@ function resolveFirecrawlEnabled(params: {
 }
 
 function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
-  const raw =
+  const fromConfig =
     firecrawl && "baseUrl" in firecrawl && typeof firecrawl.baseUrl === "string"
       ? firecrawl.baseUrl.trim()
       : "";
-  return raw || DEFAULT_FIRECRAWL_BASE_URL;
+  const fromEnv =
+    typeof process.env.FIRECRAWL_BASE_URL === "string" ? process.env.FIRECRAWL_BASE_URL.trim() : "";
+  return fromConfig || fromEnv || DEFAULT_FIRECRAWL_BASE_URL;
 }
 
 function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
