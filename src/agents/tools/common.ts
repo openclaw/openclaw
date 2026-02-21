@@ -24,11 +24,20 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
 export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 
 export class ToolInputError extends Error {
-  readonly status = 400;
+  readonly status: number = 400;
 
   constructor(message: string) {
     super(message);
     this.name = "ToolInputError";
+  }
+}
+
+export class ToolAuthorizationError extends ToolInputError {
+  override readonly status = 403;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolAuthorizationError";
   }
 }
 
