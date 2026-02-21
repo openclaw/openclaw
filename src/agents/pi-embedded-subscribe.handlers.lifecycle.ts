@@ -1,7 +1,8 @@
-import { emitAgentEvent } from "../infra/agent-events.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitAgentEvent, getAgentRunContext } from "../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -11,6 +12,19 @@ export {
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  const runContext = getAgentRunContext(ctx.params.runId);
+  if (!runContext?.sessionKey) {
+    ctx.log.debug(
+      `embedded run agent start: no sessionKey from runContext for runId=${ctx.params.runId}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "run.started",
+    runId: ctx.params.runId,
+    sessionId: (ctx.params.session as { id?: string }).id,
+    sessionKey: runContext?.sessionKey,
+    channel: ctx.params.channel,
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "lifecycle",

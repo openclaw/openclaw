@@ -163,6 +163,21 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /**
+   * Record gen_ai content on inference spans (opt-in, sensitive).
+   * `true` enables all content capture. An object form allows granular control:
+   * `{ inputMessages: true, outputMessages: true, systemInstructions: false, toolDefinitions: true, toolContent: true }`
+   * When using the object form, fields are strict opt-in (`true` required; omitted = disabled).
+   */
+  captureContent?:
+    | boolean
+    | {
+        inputMessages?: boolean;
+        outputMessages?: boolean;
+        systemInstructions?: boolean;
+        toolDefinitions?: boolean;
+        toolContent?: boolean;
+      };
 };
 
 export type DiagnosticsCacheTraceConfig = {

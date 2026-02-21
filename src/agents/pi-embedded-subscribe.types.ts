@@ -10,6 +10,14 @@ export type ToolResultFormat = "markdown" | "plain";
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  /**
+   * When true, diagnostic events may include message content.
+   * This is intentionally opt-in and typically controlled by `diagnostics.otel.captureContent`.
+   */
+  captureContent?: boolean;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
@@ -30,7 +38,6 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
-  sessionKey?: string;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

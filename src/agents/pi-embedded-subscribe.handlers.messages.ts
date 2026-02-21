@@ -1,13 +1,18 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  emitDiagnosticEvent,
+  type GenAiMessage,
+  type GenAiPart,
+} from "../infra/diagnostic-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -17,6 +22,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { derivePromptTokens, normalizeUsage } from "./usage.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -56,6 +62,46 @@ export function resolveSilentReplyFallbackText(params: {
   return fallback;
 }
 
+const buildAssistantParts = (content: unknown): GenAiPart[] => {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const parts: GenAiPart[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push({ type: "text", content: record.text });
+      continue;
+    }
+    if (record.type === "thinking" && typeof record.thinking === "string") {
+      parts.push({ type: "reasoning", content: record.thinking });
+      continue;
+    }
+    if (record.type === "toolCall") {
+      const id = typeof record.id === "string" ? record.id : "";
+      const name = typeof record.name === "string" ? record.name : "";
+      const args =
+        record.arguments && typeof record.arguments === "object" && !Array.isArray(record.arguments)
+          ? (record.arguments as Record<string, unknown>)
+          : undefined;
+      parts.push({ type: "tool_call", id, name, ...(args ? { arguments: args } : {}) });
+      continue;
+    }
+    if (record.type === "image" && typeof record.data === "string") {
+      parts.push({
+        type: "blob",
+        modality: "image",
+        mime_type: typeof record.mimeType === "string" ? record.mimeType : undefined,
+        content: record.data,
+      });
+    }
+  }
+  return parts;
+};
+
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -71,6 +117,8 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  ctx.state.currentMessageStartAt = Date.now();
+  ctx.state.currentMessageFirstTokenAt = undefined;
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -160,6 +208,8 @@ export function handleMessageUpdate(
   }
 
   if (chunk) {
+    ctx.state.firstTokenAt ??= Date.now();
+    ctx.state.currentMessageFirstTokenAt ??= Date.now();
     ctx.state.deltaBuffer += chunk;
     if (ctx.blockChunker) {
       ctx.blockChunker.append(chunk);
@@ -435,4 +485,77 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
+
+  const messageStartAt = ctx.state.currentMessageStartAt;
+  const durationMs =
+    typeof messageStartAt === "number" ? Math.max(0, Date.now() - messageStartAt) : undefined;
+  const ttftMs =
+    typeof messageStartAt === "number" && typeof ctx.state.currentMessageFirstTokenAt === "number"
+      ? Math.max(0, ctx.state.currentMessageFirstTokenAt - messageStartAt)
+      : undefined;
+
+  const usage = normalizeUsage({
+    input: (assistantMessage as { usage?: { input?: number } }).usage?.input,
+    output: (assistantMessage as { usage?: { output?: number } }).usage?.output,
+    cacheRead: (assistantMessage as { usage?: { cacheRead?: number } }).usage?.cacheRead,
+    cacheWrite: (assistantMessage as { usage?: { cacheWrite?: number } }).usage?.cacheWrite,
+    total: (assistantMessage as { usage?: { totalTokens?: number } }).usage?.totalTokens,
+  });
+  const promptTokens = derivePromptTokens(usage);
+  const totalTokens =
+    usage?.total ??
+    (typeof promptTokens === "number" && typeof usage?.output === "number"
+      ? promptTokens + usage.output
+      : undefined);
+  const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
+  const finishReasons = stopReason
+    ? [stopReason === "toolUse" ? "tool_call" : stopReason]
+    : undefined;
+  const error =
+    stopReason === "error" || stopReason === "aborted"
+      ? ((assistantMessage as { errorMessage?: string }).errorMessage ?? "LLM request failed.")
+      : undefined;
+
+  // Content capture is intentionally opt-in and controlled by diagnostics.otel.captureContent.
+  // When disabled, we still emit timings/usage/errors but omit message content fields.
+  const outputParts =
+    ctx.params.captureContent === true
+      ? buildAssistantParts((assistantMessage as { content?: unknown }).content)
+      : [];
+  const outputMessages: GenAiMessage[] =
+    ctx.params.captureContent === true && outputParts.length
+      ? [
+          {
+            role: "assistant",
+            parts: outputParts,
+            ...(finishReasons?.length ? { finish_reason: finishReasons[0] } : {}),
+          },
+        ]
+      : [];
+
+  emitDiagnosticEvent({
+    type: "model.inference",
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    sessionId: ctx.params.sessionId ?? (ctx.params.session as { id?: string }).id,
+    channel: ctx.params.channel,
+    usage: {
+      input: usage?.input,
+      output: usage?.output,
+      cacheRead: usage?.cacheRead,
+      cacheWrite: usage?.cacheWrite,
+      promptTokens,
+      total: totalTokens,
+    },
+    provider: (assistantMessage as { provider?: string }).provider,
+    model: (assistantMessage as { model?: string }).model,
+    operationName: "chat",
+    durationMs,
+    ttftMs,
+    finishReasons,
+    outputMessages: outputMessages.length > 0 ? outputMessages : undefined,
+    error,
+    errorType: error ? stopReason : undefined,
+    callIndex: ctx.state.assistantMessageIndex,
+  });
 }

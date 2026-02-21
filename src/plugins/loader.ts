@@ -1,9 +1,15 @@
+import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginDiagnostic,
+  PluginLogger,
+} from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -23,12 +29,6 @@ import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginModule,
-  PluginDiagnostic,
-  PluginLogger,
-} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -53,6 +53,7 @@ const resolvePluginSdkAliasFile = (params: {
     const modulePath = fileURLToPath(import.meta.url);
     const isProduction = process.env.NODE_ENV === "production";
     const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    const isFromDist = modulePath.includes(`${path.sep}dist${path.sep}`);
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
@@ -61,7 +62,9 @@ const resolvePluginSdkAliasFile = (params: {
         ? isTest
           ? [distCandidate, srcCandidate]
           : [distCandidate]
-        : [srcCandidate, distCandidate];
+        : isFromDist
+          ? [distCandidate, srcCandidate]
+          : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {
           return candidate;
