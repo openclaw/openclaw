@@ -84,12 +84,6 @@ export function isLocalPath(url: string): boolean {
     return true;
   }
 
-  // Windows drive-root-relative path (e.g. \tmp\openclaw\file.txt)
-  // path.join("/tmp/openclaw", "foo") on Windows yields \tmp\openclaw\foo
-  if (url.startsWith("\\")) {
-    return true;
-  }
-
   return false;
 }
 
