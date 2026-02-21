@@ -45,6 +45,16 @@ function resolveRunConcurrency(state: CronServiceState): number {
   }
   return Math.max(1, Math.floor(raw));
 }
+function timeoutErrorMessage(): string {
+  return "cron: job execution timed out";
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return err.name === "AbortError" || err.message === timeoutErrorMessage();
+}
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
@@ -267,15 +277,16 @@ export async function onTimer(state: CronServiceState) {
         const result =
           typeof jobTimeoutMs === "number"
             ? await (async () => {
+                const timeoutController = new AbortController();
                 let timeoutId: NodeJS.Timeout | undefined;
                 try {
                   return await Promise.race([
-                    executeJobCore(state, job),
+                    executeJobCore(state, job, timeoutController.signal),
                     new Promise<never>((_, reject) => {
-                      timeoutId = setTimeout(
-                        () => reject(new Error("cron: job execution timed out")),
-                        jobTimeoutMs,
-                      );
+                      timeoutId = setTimeout(() => {
+                        timeoutController.abort(timeoutErrorMessage());
+                        reject(new Error(timeoutErrorMessage()));
+                      }, jobTimeoutMs);
                     }),
                   ]);
                 } finally {
@@ -287,14 +298,15 @@ export async function onTimer(state: CronServiceState) {
             : await executeJobCore(state, job);
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
+        const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
         state.deps.log.warn(
           { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
-          `cron: job failed: ${String(err)}`,
+          `cron: job failed: ${errorText}`,
         );
         return {
           jobId: id,
           status: "error",
-          error: String(err),
+          error: errorText,
           startedAt,
           endedAt: state.deps.nowMs(),
         };
@@ -486,7 +498,11 @@ export async function runDueJobs(state: CronServiceState) {
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
+  signal?: AbortSignal,
 ): Promise<CronRunOutcome & CronRunTelemetry> {
+  if (signal?.aborted) {
+    return { status: "error", error: timeoutErrorMessage() };
+  }
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
@@ -513,6 +529,9 @@ async function executeJobCore(
 
       let heartbeatResult: HeartbeatRunResult;
       for (;;) {
+        if (signal?.aborted) {
+          return { status: "error", error: timeoutErrorMessage() };
+        }
         heartbeatResult = await state.deps.runHeartbeatOnce({
           reason,
           agentId: job.agentId,
@@ -559,7 +578,12 @@ async function executeJobCore(
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message: job.payload.message,
+    signal,
   });
+
+  if (signal?.aborted) {
+    return { status: "error", error: timeoutErrorMessage() };
+  }
 
   // Post a short summary back to the main session — but only when the
   // isolated run did NOT already deliver its output to the target channel.
