@@ -51,7 +51,14 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 
 describe("chat view", () => {
   it("renders/hides compaction and fallback indicators across recency states", () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      nowMs?: number;
+      props: Partial<ChatProps>;
+      selector: string;
+      missing?: boolean;
+      expectedText?: string;
+    }> = [
       {
         name: "active compaction",
         props: {
@@ -134,7 +141,7 @@ describe("chat view", () => {
         selector: ".compaction-indicator--fallback-cleared",
         expectedText: "Fallback cleared: fireworks/minimax-m2p5",
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const nowSpy =
@@ -146,7 +153,7 @@ describe("chat view", () => {
         expect(indicator, testCase.name).toBeNull();
       } else {
         expect(indicator, testCase.name).not.toBeNull();
-        expect(indicator?.textContent, testCase.name).toContain(testCase.expectedText);
+        expect(indicator?.textContent, testCase.name).toContain(testCase.expectedText ?? "");
       }
       nowSpy?.mockRestore();
     }

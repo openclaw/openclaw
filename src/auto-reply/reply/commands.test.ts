@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { typedCases } from "../../test-utils/typed-cases.js";
 import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
@@ -138,7 +139,12 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
 describe("handleCommands gating", () => {
   it("blocks /bash when disabled or not elevated-allowlisted", async () => {
     resetBashChatCommandForTests();
-    const cases = [
+    const cases = typedCases<{
+      name: string;
+      cfg: OpenClawConfig;
+      applyParams?: (params: ReturnType<typeof buildParams>) => void;
+      expectedText: string;
+    }>([
       {
         name: "disabled bash command",
         cfg: {
@@ -162,7 +168,7 @@ describe("handleCommands gating", () => {
         },
         expectedText: "elevated is not available",
       },
-    ] as const;
+    ]);
     for (const testCase of cases) {
       const params = buildParams("/bash echo hi", testCase.cfg);
       testCase.applyParams?.(params);
