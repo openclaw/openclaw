@@ -119,6 +119,15 @@ export const AgentDefaultsSchema = z
               .optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
+            periodicExtraction: z
+              .object({
+                enabled: z.boolean().optional(),
+                every: z.string().optional(),
+                prompt: z.string().optional(),
+                systemPrompt: z.string().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
