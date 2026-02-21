@@ -9,7 +9,7 @@ import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
@@ -263,25 +263,21 @@ describe("gateway server models + voicewake", () => {
 
 describe("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
-    const envSnapshot = captureEnv(["OPENCLAW_CANVAS_HOST_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
-    try {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "secret" }, async () => {
       testTailnetIPv4.value = "100.64.0.1";
       testState.gatewayBind = "lan";
       const canvasPort = await getFreePort();
       testState.canvasHostPort = canvasPort;
-      process.env.OPENCLAW_CANVAS_HOST_PORT = String(canvasPort);
-
-      const testPort = await getFreePort();
-      const canvasHostUrl = resolveCanvasHostUrl({
-        canvasPort,
-        requestHost: `100.64.0.1:${testPort}`,
-        localAddress: "127.0.0.1",
+      await withEnvAsync({ OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) }, async () => {
+        const testPort = await getFreePort();
+        const canvasHostUrl = resolveCanvasHostUrl({
+          canvasPort,
+          requestHost: `100.64.0.1:${testPort}`,
+          localAddress: "127.0.0.1",
+        });
+        expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
       });
-      expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 
   test("send dedupes by idempotencyKey", { timeout: 60_000 }, async () => {
