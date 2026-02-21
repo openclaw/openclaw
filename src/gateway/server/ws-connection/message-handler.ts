@@ -422,11 +422,28 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
-          if (scopes.length > 0 && !allowControlUiBypass) {
+          // When dangerouslyDisableDeviceAuth is enabled, preserve scopes so
+          // the Control UI can actually operate (read, write, approve, etc.).
+          // Without this, scopes get cleared and the connection is useless.
+          // Note: only for dangerouslyDisableDeviceAuth, NOT allowInsecureAuth
+          // (which permits insecure transport but should not auto-grant scopes).
+          if (disableControlUiDeviceAuth) {
+            if (scopes.length === 0) {
+              scopes = [
+                "operator.admin",
+                "operator.read",
+                "operator.write",
+                "operator.approvals",
+                "operator.pairing",
+                "operator.talk.secrets",
+              ];
+              connectParams.scopes = scopes;
+            }
+          } else if (scopes.length > 0) {
             scopes = [];
             connectParams.scopes = scopes;
           }
-          const canSkipDevice = sharedAuthOk;
+          const canSkipDevice = sharedAuthOk || allowControlUiBypass;
 
           if (isControlUi && !allowControlUiBypass) {
             const errorMessage = "control ui requires HTTPS or localhost (secure context)";
