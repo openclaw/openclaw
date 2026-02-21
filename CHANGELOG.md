@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Dev tooling: add dead-code scans to CI via Knip/ts-prune/ts-unused-exports and report unused dependencies/exports in non-blocking checks. (#22468) Thanks @vincentkoc.
 - Dev tooling: move `@larksuiteoapi/node-sdk` out of root `package.json` and keep it scoped to `extensions/feishu` where it is used. (#22471) Thanks @vincentkoc.
 - Dev tooling: remove unused root dependency `signal-utils` from core manifest after confirming it was only used by extension-only paths. (#22471) Thanks @vincentkoc.
+- Telegram: dedupe sent-message cache storage by removing redundant per-chat Set tracking and using the timestamp map as the single source of truth. (#22127) thanks @TaKO8Ki.
 - Agents/Subagents: default subagent spawn depth now uses shared `maxSpawnDepth=2`, enabling depth-1 orchestrator spawning by default while keeping depth policy checks consistent across spawn and prompt paths. (#22223) Thanks @tyler6204.
 - Channels/CLI: add per-account/channel `defaultTo` outbound routing fallback so `openclaw agent --deliver` can send without explicit `--reply-to` when a default target is configured. (#16985) Thanks @KirillShchetinin.
 - iOS/Chat: clean chat UI noise by stripping inbound untrusted metadata/timestamp prefixes, formatting tool outputs into concise summaries/errors, compacting the composer while typing, and supporting tap-to-dismiss keyboard in chat view. (#22122) thanks @mbelinky.
