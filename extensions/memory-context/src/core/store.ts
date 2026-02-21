@@ -142,7 +142,6 @@ export class WarmStore {
     }
 
     const eviction = this.opts.eviction ?? DEFAULT_EVICTION;
-    let reEmbeddedCount = 0;
 
     for await (const seg of this.cold.loadAll()) {
       // Cross-session: load all; otherwise filter to our session
@@ -164,89 +163,82 @@ export class WarmStore {
         continue;
       }
 
-      if (isDowngrade || needsAsyncReEmbed) {
-        // BM25-only fast load:
-        // - Downgrade: preserve cached vectors for when the real provider returns.
-        // - Async re-embed: load fast now, vectors will be filled in background.
-        const restored: ConversationSegment = {
-          id: seg.id,
-          sessionId: seg.sessionId,
-          sessionKey: seg.sessionKey,
-          timestamp: seg.timestamp,
-          role: seg.role,
-          content: seg.content,
-          tokens: seg.tokens,
-          metadata: {
-            topics: extractTopics(seg.content),
-            entities: extractEntities(seg.content),
-          },
-          // No embedding — vector search will be enabled after background re-embedding
-        };
-        this.segments.set(restored.id, restored);
-        this.timeline.push(restored.id);
-        this.dedupSet.set(dk, restored.id);
-        this.bm25.add(restored.id, restored.content);
-      } else {
-        const cachedVec = vectorCache.get(seg.id);
-        const usedCache = cachedVec && cachedVec.length === currentDim;
-        const restored = await this.restoreSegment(seg, cachedVec);
-        if (!usedCache && restored.embedding) {
-          reEmbeddedCount++;
-        }
-        this.segments.set(restored.id, restored);
-        this.timeline.push(restored.id);
-        this.dedupSet.set(dk, restored.id);
-        if (restored.embedding) {
-          this.index.add(restored.id, restored.embedding);
-        }
-        this.bm25.add(restored.id, restored.content);
+      // Fast load: use cached vectors if available, skip embedding during init.
+      // Uncached segments will be embedded in background after init completes.
+      // This makes init O(n) disk I/O only — no embedding API calls.
+      const cachedVec = vectorCache.get(seg.id);
+      const usedCache = !isDowngrade && cachedVec && cachedVec.length === currentDim;
+
+      const restored: ConversationSegment = {
+        id: seg.id,
+        sessionId: seg.sessionId,
+        sessionKey: seg.sessionKey,
+        timestamp: seg.timestamp,
+        role: seg.role,
+        content: seg.content,
+        embedding: usedCache ? cachedVec : undefined,
+        tokens: seg.tokens,
+        metadata: {
+          topics: extractTopics(seg.content),
+          entities: extractEntities(seg.content),
+        },
+      };
+
+      this.segments.set(restored.id, restored);
+      this.timeline.push(restored.id);
+      this.dedupSet.set(dk, restored.id);
+      if (restored.embedding) {
+        this.index.add(restored.id, restored.embedding);
       }
+      this.bm25.add(restored.id, restored.content);
     }
 
     // Enforce maxSegments on startup
     this.evictIfNeeded();
 
-    // Persist vectors immediately if any were re-embedded (dim mismatch or missing cache).
-    // This ensures subsequent inits can use the cache instead of re-embedding again.
-    // Skip if preserving higher-quality vector cache from a temporarily unavailable provider.
-    if (reEmbeddedCount > 0 && this.opts.vectorPersist !== false && !this.preserveVectorCache) {
-      console.info(`[memory-context] persisting ${reEmbeddedCount} re-embedded vectors`);
-      this.persistVectorsNow();
-    }
-
-    // Kick off background re-embedding if semantic provider has dim mismatch
-    if (needsAsyncReEmbed) {
-      this.startBackgroundReEmbedding();
+    // Background-embed segments that don't have vectors yet.
+    // Skip if downgraded to a non-semantic provider (preserve cached vectors).
+    if (!isDowngrade && isSemanticProvider) {
+      this.startBackgroundEmbedding();
     }
   }
 
   /**
-   * Re-embed all segments in the background using the current semantic provider.
-   * Builds a fresh VectorIndex, then swaps it in atomically via replaceFrom().
-   * Does not block init — BM25 search works immediately, vector search becomes
-   * available once re-embedding completes.
+   * Background-embed all segments that lack vectors.
+   * Handles both:
+   *   - Normal init: segments loaded from cold store without cached vectors
+   *   - Dim mismatch: all segments need fresh vectors with new provider
+   *
+   * Adds vectors to the live index incrementally so search improves
+   * progressively. Persists every PERSIST_EVERY embeddings to avoid
+   * losing progress on crash.
    */
-  private startBackgroundReEmbedding(): void {
+  private startBackgroundEmbedding(): void {
+    const uncached = [...this.segments.values()].filter((s) => !s.embedding);
+    if (uncached.length === 0) return;
     if (this.backgroundReEmbedding) return;
     this.backgroundReEmbedding = true;
 
     const BATCH_SIZE = 20;
     const BATCH_DELAY_MS = 50;
+    const PERSIST_EVERY = 100;
+
+    console.info(
+      `[memory-context] background embedding: ${uncached.length} segments without vectors`,
+    );
 
     const run = async () => {
       const dim = this.opts.embedding.dim;
-      const tmpIndex = new VectorIndex(dim);
-      const allSegments = [...this.segments.values()];
       let count = 0;
 
-      for (let i = 0; i < allSegments.length; i += BATCH_SIZE) {
-        const batch = allSegments.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
+        const batch = uncached.slice(i, i + BATCH_SIZE);
         for (const seg of batch) {
           try {
             const vec = await this.safeEmbed(seg.content);
             if (vec.length === dim) {
               seg.embedding = vec;
-              tmpIndex.add(seg.id, vec);
+              this.index.add(seg.id, vec);
               count++;
             }
           } catch {
@@ -254,18 +246,19 @@ export class WarmStore {
           }
         }
         // Yield to event loop between batches
-        if (i + BATCH_SIZE < allSegments.length) {
+        if (i + BATCH_SIZE < uncached.length) {
           await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+        }
+        // Periodic persist to avoid losing progress on crash
+        if (count > 0 && count % PERSIST_EVERY === 0 && this.opts.vectorPersist !== false) {
+          this.persistVectorsNow();
         }
       }
 
-      // Atomic swap: replace live index contents with the fully-built tmp index
-      if (count > 0 && this.index instanceof VectorIndex) {
-        this.index.replaceFrom(tmpIndex);
+      if (count > 0) {
         console.info(
-          `[memory-context] background re-embedding complete: ${count}/${allSegments.length} segments`,
+          `[memory-context] background embedding complete: ${count}/${uncached.length} segments`,
         );
-        // Persist the new vectors
         if (this.opts.vectorPersist !== false) {
           this.persistVectorsNow();
         }
@@ -274,7 +267,7 @@ export class WarmStore {
     };
 
     run().catch((err) => {
-      console.warn(`[memory-context] background re-embedding failed:`, err);
+      console.warn(`[memory-context] background embedding failed:`, err);
       this.backgroundReEmbedding = false;
     });
   }

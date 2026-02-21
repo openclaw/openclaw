@@ -8,12 +8,18 @@
 export type BM25SearchResult = { id: string; score: number };
 
 /**
- * Simple tokenizer: splits on whitespace and punctuation, handles Chinese by character.
- * No external dependencies.
+ * Simple tokenizer: splits on whitespace and punctuation, handles CJK with
+ * unigram + bigram strategy for better compound-word matching.
+ *
+ * CJK bigrams dramatically improve Chinese recall:
+ *   "飞书消息" → ["飞", "飞书", "书", "书消", "消", "消息", "息"]
+ * The bigrams "飞书" and "消息" carry IDF weight, so documents containing
+ * the exact compound get a relevance boost over character-level overlap.
  */
 function tokenize(text: string): string[] {
   const normalized = text.toLowerCase();
   const tokens: string[] = [];
+  let prevCJK = ""; // previous CJK char for bigram generation
 
   let current = "";
   for (const char of normalized) {
@@ -29,18 +35,26 @@ function tokenize(text: string): string[] {
       if (current.length > 0) {
         tokens.push(current);
         current = "";
+        prevCJK = ""; // non-CJK breaks bigram chain
       }
-      // Add CJK character as individual token
+      // Unigram
       tokens.push(char);
+      // Bigram with previous CJK character
+      if (prevCJK) {
+        tokens.push(prevCJK + char);
+      }
+      prevCJK = char;
     } else if (/[\s\p{P}]/u.test(char)) {
       // Whitespace or punctuation - flush current token
       if (current.length > 0) {
         tokens.push(current);
         current = "";
       }
+      prevCJK = ""; // separator breaks bigram chain
     } else if (/[\p{L}\p{N}]/u.test(char)) {
       // Letter or number - add to current token
       current += char;
+      prevCJK = ""; // non-CJK breaks bigram chain
     }
   }
 
