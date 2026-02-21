@@ -126,6 +126,7 @@ export async function ensureOpenClawModelsJson(
   const normalizedProviders = normalizeProviders({
     providers: mergedProviders,
     agentDir,
+    config: cfg,
   });
   const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
   try {

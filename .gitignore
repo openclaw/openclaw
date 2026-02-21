@@ -99,3 +99,8 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Vault secrets (plaintext and keys must not be committed)
+vault/vault-key.txt
+vault/secrets.txt
+deploy/.env

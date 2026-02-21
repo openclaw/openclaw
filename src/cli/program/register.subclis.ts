@@ -278,6 +278,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "vault",
+    description: "Vault secret management",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../vault-cli.js");
+      mod.registerVaultCli(program);
+    },
+  },
+  {
     name: "completion",
     description: "Generate shell completion script",
     hasSubcommands: false,
