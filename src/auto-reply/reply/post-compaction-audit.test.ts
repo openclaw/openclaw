@@ -170,6 +170,24 @@ describe("auditPostCompactionReads", () => {
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
   });
+
+  it("uses human-readable label for labeled RegExp entries", () => {
+    const result = auditPostCompactionReads(["WORKFLOW_AUTO.md"], workspaceDir);
+
+    expect(result.passed).toBe(false);
+    // Should show readable label, not raw regex source
+    expect(result.missingPatterns).toContain("memory/YYYY-MM-DD.md");
+    expect(result.missingPatterns).not.toContain("memory\\/\\d{4}-\\d{2}-\\d{2}\\.md");
+  });
+
+  it("falls back to regex source for plain RegExp entries", () => {
+    const readPaths: string[] = [];
+    const customRequired = [/custom\/\d+\.md/];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
+
+    expect(result.passed).toBe(false);
+    expect(result.missingPatterns).toContain("custom\\/\\d+\\.md");
+  });
 });
 
 describe("formatAuditWarning", () => {
