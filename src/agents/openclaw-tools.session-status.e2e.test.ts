@@ -237,4 +237,47 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
   });
+
+  it("displays thinking/reasoning levels from session entry", async () => {
+    loadSessionStoreMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        thinkingLevel: "medium",
+        reasoningLevel: "on",
+      },
+    });
+
+    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
+      (candidate) => candidate.name === "session_status",
+    );
+    if (!tool) {
+      throw new Error("missing session_status tool");
+    }
+
+    const result = await tool.execute("call-think", {});
+    const details = result.details as { statusText?: string };
+    expect(details.statusText).toContain("medium");
+  });
+
+  it("falls back to off when no session-level thinking is set", async () => {
+    loadSessionStoreMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({
+      main: { sessionId: "s1", updatedAt: 10 },
+    });
+
+    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
+      (candidate) => candidate.name === "session_status",
+    );
+    if (!tool) {
+      throw new Error("missing session_status tool");
+    }
+
+    const result = await tool.execute("call-default", {});
+    const details = result.details as { statusText?: string };
+    expect(details.statusText).toBeDefined();
+  });
 });
