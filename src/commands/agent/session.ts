@@ -39,6 +39,19 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
+function normalizeSessionIdSessionSuffix(sessionId: string): string {
+  const normalized = sessionId.trim().toLowerCase();
+  if (!normalized) {
+    return "session";
+  }
+  const sanitized = normalized.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized || "session";
+}
+
+function buildSessionIdSessionKey(params: { agentId: string; sessionId: string }): string {
+  return `agent:${params.agentId}:session:${normalizeSessionIdSessionSuffix(params.sessionId)}`;
+}
+
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -49,13 +62,15 @@ export function resolveSessionKeyForRequest(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const explicitSessionKey =
+  const explicitSessionKey = opts.sessionKey?.trim();
+  const explicitAgentSessionKey =
     opts.sessionKey?.trim() ||
     resolveExplicitAgentSessionKey({
       cfg: opts.cfg,
       agentId: opts.agentId,
     });
-  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
+  const baseSessionKey = explicitAgentSessionKey;
+  const storeAgentId = resolveAgentIdFromSessionKey(baseSessionKey);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
@@ -63,7 +78,7 @@ export function resolveSessionKeyForRequest(opts: {
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
+    explicitAgentSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
   if (
@@ -102,6 +117,25 @@ export function resolveSessionKeyForRequest(opts: {
         return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
       }
     }
+  }
+
+  // If no existing key exists for the explicit session-id, use a dedicated
+  // session namespace so callers can safely isolate test/parallel sessions
+  // without reusing per-sender or agent main entries.
+  if (
+    !explicitSessionKey &&
+    opts.sessionId &&
+    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
+  ) {
+    const scopedSessionKey = buildSessionIdSessionKey({
+      agentId: storeAgentId,
+      sessionId: opts.sessionId,
+    });
+    return {
+      sessionKey: scopedSessionKey,
+      sessionStore,
+      storePath,
+    };
   }
 
   return { sessionKey, sessionStore, storePath };

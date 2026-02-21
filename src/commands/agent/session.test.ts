@@ -119,7 +119,21 @@ describe("resolveSessionKeyForRequest", () => {
       cfg: baseCfg,
       sessionId: "nonexistent-id",
     });
-    expect(result.sessionKey).toBeUndefined();
+    expect(result.sessionKey).toBe("agent:main:session:nonexistent-id");
+  });
+
+  it("uses derived session key for --agent + unknown session-id", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
+    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.loadSessionStore.mockReturnValue({});
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      sessionId: "session-id-1234",
+      agentId: "testagent",
+    });
+    expect(result.sessionKey).toBe("agent:testagent:session:session-id-1234");
+    expect(result.storePath).toBe(MAIN_STORE_PATH);
   });
 
   it("does not search other stores when explicitSessionKey is set", async () => {
