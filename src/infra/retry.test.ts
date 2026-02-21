@@ -2,6 +2,31 @@ import { describe, expect, it, vi } from "vitest";
 import { retryAsync } from "./retry.js";
 
 describe("retryAsync", () => {
+  async function runRetryAfterCase(options: {
+    maxDelayMs: number;
+    retryAfterMs: number;
+    expectedDelayMs: number;
+  }) {
+    vi.useFakeTimers();
+    try {
+      const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+      const delays: number[] = [];
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: options.maxDelayMs,
+        jitter: 0,
+        retryAfterMs: () => options.retryAfterMs,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays[0]).toBe(options.expectedDelayMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
   it("returns on first success", async () => {
     const fn = vi.fn().mockResolvedValue("ok");
     const result = await retryAsync(fn, 3, 10);
@@ -49,39 +74,20 @@ describe("retryAsync", () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("uses retryAfterMs when provided", async () => {
-    vi.useFakeTimers();
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
-    const delays: number[] = [];
-    const promise = retryAsync(fn, {
-      attempts: 2,
-      minDelayMs: 0,
+  it.each([
+    {
+      name: "uses retryAfterMs when provided",
       maxDelayMs: 1000,
-      jitter: 0,
-      retryAfterMs: () => 500,
-      onRetry: (info) => delays.push(info.delayMs),
-    });
-    await vi.runAllTimersAsync();
-    await expect(promise).resolves.toBe("ok");
-    expect(delays[0]).toBe(500);
-    vi.useRealTimers();
-  });
-
-  it("clamps retryAfterMs to maxDelayMs", async () => {
-    vi.useFakeTimers();
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
-    const delays: number[] = [];
-    const promise = retryAsync(fn, {
-      attempts: 2,
-      minDelayMs: 0,
+      retryAfterMs: 500,
+      expectedDelayMs: 500,
+    },
+    {
+      name: "clamps retryAfterMs to maxDelayMs",
       maxDelayMs: 100,
-      jitter: 0,
-      retryAfterMs: () => 500,
-      onRetry: (info) => delays.push(info.delayMs),
-    });
-    await vi.runAllTimersAsync();
-    await expect(promise).resolves.toBe("ok");
-    expect(delays[0]).toBe(100);
-    vi.useRealTimers();
+      retryAfterMs: 500,
+      expectedDelayMs: 100,
+    },
+  ])("$name", async ({ maxDelayMs, retryAfterMs, expectedDelayMs }) => {
+    await runRetryAfterCase({ maxDelayMs, retryAfterMs, expectedDelayMs });
   });
 });
