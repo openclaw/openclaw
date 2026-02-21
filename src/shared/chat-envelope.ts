@@ -24,7 +24,7 @@ const INBOUND_METADATA_HEADERS = [
   "Forwarded message context (untrusted metadata):",
   "Chat history since last reply (untrusted, for context):",
 ];
-const REGEX_ESCAPE_RE = /[.*+?^${}()|[\]\\\-]/g;
+const REGEX_ESCAPE_RE = /[.*+?^${}()|[\]\\-]/g;
 const INBOUND_METADATA_PREFIX_RE = new RegExp(
   "^\\s*(?:" +
     INBOUND_METADATA_HEADERS.map((header) => header.replace(REGEX_ESCAPE_RE, "\\$&")).join("|") +
