@@ -14,6 +14,7 @@ type SandboxBrowserHashInput = {
     SandboxBrowserConfig,
     "cdpPort" | "vncPort" | "noVncPort" | "headless" | "enableNoVnc"
   >;
+  securityEpoch: string;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;

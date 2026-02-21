@@ -11,10 +11,13 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants.js";
+import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
@@ -43,6 +46,11 @@ export type SecurityAuditFinding = {
   detail: string;
   remediation?: string;
 };
+
+type ExecDockerRawFn = (
+  args: string[],
+  opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
+) => Promise<ExecDockerRawResult>;
 
 // --------------------------------------------------------------------------
 // Helpers
@@ -241,6 +249,115 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
 // --------------------------------------------------------------------------
 // Exported collectors
 // --------------------------------------------------------------------------
+
+function normalizeDockerLabelValue(raw: string | undefined): string | null {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed || trimmed === "<no value>") {
+    return null;
+  }
+  return trimmed;
+}
+
+async function listSandboxBrowserContainers(
+  execDockerRawFn: ExecDockerRawFn,
+): Promise<string[] | null> {
+  try {
+    const result = await execDockerRawFn(
+      ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
+      { allowFailure: true },
+    );
+    if (result.code !== 0) {
+      return null;
+    }
+    return result.stdout
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+async function readSandboxBrowserHashLabels(params: {
+  containerName: string;
+  execDockerRawFn: ExecDockerRawFn;
+}): Promise<{ configHash: string | null; epoch: string | null } | null> {
+  try {
+    const result = await params.execDockerRawFn(
+      [
+        "inspect",
+        "-f",
+        '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
+        params.containerName,
+      ],
+      { allowFailure: true },
+    );
+    if (result.code !== 0) {
+      return null;
+    }
+    const [hashRaw, epochRaw] = result.stdout.toString("utf8").split("\t");
+    return {
+      configHash: normalizeDockerLabelValue(hashRaw),
+      epoch: normalizeDockerLabelValue(epochRaw),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function collectSandboxBrowserHashLabelFindings(params?: {
+  execDockerRawFn?: ExecDockerRawFn;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const execFn = params?.execDockerRawFn ?? execDockerRaw;
+  const containers = await listSandboxBrowserContainers(execFn);
+  if (!containers || containers.length === 0) {
+    return findings;
+  }
+
+  const missingHash: string[] = [];
+  const staleEpoch: string[] = [];
+
+  for (const containerName of containers) {
+    const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
+    if (!labels) {
+      continue;
+    }
+    if (!labels.configHash) {
+      missingHash.push(containerName);
+    }
+    if (labels.epoch !== SANDBOX_BROWSER_SECURITY_HASH_EPOCH) {
+      staleEpoch.push(containerName);
+    }
+  }
+
+  if (missingHash.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_container.hash_label_missing",
+      severity: "warn",
+      title: "Sandbox browser container missing config hash label",
+      detail:
+        `Containers: ${missingHash.join(", ")}. ` +
+        "These browser containers predate hash-based drift checks and may miss security remediations until recreated.",
+      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+    });
+  }
+
+  if (staleEpoch.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_container.hash_epoch_stale",
+      severity: "warn",
+      title: "Sandbox browser container hash epoch is stale",
+      detail:
+        `Containers: ${staleEpoch.join(", ")}. ` +
+        `Expected openclaw.browserConfigEpoch=${SANDBOX_BROWSER_SECURITY_HASH_EPOCH}.`,
+      remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+    });
+  }
+
+  return findings;
+}
 
 export async function collectPluginsTrustFindings(params: {
   cfg: OpenClawConfig;
