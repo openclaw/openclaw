@@ -329,4 +329,87 @@ describe("memory index", () => {
       );
     }
   });
+
+  it("shouldSyncSessions returns true for needsFullReindex even when reason is session-start or watch", async () => {
+    const cfg = createCfg({ storePath: indexMainPath });
+    const manager = await getPersistentManager(cfg);
+    // Inject the sessions source so shouldSyncSessions passes the source guard
+    const sources = (manager as unknown as { sources: Set<string> }).sources;
+    sources.add("sessions");
+    try {
+      const shouldSync = manager as unknown as {
+        shouldSyncSessions: (
+          params?: { reason?: string; force?: boolean },
+          needsFullReindex?: boolean,
+        ) => boolean;
+      };
+      // Core bug: reason gate must not block when needsFullReindex is true
+      expect(shouldSync.shouldSyncSessions({ reason: "session-start" }, true)).toBe(true);
+      expect(shouldSync.shouldSyncSessions({ reason: "watch" }, true)).toBe(true);
+      // Sanity: without needsFullReindex, these reasons should still block
+      expect(shouldSync.shouldSyncSessions({ reason: "session-start" }, false)).toBe(false);
+      expect(shouldSync.shouldSyncSessions({ reason: "watch" }, false)).toBe(false);
+    } finally {
+      sources.delete("sessions");
+    }
+  });
+
+  it("restores sessionsDirty from persisted meta on manager construction", async () => {
+    const storePath = path.join(workspaceDir, `index-sessions-dirty-${Date.now()}.sqlite`);
+    const cfg: TestCfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: storePath, vector: { enabled: false } },
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
+            sources: ["memory", "sessions"],
+            experimental: { sessionMemory: true },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    // First manager: write meta with sessionsDirty=true directly
+    const first = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(first.manager).not.toBeNull();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+    const firstManager = first.manager as MemoryIndexManager;
+    managersForCleanup.add(firstManager);
+    (firstManager as unknown as { sessionsDirty: boolean }).sessionsDirty = true;
+    // Write meta that includes sessionsDirty=true
+    (
+      firstManager as unknown as {
+        writeMeta: (meta: Record<string, unknown>) => void;
+      }
+    ).writeMeta({
+      model: "mock-embed",
+      provider: "openai",
+      chunkTokens: 4000,
+      chunkOverlap: 0,
+      sessionsDirty: true,
+    });
+    await firstManager.close?.();
+    managersForCleanup.delete(firstManager);
+
+    // Second manager: should restore sessionsDirty from meta
+    const second = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(second.manager).not.toBeNull();
+    if (!second.manager) {
+      throw new Error("manager missing");
+    }
+    const secondManager = second.manager as MemoryIndexManager;
+    managersForCleanup.add(secondManager);
+    const restoredDirty = (secondManager as unknown as { sessionsDirty: boolean }).sessionsDirty;
+    expect(restoredDirty).toBe(true);
+    await secondManager.close?.();
+    managersForCleanup.delete(secondManager);
+  });
 });

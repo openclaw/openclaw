@@ -182,6 +182,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.ensureIntervalSync();
     const statusOnly = params.purpose === "status";
     this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
+    if (this.sources.has("sessions") && meta?.sessionsDirty) {
+      this.sessionsDirty = true;
+      void this.rebuildSessionsDirtyFiles();
+    }
     this.batch = this.resolveBatchConfig();
   }
 
@@ -597,6 +601,30 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
+    }
+  }
+
+  private async rebuildSessionsDirtyFiles(): Promise<void> {
+    try {
+      const { listSessionFilesForAgent } = await import("./session-files.js");
+      const files = await listSessionFilesForAgent(this.agentId);
+
+      for (const absPath of files) {
+        const record = this.db
+          .prepare(`SELECT path FROM files WHERE path = ? AND source = ?`)
+          .get(absPath, "sessions") as { path: string } | undefined;
+
+        if (!record) {
+          this.sessionsDirtyFiles.add(absPath);
+        }
+      }
+
+      log.debug("Rebuilt sessionsDirtyFiles on startup", {
+        totalFiles: files.length,
+        dirtyFiles: this.sessionsDirtyFiles.size,
+      });
+    } catch (err) {
+      log.warn(`Failed to rebuild sessionsDirtyFiles: ${String(err)}`);
     }
   }
 

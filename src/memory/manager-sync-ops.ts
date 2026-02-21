@@ -48,6 +48,7 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
+  sessionsDirty?: boolean;
 };
 
 type MemorySyncProgressState = {
@@ -613,12 +614,12 @@ export abstract class MemoryManagerSyncOps {
     if (params?.force) {
       return true;
     }
+    if (needsFullReindex) {
+      return true;
+    }
     const reason = params?.reason;
     if (reason === "session-start" || reason === "watch") {
       return false;
-    }
-    if (needsFullReindex) {
-      return true;
     }
     return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
   }
@@ -1067,6 +1068,10 @@ export abstract class MemoryManagerSyncOps {
         nextMeta.vectorDims = this.vector.dims;
       }
 
+      if (this.sources.has("sessions")) {
+        nextMeta.sessionsDirty = this.sessionsDirty;
+      }
+
       this.writeMeta(nextMeta);
       this.pruneEmbeddingCacheIfNeeded?.();
 
@@ -1131,6 +1136,10 @@ export abstract class MemoryManagerSyncOps {
     };
     if (this.vector.available && this.vector.dims) {
       nextMeta.vectorDims = this.vector.dims;
+    }
+
+    if (this.sources.has("sessions")) {
+      nextMeta.sessionsDirty = this.sessionsDirty;
     }
 
     this.writeMeta(nextMeta);
