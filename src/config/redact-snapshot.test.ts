@@ -408,15 +408,15 @@ describe("redactConfigSnapshot", () => {
           custom2: [{ mySecret: "this-is-a-custom-secret-value" }],
         }),
         assert: ({ redacted, restored }) => {
-          const cfg = redacted as Record<string, Record<string, unknown>>;
-          const cfgCustom2 = cfg.custom2 as unknown as unknown[];
+          const cfg = redacted;
+          const cfgCustom2 = Array.isArray(cfg.custom2) ? cfg.custom2 : [];
           expect(cfgCustom2.length).toBeGreaterThan(0);
           expect(
             ((cfg.custom1 as Record<string, unknown>).anykey as Record<string, unknown>).mySecret,
           ).toBe(REDACTED_SENTINEL);
           expect((cfgCustom2[0] as Record<string, unknown>).mySecret).toBe(REDACTED_SENTINEL);
-          const out = restored as Record<string, Record<string, unknown>>;
-          const outCustom2 = out.custom2 as unknown as unknown[];
+          const out = restored;
+          const outCustom2 = Array.isArray(out.custom2) ? out.custom2 : [];
           expect(outCustom2.length).toBeGreaterThan(0);
           expect(
             ((out.custom1 as Record<string, unknown>).anykey as Record<string, unknown>).mySecret,
@@ -437,15 +437,15 @@ describe("redactConfigSnapshot", () => {
           custom2: [{ mySecret: "this-is-a-custom-secret-value" }],
         }),
         assert: ({ redacted, restored }) => {
-          const cfg = redacted as Record<string, Record<string, unknown>>;
-          const cfgCustom2 = cfg.custom2 as unknown as unknown[];
+          const cfg = redacted;
+          const cfgCustom2 = Array.isArray(cfg.custom2) ? cfg.custom2 : [];
           expect(cfgCustom2.length).toBeGreaterThan(0);
           expect(
             ((cfg.custom1 as Record<string, unknown>).anykey as Record<string, unknown>).mySecret,
           ).toBe(REDACTED_SENTINEL);
           expect((cfgCustom2[0] as Record<string, unknown>).mySecret).toBe(REDACTED_SENTINEL);
-          const out = restored as Record<string, Record<string, unknown>>;
-          const outCustom2 = out.custom2 as unknown as unknown[];
+          const out = restored;
+          const outCustom2 = Array.isArray(out.custom2) ? out.custom2 : [];
           expect(outCustom2.length).toBeGreaterThan(0);
           expect(
             ((out.custom1 as Record<string, unknown>).anykey as Record<string, unknown>).mySecret,
