@@ -23,7 +23,7 @@ export function parseAbsoluteTimeMs(input: string): number | null {
   if (/^\d+$/.test(raw)) {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) {
-      return Math.floor(n);
+      return Math.floor(n * 1000); // Convert Unix timestamp (seconds) to milliseconds
     }
   }
   const parsed = Date.parse(normalizeUtcIso(raw));
