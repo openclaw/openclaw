@@ -306,6 +306,49 @@ async function readSandboxBrowserHashLabels(params: {
   }
 }
 
+function parsePublishedHostFromDockerPortLine(line: string): string | null {
+  const trimmed = line.trim();
+  const rhs = trimmed.includes("->") ? (trimmed.split("->").at(-1)?.trim() ?? "") : trimmed;
+  if (!rhs) {
+    return null;
+  }
+  const bracketHost = rhs.match(/^\[([^\]]+)\]:\d+$/);
+  if (bracketHost?.[1]) {
+    return bracketHost[1];
+  }
+  const hostPort = rhs.match(/^([^:]+):\d+$/);
+  if (hostPort?.[1]) {
+    return hostPort[1];
+  }
+  return null;
+}
+
+function isLoopbackPublishHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
+async function readSandboxBrowserPortMappings(params: {
+  containerName: string;
+  execDockerRawFn: ExecDockerRawFn;
+}): Promise<string[] | null> {
+  try {
+    const result = await params.execDockerRawFn(["port", params.containerName], {
+      allowFailure: true,
+    });
+    if (result.code !== 0) {
+      return null;
+    }
+    return result.stdout
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
 }): Promise<SecurityAuditFinding[]> {
@@ -318,6 +361,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
 
   const missingHash: string[] = [];
   const staleEpoch: string[] = [];
+  const nonLoopbackPublished: string[] = [];
 
   for (const containerName of containers) {
     const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
@@ -329,6 +373,20 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     }
     if (labels.epoch !== SANDBOX_BROWSER_SECURITY_HASH_EPOCH) {
       staleEpoch.push(containerName);
+    }
+    const portMappings = await readSandboxBrowserPortMappings({
+      containerName,
+      execDockerRawFn: execFn,
+    });
+    if (!portMappings?.length) {
+      continue;
+    }
+    const exposedMappings = portMappings.filter((line) => {
+      const host = parsePublishedHostFromDockerPortLine(line);
+      return Boolean(host && !isLoopbackPublishHost(host));
+    });
+    if (exposedMappings.length > 0) {
+      nonLoopbackPublished.push(`${containerName} (${exposedMappings.join("; ")})`);
     }
   }
 
@@ -353,6 +411,20 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
         `Containers: ${staleEpoch.join(", ")}. ` +
         `Expected openclaw.browserConfigEpoch=${SANDBOX_BROWSER_SECURITY_HASH_EPOCH}.`,
       remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
+    });
+  }
+
+  if (nonLoopbackPublished.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_container.non_loopback_publish",
+      severity: "critical",
+      title: "Sandbox browser container publishes ports on non-loopback interfaces",
+      detail:
+        `Containers: ${nonLoopbackPublished.join(", ")}. ` +
+        "Sandbox browser observer/control ports should stay loopback-only to avoid unintended remote access.",
+      remediation:
+        `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt), ` +
+        "then verify published ports are bound to 127.0.0.1.",
     });
   }
 
