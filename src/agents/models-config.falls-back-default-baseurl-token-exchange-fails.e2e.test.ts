@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_COPILOT_API_BASE_URL } from "../providers/github-copilot-token.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
   mockCopilotTokenExchangeSuccess,
@@ -16,16 +16,14 @@ installModelsConfigTestHooks({ restoreFetch: true });
 describe("models-config", () => {
   it("falls back to default baseUrl when token exchange fails", async () => {
     await withTempHome(async () => {
-      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN"]);
-      process.env.COPILOT_GITHUB_TOKEN = "gh-token";
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: async () => ({ message: "boom" }),
-      });
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withEnvAsync({ COPILOT_GITHUB_TOKEN: "gh-token" }, async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          json: async () => ({ message: "boom" }),
+        });
+        globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      try {
         await ensureOpenClawModelsJson({ models: { providers: {} } });
 
         const agentDir = path.join(process.env.HOME ?? "", ".openclaw", "agents", "main", "agent");
@@ -35,9 +33,7 @@ describe("models-config", () => {
         };
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe(DEFAULT_COPILOT_API_BASE_URL);
-      } finally {
-        envSnapshot.restore();
-      }
+      });
     });
   });
 
