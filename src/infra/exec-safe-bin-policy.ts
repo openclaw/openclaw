@@ -151,7 +151,6 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "--field-separator",
       "--buffer-size",
       "--temporary-directory",
-      "--compress-program",
       "--parallel",
       "--batch-size",
       "--random-source",
@@ -163,7 +162,8 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-T",
       "-o",
     ],
-    blockedFlags: ["--files0-from", "--output", "-o"],
+    // --compress-program can invoke an external executable and breaks stdin-only guarantees.
+    blockedFlags: ["--compress-program", "--files0-from", "--output", "-o"],
   },
   uniq: {
     maxPositional: 0,
