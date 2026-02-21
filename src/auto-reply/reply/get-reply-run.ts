@@ -160,6 +160,12 @@ export async function runPreparedReply(
   let currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
+  // Thread history should also be included when the channel layer marks this as
+  // the first turn in a thread (e.g. after a stale session reset).  The prepare
+  // step may have updated the session-store entry already, causing session.ts to
+  // see the entry as fresh and keep isNewSession=false, but the thread history
+  // was fetched and should still be injected.
+  const includeThreadHistory = isNewSession || sessionCtx.IsFirstThreadTurn === true;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
@@ -186,7 +192,7 @@ export async function runPreparedReply(
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
-    isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    includeThreadHistory ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
   const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
     .filter(Boolean)
@@ -210,7 +216,7 @@ export async function runPreparedReply(
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
-    isNewSession
+    includeThreadHistory
       ? {
           ...sessionCtx,
           ...(sessionCtx.ThreadHistoryBody?.trim()
@@ -261,9 +267,9 @@ export async function runPreparedReply(
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
   const threadContextNote =
-    isNewSession && threadHistoryBody
+    includeThreadHistory && threadHistoryBody
       ? `[Thread history - for context]\n${threadHistoryBody}`
-      : isNewSession && threadStarterBody
+      : includeThreadHistory && threadStarterBody
         ? `[Thread starter - for context]\n${threadStarterBody}`
         : undefined;
   const skillResult = await ensureSkillSnapshot({

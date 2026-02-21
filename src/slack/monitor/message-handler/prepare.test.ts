@@ -364,6 +364,73 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
   });
 
+  it("re-fetches thread history when existing thread session is stale", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "300.000",
+    });
+    // Write a stale session entry (old timestamp that will fail freshness check)
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        { [threadKeys.sessionKey]: { updatedAt: Date.now() - 48 * 60 * 60 * 1000 } },
+        null,
+        2,
+      ),
+    );
+
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: "300.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter", user: "U2", ts: "300.000" },
+          { text: "old assistant reply", bot_id: "B1", ts: "300.500" },
+          { text: "new follow-up", user: "U1", ts: "300.800" },
+          { text: "current message", user: "U1", ts: "301.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.resolveUserName = async (id: string) => ({
+      name: id === "U1" ? "Alice" : "Bob",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "current message",
+        ts: "301.000",
+        thread_ts: "300.000",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("old assistant reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("new follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",

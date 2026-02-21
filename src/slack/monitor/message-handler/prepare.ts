@@ -25,7 +25,15 @@ import { resolveConversationLabel } from "../../../channels/conversation-label.j
 import { logInboundDrop } from "../../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { recordInboundSession } from "../../../channels/session.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
+import {
+  evaluateSessionFreshness,
+  readSessionUpdatedAt,
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveStorePath,
+  updateSessionStore,
+} from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { buildPairingReply } from "../../../pairing/pairing-messages.js";
@@ -482,6 +490,7 @@ export async function prepareSlackMessage(params: {
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
   let threadSessionPreviousTimestamp: number | undefined;
+  let threadSessionIsStale = false;
   let threadLabel: string | undefined;
   let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
   if (isThreadReply && threadTs) {
@@ -521,7 +530,38 @@ export async function prepareSlackMessage(params: {
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+    // Re-fetch thread history when the session has gone stale (e.g. daily reset
+    // or idle timeout). Without this, a reset creates a new empty session but
+    // the non-undefined timestamp prevents re-hydration from the Slack API.
+    threadSessionIsStale =
+      threadSessionPreviousTimestamp != null &&
+      !evaluateSessionFreshness({
+        updatedAt: threadSessionPreviousTimestamp,
+        now: Date.now(),
+        policy: resolveSessionResetPolicy({
+          sessionCfg: cfg.session,
+          resetType: resolveSessionResetType({ sessionKey, isThread: true }),
+          resetOverride: resolveChannelResetConfig({ sessionCfg: cfg.session, channel: "slack" }),
+        }),
+      }).fresh;
+    // When the thread session is stale, clear the old sessionId from the store
+    // so that session.ts creates a fresh session instead of resuming the old one.
+    // Without this, the old JSONL file (with irrelevant prior context) is loaded
+    // alongside the freshly-fetched thread history, confusing the model.
+    if (threadSessionIsStale) {
+      void updateSessionStore(storePath, (store) => {
+        const entry = store[sessionKey];
+        if (entry) {
+          // Reset to force session.ts to create a fresh session.
+          entry.sessionId = crypto.randomUUID();
+          entry.updatedAt = 0;
+        }
+      }).catch(() => {});
+    }
+    if (
+      threadInitialHistoryLimit > 0 &&
+      (!threadSessionPreviousTimestamp || threadSessionIsStale)
+    ) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
@@ -612,7 +652,9 @@ export async function prepareSlackMessage(params: {
     ThreadStarterBody: threadStarterBody,
     ThreadHistoryBody: threadHistoryBody,
     IsFirstThreadTurn:
-      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+      isThreadReply && threadTs && (!threadSessionPreviousTimestamp || threadSessionIsStale)
+        ? true
+        : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
