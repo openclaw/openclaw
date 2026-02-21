@@ -383,7 +383,26 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         }) ?? err;
       if (!isFailoverError(normalized)) {
-        throw err;
+        // Only fail-fast on primary model (i === 0) - preserves safety semantics
+        if (i === 0) {
+          throw err;
+        }
+        // For fallbacks, record and continue to next candidate
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: err instanceof Error ? err.message : String(err),
+          reason: undefined
+        });
+        lastError = err;
+        await params.onError?.({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: err,
+          attempt: i + 1,
+          total: candidates.length
+        });
+        continue;
       }
 
       lastError = normalized;
