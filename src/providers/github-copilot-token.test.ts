@@ -23,12 +23,15 @@ describe("github-copilot token", () => {
     );
   });
 
-  it("uses cache when token is still valid", async () => {
+  it("uses cache when token is still valid and githubToken matches", async () => {
     const now = Date.now();
+    const crypto = await import("node:crypto");
+    const ghHash = crypto.createHash("sha256").update("gh").digest("hex");
     loadJsonFile.mockReturnValue({
       token: "cached;proxy-ep=proxy.example.com;",
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
+      githubTokenHash: ghHash,
     });
 
     const fetchImpl = vi.fn();
@@ -44,6 +47,42 @@ describe("github-copilot token", () => {
     expect(res.baseUrl).toBe("https://api.example.com");
     expect(String(res.source)).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("ignores cache when githubToken does not match cached hash", async () => {
+    const now = Date.now();
+    const crypto = await import("node:crypto");
+    const account1Hash = crypto.createHash("sha256").update("ghu_account1").digest("hex");
+    loadJsonFile.mockReturnValue({
+      token: "account1-token;proxy-ep=proxy.example.com;",
+      expiresAt: now + 60 * 60 * 1000,
+      updatedAt: now,
+      githubTokenHash: account1Hash,
+    });
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "account2-token;proxy-ep=https://proxy.example.com;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    const res = await resolveCopilotApiToken({
+      githubToken: "ghu_account2",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(res.token).toBe("account2-token;proxy-ep=https://proxy.example.com;");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    const saved = saveJsonFile.mock.calls[0][1];
+    const account2Hash = crypto.createHash("sha256").update("ghu_account2").digest("hex");
+    expect(saved.githubTokenHash).toBe(account2Hash);
   });
 
   it("fetches and stores token when cache is missing", async () => {
