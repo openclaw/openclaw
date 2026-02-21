@@ -224,6 +224,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
   "commands.ownerAllowFrom": "Command Owners",
+  "commands.ownerDisplay": "Owner ID Display",
+  "commands.ownerDisplaySecret": "Owner ID Hash Secret",
   "ui.seamColor": "Accent Color",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",
