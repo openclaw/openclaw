@@ -148,6 +148,9 @@ const STOP_WORDS_KO = new Set([
   "대로",
   // Pronouns (대명사)
   "나",
+  "나는",
+  "내가",
+  "나를",
   "너",
   "우리",
   "저",
@@ -182,7 +185,6 @@ const STOP_WORDS_KO = new Set([
   "중",
   "분",
   // Adverbs
-  "좀",
   "잘",
   "더",
   "또",
@@ -191,6 +193,7 @@ const STOP_WORDS_KO = new Set([
   "아주",
   "많이",
   "너무",
+  "좀",
   // Conjunctions
   "그리고",
   "하지만",
