@@ -750,14 +750,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
+    let parsedMediaPaths: string[] = [];
+    let parsedMediaTypes: string[] = [];
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
+          persistImagesToDisk: true,
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
+        parsedMediaPaths = parsed.mediaPaths;
+        parsedMediaTypes = parsed.mediaTypes;
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
@@ -860,6 +865,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        MediaPath: parsedMediaPaths[0],
+        MediaPaths: parsedMediaPaths.length > 0 ? parsedMediaPaths : undefined,
+        MediaType: parsedMediaTypes[0],
+        MediaTypes: parsedMediaTypes.length > 0 ? parsedMediaTypes : undefined,
       };
 
       const agentId = resolveSessionAgentId({
