@@ -75,6 +75,43 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(123);
   });
 
+  it("returns 'error' for error from another run without clearing state", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "boom",
+    };
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+
+  it("returns 'aborted' for aborted from another run without clearing state", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "aborted",
+    };
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+
   it("processes final from own run and clears state", () => {
     const state = createState({
       sessionKey: "main",
