@@ -144,10 +144,11 @@ export function detectRepetition(
       let count = 0;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(content)) !== null) {
-        count++;
         if (match[0].length === 0) {
           regex.lastIndex++; // Prevent infinite loop on zero-length match
+          continue; // Skip counting zero-length matches
         }
+        count++;
         if (count > maxRepetitions) {
           break;
         }
