@@ -520,6 +520,15 @@ export async function handleFeishuMessage(params: {
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
 
+  // Use senderKey as stable user identifier with fallback to senderId when senderOpenId is missing.
+  // This ensures DM session isolation works correctly even when Feishu doesn't provide open_id.
+  const senderKey = (ctx.senderOpenId || ctx.senderId || "").trim();
+  if (!senderKey) {
+    error(
+      `feishu: inbound message missing sender id (open_id and user_id are empty); chatId=${ctx.chatId} messageId=${ctx.messageId} chatType=${ctx.chatType}`,
+    );
+  }
+
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
     account,
@@ -542,7 +551,7 @@ export async function handleFeishuMessage(params: {
   }
 
   log(
-    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
+    `feishu[${account.accountId}]: received message from ${senderKey || ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
   );
 
   // Log mention targets if detected
@@ -636,7 +645,7 @@ export async function handleFeishuMessage(params: {
     const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
     const dmAllowed = resolveFeishuAllowlistMatch({
       allowFrom: effectiveDmAllowFrom,
-      senderId: ctx.senderOpenId,
+      senderId: senderKey,
       senderName: ctx.senderName,
     }).allowed;
 
@@ -644,31 +653,31 @@ export async function handleFeishuMessage(params: {
       if (dmPolicy === "pairing") {
         const { code, created } = await core.channel.pairing.upsertPairingRequest({
           channel: "feishu",
-          id: ctx.senderOpenId,
+          id: senderKey,
           meta: { name: ctx.senderName },
         });
         if (created) {
-          log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
+          log(`feishu[${account.accountId}]: pairing request sender=${senderKey}`);
           try {
             await sendMessageFeishu({
               cfg,
-              to: `user:${ctx.senderOpenId}`,
+              to: `user:${senderKey}`,
               text: core.channel.pairing.buildPairingReply({
                 channel: "feishu",
-                idLine: `Your Feishu user id: ${ctx.senderOpenId}`,
+                idLine: `Your Feishu user id: ${senderKey}`,
                 code,
               }),
               accountId: account.accountId,
             });
           } catch (err) {
             log(
-              `feishu[${account.accountId}]: pairing reply failed for ${ctx.senderOpenId}: ${String(err)}`,
+              `feishu[${account.accountId}]: pairing reply failed for ${senderKey}: ${String(err)}`,
             );
           }
         }
       } else {
         log(
-          `feishu[${account.accountId}]: blocked unauthorized sender ${ctx.senderOpenId} (dmPolicy=${dmPolicy})`,
+          `feishu[${account.accountId}]: blocked unauthorized sender ${senderKey} (dmPolicy=${dmPolicy})`,
         );
       }
       return;
@@ -677,7 +686,7 @@ export async function handleFeishuMessage(params: {
     const commandAllowFrom = isGroup ? (groupConfig?.allowFrom ?? []) : effectiveDmAllowFrom;
     const senderAllowedForCommands = resolveFeishuAllowlistMatch({
       allowFrom: commandAllowFrom,
-      senderId: ctx.senderOpenId,
+      senderId: senderKey,
       senderName: ctx.senderName,
     }).allowed;
     const commandAuthorized = shouldComputeCommandAuthorized
@@ -691,13 +700,13 @@ export async function handleFeishuMessage(params: {
 
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.
     // Using a group-scoped From causes the agent to treat different users as the same person.
-    const feishuFrom = `feishu:${ctx.senderOpenId}`;
-    const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
+    const feishuFrom = `feishu:${senderKey}`;
+    const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${senderKey}`;
 
     // Resolve peer ID for session routing
     // When topicSessionMode is enabled, messages within a topic (identified by root_id)
     // get a separate session from the main group chat.
-    let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
+    let peerId = isGroup ? ctx.chatId : senderKey;
     if (isGroup && ctx.rootId) {
       const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
       const topicSessionMode =
@@ -729,7 +738,7 @@ export async function handleFeishuMessage(params: {
         const result = await maybeCreateDynamicAgent({
           cfg,
           runtime,
-          senderOpenId: ctx.senderOpenId,
+          senderOpenId: senderKey,
           dynamicCfg,
           log: (msg) => log(msg),
         });
@@ -740,7 +749,7 @@ export async function handleFeishuMessage(params: {
             cfg: result.updatedCfg,
             channel: "feishu",
             accountId: account.accountId,
-            peer: { kind: "direct", id: ctx.senderOpenId },
+            peer: { kind: "direct", id: senderKey },
           });
           log(
             `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
@@ -752,7 +761,7 @@ export async function handleFeishuMessage(params: {
     const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
-      : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
+      : `Feishu[${account.accountId}] DM from ${senderKey}`;
 
     core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
       sessionKey: route.sessionKey,
@@ -802,7 +811,7 @@ export async function handleFeishuMessage(params: {
 
     // Include a readable speaker label so the model can attribute instructions.
     // (DMs already have per-sender sessions, but the prefix is still useful for clarity.)
-    const speaker = ctx.senderName ?? ctx.senderOpenId;
+    const speaker = ctx.senderName ?? senderKey;
     messageBody = `${speaker}: ${messageBody}`;
 
     // If there are mention targets, inform the agent that replies will auto-mention them
@@ -811,7 +820,7 @@ export async function handleFeishuMessage(params: {
       messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
     }
 
-    const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
+    const envelopeFrom = isGroup ? `${ctx.chatId}:${senderKey}` : senderKey;
 
     // If there's a permission error, dispatch a separate notification first
     if (permissionErrorForAgent) {
