@@ -94,6 +94,8 @@ export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     deleteTranscript: Type.Optional(Type.Boolean()),
+    // Internal control: when false, still unbind thread bindings but skip hook emission.
+    emitLifecycleHooks: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
