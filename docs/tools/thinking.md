@@ -61,6 +61,7 @@ title: "Thinking Levels"
 ## Related
 
 - Elevated mode docs live in [Elevated mode](/tools/elevated).
+- Reasoning visibility behavior is documented in [Reasoning visibility](/tools/thinking#reasoning-visibility-reasoning).
 
 ## Heartbeats
 
