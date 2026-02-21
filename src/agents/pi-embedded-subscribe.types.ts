@@ -7,6 +7,17 @@ import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 
 export type ToolResultFormat = "markdown" | "plain";
 
+/**
+ * Active tool execution state returned by the subscription's getActiveToolExecutionState() method.
+ * All fields are optional since tool execution may not be in progress when queried.
+ * When tool execution is active, all three fields should be populated together.
+ */
+export type ActiveToolExecutionState = {
+  activeToolName?: string;
+  activeToolCallId?: string;
+  activeToolStartTime?: number;
+};
+
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
