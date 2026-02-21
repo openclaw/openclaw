@@ -67,7 +67,7 @@ Minimal config:
 - Each account maps to an isolated session key `agent:<agentId>:twitch:<accountName>`.
 - `username` is the bot's account (who authenticates), `channel` is which chat room to join.
 
-## Setup (detailed, recommended)
+## Onboarding (detailed, recommended)
 
 ### Generate credentials
 

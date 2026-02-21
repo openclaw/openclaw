@@ -76,7 +76,7 @@ Disable with:
 - If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).
 - For "I text the bot and it replies," use a **separate bot number**.
 
-## Setup (option A): link existing Signal account (QR)
+## Onboarding (option A): link existing Signal account (QR)
 
 1. Install `signal-cli` (JVM or native build).
 2. Link a bot account:
@@ -101,7 +101,7 @@ Example:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-## Setup (option B): register dedicated bot number (SMS, Linux)
+## Onboarding (option B): register dedicated bot number (SMS, Linux)
 
 Use this when you want a dedicated bot number instead of linking an existing Signal app account.
 
