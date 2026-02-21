@@ -139,6 +139,7 @@ struct OpenClawApp: App {
             self.isPanelVisible = visible
             self.updateStatusHighlight()
             self.updateHoverHUDSuppression()
+            ReplyNotificationObserver.shared.setPanelVisible(visible)
         }
         CanvasManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.state.canvasPanelVisible = visible
@@ -276,6 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
         TerminationSignalWatcher.shared.start()
+        ReplyNotificationObserver.shared.start()
         NodePairingApprovalPrompter.shared.start()
         DevicePairingApprovalPrompter.shared.start()
         ExecApprovalsPromptServer.shared.start()
@@ -309,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsGatewayPrompter.shared.stop()
         MacNodeModeCoordinator.shared.stop()
         TerminationSignalWatcher.shared.stop()
+        ReplyNotificationObserver.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
         WebChatManager.shared.close()
         WebChatManager.shared.resetTunnels()

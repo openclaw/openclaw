@@ -14,7 +14,13 @@ struct NotificationManager {
         return (val as? Bool) == true
     }()
 
+    private static let canUseNotificationCenter: Bool = Bundle.main.bundleIdentifier != nil
+
     func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
+        guard Self.canUseNotificationCenter else {
+            self.logger.debug("notifications unavailable (no bundle identifier)")
+            return false
+        }
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
         if status.authorizationStatus == .notDetermined {
