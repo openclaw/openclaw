@@ -52,4 +52,40 @@ describe("deleteTelegramUpdateOffset", () => {
       expect(await readTelegramUpdateOffset({ accountId: "alerts" })).toBe(200);
     });
   });
+
+  it("does not share offset across different telegram tokens", async () => {
+    await withTempStateDir(async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 100,
+        token: "tok-alpha",
+      });
+
+      expect(await readTelegramUpdateOffset({ accountId: "default", token: "tok-alpha" })).toBe(
+        100,
+      );
+      expect(
+        await readTelegramUpdateOffset({ accountId: "default", token: "tok-beta" }),
+      ).toBeNull();
+    });
+  });
+
+  it("ignores legacy v1 offset files when token is provided", async () => {
+    await withTempStateDir(async () => {
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        return;
+      }
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 1, lastUpdateId: 250 }, null, 2)}\n`,
+        "utf-8",
+      );
+      expect(
+        await readTelegramUpdateOffset({ accountId: "default", token: "tok-alpha" }),
+      ).toBeNull();
+    });
+  });
 });
