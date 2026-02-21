@@ -109,7 +109,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Tools surface](/tools)
 - [OpenProse](/prose)
-- [CLI reference](/cli)
+- [CLI reference](/reference/cli)
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)

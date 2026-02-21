@@ -44,4 +44,4 @@ x-i18n:
 
 你可以将 Gateway 网关保持在云端，并在本地设备（Mac/iOS/Android/无头）上配对**节点**。节点提供本地屏幕/摄像头/canvas 和 `system.run` 功能，而 Gateway 网关保持在云端。
 
-文档：[节点](/nodes)，[节点 CLI](/cli/nodes)
+文档：[节点](/nodes)，[节点 CLI](/reference/cli/nodes)

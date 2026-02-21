@@ -29,7 +29,7 @@ Use the CLI wizard when you want full control of the Gateway, workspace,
 channels, and skills. Docs:
 
 - [Onboarding Wizard (CLI)](/start/wizard)
-- [`openclaw onboard` command](/cli/onboard)
+- [`openclaw onboard` command](/reference/cli/onboard)
 
 ## macOS app onboarding
 

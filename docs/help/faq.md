@@ -523,7 +523,7 @@ pnpm install
 pnpm build
 ```
 
-Docs: [Update](/cli/update), [Development channels](/install/development-channels),
+Docs: [Update](/reference/cli/update), [Development channels](/install/development-channels),
 [Install](/install).
 
 ### Installer stuck How do I get more feedback
@@ -625,7 +625,7 @@ local screen/camera/canvas or run commands on your laptop while keeping the
 Gateway in the cloud.
 
 Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
-Nodes: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
+Nodes: [Nodes](/nodes), [Nodes CLI](/reference/cli/nodes).
 
 ### Can I ask OpenClaw to update itself
 
@@ -650,7 +650,7 @@ openclaw update --yes --no-restart
 openclaw gateway restart
 ```
 
-Docs: [Update](/cli/update), [Updating](/install/updating).
+Docs: [Update](/reference/cli/update), [Updating](/install/updating).
 
 ### What does the onboarding wizard actually do
 
@@ -712,7 +712,7 @@ reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthr
 for usage/billing and raise limits as needed.
 
 Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
-See [Models](/cli/models) and [OAuth](/concepts/oauth).
+See [Models](/reference/cli/models) and [OAuth](/concepts/oauth).
 
 ### Is AWS Bedrock supported
 
@@ -782,7 +782,7 @@ Common pattern:
 - MacBook Pro runs the macOS app or a node host and pairs to the Gateway.
 - Use `openclaw nodes status` / `openclaw nodes list` to see it.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
+Docs: [Nodes](/nodes), [Nodes CLI](/reference/cli/nodes).
 
 ### Can I use Bun
 
@@ -1543,7 +1543,7 @@ openclaw agent --message "Hello from local bot" --deliver --channel telegram --r
 Tip: add a guardrail so the two bots do not loop endlessly (mention-only, channel
 allowlists, or a "do not reply to bot messages" rule).
 
-Docs: [Remote access](/gateway/remote), [Agent CLI](/cli/agent), [Agent send](/tools/agent-send).
+Docs: [Remote access](/gateway/remote), [Agent CLI](/reference/cli/agent), [Agent send](/tools/agent-send).
 
 ### Do I need separate VPSes for multiple agents
 
@@ -1571,7 +1571,7 @@ setup is an always-on host plus your laptop as a node.
 SSH is fine for ad-hoc shell access, but nodes are simpler for ongoing agent workflows and
 device automation.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome-extension).
+Docs: [Nodes](/nodes), [Nodes CLI](/reference/cli/nodes), [Chrome extension](/tools/chrome-extension).
 
 ### Should I install on a second laptop or just add a node
 
@@ -1581,7 +1581,7 @@ currently macOS-only, but we plan to extend them to other OSes.
 
 Install a second Gateway only when you need **hard isolation** or two fully separate bots.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Multiple gateways](/gateway/multiple-gateways).
+Docs: [Nodes](/nodes), [Nodes CLI](/reference/cli/nodes), [Multiple gateways](/gateway/multiple-gateways).
 
 ### Do nodes run a gateway service
 
@@ -1612,7 +1612,7 @@ Avoid it:
 - Use `openclaw config set` for small changes.
 - Use `openclaw configure` for interactive edits.
 
-Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
+Docs: [Config](/cli/config), [Configure](/reference/cli/configure), [Doctor](/gateway/doctor).
 
 ### What's a minimal sane config for a first install
 
@@ -1772,7 +1772,7 @@ less efficient than using one bot with separate sessions. The typical model we
 envision is one bot you talk to, with different sessions for parallel work. That
 bot can also spawn sub-agents when needed.
 
-Docs: [Multi-agent routing](/concepts/multi-agent), [Sub-agents](/tools/subagents), [Agents CLI](/cli/agents).
+Docs: [Multi-agent routing](/concepts/multi-agent), [Sub-agents](/tools/subagents), [Agents CLI](/reference/cli/agents).
 
 ### Why did context get truncated midtask How do I prevent it
 
@@ -1904,7 +1904,7 @@ Option 2 (if already configured/allowlisted): list groups from config:
 openclaw directory groups list --channel whatsapp
 ```
 
-Docs: [WhatsApp](/channels/whatsapp), [Directory](/cli/directory), [Logs](/cli/logs).
+Docs: [WhatsApp](/channels/whatsapp), [Directory](/reference/cli/directory), [Logs](/reference/cli/logs).
 
 ### Why doesn't OpenClaw reply in a group
 
@@ -2011,7 +2011,7 @@ Safe options:
 Avoid `config.apply` with a partial object unless you intend to replace the whole config.
 If you did overwrite config, restore from backup or re-run `openclaw doctor` to repair.
 
-Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
+Docs: [Models](/concepts/models), [Configure](/reference/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
 
 ### What do OpenClaw, Flawd, and Krill use for models
 

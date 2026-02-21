@@ -95,4 +95,4 @@ High-level:
 - `openclaw doctor` (offers to run update first on git checkouts)
 - [Development channels](/install/development-channels)
 - [Updating](/install/updating)
-- [CLI reference](/cli)
+- [CLI reference](/reference/cli)

@@ -511,7 +511,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
 - `cron.run` (force or due), `cron.runs`
-  For immediate system events without a job, use [`openclaw system event`](/cli/system).
+  For immediate system events without a job, use [`openclaw system event`](/reference/cli/system).
 
 ## Troubleshooting
 

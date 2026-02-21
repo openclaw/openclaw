@@ -61,7 +61,7 @@
     },
     {
       "source": "/cron",
-      "destination": "/cron-jobs"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/minimax",
@@ -121,7 +121,7 @@
     },
     {
       "source": "/message",
-      "destination": "/cli/message"
+      "destination": "/reference/cli/message"
     },
     {
       "source": "/providers/discord",
@@ -181,7 +181,7 @@
     },
     {
       "source": "/sandbox",
-      "destination": "/cli/sandbox"
+      "destination": "/reference/cli/sandbox"
     },
     {
       "source": "/sandboxing",
@@ -493,11 +493,11 @@
     },
     {
       "source": "/model",
-      "destination": "/models"
+      "destination": "/providers/models"
     },
     {
       "source": "/model/",
-      "destination": "/models"
+      "destination": "/providers/models"
     },
     {
       "source": "/models",
@@ -573,7 +573,7 @@
     },
     {
       "source": "/security",
-      "destination": "/gateway/security"
+      "destination": "/gateway/security/index"
     },
     {
       "source": "/session",
@@ -794,6 +794,150 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/cli/agent",
+      "destination": "/reference/cli/agent"
+    },
+    {
+      "source": "/cli/agents",
+      "destination": "/reference/cli/agents"
+    },
+    {
+      "source": "/cli/approvals",
+      "destination": "/reference/cli/approvals"
+    },
+    {
+      "source": "/cli/browser",
+      "destination": "/reference/cli/browser"
+    },
+    {
+      "source": "/cli/channels",
+      "destination": "/reference/cli/channels"
+    },
+    {
+      "source": "/cli/configure",
+      "destination": "/reference/cli/configure"
+    },
+    {
+      "source": "/cli/cron",
+      "destination": "/reference/cli/cron"
+    },
+    {
+      "source": "/cli/dashboard",
+      "destination": "/reference/cli/dashboard"
+    },
+    {
+      "source": "/cli/directory",
+      "destination": "/reference/cli/directory"
+    },
+    {
+      "source": "/cli/dns",
+      "destination": "/reference/cli/dns"
+    },
+    {
+      "source": "/cli/docs",
+      "destination": "/reference/cli/docs"
+    },
+    {
+      "source": "/cli/doctor",
+      "destination": "/reference/cli/doctor"
+    },
+    {
+      "source": "/cli/gateway",
+      "destination": "/reference/cli/gateway"
+    },
+    {
+      "source": "/cli/health",
+      "destination": "/reference/cli/health"
+    },
+    {
+      "source": "/cli/hooks",
+      "destination": "/reference/cli/hooks"
+    },
+    {
+      "source": "/cli/index",
+      "destination": "/reference/cli/index"
+    },
+    {
+      "source": "/cli/logs",
+      "destination": "/reference/cli/logs"
+    },
+    {
+      "source": "/cli/memory",
+      "destination": "/reference/cli/memory"
+    },
+    {
+      "source": "/cli/message",
+      "destination": "/reference/cli/message"
+    },
+    {
+      "source": "/cli/models",
+      "destination": "/reference/cli/models"
+    },
+    {
+      "source": "/cli/nodes",
+      "destination": "/reference/cli/nodes"
+    },
+    {
+      "source": "/cli/onboard",
+      "destination": "/reference/cli/onboard"
+    },
+    {
+      "source": "/cli/pairing",
+      "destination": "/reference/cli/pairing"
+    },
+    {
+      "source": "/cli/plugins",
+      "destination": "/reference/cli/plugins"
+    },
+    {
+      "source": "/cli/reset",
+      "destination": "/reference/cli/reset"
+    },
+    {
+      "source": "/cli/sandbox",
+      "destination": "/reference/cli/sandbox"
+    },
+    {
+      "source": "/cli/security",
+      "destination": "/reference/cli/security"
+    },
+    {
+      "source": "/cli/sessions",
+      "destination": "/reference/cli/sessions"
+    },
+    {
+      "source": "/cli/setup",
+      "destination": "/reference/cli/setup"
+    },
+    {
+      "source": "/cli/skills",
+      "destination": "/reference/cli/skills"
+    },
+    {
+      "source": "/cli/status",
+      "destination": "/reference/cli/status"
+    },
+    {
+      "source": "/cli/system",
+      "destination": "/reference/cli/system"
+    },
+    {
+      "source": "/cli/tui",
+      "destination": "/reference/cli/tui"
+    },
+    {
+      "source": "/cli/uninstall",
+      "destination": "/reference/cli/uninstall"
+    },
+    {
+      "source": "/cli/update",
+      "destination": "/reference/cli/update"
+    },
+    {
+      "source": "/cli/voicecall",
+      "destination": "/reference/cli/voicecall"
     }
   ],
   "navigation": {
@@ -841,11 +985,11 @@
               {
                 "group": "Other install methods",
                 "pages": [
-                  "install/docker",
-                  "install/podman",
-                  "install/nix",
                   "install/ansible",
-                  "install/bun"
+                  "install/bun",
+                  "install/docker",
+                  "install/nix",
+                  "install/podman"
                 ]
               },
               {
@@ -855,14 +999,14 @@
               {
                 "group": "Hosting and deployment",
                 "pages": [
-                  "install/fly",
-                  "install/hetzner",
-                  "install/gcp",
-                  "install/macos-vm",
                   "install/exe-dev",
+                  "install/fly",
+                  "install/gcp",
+                  "install/hetzner",
+                  "install/macos-vm",
+                  "install/northflank",
                   "install/railway",
-                  "install/render",
-                  "install/northflank"
+                  "install/render"
                 ]
               },
               {
@@ -883,17 +1027,22 @@
                 "pages": [
                   "channels/whatsapp",
                   "channels/telegram",
+                  "channels/bluebubbles",
                   "channels/discord",
-                  "channels/irc",
-                  "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
-                  "channels/mattermost",
-                  "channels/signal",
                   "channels/imessage",
-                  "channels/msteams",
+                  "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/mattermost",
+                  "channels/msteams",
+                  "channels/nextcloud-talk",
+                  "channels/nostr",
+                  "channels/signal",
+                  "channels/slack",
+                  "channels/tlon",
+                  "channels/twitch",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -901,12 +1050,12 @@
               {
                 "group": "Configuration",
                 "pages": [
-                  "channels/pairing",
-                  "channels/group-messages",
-                  "channels/groups",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
+                  "channels/group-messages",
+                  "channels/groups",
                   "channels/location",
+                  "channels/pairing",
                   "channels/troubleshooting"
                 ]
               }
@@ -918,13 +1067,13 @@
               {
                 "group": "Fundamentals",
                 "pages": [
-                  "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
-                  "concepts/system-prompt",
-                  "concepts/context",
                   "concepts/agent-workspace",
-                  "concepts/oauth"
+                  "concepts/architecture",
+                  "concepts/context",
+                  "concepts/oauth",
+                  "concepts/system-prompt"
                 ]
               },
               {
@@ -938,8 +1087,8 @@
                   "concepts/sessions",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
-                  "concepts/compaction"
+                  "concepts/compaction",
+                  "concepts/memory"
                 ]
               },
               {
@@ -967,14 +1116,14 @@
               {
                 "group": "Built-in tools",
                 "pages": [
-                  "tools/lobster",
-                  "tools/llm-task",
-                  "tools/exec",
-                  "tools/web",
                   "tools/apply-patch",
                   "tools/elevated",
+                  "tools/exec",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/reactions",
                   "tools/thinking",
-                  "tools/reactions"
+                  "tools/web"
                 ]
               },
               {
@@ -982,8 +1131,8 @@
                 "pages": [
                   "tools/browser",
                   "tools/browser-login",
-                  "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting"
+                  "tools/browser-linux-troubleshooting",
+                  "tools/chrome-extension"
                 ]
               },
               {
@@ -993,10 +1142,10 @@
               {
                 "group": "Skills",
                 "pages": [
+                  "tools/clawhub",
                   "tools/slash-commands",
                   "tools/skills",
                   "tools/skills-config",
-                  "tools/clawhub",
                   "tools/plugin"
                 ]
               },
@@ -1007,27 +1156,27 @@
               {
                 "group": "Automation",
                 "pages": [
-                  "automation/hooks",
+                  "automation/auth-monitoring",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
-                  "automation/troubleshooting",
-                  "automation/webhook",
                   "automation/gmail-pubsub",
+                  "automation/hooks",
                   "automation/poll",
-                  "automation/auth-monitoring"
+                  "automation/troubleshooting",
+                  "automation/webhook"
                 ]
               },
               {
                 "group": "Media and devices",
                 "pages": [
-                  "nodes/index",
-                  "nodes/troubleshooting",
-                  "nodes/images",
                   "nodes/audio",
                   "nodes/camera",
+                  "nodes/images",
+                  "nodes/index",
+                  "nodes/location-command",
                   "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command"
+                  "nodes/troubleshooting",
+                  "nodes/voicewake"
                 ]
               }
             ]
@@ -1050,19 +1199,38 @@
               {
                 "group": "Providers",
                 "pages": [
+                  "brave-search",
+                  "perplexity",
                   "providers/anthropic",
-                  "providers/openai",
-                  "providers/openrouter",
-                  "providers/litellm",
                   "providers/bedrock",
-                  "providers/vercel-ai-gateway",
-                  "providers/moonshot",
-                  "providers/minimax",
-                  "providers/opencode",
                   "providers/glm",
-                  "providers/zai",
+                  "providers/litellm",
+                  "providers/minimax",
+                  "providers/moonshot",
+                  "providers/openai",
+                  "providers/opencode",
+                  "providers/openrouter",
+                  "providers/qianfan",
                   "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/vercel-ai-gateway",
+                  "providers/zai"
+                ]
+              },
+              {
+                "group": "Additional providers",
+                "pages": [
+                  "providers/claude-max-api-proxy",
+                  "providers/cloudflare-ai-gateway",
+                  "providers/deepgram",
+                  "providers/github-copilot",
+                  "providers/huggingface",
+                  "providers/nvidia",
+                  "providers/ollama",
+                  "providers/qwen",
+                  "providers/together",
+                  "providers/venice",
+                  "providers/vllm",
+                  "providers/xiaomi"
                 ]
               }
             ]
@@ -1082,26 +1250,30 @@
                 ]
               },
               {
+                "group": "Deployment guides",
+                "pages": ["platforms/raspberry-pi", "platforms/digitalocean", "platforms/oracle"]
+              },
+              {
                 "group": "macOS companion app",
                 "pages": [
-                  "platforms/mac/dev-setup",
-                  "platforms/mac/menu-bar",
-                  "platforms/mac/voicewake",
-                  "platforms/mac/voice-overlay",
-                  "platforms/mac/webchat",
+                  "platforms/mac/bundled-gateway",
                   "platforms/mac/canvas",
                   "platforms/mac/child-process",
+                  "platforms/mac/dev-setup",
                   "platforms/mac/health",
                   "platforms/mac/icon",
                   "platforms/mac/logging",
+                  "platforms/mac/menu-bar",
+                  "platforms/mac/peekaboo",
                   "platforms/mac/permissions",
+                  "platforms/mac/release",
                   "platforms/mac/remote",
                   "platforms/mac/signing",
-                  "platforms/mac/release",
-                  "platforms/mac/bundled-gateway",
-                  "platforms/mac/xpc",
                   "platforms/mac/skills",
-                  "platforms/mac/peekaboo"
+                  "platforms/mac/voice-overlay",
+                  "platforms/mac/voicewake",
+                  "platforms/mac/webchat",
+                  "platforms/mac/xpc"
                 ]
               }
             ]
@@ -1120,14 +1292,14 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
-                      "gateway/trusted-proxy-auth",
+                      "gateway/background-process",
+                      "gateway/doctor",
+                      "gateway/gateway-lock",
                       "gateway/health",
                       "gateway/heartbeat",
-                      "gateway/doctor",
                       "gateway/logging",
-                      "gateway/gateway-lock",
-                      "gateway/background-process",
                       "gateway/multiple-gateways",
+                      "gateway/trusted-proxy-auth",
                       "gateway/troubleshooting"
                     ]
                   },
@@ -1144,19 +1316,19 @@
                     "pages": [
                       "gateway/protocol",
                       "gateway/bridge-protocol",
-                      "gateway/openai-http-api",
-                      "gateway/tools-invoke-http-api",
                       "gateway/cli-backends",
-                      "gateway/local-models"
+                      "gateway/local-models",
+                      "gateway/openai-http-api",
+                      "gateway/tools-invoke-http-api"
                     ]
                   },
                   {
                     "group": "Networking and discovery",
                     "pages": [
-                      "gateway/network-model",
-                      "gateway/pairing",
+                      "gateway/bonjour",
                       "gateway/discovery",
-                      "gateway/bonjour"
+                      "gateway/network-model",
+                      "gateway/pairing"
                     ]
                   }
                 ]
@@ -1181,42 +1353,42 @@
               {
                 "group": "CLI commands",
                 "pages": [
-                  "cli/index",
-                  "cli/agent",
-                  "cli/agents",
-                  "cli/approvals",
-                  "cli/browser",
-                  "cli/channels",
-                  "cli/configure",
-                  "cli/cron",
-                  "cli/dashboard",
-                  "cli/directory",
-                  "cli/dns",
-                  "cli/docs",
-                  "cli/doctor",
-                  "cli/gateway",
-                  "cli/health",
-                  "cli/hooks",
-                  "cli/logs",
-                  "cli/memory",
-                  "cli/message",
-                  "cli/models",
-                  "cli/nodes",
-                  "cli/onboard",
-                  "cli/pairing",
-                  "cli/plugins",
-                  "cli/reset",
-                  "cli/sandbox",
-                  "cli/security",
-                  "cli/sessions",
-                  "cli/setup",
-                  "cli/skills",
-                  "cli/status",
-                  "cli/system",
-                  "cli/tui",
-                  "cli/uninstall",
-                  "cli/update",
-                  "cli/voicecall"
+                  "reference/cli/index",
+                  "reference/cli/agent",
+                  "reference/cli/agents",
+                  "reference/cli/approvals",
+                  "reference/cli/browser",
+                  "reference/cli/channels",
+                  "reference/cli/configure",
+                  "reference/cli/cron",
+                  "reference/cli/dashboard",
+                  "reference/cli/directory",
+                  "reference/cli/dns",
+                  "reference/cli/docs",
+                  "reference/cli/doctor",
+                  "reference/cli/gateway",
+                  "reference/cli/health",
+                  "reference/cli/hooks",
+                  "reference/cli/logs",
+                  "reference/cli/memory",
+                  "reference/cli/message",
+                  "reference/cli/models",
+                  "reference/cli/nodes",
+                  "reference/cli/onboard",
+                  "reference/cli/pairing",
+                  "reference/cli/plugins",
+                  "reference/cli/reset",
+                  "reference/cli/sandbox",
+                  "reference/cli/security",
+                  "reference/cli/sessions",
+                  "reference/cli/setup",
+                  "reference/cli/skills",
+                  "reference/cli/status",
+                  "reference/cli/system",
+                  "reference/cli/tui",
+                  "reference/cli/uninstall",
+                  "reference/cli/update",
+                  "reference/cli/voicecall"
                 ]
               },
               {
