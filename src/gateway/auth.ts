@@ -52,6 +52,27 @@ type ConnectAuth = {
   password?: string;
 };
 
+export type GatewayAuthSurface = "http" | "ws-control-ui";
+
+export type AuthorizeGatewayConnectParams = {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  tailscaleWhois?: TailscaleWhoisLookup;
+  /**
+   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
+   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   */
+  authSurface?: GatewayAuthSurface;
+  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  rateLimiter?: AuthRateLimiter;
+  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  clientIp?: string;
+  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
+};
+
 type TailscaleUser = {
   login: string;
   name: string;
@@ -319,27 +340,17 @@ function authorizeTrustedProxy(params: {
   return { user };
 }
 
-export async function authorizeGatewayConnect(params: {
-  auth: ResolvedGatewayAuth;
-  connectAuth?: ConnectAuth | null;
-  req?: IncomingMessage;
-  trustedProxies?: string[];
-  tailscaleWhois?: TailscaleWhoisLookup;
-  /**
-   * Opt-in for accepting Tailscale Serve identity headers as primary auth.
-   * Default is disabled for HTTP surfaces; WS connect enables this explicitly.
-   */
-  allowTailscaleHeaderAuth?: boolean;
-  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
-  rateLimiter?: AuthRateLimiter;
-  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
-  clientIp?: string;
-  /** Optional limiter scope; defaults to shared-secret auth scope. */
-  rateLimitScope?: string;
-}): Promise<GatewayAuthResult> {
+function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
+  return authSurface === "ws-control-ui";
+}
+
+export async function authorizeGatewayConnect(
+  params: AuthorizeGatewayConnectParams,
+): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const allowTailscaleHeaderAuth = params.allowTailscaleHeaderAuth === true;
+  const authSurface = params.authSurface ?? "http";
+  const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
   if (auth.mode === "trusted-proxy") {
@@ -432,4 +443,22 @@ export async function authorizeGatewayConnect(params: {
 
   limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
+}
+
+export async function authorizeHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http",
+  });
+}
+
+export async function authorizeWsControlUiGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "ws-control-ui",
+  });
 }

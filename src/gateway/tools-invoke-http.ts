@@ -24,7 +24,7 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendGatewayAuthFailure,
@@ -146,12 +146,11 @@ export async function handleToolsInvokeHttpRequest(
 
   const cfg = loadConfig();
   const token = getBearerToken(req);
-  const authResult = await authorizeGatewayConnect({
+  const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
-    allowTailscaleHeaderAuth: false,
     rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
