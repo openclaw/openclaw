@@ -9,6 +9,7 @@ describe("applyMergePatch prototype pollution guard", () => {
     expect(result.b).toBe(2);
     expect(result.a).toBe(1);
     expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(false);
+    expect(result.polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
@@ -35,6 +36,7 @@ describe("applyMergePatch prototype pollution guard", () => {
     expect(result.nested.y).toBe(2);
     expect(result.nested.x).toBe(1);
     expect(Object.prototype.hasOwnProperty.call(result.nested, "__proto__")).toBe(false);
+    expect(result.nested.polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
