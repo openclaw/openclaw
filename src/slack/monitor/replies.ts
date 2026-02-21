@@ -6,7 +6,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { sendMessageSlack } from "../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -16,6 +16,8 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
+  /** Optional bot identity for chat:write.customize (username / icon). */
+  identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
     const threadTs = payload.replyToId ?? params.replyThreadTs;
@@ -34,6 +36,7 @@ export async function deliverReplies(params: {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        ...(params.identity ? { identity: params.identity } : {}),
       });
     } else {
       let first = true;
@@ -45,6 +48,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           threadTs,
           accountId: params.accountId,
+          ...(params.identity ? { identity: params.identity } : {}),
         });
       }
     }

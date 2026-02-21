@@ -1,4 +1,4 @@
-import { resolveHumanDelayConfig } from "../../../agents/identity.js";
+import { resolveAgentIdentity, resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -19,6 +19,7 @@ import {
 import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
+import type { SlackSendIdentity } from "../../send.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -63,10 +64,55 @@ function shouldUseStreaming(params: {
   return true;
 }
 
+/**
+ * Build a Slack custom identity payload for chat:write.customize.
+ *
+ * Reads `ui.assistant.name` / `ui.assistant.avatar` from config (with fallback
+ * to the per-agent identity). Only returns a value when a name has been
+ * explicitly configured; otherwise the bot posts under its default app name.
+ *
+ * The returned identity is passed to sendMessageSlack which handles the
+ * chat:write.customize scope gracefully: if the bot token lacks the scope,
+ * the message is retried without custom identity fields so no error surfaces.
+ */
+function buildSlackCustomIdentity(
+  cfg: PreparedSlackMessage["ctx"]["cfg"],
+  agentId: string,
+): SlackSendIdentity | undefined {
+  // Prefer ui.assistant.* (user-facing UI config) then fall back to agent identity.
+  const uiName = cfg.ui?.assistant?.name?.trim() || undefined;
+  const uiAvatar = cfg.ui?.assistant?.avatar?.trim() || undefined;
+  const agentIdentity = resolveAgentIdentity(cfg, agentId);
+  const name = uiName ?? agentIdentity?.name?.trim() ?? undefined;
+
+  // Only customise when a name is explicitly configured.
+  if (!name) {
+    return undefined;
+  }
+
+  // Resolve icon: prefer HTTP(S) avatar URL, otherwise fall back to emoji or :robot_face:.
+  const avatarCandidate = uiAvatar ?? agentIdentity?.avatar?.trim() ?? undefined;
+  const isUrl = (v?: string) => Boolean(v && /^https?:\/\//i.test(v));
+
+  if (isUrl(avatarCandidate)) {
+    return { username: name, iconUrl: avatarCandidate };
+  }
+
+  const emojiCandidate = agentIdentity?.emoji?.trim() ?? undefined;
+  const iconEmoji =
+    emojiCandidate && /^:[^:\s]+:$/.test(emojiCandidate) ? emojiCandidate : ":robot_face:";
+
+  return { username: name, iconEmoji };
+}
+
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+
+  // Resolve custom bot identity for chat:write.customize (username + icon).
+  // Falls back gracefully when the scope is absent — no error is surfaced.
+  const botIdentity = buildSlackCustomIdentity(cfg, route.agentId);
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -184,6 +230,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
+      ...(botIdentity ? { identity: botIdentity } : {}),
     });
     replyPlan.markSent();
   };
@@ -301,6 +348,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         runtime,
         textLimit: ctx.textLimit,
         replyThreadTs,
+        ...(botIdentity ? { identity: botIdentity } : {}),
       });
       replyPlan.markSent();
     },

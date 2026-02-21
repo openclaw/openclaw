@@ -142,3 +142,54 @@ Message context lines include `slack message id` and `channel` fields you can re
 
 - React with ✅ to mark completed tasks.
 - Pin key decisions or weekly status updates.
+
+---
+
+## Custom bot name and avatar (`chat:write.customize`)
+
+By default, OpenClaw posts to Slack under the app's display name and icon set in
+[api.slack.com](https://api.slack.com). You can override this per-message so the
+bot appears with your configured assistant name and avatar instead.
+
+### What it does
+
+When the bot token includes the `chat:write.customize` scope, OpenClaw
+automatically adds `username` and `icon_emoji` (or `icon_url`) to every
+`chat.postMessage` call made by the monitor (inbound-reply) path, so the bot
+shows up in Slack channels with its configured identity.
+
+The feature is **backward-compatible**: if the scope is absent, the message is
+retried without the custom identity fields — no error is surfaced and delivery
+is unaffected.
+
+### Step 1 — Add the scope in api.slack.com
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and open your app.
+2. Navigate to **OAuth & Permissions → Scopes → Bot Token Scopes**.
+3. Click **Add an OAuth Scope** and add `chat:write.customize`.
+4. Scroll to the top of the page and click **Reinstall to Workspace** (required
+   after any scope change).
+
+### Step 2 — Configure in openclaw.json
+
+Set `ui.assistant.name` and optionally `ui.assistant.avatar`:
+
+```json
+{
+  "ui": {
+    "assistant": {
+      "name": "Bernard",
+      "avatar": "https://example.com/bernard-avatar.png"
+    }
+  }
+}
+```
+
+| Field                | Effect in Slack                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| `ui.assistant.name`  | Sets the `username` field — overrides the app's display name for this message.                  |
+| `ui.assistant.avatar`| If an `https://` URL, sets `icon_url`. Otherwise `:robot_face:` is used as `icon_emoji` fallback.|
+
+You can also configure identity at the agent level via `agents.<id>.identity.name`,
+`agents.<id>.identity.avatar`, and `agents.<id>.identity.emoji`. `ui.assistant.*`
+takes precedence over per-agent identity when both are set.
