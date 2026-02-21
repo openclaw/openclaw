@@ -49,37 +49,27 @@ export type AudioConfig = {
   };
 };
 
-export type StatusReactionsEmojiConfig = {
-  thinking?: string;
-  tool?: string;
-  coding?: string;
-  web?: string;
-  done?: string;
-  error?: string;
-  stallSoft?: string;
-  stallHard?: string;
-};
-
-export type StatusReactionsTimingConfig = {
-  /** Debounce interval for intermediate states (ms). Default: 700. */
-  debounceMs?: number;
-  /** Soft stall warning timeout (ms). Default: 25000. */
-  stallSoftMs?: number;
-  /** Hard stall warning timeout (ms). Default: 60000. */
-  stallHardMs?: number;
-  /** How long to hold done emoji before cleanup (ms). Default: 1500. */
-  doneHoldMs?: number;
-  /** How long to hold error emoji before cleanup (ms). Default: 2500. */
-  errorHoldMs?: number;
-};
+export type StatusReactionMode = "full" | "off";
 
 export type StatusReactionsConfig = {
-  /** Enable lifecycle status reactions (default: false). */
   enabled?: boolean;
-  /** Override default emojis. */
-  emojis?: StatusReactionsEmojiConfig;
-  /** Override default timing. */
-  timing?: StatusReactionsTimingConfig;
+  emojis?: {
+    thinking?: string;
+    tool?: string;
+    coding?: string;
+    web?: string;
+    done?: string;
+    error?: string;
+    stallSoft?: string;
+    stallHard?: string;
+  };
+  timing?: {
+    debounceMs?: number;
+    stallSoftMs?: number;
+    stallHardMs?: number;
+    doneHoldMs?: number;
+    errorHoldMs?: number;
+  };
 };
 
 export type MessagesConfig = {
@@ -113,9 +103,11 @@ export type MessagesConfig = {
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+  /** Status reaction flow mode. `full` keeps intermediate states; `off` keeps only initial ack. */
+  statusReactionMode?: StatusReactionMode;
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
-  /** Lifecycle status reactions configuration. */
+  /** Fine-grained per-channel status reaction controls (provider support varies). */
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
@@ -124,8 +116,6 @@ export type MessagesConfig = {
 };
 
 export type NativeCommandsSetting = boolean | "auto";
-
-export type CommandOwnerDisplay = "raw" | "hash";
 
 /**
  * Per-provider allowlist for command authorization.
@@ -155,9 +145,9 @@ export type CommandsConfig = {
   useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
-  /** How owner IDs are rendered in system prompts. */
-  ownerDisplay?: CommandOwnerDisplay;
-  /** Secret used to key owner ID hashes when ownerDisplay is "hash". */
+  /** How owner ids are rendered in prompts/logs (`raw` or stable `hash`). */
+  ownerDisplay?: "raw" | "hash";
+  /** Optional secret key used when hashing owner ids. */
   ownerDisplaySecret?: string;
   /**
    * Per-provider allowlist restricting who can use slash commands.

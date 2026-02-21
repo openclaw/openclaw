@@ -3,6 +3,7 @@ import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OriginatingChannelType } from "../../templating.js";
+import type { FollowupQueueOutcome } from "../../types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
@@ -24,6 +25,10 @@ export type FollowupRun = {
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  /** True when this run was produced by queue drain paths (including queue summary drains). */
+  queueManaged?: boolean;
+  /** Per-run queue outcome callback, keyed by runId correlation. */
+  onQueueOutcome?: (payload: FollowupQueueOutcome) => Promise<void> | void;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
@@ -42,6 +47,7 @@ export type FollowupRun = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
+    runId?: string;
     agentId: string;
     agentDir: string;
     sessionId: string;

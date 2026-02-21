@@ -1,4 +1,5 @@
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import { emitFollowupQueueOutcome } from "./outcome.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -38,21 +39,36 @@ export function enqueueFollowupRun(
 
   // Deduplicate: skip if the same message is already queued.
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
+    emitFollowupQueueOutcome(run, "skipped", "dedupe");
     return false;
   }
 
+  run.queueManaged = true;
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
 
+  const queueItemsBeforeDrop = queue.items.slice();
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
   });
+  if (queueItemsBeforeDrop.length > 0) {
+    const overflowReason =
+      queue.dropPolicy === "summarize" ? "queue-cap-overflow-summarize" : "queue-cap-overflow-old";
+    for (const item of queueItemsBeforeDrop) {
+      if (queue.items.includes(item)) {
+        continue;
+      }
+      emitFollowupQueueOutcome(item, "dropped", overflowReason);
+    }
+  }
   if (!shouldEnqueue) {
+    emitFollowupQueueOutcome(run, "dropped", "queue-cap-overflow-new");
     return false;
   }
 
   queue.items.push(run);
+  emitFollowupQueueOutcome(run, "queued", "enqueued");
   return true;
 }
 

@@ -13,6 +13,14 @@ export type ModelSelectedContext = {
   thinkLevel: string | undefined;
 };
 
+export type FollowupQueueOutcomeStatus = "queued" | "skipped" | "dropped" | "merged" | "failed";
+
+export type FollowupQueueOutcome = {
+  runId: string;
+  status: FollowupQueueOutcomeStatus;
+  reason: string;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -41,6 +49,8 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  /** Called when a followup run is enqueued/deferred. */
+  onFollowupQueued?: (payload: FollowupQueueOutcome) => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

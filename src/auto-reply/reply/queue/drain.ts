@@ -9,6 +9,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { emitFollowupQueueOutcome } from "./outcome.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -69,6 +70,7 @@ export function scheduleFollowupDrain(
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
           const run = items.at(-1)?.run ?? queue.lastRun;
+          const mergedIntoRunId = run?.runId?.trim();
           if (!run) {
             break;
           }
@@ -89,10 +91,19 @@ export function scheduleFollowupDrain(
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
+          const mergedOutcomeReason = mergedIntoRunId
+            ? `collect-merged-into:${mergedIntoRunId}`
+            : "collect-merged";
+          for (const item of items.slice(0, -1)) {
+            emitFollowupQueueOutcome(item, "merged", mergedOutcomeReason);
+          }
+          const retainedRun = items.at(-1);
           await runFollowup({
             prompt,
             run,
             enqueuedAt: Date.now(),
+            queueManaged: true,
+            onQueueOutcome: retainedRun?.onQueueOutcome,
             originatingChannel,
             originatingTo,
             originatingAccountId,
@@ -107,16 +118,18 @@ export function scheduleFollowupDrain(
 
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
         if (summaryPrompt) {
-          const run = queue.lastRun;
-          if (!run) {
-            break;
-          }
           if (
-            !(await drainNextQueueItem(queue.items, async () => {
+            !(await drainNextQueueItem(queue.items, async (item) => {
               await runFollowup({
                 prompt: summaryPrompt,
-                run,
+                run: item.run,
                 enqueuedAt: Date.now(),
+                queueManaged: true,
+                onQueueOutcome: item.onQueueOutcome,
+                originatingChannel: item.originatingChannel,
+                originatingTo: item.originatingTo,
+                originatingAccountId: item.originatingAccountId,
+                originatingThreadId: item.originatingThreadId,
               });
             }))
           ) {

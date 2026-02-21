@@ -15,6 +15,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
+import { emitFollowupQueueOutcome } from "./queue/outcome.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -54,6 +55,14 @@ export function createFollowupRunner(params: {
     mode: typingMode,
     isHeartbeat: opts?.isHeartbeat === true,
   });
+
+  const emitQueueFailure = async (queued: FollowupRun, reason: string) => {
+    try {
+      emitFollowupQueueOutcome(queued, "failed", reason);
+    } catch {
+      // Queue outcome callbacks are best-effort and must not block followup cleanup.
+    }
+  };
 
   /**
    * Sends followup payloads, routing to the originating channel if set.
@@ -114,7 +123,11 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
-      const runId = crypto.randomUUID();
+      const existingRunId = queued.run.runId?.trim();
+      const shouldReuseQueuedRunId =
+        Boolean(existingRunId) && (queued.queueManaged || queued.onQueueOutcome);
+      const runId = shouldReuseQueuedRunId && existingRunId ? existingRunId : crypto.randomUUID();
+      queued.run.runId = runId;
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {
           sessionKey: queued.run.sessionKey,
@@ -125,6 +138,7 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      let lifecycleStarted = false;
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -174,6 +188,12 @@ export function createFollowupRunner(params: {
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
               onAgentEvent: (evt) => {
+                if (evt.stream === "lifecycle") {
+                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  if (phase === "start") {
+                    lifecycleStarted = true;
+                  }
+                }
                 if (evt.stream !== "compaction") {
                   return;
                 }
@@ -191,6 +211,8 @@ export function createFollowupRunner(params: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
+        const phaseTag = lifecycleStarted ? "post-start-fail" : "pre-start-fail";
+        await emitQueueFailure(queued, `${phaseTag}:${message}`);
         return;
       }
 

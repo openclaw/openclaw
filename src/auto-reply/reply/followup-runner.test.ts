@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -29,6 +29,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 import { createFollowupRunner } from "./followup-runner.js";
+
+beforeEach(() => {
+  runEmbeddedPiAgentMock.mockReset();
+});
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   ({
@@ -248,6 +252,161 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     await runner(baseQueuedRun());
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards suppressToolErrorWarnings to followup agent runs", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply, suppressToolErrorWarnings: true },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      suppressToolErrorWarnings?: boolean;
+    };
+    expect(call?.suppressToolErrorWarnings).toBe(true);
+  });
+
+  it("mints a fresh runId for synthetic followups without queue outcome handlers", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = baseQueuedRun();
+    queued.run.runId = "reused-run-id";
+
+    await runner(queued);
+
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as { runId?: string };
+    expect(call.runId).toBeDefined();
+    expect(call.runId).not.toBe("reused-run-id");
+    expect(queued.run.runId).toBe(call.runId);
+  });
+
+  it("reuses queued runId when queue outcome handler is present", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = baseQueuedRun();
+    queued.run.runId = "queued-run-id";
+    queued.onQueueOutcome = () => {};
+
+    await runner(queued);
+
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as { runId?: string };
+    expect(call.runId).toBe("queued-run-id");
+  });
+
+  it("reuses queued runId for queue-managed summary drains without queue outcome handler", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = baseQueuedRun();
+    queued.run.runId = "summary-run-id";
+    queued.queueManaged = true;
+
+    await runner(queued);
+
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as { runId?: string };
+    expect(call.runId).toBe("summary-run-id");
+  });
+
+  it("emits failed queue outcome when followup run errors before lifecycle start", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const onQueueOutcome = vi.fn();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("boom-pre"));
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = baseQueuedRun();
+    queued.onQueueOutcome = onQueueOutcome;
+
+    await runner(queued);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onQueueOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        reason: expect.stringContaining("pre-start-fail:"),
+      }),
+    );
+  });
+
+  it("emits failed queue outcome when followup run errors after lifecycle start", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const onQueueOutcome = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+      }) => {
+        args.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        throw new Error("boom-post");
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = baseQueuedRun();
+    queued.onQueueOutcome = onQueueOutcome;
+
+    await runner(queued);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onQueueOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        reason: expect.stringContaining("post-start-fail:"),
+      }),
+    );
   });
 
   it("persists usage even when replies are suppressed", async () => {

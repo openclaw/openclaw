@@ -235,6 +235,11 @@ export async function runReplyAgent(params: {
   }
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
+    const deferredRunId = followupRun.run.runId?.trim() || crypto.randomUUID();
+    followupRun.run.runId = deferredRunId;
+    if (opts?.onFollowupQueued) {
+      followupRun.onQueueOutcome = opts.onFollowupQueued;
+    }
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();

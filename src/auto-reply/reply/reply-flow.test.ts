@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MsgContext } from "../templating.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { FollowupQueueOutcome } from "../types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
@@ -600,6 +601,8 @@ afterAll(() => {
 function createRun(params: {
   prompt: string;
   messageId?: string;
+  runId?: string;
+  onQueueOutcome?: (payload: FollowupQueueOutcome) => void | Promise<void>;
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
@@ -613,7 +616,9 @@ function createRun(params: {
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
+    onQueueOutcome: params.onQueueOutcome,
     run: {
+      runId: params.runId,
       agentId: "agent",
       agentDir: "/tmp",
       sessionId: "sess",
@@ -690,6 +695,97 @@ describe("followup queue deduplication", () => {
     await done.promise;
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+  });
+
+  it("emits queued and skipped outcomes for deduped runs", () => {
+    const key = `test-outcome-dedupe-${Date.now()}`;
+    const outcomes: FollowupQueueOutcome[] = [];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "hello",
+        messageId: "m1",
+        runId: "run-1",
+        onQueueOutcome: (payload) => {
+          outcomes.push(payload);
+        },
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "hello duplicate",
+        messageId: "m1",
+        runId: "run-2",
+        onQueueOutcome: (payload) => {
+          outcomes.push(payload);
+        },
+      }),
+      settings,
+    );
+    expect(second).toBe(false);
+
+    expect(outcomes).toEqual([
+      { runId: "run-1", status: "queued", reason: "enqueued" },
+      { runId: "run-2", status: "skipped", reason: "dedupe" },
+    ]);
+  });
+
+  it("swallows synchronous queue outcome handler errors", () => {
+    const key = `test-outcome-sync-throw-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const accepted = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "hello",
+        runId: "run-sync-throw",
+        onQueueOutcome: () => {
+          throw new Error("sync outcome handler failure");
+        },
+      }),
+      settings,
+    );
+
+    expect(accepted).toBe(true);
+  });
+
+  it("swallows asynchronous queue outcome handler rejections", async () => {
+    const key = `test-outcome-async-reject-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const accepted = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "hello",
+        runId: "run-async-reject",
+        onQueueOutcome: () => Promise.reject(new Error("async outcome handler failure")),
+      }),
+      settings,
+    );
+
+    expect(accepted).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -893,6 +989,57 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("marks merged queue items when collect mode coalesces runs", async () => {
+    const key = `test-collect-merged-outcome-${Date.now()}`;
+    const done = createDeferred<void>();
+    const outcomes: FollowupQueueOutcome[] = [];
+    const runFollowup = async () => {
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        runId: "merge-1",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        onQueueOutcome: (payload) => {
+          outcomes.push(payload);
+        },
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        runId: "merge-2",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        onQueueOutcome: (payload) => {
+          outcomes.push(payload);
+        },
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(outcomes).toContainEqual({
+      runId: "merge-1",
+      status: "merged",
+      reason: "collect-merged-into:merge-2",
+    });
+  });
+
   it("collects Slack messages in same thread and preserves string thread id", async () => {
     const key = `test-collect-slack-thread-same-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1047,6 +1194,36 @@ describe("followup queue collect routing", () => {
     await done.promise;
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
+  });
+
+  it("binds overflow summary followup to the next queued runId (not the newest enqueued)", async () => {
+    const key = `test-overflow-summary-runid-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first", runId: "run-1" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second", runId: "run-2" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "third", runId: "run-3" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.run.runId).toBe("run-2");
+    expect(calls[1]?.run.runId).toBe("run-3");
   });
 });
 
