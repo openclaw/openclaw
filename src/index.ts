@@ -86,8 +86,13 @@ if (isMain) {
     process.exit(1);
   });
 
-  void program.parseAsync(process.argv).catch((err) => {
-    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
-    process.exit(1);
-  });
+  void program
+    .parseAsync(process.argv)
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+      process.exit(1);
+    });
 }
