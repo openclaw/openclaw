@@ -53,12 +53,12 @@ const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
 const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
-// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+// Pricing per 1M tokens (USD) — https://platform.minimaxi.com/document/Price
 const MINIMAX_API_COST = {
-  input: 15,
-  output: 60,
-  cacheRead: 2,
-  cacheWrite: 10,
+  input: 0.3,
+  output: 1.2,
+  cacheRead: 0.03,
+  cacheWrite: 0.12,
 };
 
 type ProviderModelConfig = NonNullable<ProviderConfig["models"]>[number];
