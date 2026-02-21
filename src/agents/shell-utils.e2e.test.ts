@@ -90,18 +90,14 @@ describe("resolveShellFromPath", () => {
     }
   });
 
-  if (isWin) {
-    it("returns undefined on Windows for missing PATH entries in this test harness", () => {
-      process.env.PATH = "";
-      expect(resolveShellFromPath("bash")).toBeUndefined();
-    });
-    return;
-  }
-
   it("returns undefined when PATH is empty", () => {
     process.env.PATH = "";
     expect(resolveShellFromPath("bash")).toBeUndefined();
   });
+
+  if (isWin) {
+    return;
+  }
 
   it("returns the first executable match from PATH", () => {
     const notExecutable = createTempCommandDir(tempDirs, [{ name: "bash", executable: false }]);
