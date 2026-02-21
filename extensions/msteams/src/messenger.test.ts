@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -182,6 +183,8 @@ describe("msteams messenger", () => {
       const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"));
       const localFile = path.join(tmpDir, "note.txt");
       await writeFile(localFile, "hello");
+      // Use file URL so isLocalPath() recognizes the path on all platforms (e.g. Windows CI)
+      const mediaUrl = pathToFileURL(localFile).href;
 
       try {
         const sent: Array<{ text?: string; entities?: unknown[] }> = [];
@@ -209,7 +212,7 @@ describe("msteams messenger", () => {
             },
           },
           context: ctx,
-          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl: localFile }],
+          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl }],
           tokenProvider: {
             getAccessToken: async () => "token",
           },

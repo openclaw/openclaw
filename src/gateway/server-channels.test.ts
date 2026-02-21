@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
   runtimeForLogger,
 } from "../logging/subsystem.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  createEmptyPluginRegistry,
+  type PluginRegistry,
+} from "../plugins/registry.js";
+import {
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
@@ -41,7 +47,9 @@ type TestAccount = {
 
 function createTestPlugin(params?: {
   account?: TestAccount;
-  startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
+  startAccount?: NonNullable<
+    ChannelPlugin<TestAccount>["gateway"]
+  >["startAccount"];
   includeDescribeAccount?: boolean;
 }): ChannelPlugin<TestAccount> {
   const account = params?.account ?? { enabled: true, configured: true };
@@ -91,7 +99,9 @@ function createManager() {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
-  const channelRuntimeEnvs = { discord: runtime } as Record<ChannelId, RuntimeEnv>;
+  const channelRuntimeEnvs = {
+    discord: runtime,
+  } as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
     loadConfig: () => ({}),
     channelLogs,
@@ -134,6 +144,35 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
+  });
+
+  it("does not auto-restart when startAccount stays pending", async () => {
+    // Resolve on abort so stopChannel() completes and test cleanup exits
+    const startAccount = vi.fn((ctx: { abortSignal?: AbortSignal }) =>
+      new Promise<void>((resolve) => {
+        ctx.abortSignal?.addEventListener(
+          "abort",
+          () => resolve(),
+          { once: true },
+        );
+      }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
   });
 
   it("does not auto-restart after manual stop during backoff", async () => {

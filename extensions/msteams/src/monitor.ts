@@ -294,12 +294,21 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
+  const result: MonitorMSTeamsResult = { app: expressApp, shutdown };
+
+  // Return a promise that stays pending until abort so the gateway keeps the channel "running".
+  // Resolve only after shutdown completes so stopChannel's await task can finish.
   if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
+    return new Promise<MonitorMSTeamsResult>((resolve) => {
+      opts.abortSignal!.addEventListener(
+        "abort",
+        () => {
+          void shutdown().then(() => resolve(result));
+        },
+        { once: true },
+      );
     });
   }
-
-  return { app: expressApp, shutdown };
+  // No abort signal: stay running (never resolve); process exit will tear down the server.
+  return new Promise<MonitorMSTeamsResult>(() => {});
 }
