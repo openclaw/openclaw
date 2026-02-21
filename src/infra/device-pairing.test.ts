@@ -183,14 +183,15 @@ describe("device pairing tokens", () => {
     });
     expect(readOk.ok).toBe(true);
 
-    const writeMismatch = await verifyDeviceToken({
+    // operator.admin satisfies all operator scopes (including operator.write)
+    const writeOk = await verifyDeviceToken({
       deviceId: "device-1",
       token,
       role: "operator",
       scopes: ["operator.write"],
       baseDir,
     });
-    expect(writeMismatch).toEqual({ ok: false, reason: "scope-mismatch" });
+    expect(writeOk.ok).toBe(true);
   });
 
   test("treats multibyte same-length token input as mismatch without throwing", async () => {

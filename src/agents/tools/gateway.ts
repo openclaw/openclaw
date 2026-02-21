@@ -86,16 +86,28 @@ function validateGatewayUrlOverrideForAgentTools(urlOverride: string): string {
   return parsed.origin;
 }
 
+function trimToUndefined(v: unknown): string | undefined {
+  if (typeof v !== "string") {
+    return undefined;
+  }
+  const trimmed = v.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
   // Prefer an explicit override; otherwise let callGateway choose based on config.
   const url =
     typeof opts?.gatewayUrl === "string" && opts.gatewayUrl.trim()
       ? validateGatewayUrlOverrideForAgentTools(opts.gatewayUrl)
       : undefined;
+  // Token fallback: explicit param → env var → config (mirrors callGateway resolution)
   const token =
-    typeof opts?.gatewayToken === "string" && opts.gatewayToken.trim()
+    (typeof opts?.gatewayToken === "string" && opts.gatewayToken.trim()
       ? opts.gatewayToken.trim()
-      : undefined;
+      : undefined) ||
+    trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN) ||
+    trimToUndefined(process.env.CLAWDBOT_GATEWAY_TOKEN) ||
+    trimToUndefined(loadConfig().gateway?.auth?.token);
   const timeoutMs =
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
