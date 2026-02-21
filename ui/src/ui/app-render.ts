@@ -68,6 +68,8 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
+import { renderSwarm } from "./views/swarm.ts";
+import { renderTaskQueue } from "./views/task-queue.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -346,6 +348,29 @@ export function renderApp(state: AppViewState) {
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "task-queue"
+            ? renderTaskQueue({
+                loading: state.taskQueueLoading,
+                snapshot: state.taskQueueSnapshot,
+                error: state.taskQueueError,
+                onRefresh: state.handleLoadTaskQueue,
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "swarm"
+            ? renderSwarm({
+                loading: state.swarmLoading,
+                snapshot: state.swarmSnapshot,
+                hierarchy: state.swarmHierarchy,
+                error: state.swarmError,
+                onRefresh: state.handleLoadSwarm,
               })
             : nothing
         }

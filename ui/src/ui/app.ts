@@ -57,6 +57,8 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
+import { loadSwarmData as loadSwarmInternal } from "./controllers/swarm.ts";
+import { loadTaskQueue as loadTaskQueueInternal } from "./controllers/task-queue.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
@@ -79,6 +81,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
+  TaskQueueSnapshot,
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -332,6 +335,13 @@ export class OpenClawApp extends LitElement {
   };
   @state() logsAutoFollow = true;
   @state() logsTruncated = false;
+  @state() taskQueueLoading = false;
+  @state() taskQueueSnapshot: TaskQueueSnapshot | null = null;
+  @state() taskQueueError: string | null = null;
+  @state() swarmLoading = false;
+  @state() swarmSnapshot: import("./controllers/swarm.ts").SwarmSnapshot | null = null;
+  @state() swarmHierarchy: import("./controllers/swarm.ts").SwarmHierarchy | null = null;
+  @state() swarmError: string | null = null;
   @state() logsCursor: number | null = null;
   @state() logsLastFetchAt: number | null = null;
   @state() logsLimit = 500;
@@ -441,6 +451,14 @@ export class OpenClawApp extends LitElement {
 
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+  }
+
+  async handleLoadTaskQueue() {
+    await loadTaskQueueInternal(this as unknown as Parameters<typeof loadTaskQueueInternal>[0]);
+  }
+
+  async handleLoadSwarm() {
+    await loadSwarmInternal(this as unknown as Parameters<typeof loadSwarmInternal>[0]);
   }
 
   async handleAbortChat() {
