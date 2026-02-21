@@ -1,9 +1,8 @@
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
-  mergeAllowlist,
+  canonicalizeAllowlistWithResolvedIds,
   patchAllowlistUsersInConfigEntries,
-  resolveAllowlistIdAdditions,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import type { DiscordGuildEntry } from "../../config/types.discord.js";
@@ -138,8 +137,11 @@ export async function resolveDiscordAllowlistConfig(params: {
         entries: allowEntries.map((entry) => String(entry)),
         fetcher: params.fetcher,
       });
-      const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(resolvedUsers);
-      allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+      const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolvedUsers);
+      allowFrom = canonicalizeAllowlistWithResolvedIds({
+        existing: allowFrom,
+        resolvedMap,
+      });
       summarizeMapping("discord users", mapping, unresolved, params.runtime);
     } catch (err) {
       params.runtime.log?.(
@@ -178,14 +180,17 @@ export async function resolveDiscordAllowlistConfig(params: {
           const nextGuild = { ...guildConfig } as Record<string, unknown>;
           const users = (guildConfig as { users?: string[] }).users;
           if (Array.isArray(users) && users.length > 0) {
-            const additions = resolveAllowlistIdAdditions({ existing: users, resolvedMap });
-            nextGuild.users = mergeAllowlist({ existing: users, additions });
+            nextGuild.users = canonicalizeAllowlistWithResolvedIds({
+              existing: users,
+              resolvedMap,
+            });
           }
           const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
           if (channels && typeof channels === "object") {
             nextGuild.channels = patchAllowlistUsersInConfigEntries({
               entries: channels,
               resolvedMap,
+              strategy: "canonicalize",
             });
           }
           nextGuilds[guildKey] = nextGuild as DiscordGuildEntry;
