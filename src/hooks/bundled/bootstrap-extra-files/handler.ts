@@ -1,6 +1,7 @@
 // Bootstrap extra files hook injects configured extra files into startup context.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  type BootstrapTier,
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
 } from "../../../agents/workspace.js";
@@ -60,9 +61,11 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     }
     // Re-run session filtering after append so extra files obey the same
     // per-session include rules as the original bootstrap files.
+    const tierOverride = context.cfg?.agents?.defaults?.bootstrapTier as BootstrapTier | undefined;
     context.bootstrapFiles = filterBootstrapFilesForSession(
       [...context.bootstrapFiles, ...extras],
       context.sessionKey,
+      tierOverride,
     );
   } catch (err) {
     log.warn(`failed: ${String(err)}`);
