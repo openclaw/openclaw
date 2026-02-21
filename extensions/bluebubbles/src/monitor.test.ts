@@ -120,6 +120,9 @@ function createMockRuntime(): PluginRuntime {
     tts: {
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
     },
+    stt: {
+      transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
+    },
     tools: {
       createMemoryGetTool: vi.fn() as unknown as PluginRuntime["tools"]["createMemoryGetTool"],
       createMemorySearchTool:
