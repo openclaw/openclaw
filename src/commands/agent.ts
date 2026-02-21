@@ -497,6 +497,12 @@ export async function agentCommand(
       if (explicitThink) {
         throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
       }
+      // Emit a warning when config-level xhigh falls back to high for unsupported models.
+      // This prevents silent downgrades that leave users confused when thinking budget is lower than expected.
+      console.warn(
+        `[openclaw] Thinking level "xhigh" is not supported for ${provider}/${model}. ` +
+          `Supported models: ${formatXHighModelHint()}. Falling back to "high".`,
+      );
       resolvedThinkLevel = "high";
       if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
         const entry = sessionEntry;
