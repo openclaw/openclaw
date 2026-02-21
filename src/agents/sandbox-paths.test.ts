@@ -88,6 +88,39 @@ describe("resolveSandboxedMediaSource", () => {
     }
   });
 
+  it("rejects relative traversal outside sandbox even when sandbox root is under tmpdir", async () => {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
+    try {
+      await expect(
+        resolveSandboxedMediaSource({
+          media: "../outside-sandbox.png",
+          sandboxRoot: sandboxDir,
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked tmpdir paths escaping tmpdir", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
+    const symlinkPath = path.join(sandboxDir, "tmp-link-escape");
+    try {
+      await fs.symlink("/etc/passwd", symlinkPath);
+      await expect(
+        resolveSandboxedMediaSource({
+          media: symlinkPath,
+          sandboxRoot: sandboxDir,
+        }),
+      ).rejects.toThrow(/symlink|sandbox/i);
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects file:// URLs outside sandbox", async () => {
     const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
     try {
