@@ -1,16 +1,16 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import type { AppViewState } from "./app-view-state.ts";
+import type { ThemeTransitionContext } from "./theme-transition.ts";
+import type { ThemeMode } from "./theme.ts";
+import type { SessionsListResult } from "./types.ts";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
-import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -35,6 +35,8 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  state.chatMessages = [];
+  state.chatQueue = [];
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
@@ -70,6 +72,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
           if (state.sessionKey !== mainSessionKey) {
             resetChatStateForSessionSwitch(state, mainSessionKey);
             void state.loadAssistantIdentity();
+            void loadChatHistory(state as unknown as ChatState);
           }
         }
         state.setTab(tab);
@@ -137,6 +140,8 @@ export function renderChatControls(state: AppViewState) {
             const next = (e.target as HTMLSelectElement).value;
             state.sessionKey = next;
             state.chatMessage = "";
+            state.chatMessages = [];
+            state.chatQueue = [];
             state.chatStream = null;
             (state as unknown as OpenClawApp).chatStreamStartedAt = null;
             state.chatRunId = null;
