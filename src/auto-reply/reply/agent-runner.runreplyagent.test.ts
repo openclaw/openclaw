@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -269,35 +270,11 @@ async function runReplyAgentWithBase(params: {
 }
 
 describe("runReplyAgent typing (heartbeat)", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  type StateEnvSnapshot = {
-    OPENCLAW_STATE_DIR: string | undefined;
-  };
-
-  function snapshotStateEnv(): StateEnvSnapshot {
-    return { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
-  }
-
-  function restoreStateEnv(snapshot: StateEnvSnapshot) {
-    if (snapshot.OPENCLAW_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = snapshot.OPENCLAW_STATE_DIR;
-    }
-  }
-
   async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-    const stateDir = path.join(fixtureRoot, `case-${++caseId}`);
-    await fs.mkdir(stateDir, { recursive: true });
-    const envSnapshot = snapshotStateEnv();
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    try {
-      return await fn(stateDir);
-    } finally {
-      restoreStateEnv(envSnapshot);
-    }
+    return await withStateDirEnv(
+      "openclaw-typing-heartbeat-",
+      async ({ stateDir }) => await fn(stateDir),
+    );
   }
 
   async function writeCorruptGeminiSessionFixture(params: {
@@ -320,16 +297,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     return { storePath, sessionEntry, sessionStore, transcriptPath };
   }
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-typing-heartbeat-"));
-  });
-
-  afterAll(async () => {
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-  });
 
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
