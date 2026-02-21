@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/voice-call",
-  "version": "2026.2.18",
+  "version": "2026.2.21",
   "description": "OpenClaw voice-call plugin",
   "type": "module",
   "dependencies": {
