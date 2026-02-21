@@ -19,7 +19,7 @@ vi.mock("../infra/update-runner.js", () => ({
 
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { connectOk, installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -60,10 +60,30 @@ const connectNodeClient = async (params: {
   });
 };
 
+const approveAllPendingPairings = async () => {
+  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const list = await listDevicePairing();
+  for (const pending of list.pending) {
+    await approveDevicePairing(pending.requestId);
+  }
+};
+
+const connectNodeClientWithPairing = async (params: Parameters<typeof connectNodeClient>[0]) => {
+  try {
+    return await connectNodeClient(params);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("pairing required")) {
+      throw error;
+    }
+    await approveAllPendingPairings();
+    return await connectNodeClient(params);
+  }
+};
+
 describe("gateway role enforcement", () => {
   test("enforces operator and node permissions", async () => {
-    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+    let nodeClient: GatewayClient | undefined;
 
     try {
       const eventRes = await rpcReq(ws, "node.event", { event: "test", payload: { ok: true } });
@@ -78,29 +98,22 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      await connectOk(nodeWs, {
-        role: "node",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          version: "1.0.0",
-          platform: "ios",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
+      nodeClient = await connectNodeClientWithPairing({
+        port,
         commands: [],
+        instanceId: "node-role-enforcement",
+        displayName: "node-role-enforcement",
       });
 
-      const binsRes = await rpcReq<{ bins?: unknown[] }>(nodeWs, "skills.bins", {});
-      expect(binsRes.ok).toBe(true);
-      expect(Array.isArray(binsRes.payload?.bins)).toBe(true);
+      const binsPayload = await nodeClient.request<{ bins?: unknown[] }>("skills.bins", {});
+      expect(Array.isArray(binsPayload?.bins)).toBe(true);
 
-      const statusRes = await rpcReq(nodeWs, "status", {});
-      expect(statusRes.ok).toBe(false);
-      expect(statusRes.error?.message ?? "").toContain("unauthorized role");
+      await expect(nodeClient.request("status", {})).rejects.toThrow("unauthorized role");
 
-      const healthRes = await rpcReq(nodeWs, "health", {});
-      expect(healthRes.ok).toBe(true);
+      const healthPayload = await nodeClient.request("health", {});
+      expect(healthPayload).toBeDefined();
     } finally {
-      nodeWs.close();
+      nodeClient?.stop();
     }
   });
 });
@@ -209,7 +222,7 @@ describe("gateway node command allowlist", () => {
     let allowedClient: GatewayClient | undefined;
 
     try {
-      systemClient = await connectNodeClient({
+      systemClient = await connectNodeClientWithPairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -227,7 +240,7 @@ describe("gateway node command allowlist", () => {
       systemClient.stop();
       await waitForConnectedCount(0);
 
-      emptyClient = await connectNodeClient({
+      emptyClient = await connectNodeClientWithPairing({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -250,7 +263,7 @@ describe("gateway node command allowlist", () => {
         new Promise<{ id?: string; nodeId?: string }>((resolve) => {
           resolveInvoke = resolve;
         });
-      allowedClient = await connectNodeClient({
+      allowedClient = await connectNodeClientWithPairing({
         port,
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",

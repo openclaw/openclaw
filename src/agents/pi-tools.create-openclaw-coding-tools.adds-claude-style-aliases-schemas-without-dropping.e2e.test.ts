@@ -176,7 +176,9 @@ describe("createOpenClawCodingTools", () => {
     expect(parameters.required ?? []).toContain("action");
   });
   it("exposes raw for gateway config.apply tool calls", () => {
-    const gateway = defaultTools.find((tool) => tool.name === "gateway");
+    const gateway = createOpenClawCodingTools({ senderIsOwner: true }).find(
+      (tool) => tool.name === "gateway",
+    );
     expect(gateway).toBeDefined();
 
     const parameters = gateway?.parameters as {
@@ -505,7 +507,11 @@ describe("createOpenClawCodingTools", () => {
       return found;
     };
 
-    for (const tool of defaultTools) {
+    const googleTools = createOpenClawCodingTools({
+      modelProvider: "google",
+      senderIsOwner: true,
+    });
+    for (const tool of googleTools) {
       const violations = findUnsupportedKeywords(tool.parameters, `${tool.name}.parameters`);
       expect(violations).toEqual([]);
     }

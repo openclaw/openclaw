@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,
   cronIsolatedRun,
@@ -11,6 +12,25 @@ import {
   testState,
   waitForSystemEvent,
 } from "./test-helpers.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: GuardedFetchOptions) => ({
+    response: new Response("ok", { status: 200 }),
+    finalUrl: params.url,
+    release: async () => {},
+  })),
+);
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: (...args: unknown[]) =>
+    (
+      fetchWithSsrFGuardMock as unknown as (...innerArgs: unknown[]) => Promise<{
+        response: Response;
+        finalUrl: string;
+        release: () => Promise<void>;
+      }>
+    )(...args),
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -487,8 +507,7 @@ describe("gateway server cron", () => {
       "utf-8",
     );
 
-    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    fetchWithSsrFGuardMock.mockClear();
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -522,15 +541,19 @@ describe("gateway server cron", () => {
       const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
       expect(notifyRunRes.ok).toBe(true);
 
-      await waitForCondition(() => fetchMock.mock.calls.length === 1, 5000);
-      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as unknown as [
-        string,
+      await waitForCondition(() => fetchWithSsrFGuardMock.mock.calls.length === 1, 5000);
+      const [notifyArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
         {
-          method?: string;
-          headers?: Record<string, string>;
-          body?: string;
+          url?: string;
+          init?: {
+            method?: string;
+            headers?: Record<string, string>;
+            body?: string;
+          };
         },
       ];
+      const notifyUrl = notifyArgs.url ?? "";
+      const notifyInit = notifyArgs.init ?? {};
       expect(notifyUrl).toBe("https://example.invalid/cron-finished");
       expect(notifyInit.method).toBe("POST");
       expect(notifyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
@@ -546,15 +569,19 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      await waitForCondition(() => fetchMock.mock.calls.length === 2, 5000);
-      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as unknown as [
-        string,
+      await waitForCondition(() => fetchWithSsrFGuardMock.mock.calls.length === 2, 5000);
+      const [legacyArgs] = fetchWithSsrFGuardMock.mock.calls[1] as unknown as [
         {
-          method?: string;
-          headers?: Record<string, string>;
-          body?: string;
+          url?: string;
+          init?: {
+            method?: string;
+            headers?: Record<string, string>;
+            body?: string;
+          };
         },
       ];
+      const legacyUrl = legacyArgs.url ?? "";
+      const legacyInit = legacyArgs.init ?? {};
       expect(legacyUrl).toBe("https://legacy.example.invalid/cron-finished");
       expect(legacyInit.method).toBe("POST");
       expect(legacyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
@@ -579,7 +606,7 @@ describe("gateway server cron", () => {
       expect(silentRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
@@ -605,12 +632,11 @@ describe("gateway server cron", () => {
       expect(noSummaryRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
     } finally {
       ws.close();
       await server.close();
       await rmTempDir(dir);
-      vi.unstubAllGlobals();
       testState.cronStorePath = undefined;
       testState.cronEnabled = undefined;
       if (prevSkipCron === undefined) {

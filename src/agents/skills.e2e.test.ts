@@ -338,15 +338,17 @@ describe("applySkillEnvOverrides", () => {
       expect(process.env.NODE_OPTIONS).toBeUndefined();
     } finally {
       restore();
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      expect(process.env.NODE_OPTIONS).toBeUndefined();
       if (originalApiKey === undefined) {
-        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+        delete process.env.OPENAI_API_KEY;
       } else {
-        expect(process.env.OPENAI_API_KEY).toBe(originalApiKey);
+        process.env.OPENAI_API_KEY = originalApiKey;
       }
       if (originalNodeOptions === undefined) {
-        expect(process.env.NODE_OPTIONS).toBeUndefined();
+        delete process.env.NODE_OPTIONS;
       } else {
-        expect(process.env.NODE_OPTIONS).toBe(originalNodeOptions);
+        process.env.NODE_OPTIONS = originalNodeOptions;
       }
     }
   });
@@ -405,11 +407,13 @@ describe("applySkillEnvOverrides", () => {
       metadata: '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]}}}',
     });
 
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "seed-present";
+
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
     });
 
-    const originalApiKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
 
     const restore = applySkillEnvOverridesFromSnapshot({
@@ -431,10 +435,11 @@ describe("applySkillEnvOverrides", () => {
       expect(process.env.OPENAI_API_KEY).toBe("snap-secret");
     } finally {
       restore();
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
       if (originalApiKey === undefined) {
-        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+        delete process.env.OPENAI_API_KEY;
       } else {
-        expect(process.env.OPENAI_API_KEY).toBe(originalApiKey);
+        process.env.OPENAI_API_KEY = originalApiKey;
       }
     }
   });
