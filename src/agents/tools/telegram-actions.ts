@@ -337,9 +337,7 @@ export async function handleTelegramAction(
 
   if (action === "sendPoll") {
     if (!isActionEnabled("polls")) {
-      throw new Error(
-        "Telegram polls are disabled. Set channels.telegram.actions.polls to true.",
-      );
+      throw new Error("Telegram polls are disabled. Set channels.telegram.actions.polls to true.");
     }
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "question", { required: true });
