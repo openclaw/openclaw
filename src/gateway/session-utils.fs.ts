@@ -8,6 +8,7 @@ import {
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
@@ -366,7 +367,8 @@ export function readSessionTitleFieldsFromTranscript(
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
   if (typeof content === "string") {
-    return content.trim() || null;
+    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
+    return normalized || null;
   }
   if (!Array.isArray(content)) {
     return null;
@@ -376,9 +378,9 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
       continue;
     }
     if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
-      const trimmed = part.text.trim();
-      if (trimmed) {
-        return trimmed;
+      const normalized = stripInlineDirectiveTagsForDisplay(part.text).text.trim();
+      if (normalized) {
+        return normalized;
       }
     }
   }
@@ -572,20 +574,22 @@ function truncatePreviewText(text: string, maxChars: number): string {
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
   if (typeof message.content === "string") {
-    const trimmed = message.content.trim();
-    return trimmed ? trimmed : null;
+    const normalized = stripInlineDirectiveTagsForDisplay(message.content).text.trim();
+    return normalized ? normalized : null;
   }
   if (Array.isArray(message.content)) {
     const parts = message.content
-      .map((entry) => (typeof entry?.text === "string" ? entry.text : ""))
+      .map((entry) =>
+        typeof entry?.text === "string" ? stripInlineDirectiveTagsForDisplay(entry.text).text : "",
+      )
       .filter((text) => text.trim().length > 0);
     if (parts.length > 0) {
       return parts.join("\n").trim();
     }
   }
   if (typeof message.text === "string") {
-    const trimmed = message.text.trim();
-    return trimmed ? trimmed : null;
+    const normalized = stripInlineDirectiveTagsForDisplay(message.text).text.trim();
+    return normalized ? normalized : null;
   }
   return null;
 }

@@ -114,6 +114,21 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("strips inline directives from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      "Hello [[reply_to_current]] world [[audio_as_voice]]",
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("does not emit chat delta for NO_REPLY streaming text", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),

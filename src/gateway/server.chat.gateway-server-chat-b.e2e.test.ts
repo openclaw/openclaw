@@ -287,6 +287,75 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history strips inline directives from displayed message text", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Hello [[reply_to_current]] world [[audio_as_voice]]" },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "A [[reply_to:abc-123]] B",
+            timestamp: Date.now() + 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            text: "[[ reply_to : 456 ]] C",
+            timestamp: Date.now() + 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "  keep padded  " }],
+            timestamp: Date.now() + 3,
+          },
+        }),
+      ];
+      await fs.writeFile(
+        path.join(sessionDir, "sess-main.jsonl"),
+        `${lines.join("\n")}\n`,
+        "utf-8",
+      );
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1000,
+      });
+      expect(historyRes.ok).toBe(true);
+      const messages = historyRes.payload?.messages ?? [];
+      expect(messages.length).toBe(4);
+
+      const serialized = JSON.stringify(messages);
+      expect(serialized.includes("[[reply_to")).toBe(false);
+      expect(serialized.includes("[[audio_as_voice]]")).toBe(false);
+
+      const first = messages[0] as { content?: Array<{ text?: string }> };
+      const second = messages[1] as { content?: string };
+      const third = messages[2] as { text?: string };
+      const fourth = messages[3] as { content?: Array<{ text?: string }> };
+
+      expect(first.content?.[0]?.text?.replace(/\s+/g, " ").trim()).toBe("Hello world");
+      expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
+      expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
+      expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
+    });
+  });
+
   test("smoke: supports abort and idempotent completion", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
