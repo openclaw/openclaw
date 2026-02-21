@@ -275,7 +275,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   model,
                   apiKey,
                   signal,
-                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens || 0)),
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
                   customInstructions,
@@ -297,7 +297,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
-      const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
+      const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens || 0));
 
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
