@@ -1,6 +1,9 @@
 import Foundation
 
 enum ChatMarkdownPreprocessor {
+    // Keep in sync with `src/auto-reply/reply/strip-inbound-meta.ts`
+    // (`INBOUND_META_SENTINELS`), and extend parser expectations in
+    // `ChatMarkdownPreprocessorTests` when sentinels change.
     private static let inboundContextHeaders = [
         "Conversation info (untrusted metadata):",
         "Sender (untrusted metadata):",
