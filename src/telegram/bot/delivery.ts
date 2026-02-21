@@ -513,7 +513,7 @@ function buildTelegramSendParams(opts?: {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
   if (opts?.replyToMessageId) {
-    params.reply_to_message_id = opts.replyToMessageId;
+    params.reply_parameters = { message_id: opts.replyToMessageId };
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
