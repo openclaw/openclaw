@@ -3,6 +3,7 @@ import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OriginatingChannelType } from "../../templating.js";
+import type { GetReplyOptions } from "../../types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
@@ -41,6 +42,12 @@ export type FollowupRun = {
   originatingThreadId?: string | number;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
+  /**
+   * Reply options for this specific queued message.
+   * Contains callbacks like onBlockReply (deliver) that should be used when processing this message.
+   * When present, takes precedence over closure-captured opts in followup runner.
+   */
+  opts?: GetReplyOptions;
   run: {
     agentId: string;
     agentDir: string;

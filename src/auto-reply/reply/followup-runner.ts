@@ -64,11 +64,15 @@ export function createFollowupRunner(params: {
    * where the message originated.
    */
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+    // Use opts from queued message if present (avoids closure reuse in shared queue).
+    // Falls back to closure-captured opts for backwards compatibility.
+    const effectiveOpts = queued.opts ?? opts;
+
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
-    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+    if (!shouldRouteToOriginating && !effectiveOpts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
       return;
     }
@@ -102,12 +106,12 @@ export function createFollowupRunner(params: {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
           // Fallback: try the dispatcher if routing failed.
-          if (opts?.onBlockReply) {
-            await opts.onBlockReply(payload);
+          if (effectiveOpts?.onBlockReply) {
+            await effectiveOpts.onBlockReply(payload);
           }
         }
-      } else if (opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+      } else if (effectiveOpts?.onBlockReply) {
+        await effectiveOpts.onBlockReply(payload);
       }
     }
   };
