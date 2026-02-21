@@ -25,7 +25,6 @@ import {
   resolveSafeBins,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
-  type ExecApprovalsAgent,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
 import { SAFE_BIN_PROFILE_FIXTURES, SAFE_BIN_PROFILES } from "./exec-safe-bin-policy.js";
