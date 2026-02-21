@@ -369,7 +369,10 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(onQueueOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", reason: expect.stringContaining("pre-start-fail:") }),
+      expect.objectContaining({
+        status: "failed",
+        reason: expect.stringContaining("pre-start-fail:"),
+      }),
     );
   });
 
