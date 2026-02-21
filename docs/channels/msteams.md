@@ -238,7 +238,6 @@ This is often easier than hand-editing JSON manifests.
 
 ## Onboarding (minimal)
 
-
 1. **Install the Microsoft Teams plugin**
    - From npm: `openclaw plugins install @openclaw/msteams`
    - From a local checkout: `openclaw plugins install ./extensions/msteams`
