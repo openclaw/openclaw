@@ -35,6 +35,7 @@ import {
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
 type ToolResultMessage = {
@@ -186,6 +187,17 @@ function extractSubagentOutputText(message: unknown): string {
 }
 
 async function readLatestSubagentOutput(sessionKey: string): Promise<string | undefined> {
+  try {
+    const latestAssistant = await readLatestAssistantReply({
+      sessionKey,
+      limit: 50,
+    });
+    if (latestAssistant?.trim()) {
+      return latestAssistant;
+    }
+  } catch {
+    // Best-effort: fall back to richer history parsing below.
+  }
   const history = await callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey, limit: 50 },
@@ -335,7 +347,16 @@ function resolveAnnounceOrigin(
   // requesterOrigin (captured at spawn time) reflects the channel the user is
   // actually on and must take priority over the session entry, which may carry
   // stale lastChannel / lastTo values from a previous channel interaction.
-  return mergeDeliveryContext(normalizedRequester, normalizedEntry);
+  const entryForMerge =
+    normalizedRequester?.to &&
+    normalizedRequester.threadId == null &&
+    normalizedEntry?.threadId != null
+      ? (() => {
+          const { threadId: _ignore, ...rest } = normalizedEntry;
+          return rest;
+        })()
+      : normalizedEntry;
+  return mergeDeliveryContext(normalizedRequester, entryForMerge);
 }
 
 async function resolveSubagentCompletionOrigin(params: {

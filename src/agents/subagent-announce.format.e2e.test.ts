@@ -142,9 +142,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 describe("subagent announce formatting", () => {
   beforeEach(() => {
-    agentSpy.mockClear();
-    sendSpy.mockClear();
-    sessionsDeleteSpy.mockClear();
+    agentSpy
+      .mockReset()
+      .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+    sendSpy
+      .mockReset()
+      .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
+    sessionsDeleteSpy.mockReset().mockImplementation((_req: AgentCallRequest) => undefined);
     embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
@@ -361,6 +365,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: 2" }] }],
     });
+    readLatestAssistantReplyMock.mockResolvedValue("");
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -499,6 +504,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "boom details" }] }],
     });
+    readLatestAssistantReplyMock.mockResolvedValue("");
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -535,6 +541,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "partial output" }] }],
     });
+    readLatestAssistantReplyMock.mockResolvedValue("");
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -1018,13 +1025,14 @@ describe("subagent announce formatting", () => {
         },
       ],
     });
-    readLatestAssistantReplyMock.mockResolvedValue("assistant ignored fallback");
+    readLatestAssistantReplyMock.mockResolvedValue("");
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
       childRunId: "run-completion-assistant-output",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
       expectsCompletionMessage: true,
       ...defaultOutcomeAnnounce,
     });
@@ -1058,6 +1066,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-completion-tool-output",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
       expectsCompletionMessage: true,
       ...defaultOutcomeAnnounce,
     });
@@ -1420,6 +1429,7 @@ describe("subagent announce formatting", () => {
         messages: [{ role: "assistant", content: "Final synthesized answer." }],
       };
     });
+    readLatestAssistantReplyMock.mockResolvedValue(undefined);
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:parent",
@@ -1563,7 +1573,7 @@ describe("subagent announce formatting", () => {
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-stale-channel",
       requesterSessionKey: "main",
-      requesterOrigin: { channel: "bluebubbles", to: "bluebubbles:chat_guid:123" },
+      requesterOrigin: { channel: "telegram", to: "telegram:123" },
       requesterDisplayKey: "main",
       ...defaultOutcomeAnnounce,
     });
@@ -1573,8 +1583,8 @@ describe("subagent announce formatting", () => {
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     // The channel should match requesterOrigin, NOT the stale session entry.
-    expect(call?.params?.channel).toBe("bluebubbles");
-    expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("telegram:123");
   });
 
   it("routes to parent subagent when parent run ended but session still exists (#18037)", async () => {
