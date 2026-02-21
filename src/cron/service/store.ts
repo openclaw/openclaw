@@ -343,16 +343,24 @@ export async function ensureLoaded(
         sched.kind = "at";
         mutated = true;
       }
-      const atRaw = typeof sched.at === "string" ? sched.at.trim() : "";
+      // Normalize timestamps: detect seconds (10 digits) vs milliseconds (13 digits)
+      // See #15729 - cron timestamp unit confusion
+      const normalizeTs = (ts: number): number => {
+        return ts < 1_000_000_000_000 ? ts * 1000 : ts;
+      };
+      const atRawStr = typeof sched.at === "string" ? sched.at.trim() : "";
+      const atRawNum = typeof sched.at === "number" ? normalizeTs(sched.at as number) : null;
       const atMsRaw = sched.atMs;
       const parsedAtMs =
         typeof atMsRaw === "number"
-          ? atMsRaw
+          ? normalizeTs(atMsRaw)
           : typeof atMsRaw === "string"
             ? parseAbsoluteTimeMs(atMsRaw)
-            : atRaw
-              ? parseAbsoluteTimeMs(atRaw)
-              : null;
+            : atRawNum !== null
+              ? atRawNum
+              : atRawStr
+                ? parseAbsoluteTimeMs(atRawStr)
+                : null;
       if (parsedAtMs !== null) {
         sched.at = new Date(parsedAtMs).toISOString();
         if ("atMs" in sched) {

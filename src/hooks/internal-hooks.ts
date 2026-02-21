@@ -188,14 +188,19 @@ export function getRegisteredEventKeys(): string[] {
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+  const eventKey = `${event.type}:${event.action}`;
   const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const specificHandlers = handlers.get(eventKey) ?? [];
 
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
+  // Debug logging to help diagnose hook issues (see #15827)
   if (allHandlers.length === 0) {
+    console.debug(`Hook: no handlers registered for ${eventKey} or ${event.type}`);
     return;
   }
+
+  console.debug(`Hook: triggering ${allHandlers.length} handler(s) for ${eventKey}`);
 
   for (const handler of allHandlers) {
     try {
