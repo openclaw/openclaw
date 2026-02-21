@@ -758,7 +758,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       const isFinal = info.kind === "final";
       if (draftStream && isFinal) {
         await flushDraft();
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        // When tableMode is "image", always skip preview-edit so delivery falls
+        // through to deliverDiscordReply (which decides whether to render table
+        // images based on actual segmentation, not a pre-heuristic).
+        const hasMedia =
+          Boolean(payload.mediaUrl) ||
+          (payload.mediaUrls?.length ?? 0) > 0 ||
+          tableMode === "image";
         const finalText = payload.text;
         const previewFinalText = resolvePreviewFinalText(finalText);
         const previewMessageId = draftStream.messageId();

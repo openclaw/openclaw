@@ -145,7 +145,7 @@ async function deliverTwitchReply(params: {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown;
-  tableMode: "off" | "plain" | "markdown" | "bullets" | "code";
+  tableMode: "off" | "plain" | "markdown" | "bullets" | "code" | "image";
   runtime: TwitchRuntimeEnv;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {

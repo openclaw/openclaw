@@ -19,7 +19,7 @@ const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
 ]);
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
-  value === "off" || value === "bullets" || value === "code";
+  value === "off" || value === "bullets" || value === "code" || value === "image";
 
 function resolveMarkdownModeFromSection(
   section: MarkdownConfigSection | undefined,

@@ -11,7 +11,7 @@ const MARKDOWN_STYLE_MARKERS = {
 } as const;
 
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
-  if (!markdown || mode === "off") {
+  if (!markdown || mode === "off" || mode === "image") {
     return markdown;
   }
   const { ir, hasTables } = markdownToIRWithMeta(markdown, {

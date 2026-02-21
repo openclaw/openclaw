@@ -160,7 +160,7 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
-export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "image"]);
 
 export const MarkdownConfigSchema = z
   .object({

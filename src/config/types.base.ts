@@ -31,10 +31,10 @@ export type BlockStreamingChunkConfig = {
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
-export type MarkdownTableMode = "off" | "bullets" | "code";
+export type MarkdownTableMode = "off" | "bullets" | "code" | "image";
 
 export type MarkdownConfig = {
-  /** Table rendering mode (off|bullets|code). */
+  /** Table rendering mode (off|bullets|code|image). */
   tables?: MarkdownTableMode;
 };
 

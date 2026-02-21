@@ -10,8 +10,20 @@ vi.mock("../send.js", () => ({
   sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
 }));
 
+const isTableImageRendererAvailableMock = vi.hoisted(() => vi.fn());
+const renderTableImageMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../media/table-image.js", () => ({
+  isTableImageRendererAvailable: (...args: unknown[]) => isTableImageRendererAvailableMock(...args),
+  renderTableImage: (...args: unknown[]) => renderTableImageMock(...args),
+}));
+
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
+
+  const mockRest = {
+    post: vi.fn().mockResolvedValue({ id: "msg-file", channel_id: "channel-1" }),
+  };
 
   beforeEach(() => {
     sendMessageDiscordMock.mockReset().mockResolvedValue({
@@ -22,6 +34,9 @@ describe("deliverDiscordReply", () => {
       messageId: "voice-1",
       channelId: "channel-1",
     });
+    isTableImageRendererAvailableMock.mockReset().mockResolvedValue(false);
+    renderTableImageMock.mockReset().mockResolvedValue(null);
+    mockRest.post.mockReset().mockResolvedValue({ id: "msg-file", channel_id: "channel-1" });
   });
 
   it("routes audioAsVoice payloads through the voice API and sends text separately", async () => {
@@ -64,6 +79,93 @@ describe("deliverDiscordReply", () => {
         replyTo: "reply-1",
       }),
     );
+  });
+
+  describe("image table mode", () => {
+    const TABLE_MD = "Here is a table:\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nDone.";
+
+    it("renders tables as PNG when tableMode=image and renderer is available", async () => {
+      isTableImageRendererAvailableMock.mockResolvedValue(true);
+      renderTableImageMock.mockResolvedValue({
+        png: Buffer.from("fake-png"),
+        fileName: "table-1.png",
+        fallbackMarkdown: "| A | B |\n|---|---|\n| 1 | 2 |",
+      });
+
+      await deliverDiscordReply({
+        replies: [{ text: TABLE_MD }],
+        target: "channel:100",
+        token: "token",
+        runtime,
+        rest: mockRest as never,
+        textLimit: 2000,
+        tableMode: "image",
+      });
+
+      // Text segments sent via sendMessageDiscord
+      expect(sendMessageDiscordMock).toHaveBeenCalled();
+      // Table image sent via rest.post (file attachment)
+      expect(mockRest.post).toHaveBeenCalledTimes(1);
+      // renderTableImage was called with the table markdown
+      expect(renderTableImageMock).toHaveBeenCalledWith(expect.stringContaining("| A | B |"), 0);
+    });
+
+    it("falls back to code tables when renderer is unavailable", async () => {
+      isTableImageRendererAvailableMock.mockResolvedValue(false);
+
+      await deliverDiscordReply({
+        replies: [{ text: TABLE_MD }],
+        target: "channel:100",
+        token: "token",
+        runtime,
+        rest: mockRest as never,
+        textLimit: 2000,
+        tableMode: "image",
+      });
+
+      // Should fall through to standard text delivery (code mode fallback)
+      expect(sendMessageDiscordMock).toHaveBeenCalled();
+      // No file attachment sent
+      expect(mockRest.post).not.toHaveBeenCalled();
+    });
+
+    it("falls back to text when renderTableImage returns null", async () => {
+      isTableImageRendererAvailableMock.mockResolvedValue(true);
+      renderTableImageMock.mockResolvedValue(null);
+
+      await deliverDiscordReply({
+        replies: [{ text: TABLE_MD }],
+        target: "channel:100",
+        token: "token",
+        runtime,
+        rest: mockRest as never,
+        textLimit: 2000,
+        tableMode: "image",
+      });
+
+      // No file attachment — renderer returned null for the table
+      expect(mockRest.post).not.toHaveBeenCalled();
+      // Text should still be sent (fallback)
+      expect(sendMessageDiscordMock).toHaveBeenCalled();
+    });
+
+    it("uses standard text path when text has no tables even in image mode", async () => {
+      isTableImageRendererAvailableMock.mockResolvedValue(true);
+
+      await deliverDiscordReply({
+        replies: [{ text: "No tables here" }],
+        target: "channel:100",
+        token: "token",
+        runtime,
+        rest: mockRest as never,
+        textLimit: 2000,
+        tableMode: "image",
+      });
+
+      // No image rendering attempted
+      expect(renderTableImageMock).not.toHaveBeenCalled();
+      expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("skips follow-up text when the voice payload text is blank", async () => {
