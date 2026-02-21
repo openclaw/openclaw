@@ -5,6 +5,7 @@ import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset } from "./timestamps.js";
 
@@ -15,28 +16,7 @@ type ConsoleSettings = {
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
-function resolveNodeRequire(): ((id: string) => NodeJS.Require) | null {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return null;
-  }
-  try {
-    const moduleNamespace = getBuiltinModule("module") as {
-      createRequire?: (id: string) => NodeJS.Require;
-    };
-    return typeof moduleNamespace.createRequire === "function"
-      ? moduleNamespace.createRequire
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-const requireConfig = resolveNodeRequire()?.(import.meta.url) ?? null;
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
 const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
   try {
