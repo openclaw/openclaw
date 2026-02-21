@@ -69,18 +69,14 @@ export function isLocalPath(url: string): boolean {
     return true;
   }
 
-  // Windows rooted path on current drive (e.g. \tmp\file.txt)
-  if (url.startsWith("\\") && !url.startsWith("\\\\")) {
+  // Windows root-relative paths (e.g. \tmp\file.txt) and UNC paths
+  // (e.g. \\server\share\file.txt) both start with a backslash.
+  if (url.startsWith("\\")) {
     return true;
   }
 
   // Windows drive-letter absolute path (e.g. C:\foo\bar.txt or C:/foo/bar.txt)
   if (/^[a-zA-Z]:[\\/]/.test(url)) {
-    return true;
-  }
-
-  // Windows UNC path (e.g. \\server\share\file.txt)
-  if (url.startsWith("\\\\")) {
     return true;
   }
 

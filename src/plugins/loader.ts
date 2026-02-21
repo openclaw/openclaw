@@ -38,6 +38,8 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   cache?: boolean;
+  /** Bypass registry cache reads for this load, but keep cache writes enabled. */
+  refresh?: boolean;
   mode?: "full" | "validate";
 };
 
@@ -343,7 +345,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     plugins: normalized,
   });
   const cacheEnabled = options.cache !== false;
-  if (cacheEnabled) {
+  const refreshCache = options.refresh === true;
+  const cacheReadEnabled = cacheEnabled && !refreshCache;
+  if (cacheReadEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached) {
       setActivePluginRegistry(cached, cacheKey);

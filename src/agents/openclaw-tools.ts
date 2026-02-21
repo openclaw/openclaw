@@ -65,6 +65,8 @@ export function createOpenClawTools(options?: {
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
   senderIsOwner?: boolean;
+  /** Force plugin tool schema refresh by bypassing plugin loader cache once. */
+  refreshToolSchema?: boolean;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -181,6 +183,7 @@ export function createOpenClawTools(options?: {
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
+    refreshToolSchema: options?.refreshToolSchema,
   });
 
   return [...tools, ...pluginTools];

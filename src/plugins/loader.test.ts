@@ -242,6 +242,50 @@ describe("loadOpenClawPlugins", () => {
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
   });
 
+  it("refresh mode bypasses stale cache reads and updates cache for later loads", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "refresh-cache",
+      body: `export default { id: "refresh-cache", register(api) {
+  api.registerGatewayMethod("refresh-cache.ping", ({ respond }) => respond(true, { ok: true }));
+} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: ["refresh-cache"],
+      },
+    };
+
+    const cachedRegistry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config,
+    });
+    (cachedRegistry as { __staleMarker?: string }).__staleMarker = "stale";
+
+    const staleRegistry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config,
+    });
+    expect(staleRegistry).toBe(cachedRegistry);
+    expect((staleRegistry as { __staleMarker?: string }).__staleMarker).toBe("stale");
+
+    const refreshedRegistry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config,
+      refresh: true,
+    });
+    expect(refreshedRegistry).not.toBe(cachedRegistry);
+    expect((refreshedRegistry as { __staleMarker?: string }).__staleMarker).toBeUndefined();
+
+    const subsequentRegistry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config,
+    });
+    expect(subsequentRegistry).toBe(refreshedRegistry);
+    expect((subsequentRegistry as { __staleMarker?: string }).__staleMarker).toBeUndefined();
+  });
+
   it("denylist disables plugins even if allowed", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({

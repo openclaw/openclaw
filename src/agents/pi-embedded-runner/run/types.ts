@@ -19,6 +19,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  /** Force a one-time tool schema refresh by bypassing plugin registry cache. */
+  refreshToolSchema?: boolean;
 };
 
 export type EmbeddedRunAttemptResult = {
