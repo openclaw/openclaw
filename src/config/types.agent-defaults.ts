@@ -166,6 +166,13 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /**
+   * Filter out reasoning content from model responses.
+   * When enabled, removes reasoning_content fields from models like Xiaomi Mimo v2 flash
+   * that return internal reasoning as part of the response.
+   * @default false
+   */
+  filterReasoningContent?: boolean;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

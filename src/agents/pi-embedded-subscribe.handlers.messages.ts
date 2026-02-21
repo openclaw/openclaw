@@ -263,7 +263,8 @@ export function handleMessageEnd(
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = extractAssistantText(assistantMessage);
+  const filterReasoningContent = ctx.params.config?.agents?.defaults?.filterReasoningContent ?? false;
+  const rawText = extractAssistantText(assistantMessage, { filterReasoningContent });
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
