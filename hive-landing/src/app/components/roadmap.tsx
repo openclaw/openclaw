@@ -87,8 +87,8 @@ export function Roadmap() {
               From Validation to Scale
             </h2>
             <p className="mt-4 text-neutral-400">
-              Conway integration is Phase 3 &mdash; deliberately sequenced after
-              governance patterns are validated by real-world Queen deployments.
+              Conway integration is Phase 3 &mdash; deliberately sequenced after governance patterns
+              are validated by real-world Queen deployments.
             </p>
           </div>
         </ScrollReveal>
@@ -118,33 +118,24 @@ export function Roadmap() {
                     <span className="font-mono text-xs font-bold tracking-wider text-amber-400 uppercase">
                       {phase.phase}
                     </span>
-                    <span className="text-sm font-bold text-neutral-200">
-                      {phase.title}
-                    </span>
+                    <span className="text-sm font-bold text-neutral-200">{phase.title}</span>
                     {phase.status === "current" && (
                       <span className="rounded-full bg-amber-400/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-400 uppercase">
                         Active
                       </span>
                     )}
                   </div>
-                  <span className="font-mono text-[10px] text-neutral-500">
-                    {phase.time}
-                  </span>
+                  <span className="font-mono text-[10px] text-neutral-500">{phase.time}</span>
                 </div>
 
                 {/* Content */}
                 <div className="px-5 py-4">
                   {/* Progress bar ASCII */}
-                  <div className="mb-3 font-mono text-xs text-neutral-500">
-                    {phase.ascii}
-                  </div>
+                  <div className="mb-3 font-mono text-xs text-neutral-500">{phase.ascii}</div>
 
                   <ul className="space-y-1.5">
                     {phase.items.map((item) => (
-                      <li
-                        key={item}
-                        className="flex items-start gap-2 text-sm text-neutral-400"
-                      >
+                      <li key={item} className="flex items-start gap-2 text-sm text-neutral-400">
                         <span className="mt-1 font-mono text-neutral-600">
                           {phase.status === "current" ? "✓" : "○"}
                         </span>

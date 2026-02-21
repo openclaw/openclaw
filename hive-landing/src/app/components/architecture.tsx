@@ -53,8 +53,8 @@ export function Architecture() {
               Queen-Centric Architecture
             </h2>
             <p className="mt-4 text-neutral-400">
-              One Queen per Hive. Not a &ldquo;more powerful worker&rdquo; &mdash; a
-              structurally distinct role with exclusive governance capabilities.
+              One Queen per Hive. Not a &ldquo;more powerful worker&rdquo; &mdash; a structurally
+              distinct role with exclusive governance capabilities.
             </p>
           </div>
         </ScrollReveal>
@@ -79,16 +79,12 @@ export function Architecture() {
                     </span>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-amber-400">
-                          {layer.name}
-                        </span>
+                        <span className="text-sm font-bold text-amber-400">{layer.name}</span>
                       </div>
                       <p className="mt-0.5 font-mono text-[11px] text-neutral-500">
                         {layer.components}
                       </p>
-                      <p className="mt-2 text-sm text-neutral-400">
-                        {layer.description}
-                      </p>
+                      <p className="mt-2 text-sm text-neutral-400">{layer.description}</p>
                     </div>
                   </div>
                   {i < layers.length - 1 && (
@@ -125,9 +121,7 @@ export function Architecture() {
                         {i + 1}
                       </span>
                       {i < contributionSteps.length - 1 && (
-                        <span className="absolute ml-3 mt-8 font-mono text-neutral-700">
-                          │
-                        </span>
+                        <span className="absolute ml-3 mt-8 font-mono text-neutral-700">│</span>
                       )}
                     </div>
                     <div className="flex items-center gap-3">

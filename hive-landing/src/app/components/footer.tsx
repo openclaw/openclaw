@@ -8,9 +8,7 @@ export function Footer() {
           <div className="flex items-center gap-3">
             <HexagonIcon />
             <div>
-              <div className="font-mono text-sm font-bold tracking-wider">
-                THE::HIVE
-              </div>
+              <div className="font-mono text-sm font-bold tracking-wider">THE::HIVE</div>
               <div className="font-mono text-[10px] text-neutral-500">
                 queen-claw // MIT License // 2026
               </div>
@@ -47,12 +45,7 @@ function FooterLink({ href, children }: { href: string; children: React.ReactNod
 
 function HexagonIcon() {
   return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 32 32"
-      fill="none"
-    >
+    <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
       <path
         d="M16 2L28.66 9V23L16 30L3.34 23V9L16 2Z"
         stroke="#f59e0b"

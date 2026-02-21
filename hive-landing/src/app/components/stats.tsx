@@ -55,9 +55,7 @@ export function Stats() {
                   duration={2000 + i * 300}
                 />
               </div>
-              <div className="mt-2 text-sm font-medium text-neutral-200">
-                {stat.label}
-              </div>
+              <div className="mt-2 text-sm font-medium text-neutral-200">{stat.label}</div>
               <div className="mt-1 text-xs text-neutral-500">{stat.sublabel}</div>
             </div>
           </ScrollReveal>

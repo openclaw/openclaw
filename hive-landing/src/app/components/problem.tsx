@@ -66,9 +66,7 @@ export function Problem() {
                 <pre className="mb-5 overflow-hidden rounded-lg border border-neutral-800/50 bg-neutral-950/80 p-3 font-mono text-[10px] leading-tight text-red-400/60 transition-colors group-hover:text-red-400/80">
                   {problem.ascii}
                 </pre>
-                <h3 className="text-lg font-semibold text-neutral-100">
-                  {problem.title}
-                </h3>
+                <h3 className="text-lg font-semibold text-neutral-100">{problem.title}</h3>
                 <p className="mt-2 text-sm leading-relaxed text-neutral-400">
                   {problem.description}
                 </p>
@@ -83,12 +81,9 @@ export function Problem() {
               {`┌─ POSITION ─────────────────────────────────┐`}
             </pre>
             <p className="text-sm leading-relaxed text-amber-200/80">
-              <span className="font-semibold text-amber-400">
-                The Hive&apos;s Position:
-              </span>{" "}
-              We are not competing with OpenClaw. We are building the governance
-              infrastructure that OpenClaw&apos;s foundation will eventually need to
-              implement.
+              <span className="font-semibold text-amber-400">The Hive&apos;s Position:</span> We are
+              not competing with OpenClaw. We are building the governance infrastructure that
+              OpenClaw&apos;s foundation will eventually need to implement.
             </p>
             <pre className="mt-3 font-mono text-xs text-amber-500/50">
               {`└─────────────────────────────────────────────┘`}

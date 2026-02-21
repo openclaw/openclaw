@@ -70,8 +70,8 @@ export function Security() {
               Security Architecture
             </h2>
             <p className="mt-4 text-neutral-400">
-              Every documented OpenClaw vulnerability has a specific Hive mitigation.
-              Strict positive allowlist — not regex rejection.
+              Every documented OpenClaw vulnerability has a specific Hive mitigation. Strict
+              positive allowlist — not regex rejection.
             </p>
           </div>
         </ScrollReveal>
@@ -114,12 +114,8 @@ export function Security() {
                       key={cve.id}
                       className="border-b border-neutral-800/30 transition-colors hover:bg-neutral-800/30"
                     >
-                      <td className="p-3 font-mono text-xs text-neutral-300">
-                        {cve.id}
-                      </td>
-                      <td className="p-3 font-mono text-xs text-neutral-400">
-                        {cve.cvss}
-                      </td>
+                      <td className="p-3 font-mono text-xs text-neutral-300">{cve.id}</td>
+                      <td className="p-3 font-mono text-xs text-neutral-400">{cve.cvss}</td>
                       <td className="p-3">
                         <span
                           className={`inline-block rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${cve.severityColor}`}
@@ -128,9 +124,7 @@ export function Security() {
                         </span>
                       </td>
                       <td className="p-3 text-xs text-neutral-400">{cve.type}</td>
-                      <td className="p-3 text-xs text-emerald-400/80">
-                        {cve.mitigation}
-                      </td>
+                      <td className="p-3 text-xs text-emerald-400/80">{cve.mitigation}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -169,13 +163,7 @@ export function Security() {
                       <span className="text-neutral-400">
                         {String(i + 1).padStart(2, "0")}. {t.test}
                       </span>
-                      <span
-                        className={
-                          t.result === "ACCEPT"
-                            ? "text-emerald-400"
-                            : "text-red-400"
-                        }
-                      >
+                      <span className={t.result === "ACCEPT" ? "text-emerald-400" : "text-red-400"}>
                         [{t.result}]
                       </span>
                     </div>
@@ -191,9 +179,7 @@ export function Security() {
             <ScrollReveal delay={500}>
               <div className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/50">
                 <div className="border-b border-neutral-800 bg-neutral-900/80 px-4 py-3">
-                  <span className="font-mono text-xs text-neutral-500">
-                    TUF Signing Roles
-                  </span>
+                  <span className="font-mono text-xs text-neutral-500">TUF Signing Roles</span>
                 </div>
                 <div className="space-y-2 p-4">
                   {[
@@ -206,9 +192,7 @@ export function Security() {
                       key={r.role}
                       className="flex items-center justify-between rounded-lg border border-neutral-800 bg-neutral-950/50 px-3 py-2"
                     >
-                      <span className="font-mono text-xs font-bold text-amber-400">
-                        {r.role}
-                      </span>
+                      <span className="font-mono text-xs font-bold text-amber-400">{r.role}</span>
                       <div className="flex items-center gap-3 font-mono text-[10px]">
                         <span className="text-neutral-500">{r.key}</span>
                         <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-400">

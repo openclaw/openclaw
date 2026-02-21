@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useMemo } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
+import { useRef, useMemo } from "react";
 import * as THREE from "three";
 
 function HexGrid() {
@@ -65,12 +65,7 @@ function HexGrid() {
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, count]}>
       <shapeGeometry args={[hexShape]} />
-      <meshBasicMaterial
-        color="#f59e0b"
-        transparent
-        opacity={0.04}
-        side={THREE.DoubleSide}
-      />
+      <meshBasicMaterial color="#f59e0b" transparent opacity={0.04} side={THREE.DoubleSide} />
     </instancedMesh>
   );
 }
@@ -167,11 +162,7 @@ function FloatingParticles() {
   return (
     <points ref={pointsRef}>
       <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          args={[positions, 3]}
-          count={count}
-        />
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} count={count} />
       </bufferGeometry>
       <pointsMaterial color="#fbbf24" size={0.04} transparent opacity={0.6} sizeAttenuation />
     </points>

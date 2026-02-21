@@ -31,10 +31,9 @@ export function CTA() {
               The moat is not the code.
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-neutral-400">
-              The moat is the first public contribution PR &mdash; with a verified
-              firewall log, a clean diff, and a community security review &mdash; that
-              demonstrates the privacy-preserving collective intelligence loop
-              actually works.
+              The moat is the first public contribution PR &mdash; with a verified firewall log, a
+              clean diff, and a community security review &mdash; that demonstrates the
+              privacy-preserving collective intelligence loop actually works.
             </p>
 
             {/* ASCII commitment */}

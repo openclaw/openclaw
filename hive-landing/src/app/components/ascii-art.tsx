@@ -131,7 +131,7 @@ export function AsciiQueen({ className = "" }: { className?: string }) {
       ([entry]) => {
         if (entry.isIntersecting) setVisible(true);
       },
-      { threshold: 0.3 }
+      { threshold: 0.3 },
     );
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
@@ -158,7 +158,7 @@ export function AsciiFirewall({ className = "" }: { className?: string }) {
       ([entry]) => {
         if (entry.isIntersecting) setVisible(true);
       },
-      { threshold: 0.2 }
+      { threshold: 0.2 },
     );
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
@@ -178,10 +178,7 @@ export function AsciiFirewall({ className = "" }: { className?: string }) {
 
 export function AsciiBee({ className = "" }: { className?: string }) {
   return (
-    <pre
-      className={`text-amber-400/60 text-xs leading-tight ${className}`}
-      aria-hidden="true"
-    >
+    <pre className={`text-amber-400/60 text-xs leading-tight ${className}`} aria-hidden="true">
       {BEE_SMALL}
     </pre>
   );
@@ -198,13 +195,7 @@ export function AsciiDivider({ className = "" }: { className?: string }) {
   );
 }
 
-export function GlitchText({
-  children,
-  className = "",
-}: {
-  children: string;
-  className?: string;
-}) {
+export function GlitchText({ children, className = "" }: { children: string; className?: string }) {
   const [text, setText] = useState(children);
   const glitchChars = "█▓▒░╔╗╚╝║═◊◆◇⬡⬢";
 
@@ -261,7 +252,7 @@ export function ScrollReveal({
           setTimeout(() => setVisible(true), delay);
         }
       },
-      { threshold: 0.15 }
+      { threshold: 0.15 },
     );
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
@@ -299,7 +290,7 @@ export function AnimatedCounter({
       ([entry]) => {
         if (entry.isIntersecting) setStarted(true);
       },
-      { threshold: 0.5 }
+      { threshold: 0.5 },
     );
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();

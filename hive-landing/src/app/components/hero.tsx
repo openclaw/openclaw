@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 const HoneycombScene = dynamic(
   () => import("./honeycomb-scene").then((mod) => ({ default: mod.HoneycombScene })),
-  { ssr: false }
+  { ssr: false },
 );
 
 const TERMINAL_LINES = [
@@ -14,8 +14,16 @@ const TERMINAL_LINES = [
   { text: "Initializing Hive with Queen node...", color: "text-amber-400", delay: 600 },
   { text: "Loading Mission Statement from SOUL.md", color: "text-neutral-400", delay: 900 },
   { text: "TUF root key verified ✓ (3-of-5 threshold)", color: "text-neutral-400", delay: 1200 },
-  { text: "Beacon scheduler started (02:00 UTC ± 90m jitter)", color: "text-neutral-400", delay: 1500 },
-  { text: "Human Knowledge Firewall active (v1.0, strict-allowlist)", color: "text-neutral-400", delay: 1800 },
+  {
+    text: "Beacon scheduler started (02:00 UTC ± 90m jitter)",
+    color: "text-neutral-400",
+    delay: 1500,
+  },
+  {
+    text: "Human Knowledge Firewall active (v1.0, strict-allowlist)",
+    color: "text-neutral-400",
+    delay: 1800,
+  },
   { text: "Registering Worker slots [0/∞]...", color: "text-neutral-400", delay: 2100 },
   { text: "", color: "", delay: 2400 },
   { text: "╔══════════════════════════════════════════╗", color: "text-amber-500/60", delay: 2500 },
@@ -25,20 +33,10 @@ const TERMINAL_LINES = [
   { text: "╚══════════════════════════════════════════╝", color: "text-amber-500/60", delay: 2900 },
 ];
 
-function TerminalLine({
-  line,
-  show,
-}: {
-  line: { text: string; color: string };
-  show: boolean;
-}) {
+function TerminalLine({ line, show }: { line: { text: string; color: string }; show: boolean }) {
   if (!show) return null;
   if (!line.text) return <div className="h-2" />;
-  return (
-    <div className={`${line.color} animate-fade-in-up`}>
-      {line.text}
-    </div>
-  );
+  return <div className={`${line.color} animate-fade-in-up`}>{line.text}</div>;
 }
 
 export function Hero() {
@@ -46,7 +44,7 @@ export function Hero() {
 
   useEffect(() => {
     const timers = TERMINAL_LINES.map((line, i) =>
-      setTimeout(() => setVisibleLines(i + 1), line.delay)
+      setTimeout(() => setVisibleLines(i + 1), line.delay),
     );
     return () => timers.forEach(clearTimeout);
   }, []);
@@ -64,14 +62,15 @@ export function Hero() {
         {/* Badge */}
         <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-neutral-900/80 px-4 py-1.5 text-sm text-amber-400 backdrop-blur-sm">
           <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-          <span className="font-mono text-xs tracking-wide">
-            queen-claw v0.1 // MIT Licensed
-          </span>
+          <span className="font-mono text-xs tracking-wide">queen-claw v0.1 // MIT Licensed</span>
         </div>
 
         {/* ASCII logo above heading */}
-        <pre className="mx-auto mb-6 hidden text-[8px] leading-[1.1] text-amber-500/40 sm:block sm:text-[10px]" aria-hidden="true">
-{`        ___  ___  ___  ___
+        <pre
+          className="mx-auto mb-6 hidden text-[8px] leading-[1.1] text-amber-500/40 sm:block sm:text-[10px]"
+          aria-hidden="true"
+        >
+          {`        ___  ___  ___  ___
        /   \\/   \\/   \\/   \\
       / \\  / \\  / \\  / \\  /
      /   \\/   \\/   \\/   \\/
@@ -93,9 +92,8 @@ export function Hero() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-neutral-400 sm:text-xl">
-          Privacy-preserving, queen-centric swarm infrastructure that solves
-          version drift, security fragmentation, and supply-chain poisoning
-          for autonomous AI agent deployments.
+          Privacy-preserving, queen-centric swarm infrastructure that solves version drift, security
+          fragmentation, and supply-chain poisoning for autonomous AI agent deployments.
         </p>
 
         <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
@@ -134,9 +132,7 @@ export function Hero() {
             <span className="h-3 w-3 rounded-full bg-red-500/60" />
             <span className="h-3 w-3 rounded-full bg-yellow-400/60" />
             <span className="h-3 w-3 rounded-full bg-emerald-400/60" />
-            <span className="ml-3 font-mono text-xs text-neutral-500">
-              queen-claw@hive:~
-            </span>
+            <span className="ml-3 font-mono text-xs text-neutral-500">queen-claw@hive:~</span>
           </div>
           <div className="scanline relative p-5 text-left font-mono text-xs leading-relaxed sm:text-sm">
             {TERMINAL_LINES.map((line, i) => (

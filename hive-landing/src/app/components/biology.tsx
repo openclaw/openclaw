@@ -59,12 +59,11 @@ export function Biology() {
               // Biological Foundations
             </p>
             <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-              30 Million Years of{" "}
-              <span className="text-amber-400">Resilience Engineering</span>
+              30 Million Years of <span className="text-amber-400">Resilience Engineering</span>
             </h2>
             <p className="mt-4 text-neutral-400">
-              Not metaphors &mdash; design constraints. Bee colony biology solved the
-              exact problems facing distributed AI agent deployments.
+              Not metaphors &mdash; design constraints. Bee colony biology solved the exact problems
+              facing distributed AI agent deployments.
             </p>
           </div>
         </ScrollReveal>
@@ -93,9 +92,7 @@ export function Biology() {
                   <div className="flex items-center justify-center p-3 text-amber-400/60">
                     {row.icon}
                   </div>
-                  <div className="p-3 text-sm font-medium text-neutral-200">
-                    {row.bee}
-                  </div>
+                  <div className="p-3 text-sm font-medium text-neutral-200">{row.bee}</div>
                   <div className="p-3 text-sm text-neutral-400">{row.problem}</div>
                   <div className="p-3 text-sm text-neutral-300">{row.hive}</div>
                 </div>
