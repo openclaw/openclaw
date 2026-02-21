@@ -189,7 +189,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Android/Security: require TLS for non-loopback gateway connections, block manual non-loopback plaintext attempts with a clear status error, and keep plaintext WS limited to loopback-only development flows.
 - Agents/Streaming: keep assistant partial streaming active during reasoning streams, handle native `thinking_*` stream events consistently, dedupe mixed reasoning-end signals, and clear stale mutating tool errors after same-target retry success. (#20635) Thanks @obviyus.
 - iOS/Chat: use a dedicated iOS chat session key for ChatSheet routing to avoid cross-client session collisions with main-session traffic. (#21139) thanks @mbelinky.
 - iOS/Chat: auto-resync chat history after reconnect sequence gaps, clear stale pending runs, and avoid dead-end manual refresh errors after transient disconnects. (#21135) thanks @mbelinky.
