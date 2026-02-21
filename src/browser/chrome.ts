@@ -284,6 +284,21 @@ export async function launchOpenClawChrome(
     log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
   }
 
+  // Remove stale Chrome Singleton files that block launch when the container
+  // hostname changes across restarts.  Chrome encodes the hostname in
+  // SingletonLock and refuses to start (exit code 21) if it sees a lock from a
+  // different host.  In Docker environments the hostname changes on every
+  // container restart while the user-data volume persists, so these locks are
+  // always stale after a restart.
+  for (const singletonFile of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const filePath = path.join(userDataDir, singletonFile);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // File may not exist, which is fine.
+    }
+  }
+
   const proc = spawnOnce();
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
