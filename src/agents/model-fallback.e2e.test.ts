@@ -609,7 +609,6 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
-});
 
   it("continues to second fallback when first fallback throws unclassified error after primary classified error", async () => {
     // This tests the fix for "2nd model blocks 3rd" - when primary fails with a 
