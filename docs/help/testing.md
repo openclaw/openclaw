@@ -320,6 +320,12 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Test: `src/media-understanding/providers/deepgram/audio.live.test.ts`
 - Enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
 
+## BytePlus coding plan live
+
+- Test: `src/agents/byteplus.live.test.ts`
+- Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
+- Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
+
 ## Docker runners (optional “works in Linux” checks)
 
 These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted):
