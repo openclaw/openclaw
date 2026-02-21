@@ -172,7 +172,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   }
   const updates: EnvUpdate[] = [];
 
-  for (const skill of snapshot.skills) {
+  for (const skill of snapshot.skills ?? []) {
     const skillConfig = resolveSkillConfig(config, skill.name);
     if (!skillConfig) {
       continue;
