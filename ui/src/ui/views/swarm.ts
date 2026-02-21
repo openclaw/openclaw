@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   SwarmSnapshot,
   SwarmHierarchy,
@@ -69,7 +69,7 @@ function trustBar(score: number) {
   `;
 }
 
-function renderAgentNode(node: SwarmAgentNode, depth = 0) {
+function renderAgentNode(node: SwarmAgentNode, depth = 0): TemplateResult {
   const indent = depth * 24;
   return html`
     <div style="margin-left: ${indent}px; margin-bottom: 8px;">

@@ -69,7 +69,7 @@ export const trustHandlers: GatewayRequestHandlers = {
     try {
       const profile = await loadTrustProfile(agentId);
       if (!profile) {
-        respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, `Agent ${agentId} not found`));
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `Agent ${agentId} not found`));
         return;
       }
       respond(true, profile, undefined);
