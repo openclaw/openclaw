@@ -268,6 +268,7 @@ export async function agentCommand(
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
+    channel: opts.channel,
   });
 
   const {
