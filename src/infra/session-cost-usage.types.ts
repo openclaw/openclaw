@@ -51,10 +51,17 @@ export type CostUsageDailyEntry = CostUsageTotals & {
   date: string;
 };
 
+export type CostUsageModelEntry = CostUsageTotals & {
+  model: string;
+  provider?: string;
+  sessionCount: number;
+};
+
 export type CostUsageSummary = {
   updatedAt: number;
   days: number;
   daily: CostUsageDailyEntry[];
+  models: CostUsageModelEntry[];
   totals: CostUsageTotals;
 };
 
