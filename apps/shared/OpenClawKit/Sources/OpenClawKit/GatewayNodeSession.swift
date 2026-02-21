@@ -21,6 +21,7 @@ public actor GatewayNodeSession {
     private var activeURL: URL?
     private var activeToken: String?
     private var activePassword: String?
+    private var activeTLSParams: GatewayTLSParams?
     private var activeConnectOptionsKey: String?
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
@@ -249,6 +250,16 @@ public actor GatewayNodeSession {
     /// Returns the current active authentication token.
     public func currentAuthToken() -> String? {
         self.activeToken
+    }
+
+    /// Returns TLS params for making pinned HTTP requests to the gateway (e.g., TTS proxy).
+    public func currentTLSParams() -> GatewayTLSParams? {
+        self.activeTLSParams
+    }
+
+    /// Stores TLS params for the active connection (called from the connection loop).
+    public func setActiveTLSParams(_ params: GatewayTLSParams?) {
+        self.activeTLSParams = params
     }
 
     public func sendEvent(event: String, payloadJSON: String?) async {

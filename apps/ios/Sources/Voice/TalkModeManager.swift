@@ -64,6 +64,8 @@ final class TalkModeManager: NSObject {
     private var apiKey: String?
     private var ttsBaseUrl: URL?
     private var ttsAuthToken: String?
+    private var ttsTLSParams: GatewayTLSParams?
+
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
     private var mainSessionKey: String = "main"
@@ -1000,7 +1002,8 @@ final class TalkModeManager: NSObject {
                 let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
                 let stream = Self.openAITTSStream(
                     baseUrl: ttsBaseUrl, text: cleaned, model: model, voice: voice,
-                    sampleRate: 24000, timeoutSeconds: 30, authToken: self.ttsAuthToken)
+                    sampleRate: 24000, timeoutSeconds: 30, authToken: self.ttsAuthToken,
+                    tlsParams: self.ttsTLSParams)
                 if self.interruptOnSpeech {
                     do { try self.startRecognition() } catch {
                         self.logger.warning("startRecognition failed: \(error.localizedDescription, privacy: .public)")
@@ -1232,7 +1235,8 @@ final class TalkModeManager: NSObject {
             let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
             prefetchedStream = Self.openAITTSStream(
                 baseUrl: baseUrl, text: trimmed, model: model, voice: voice,
-                sampleRate: 24000, timeoutSeconds: 30, authToken: self.ttsAuthToken)
+                sampleRate: 24000, timeoutSeconds: 30, authToken: self.ttsAuthToken,
+                tlsParams: self.ttsTLSParams)
         } else {
             prefetchedStream = nil
         }
@@ -1388,7 +1392,8 @@ final class TalkModeManager: NSObject {
             let model = self.currentModelId ?? self.defaultModelId ?? "qwen3-tts"
             return Self.openAITTSStream(
                 baseUrl: baseUrl, text: text, model: model, voice: voice,
-                sampleRate: 24000, timeoutSeconds: 30, authToken: self.ttsAuthToken)
+                sampleRate: 24000, timeoutSeconds: 30, authToken: self.ttsAuthToken,
+                tlsParams: self.ttsTLSParams)
         }) {
             GatewayDiagnostics.log("talk incremental tts: provider=openai-tts")
             let finished = await OpenAITTSPlayerIOS.shared.play(
@@ -1800,16 +1805,19 @@ extension TalkModeManager {
             if let baseUrlStr = storedBaseUrl, !baseUrlStr.isEmpty, let baseUrl = URL(string: baseUrlStr) {
                 self.ttsBaseUrl = baseUrl
                 self.ttsAuthToken = nil
+                self.ttsTLSParams = nil
                 GatewayDiagnostics.log("talk reloadConfig: ttsBaseUrl=\(baseUrlStr) (direct)")
             } else if let httpBase = await gateway.currentHttpBaseURL(),
                       let authToken = await gateway.currentAuthToken() {
                 // No local TTS URL configured — route TTS through the gateway proxy.
                 self.ttsBaseUrl = httpBase
                 self.ttsAuthToken = authToken
+                self.ttsTLSParams = await gateway.currentTLSParams()
                 GatewayDiagnostics.log("talk reloadConfig: ttsBaseUrl=\(httpBase.absoluteString) (gateway proxy)")
             } else {
                 self.ttsBaseUrl = nil
                 self.ttsAuthToken = nil
+                self.ttsTLSParams = nil
                 GatewayDiagnostics.log("talk reloadConfig: ttsBaseUrl=nil (not configured)")
             }
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
@@ -1963,7 +1971,8 @@ extension TalkModeManager {
         voice: String,
         sampleRate: Int,
         timeoutSeconds: TimeInterval,
-        authToken: String? = nil
+        authToken: String? = nil,
+        tlsParams: GatewayTLSParams? = nil
     ) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -1990,7 +1999,13 @@ extension TalkModeManager {
                     sessionConfig.timeoutIntervalForRequest = timeoutSeconds
                     sessionConfig.timeoutIntervalForResource = timeoutSeconds + 30
                     sessionConfig.waitsForConnectivity = false
-                    let session = URLSession(configuration: sessionConfig)
+                    let session: URLSession
+                    if let tlsParams {
+                        let pinning = GatewayTLSPinningSession(params: tlsParams)
+                        session = URLSession(configuration: sessionConfig, delegate: pinning, delegateQueue: nil)
+                    } else {
+                        session = URLSession(configuration: sessionConfig)
+                    }
                     let (bytes, response) = try await session.bytes(for: req)
                     guard let http = response as? HTTPURLResponse else {
                         throw NSError(domain: "OpenAITTS", code: 1, userInfo: [

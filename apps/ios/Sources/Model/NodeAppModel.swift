@@ -1748,6 +1748,9 @@ extension NodeAppModel {
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
         let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
 
+        // Expose TLS params on the node session so TTS proxy HTTP requests can use the same pinning.
+        Task { await self.nodeGateway.setActiveTLSParams(tls) }
+
         self.activeGatewayConnectConfig = GatewayConnectConfig(
             url: url,
             stableID: stableID,
