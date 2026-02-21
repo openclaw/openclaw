@@ -186,7 +186,12 @@ export async function ensureSessionHeader(params: {
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+    senderIsOwner?: boolean;
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
@@ -195,10 +200,35 @@ export function buildBootstrapContextFiles(
   );
   let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
+
+  const isNonOwner = opts?.senderIsOwner === false;
+
   for (const file of files) {
     if (remainingTotalChars <= 0) {
       break;
     }
+
+    let content = file.content ?? "";
+    if (isNonOwner) {
+      // Privacy: strip content between <!-- OWNER_ONLY --> and <!-- /OWNER_ONLY -->
+      // for non-owner senders.
+      const startTag = "<!-- OWNER_ONLY -->";
+      const endTag = "<!-- /OWNER_ONLY -->";
+      let startIndex = content.indexOf(startTag);
+      while (startIndex !== -1) {
+        const endIndex = content.indexOf(endTag, startIndex + startTag.length);
+        const before = content.slice(0, startIndex);
+        if (endIndex === -1) {
+          // Unclosed tag: strip everything from the opening tag to end of content.
+          content = before + "[Content restricted to owner]";
+          break;
+        }
+        const after = content.slice(endIndex + endTag.length);
+        content = before + "[Content restricted to owner]" + after;
+        startIndex = content.indexOf(startTag);
+      }
+    }
+
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${file.path}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
@@ -219,7 +249,7 @@ export function buildBootstrapContextFiles(
       break;
     }
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const trimmed = trimBootstrapContent(content, file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
       continue;
