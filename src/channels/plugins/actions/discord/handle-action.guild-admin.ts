@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelMessageActionContext } from "../../types.js";
 import {
+  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -9,7 +11,6 @@ import {
   readDiscordModerationCommand,
 } from "../../../../agents/tools/discord-actions-moderation-shared.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
-import type { ChannelMessageActionContext } from "../../types.js";
 
 type Ctx = Pick<
   ChannelMessageActionContext,
@@ -195,6 +196,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const autoArchiveDuration = readNumberParam(actionParams, "autoArchiveDuration", {
       integer: true,
     });
+    const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {
         action: "channelEdit",
@@ -209,6 +211,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         archived,
         locked,
         autoArchiveDuration: autoArchiveDuration ?? undefined,
+        availableTags,
       },
       cfg,
     );
