@@ -1,0 +1,44 @@
+{{- if .Values.httpRoute.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ default (include "openclaw.fullname" .) .Values.httpRoute.name }}
+  namespace: {{ .Values.namespace.name | quote }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+    {{- with .Values.httpRoute.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.httpRoute.parentRefs }}
+  {{- fail "httpRoute.parentRefs is required when httpRoute.enabled=true" }}
+  {{- end }}
+  parentRefs:
+    {{- toYaml .Values.httpRoute.parentRefs | nindent 4 }}
+  {{- with .Values.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- if .Values.httpRoute.rules }}
+    {{- toYaml .Values.httpRoute.rules | nindent 4 }}
+    {{- else }}
+    - matches:
+        {{- toYaml .Values.httpRoute.matches | nindent 8 }}
+      {{- with .Values.httpRoute.filters }}
+      filters:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        {{- if .Values.httpRoute.backendRefs }}
+        {{- toYaml .Values.httpRoute.backendRefs | nindent 8 }}
+        {{- else }}
+        - name: {{ include "openclaw.fullname" . }}
+          port: {{ .Values.service.port }}
+        {{- end }}
+    {{- end }}
+{{- end }}

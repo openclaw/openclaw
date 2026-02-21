@@ -30,6 +30,7 @@ coverage
 *.log
 tmp
 **/tmp
+helm/
 
 # build artifacts
 dist

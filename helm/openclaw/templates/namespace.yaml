@@ -1,0 +1,8 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace.name | quote }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+{{- end }}
