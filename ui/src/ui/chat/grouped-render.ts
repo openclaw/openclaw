@@ -16,6 +16,8 @@ import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 type ImageBlock = {
   url: string;
   alt?: string;
+  width?: string;
+  height?: string;
 };
 
 function extractImages(message: unknown): ImageBlock[] {
@@ -38,21 +40,83 @@ function extractImages(message: unknown): ImageBlock[] {
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
+          images.push({
+            url,
+            width: sanitizeImageDimension(source.width),
+            height: sanitizeImageDimension(source.height),
+          });
         } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
+          images.push({
+            url: b.url,
+            width: sanitizeImageDimension((b as { width?: unknown }).width),
+            height: sanitizeImageDimension((b as { height?: unknown }).height),
+          });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+          images.push({
+            url: imageUrl.url,
+            width: sanitizeImageDimension((imageUrl as { width?: unknown }).width),
+            height: sanitizeImageDimension((imageUrl as { height?: unknown }).height),
+          });
         }
       }
     }
   }
 
   return images;
+}
+
+function sanitizeImageDimension(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return `${value}px`;
+  }
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  if (/^(?:\d+(?:\.\d+)?)(?:px|%)$/.test(trimmed) || /^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return /^\d+(?:\.\d+)?$/.test(trimmed) ? `${trimmed}px` : trimmed;
+  }
+  return;
+}
+
+function imageStyle(img: ImageBlock): string | undefined {
+  const styles: string[] = [];
+  if (img.width) {
+    styles.push(`--chat-message-image-width:${img.width}`);
+  }
+  if (img.height) {
+    styles.push(`--chat-message-image-height:${img.height}`);
+  }
+  return styles.length > 0 ? styles.join(";") + ";" : undefined;
+}
+
+function markMessageImageLoadFailed(event: Event) {
+  const image = event.currentTarget as HTMLImageElement | null;
+  const wrapper = image?.closest(".chat-message-image-wrap");
+  if (!wrapper) {
+    return;
+  }
+  wrapper.setAttribute("data-load-failed", "true");
+}
+
+function clearMessageImageLoadState(event: Event) {
+  const image = event.currentTarget as HTMLImageElement | null;
+  const wrapper = image?.closest(".chat-message-image-wrap");
+  if (!wrapper) {
+    return;
+  }
+  wrapper.removeAttribute("data-load-failed");
+}
+
+function openImage(imageUrl: string) {
+  window.open(imageUrl, "_blank");
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
@@ -204,12 +268,21 @@ function renderMessageImages(images: ImageBlock[]) {
     <div class="chat-message-images">
       ${images.map(
         (img) => html`
-          <img
-            src=${img.url}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => window.open(img.url, "_blank")}
-          />
+          <div class="chat-message-image-wrap">
+            <img
+              src=${img.url}
+              alt=${img.alt ?? "Attached image"}
+              class="chat-message-image"
+              loading="lazy"
+              style=${imageStyle(img) || nothing}
+              @error=${markMessageImageLoadFailed}
+              @load=${clearMessageImageLoadState}
+              @click=${() => openImage(img.url)}
+            />
+            <a class="chat-message-image__fallback" href=${img.url} target="_blank" rel="noreferrer noopener">
+              Open image
+            </a>
+          </div>
         `,
       )}
     </div>

@@ -241,17 +241,60 @@
   margin-bottom: 8px;
 }
 
+.chat-message-image-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-message-image-wrap[data-load-failed="true"] .chat-message-image {
+  display: none;
+}
+
+.chat-message-image-wrap[data-load-failed="true"] .chat-message-image__fallback {
+  display: inline-flex;
+}
+
 .chat-message-image {
-  max-width: 300px;
-  max-height: 200px;
+  --chat-message-image-width: min(100%, 320px);
+  --chat-message-image-height: min(70vh, 360px);
+  max-width: var(--chat-message-image-width);
+  max-height: var(--chat-message-image-height);
+  width: auto;
+  height: auto;
   border-radius: 8px;
   object-fit: contain;
   cursor: pointer;
   transition: transform 150ms ease-out;
 }
 
+.chat-message-image__fallback {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 8px;
+  padding: 0.5rem 0.85rem;
+  background: rgba(120, 144, 156, 0.14);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  text-decoration: none;
+  text-align: center;
+}
+
 .chat-message-image:hover {
   transform: scale(1.02);
+}
+
+.chat-text img {
+  width: auto;
+  height: auto;
+  max-width: min(100%, 100%);
+  max-height: min(70vh, 360px);
+  object-fit: contain;
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 /* User message images align right */
