@@ -255,6 +255,45 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       },
     },
   },
+  wati: {
+    id: "wati",
+    capabilities: {
+      chatTypes: ["direct"],
+      blockStreaming: true,
+    },
+    outbound: { textChunkLimit: 4000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) => {
+        const channel = cfg.channels?.wati as
+          | {
+              accounts?: Record<string, { allowFrom?: Array<string | number> }>;
+              allowFrom?: Array<string | number>;
+            }
+          | undefined;
+        const normalized = normalizeAccountId(accountId);
+        const account = resolveCaseInsensitiveAccount(channel?.accounts, normalized);
+        return (account?.allowFrom ?? channel?.allowFrom ?? []).map((entry) => String(entry));
+      },
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) => entry.replace(/^wati:/i, ""))
+          .map((entry) => entry.toLowerCase()),
+      resolveDefaultTo: ({ cfg, accountId }) => {
+        const channel = cfg.channels?.wati as
+          | { accounts?: Record<string, { defaultTo?: string }>; defaultTo?: string }
+          | undefined;
+        const normalized = normalizeAccountId(accountId);
+        const account = resolveCaseInsensitiveAccount(channel?.accounts, normalized);
+        return (account?.defaultTo ?? channel?.defaultTo)?.trim() || undefined;
+      },
+    },
+    groups: {
+      resolveRequireMention: () => false,
+      resolveToolPolicy: () => undefined,
+    },
+  },
   discord: {
     id: "discord",
     capabilities: {

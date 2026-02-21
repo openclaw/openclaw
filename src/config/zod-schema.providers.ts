@@ -11,6 +11,7 @@ import {
   SignalConfigSchema,
   SlackConfigSchema,
   TelegramConfigSchema,
+  WatiConfigSchema,
 } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
@@ -33,6 +34,7 @@ export const ChannelsSchema = z
       .optional(),
     modelByChannel: ChannelModelByChannelSchema,
     whatsapp: WhatsAppConfigSchema.optional(),
+    wati: WatiConfigSchema.optional(),
     telegram: TelegramConfigSchema.optional(),
     discord: DiscordConfigSchema.optional(),
     irc: IrcConfigSchema.optional(),

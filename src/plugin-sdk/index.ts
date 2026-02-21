@@ -461,5 +461,21 @@ export {
 } from "../line/markdown-to-line.js";
 export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
+// Channel: WATI
+export {
+  listWatiAccountIds,
+  resolveDefaultWatiAccountId,
+  resolveWatiAccount,
+  type ResolvedWatiAccount,
+} from "../wati/accounts.js";
+export { watiOnboardingAdapter } from "../channels/plugins/onboarding/wati.js";
+export { WatiConfigSchema } from "../config/zod-schema.providers-core.js";
+export { type WatiProbe } from "../wati/probe.js";
+export {
+  normalizeWatiMessagingTarget,
+  looksLikeWatiTargetId,
+} from "../channels/plugins/normalize/wati.js";
+export { collectWatiStatusIssues } from "../channels/plugins/status-issues/wati.js";
+
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

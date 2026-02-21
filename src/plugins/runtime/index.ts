@@ -128,6 +128,9 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
+import { monitorWatiProvider } from "../../wati/monitor.js";
+import { probeWati } from "../../wati/probe.js";
+import { sendMessageWati, sendTemplateMessageWati } from "../../wati/send.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
 import {
   getWebAuthAgeMs,
@@ -431,6 +434,12 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
       monitorLineProvider,
+    },
+    wati: {
+      sendMessageWati,
+      sendTemplateMessageWati,
+      probeWati,
+      monitorWatiProvider,
     },
   };
 }
