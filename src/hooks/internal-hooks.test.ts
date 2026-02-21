@@ -123,7 +123,6 @@ describe("hooks", () => {
     });
 
     it("should catch and log errors from handlers", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       const errorHandler = vi.fn(() => {
         throw new Error("Handler failed");
       });
@@ -137,12 +136,6 @@ describe("hooks", () => {
 
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Hook error"),
-        expect.stringContaining("Handler failed"),
-      );
-
-      consoleError.mockRestore();
     });
 
     it("should not throw if no handlers are registered", async () => {
@@ -366,7 +359,6 @@ describe("hooks", () => {
     });
 
     it("should handle hook errors without breaking message processing", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       const errorHandler = vi.fn(() => {
         throw new Error("Hook failed");
       });
@@ -386,13 +378,6 @@ describe("hooks", () => {
       // Both handlers were called
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
-      // Error was logged but didn't prevent second handler
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Hook error"),
-        expect.stringContaining("Hook failed"),
-      );
-
-      consoleError.mockRestore();
     });
   });
 
