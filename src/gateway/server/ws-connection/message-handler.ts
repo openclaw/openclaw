@@ -1050,7 +1050,7 @@ export function attachGatewayWsMessageHandler(params: {
           ok,
           method: req.method,
           errorCode: error?.code,
-          errorMessage: error?.message,
+          errorMessage: error ? formatForLog(error) : undefined,
           ...meta,
         });
       };

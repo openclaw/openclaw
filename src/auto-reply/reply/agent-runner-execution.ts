@@ -20,6 +20,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -246,7 +247,7 @@ export async function runAgentTurnWithFallback(params: {
                     phase: "error",
                     startedAt,
                     endedAt: Date.now(),
-                    error: String(err),
+                    error: formatErrorMessage(err),
                   },
                 });
                 lifecycleTerminalEmitted = true;
