@@ -532,12 +532,14 @@ Rotation checklist (token/password):
 ### 0.6) Tailscale Serve identity headers
 
 When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw
-accepts Tailscale Serve identity headers (`tailscale-user-login`) as
-authentication. OpenClaw verifies the identity by resolving the
+accepts Tailscale Serve identity headers (`tailscale-user-login`) for Control
+UI/WebSocket authentication. OpenClaw verifies the identity by resolving the
 `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`)
 and matching it to the header. This only triggers for requests that hit loopback
 and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
+HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
+still require token/password auth.
 
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
 Do not treat this as protection against hostile same-host processes. If untrusted
