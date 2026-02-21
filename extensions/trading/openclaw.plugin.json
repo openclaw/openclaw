@@ -1,0 +1,59 @@
+{
+  "id": "trading",
+  "uiHints": {
+    "provider": {
+      "label": "Broker Provider",
+      "help": "Use alpaca for live/paper trading, or mock for dev/no-network."
+    },
+    "apiKey": {
+      "label": "API Key",
+      "sensitive": true
+    },
+    "apiSecret": {
+      "label": "API Secret",
+      "sensitive": true
+    },
+    "paperTrading": {
+      "label": "Paper Trading",
+      "help": "Use Alpaca paper trading endpoint (recommended for testing)."
+    },
+    "baseUrl": {
+      "label": "Base URL Override",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable or disable the trading plugin."
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["alpaca", "mock"],
+        "default": "mock",
+        "description": "Broker provider to use."
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Broker API key."
+      },
+      "apiSecret": {
+        "type": "string",
+        "description": "Broker API secret."
+      },
+      "paperTrading": {
+        "type": "boolean",
+        "default": true,
+        "description": "Use paper trading endpoints."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Override the broker API base URL."
+      }
+    },
+    "additionalProperties": false
+  }
+}

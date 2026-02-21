@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/trading",
+  "version": "0.1.0",
+  "description": "OpenClaw trading plugin — portfolio tracking and price quotes via Alpaca Markets",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

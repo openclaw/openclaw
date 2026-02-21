@@ -237,3 +237,58 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+## Trading Plugin (`extensions/trading/`)
+
+Channel-agnostic plugin for portfolio tracking and price quotes via Alpaca Markets API (or mock provider for development).
+
+### Structure
+
+```
+extensions/trading/
+├── openclaw.plugin.json          # Plugin manifest + JSON Schema config
+├── package.json                  # @openclaw/trading (deps: @sinclair/typebox, zod)
+├── index.ts                      # Entry point — registers tools, commands, CLI, service
+└── src/
+    ├── config.ts                 # Zod schema, env resolution (ALPACA_API_KEY/SECRET), validation
+    ├── types.ts                  # Position, AccountInfo, Quote, BrokerProvider interface
+    ├── commands.ts               # /portfolio and /price auto-reply handlers (bypass LLM)
+    ├── cli.ts                    # CLI: openclaw trading status|portfolio|price <symbol>
+    └── providers/
+        ├── alpaca.ts             # Alpaca Markets REST API (paper + live)
+        └── mock.ts               # Mock provider with fictional AAPL/MSFT/BTC data
+```
+
+### Configuration
+
+```json
+{
+  "trading": {
+    "enabled": true,
+    "provider": "mock",
+    "paperTrading": true
+  }
+}
+```
+
+For Alpaca: set `provider: "alpaca"` and provide credentials via config (`apiKey`/`apiSecret`) or env vars (`ALPACA_API_KEY`/`ALPACA_API_SECRET`). Paper trading uses `paper-api.alpaca.markets`; live uses `api.alpaca.markets`.
+
+### Registered Components
+
+| Type    | Name                              | Description                              |
+| ------- | --------------------------------- | ---------------------------------------- |
+| Tool    | `trading_portfolio`               | Account + positions + P&L (for AI agent) |
+| Tool    | `trading_price`                   | Quote for a symbol (for AI agent)        |
+| Command | `/portfolio`                      | Portfolio summary bypassing LLM          |
+| Command | `/price <SYM>`                    | Price check bypassing LLM                |
+| CLI     | `openclaw trading status`         | Account info (JSON)                      |
+| CLI     | `openclaw trading portfolio`      | Account + positions (JSON)               |
+| CLI     | `openclaw trading price <symbol>` | Quote (JSON)                             |
+| Service | `trading`                         | Lazy provider initialization             |
+
+### Patterns Used
+
+- **Provider pattern**: `BrokerProvider` interface → `AlpacaProvider` + `MockProvider`
+- **Lazy init**: `ensureProvider()` creates provider on first use only
+- **Env fallback**: config values fall back to `ALPACA_API_KEY`/`ALPACA_API_SECRET`
+- **Object-form plugin**: `{ id, name, configSchema, register(api) }` default export
