@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveAgentMaxConcurrentPerConversation } from "../../config/agent-limits.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -48,7 +49,7 @@ import {
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
+import { resolveConversationLane, resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
@@ -191,10 +192,21 @@ export async function runEmbeddedPiAgent(
 ): Promise<EmbeddedPiRunResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  const convLane = resolveConversationLane({
+    channel: params.messageChannel,
+    accountId: params.agentAccountId,
+    peerId: params.messageTo,
+  });
+  if (convLane) {
+    setCommandLaneConcurrency(convLane, resolveAgentMaxConcurrentPerConversation(params.config));
+  }
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   const enqueueSession =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+  const enqueueConv = convLane
+    ? <T>(task: () => Promise<T>) => enqueueCommandInLane(convLane, task)
+    : <T>(task: () => Promise<T>) => task();
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -206,7 +218,8 @@ export async function runEmbeddedPiAgent(
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
   return enqueueSession(() =>
-    enqueueGlobal(async () => {
+    enqueueConv(() =>
+      enqueueGlobal(async () => {
       const started = Date.now();
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -1130,6 +1143,7 @@ export async function runEmbeddedPiAgent(
       } finally {
         process.chdir(prevCwd);
       }
-    }),
+    })),
+    ),
   );
 }
