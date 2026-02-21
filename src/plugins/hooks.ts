@@ -266,14 +266,36 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run agent_end hook.
-   * Allows plugins to analyze completed conversations.
-   * Runs in parallel (fire-and-forget).
+   * Provides ctx.injectMessage() for hooks to queue continuation messages.
+   * Returns injected messages array if any hooks called injectMessage().
    */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("agent_end", event, ctx);
+  ): Promise<string[]> {
+    const hooks = getHooks("agent_end");
+    if (hooks.length === 0) return [];
+
+    const injectedMessages: string[] = [];
+
+    // Create context with injectMessage method
+    const agentEndCtx: PluginHookAgentContext = {
+      ...ctx,
+      injectMessage: (message: string) => {
+        injectedMessages.push(message);
+      },
+    };
+
+    // Run hooks sequentially (like pi-mono)
+    for (const hook of hooks) {
+      try {
+        await hook.handler(event, agentEndCtx);
+      } catch (err) {
+        handleHookError(hook, err);
+      }
+    }
+
+    return injectedMessages;
   }
 
   /**

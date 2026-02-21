@@ -324,6 +324,8 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** Inject a user message to continue the agent loop. Only supported in agent_end hooks. */
+  injectMessage?: (message: string) => void;
 };
 
 // before_model_resolve hook
@@ -392,11 +394,12 @@ export type PluginHookLlmOutputEvent = {
 
 // agent_end hook
 export type PluginHookAgentEndEvent = {
-  messages: unknown[];
+  messages: AgentMessage[];
   success: boolean;
   error?: string;
   durationMs?: number;
 };
+
 
 // Compaction hooks
 export type PluginHookBeforeCompactionEvent = {
@@ -584,7 +587,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
-  agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  agent_end: (
+    event: PluginHookAgentEndEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookAgentEndResult | void> | PluginHookAgentEndResult | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
     ctx: PluginHookAgentContext,
