@@ -378,11 +378,11 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
     }
   });
-  it("defaults telegram.streaming to true when telegram section exists", async () => {
+  it("defaults telegram.streaming to false when telegram section exists", async () => {
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.streaming).toBe(true);
+      expect(res.config.channels?.telegram?.streaming).toBe(false);
       expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
     }
   });

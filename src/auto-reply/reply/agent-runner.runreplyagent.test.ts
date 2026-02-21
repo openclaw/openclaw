@@ -383,6 +383,50 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
+  it("suppresses partial streaming for NO_REPLY prefixes", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "NO_" });
+      await params.onPartialReply?.({ text: "NO_RE" });
+      await params.onPartialReply?.({ text: "NO_REPLY" });
+      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+    });
+
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply },
+      typingMode: "message",
+    });
+    await run();
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress partial streaming for normal 'No' prefixes", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "No" });
+      await params.onPartialReply?.({ text: "No, that is valid" });
+      return { payloads: [{ text: "No, that is valid" }], meta: {} };
+    });
+
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply },
+      typingMode: "message",
+    });
+    await run();
+
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply).toHaveBeenNthCalledWith(1, { text: "No", mediaUrls: undefined });
+    expect(onPartialReply).toHaveBeenNthCalledWith(2, {
+      text: "No, that is valid",
+      mediaUrls: undefined,
+    });
+    expect(typing.startTypingOnText).toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
   it("does not start typing on assistant message start without prior text in message mode", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onAssistantMessageStart?.();

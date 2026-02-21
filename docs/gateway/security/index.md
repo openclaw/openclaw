@@ -127,8 +127,9 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `gateway.http.no_auth`                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                     | `gateway.auth.mode`, `gateway.http.endpoints.*`               | no       |
 | `gateway.tools_invoke_http.dangerous_allow`   | warn/critical | Re-enables dangerous tools over HTTP API                                | `gateway.tools.allow`                                         | no       |
 | `gateway.tailscale_funnel`                    | critical      | Public internet exposure                                                | `gateway.tailscale.mode`                                      | no       |
-| `gateway.control_ui.insecure_auth`            | critical      | Insecure-auth toggle enabled                                            | `gateway.controlUi.allowInsecureAuth`                         | no       |
+| `gateway.control_ui.insecure_auth`            | warn          | Insecure-auth compatibility toggle enabled                              | `gateway.controlUi.allowInsecureAuth`                         | no       |
 | `gateway.control_ui.device_auth_disabled`     | critical      | Disables device identity check                                          | `gateway.controlUi.dangerouslyDisableDeviceAuth`              | no       |
+| `config.insecure_or_dangerous_flags`          | warn          | Any insecure/dangerous debug flags enabled                              | multiple keys (see finding detail)                            | no       |
 | `hooks.token_too_short`                       | warn          | Easier brute force on hook ingress                                      | `hooks.token`                                                 | no       |
 | `hooks.request_session_key_enabled`           | warn/critical | External caller can choose sessionKey                                   | `hooks.allowRequestSessionKey`                                | no       |
 | `hooks.request_session_key_prefixes_missing`  | warn/critical | No bound on external session key shapes                                 | `hooks.allowedSessionKeyPrefixes`                             | no       |
@@ -153,22 +154,48 @@ keep it off unless you are actively debugging and can revert quickly.
 
 `openclaw security audit` warns when this setting is enabled.
 
+## Insecure or dangerous flags summary
+
+`openclaw security audit` includes `config.insecure_or_dangerous_flags` when any
+insecure/dangerous debug switches are enabled. This warning aggregates the exact
+keys so you can review them in one place (for example
+`gateway.controlUi.allowInsecureAuth=true`,
+`gateway.controlUi.dangerouslyDisableDeviceAuth=true`,
+`hooks.gmail.allowUnsafeExternalContent=true`, or
+`tools.exec.applyPatch.workspaceOnly=false`).
+
 ## Reverse Proxy Configuration
 
 If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
 
-When the Gateway detects proxy headers (`X-Forwarded-For` or `X-Real-IP`) from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
+When the Gateway detects proxy headers from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
 
 ```yaml
 gateway:
   trustedProxies:
     - "127.0.0.1" # if your proxy runs on localhost
+  # Optional. Default false.
+  # Only enable if your proxy cannot provide X-Forwarded-For.
+  allowRealIpFallback: false
   auth:
     mode: password
     password: ${OPENCLAW_GATEWAY_PASSWORD}
 ```
 
-When `trustedProxies` is configured, the Gateway will use `X-Forwarded-For` headers to determine the real client IP for local client detection. Make sure your proxy overwrites (not appends to) incoming `X-Forwarded-For` headers to prevent spoofing.
+When `trustedProxies` is configured, the Gateway uses `X-Forwarded-For` to determine the client IP. `X-Real-IP` is ignored by default unless `gateway.allowRealIpFallback: true` is explicitly set.
+
+Good reverse proxy behavior (overwrite incoming forwarding headers):
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Real-IP $remote_addr;
+```
+
+Bad reverse proxy behavior (append/preserve untrusted forwarding headers):
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
 
 ## Local session logs live on disk
 
