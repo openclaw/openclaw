@@ -543,17 +543,41 @@ function maybeRepairDiscordNumericIds(
   // in the raw config text that exceed MAX_SAFE_INTEGER.  Multiple distinct IDs
   // can round to the same Number, so we store an array and shift() during repair
   // to consume them in file order (which matches JSON parse order).
+  // Only scan within the "discord" section of the raw text to avoid capturing
+  // numbers from unrelated config fields.
   const rawLookup = new Map<number, string[]>();
   if (rawText) {
-    for (const m of rawText.matchAll(/(?<!")(\b\d{16,}\b)(?!")/g)) {
-      const original = m[1];
-      const asNumber = Number(original);
-      if (String(asNumber) !== original) {
-        const existing = rawLookup.get(asNumber);
-        if (existing) {
-          existing.push(original);
-        } else {
-          rawLookup.set(asNumber, [original]);
+    let discordText: string | null = null;
+    // Match both quoted ("discord") and unquoted (discord) JSON5 keys
+    const discordKeyMatch = /(?:"|')?(discord)(?:"|')?\s*:/.exec(rawText);
+    const discordKeyIdx = discordKeyMatch?.index ?? -1;
+    if (discordKeyIdx !== -1) {
+      const braceStart = rawText.indexOf("{", discordKeyIdx);
+      if (braceStart !== -1) {
+        let depth = 1;
+        let i = braceStart + 1;
+        while (i < rawText.length && depth > 0) {
+          if (rawText[i] === "{") {
+            depth++;
+          } else if (rawText[i] === "}") {
+            depth--;
+          }
+          i++;
+        }
+        discordText = rawText.slice(braceStart, i);
+      }
+    }
+    if (discordText) {
+      for (const m of discordText.matchAll(/(?<!")(\b\d{16,}\b)(?!")/g)) {
+        const original = m[1];
+        const asNumber = Number(original);
+        if (String(asNumber) !== original) {
+          const existing = rawLookup.get(asNumber);
+          if (existing) {
+            existing.push(original);
+          } else {
+            rawLookup.set(asNumber, [original]);
+          }
         }
       }
     }
