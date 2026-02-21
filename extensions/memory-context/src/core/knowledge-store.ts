@@ -94,6 +94,25 @@ export class KnowledgeStore {
     return createHash("sha256").update(content.trim().toLowerCase()).digest("hex").slice(0, 16);
   }
 
+  /**
+   * Jaccard similarity between two texts using CJK-aware tokenization.
+   * Returns 0-1 where 1 means identical token sets.
+   */
+  private static jaccard(a: string, b: string): number {
+    const ta = new Set(KnowledgeStore.tokenize(a));
+    const tb = new Set(KnowledgeStore.tokenize(b));
+    if (ta.size === 0 || tb.size === 0) {
+      return 0;
+    }
+    let intersection = 0;
+    for (const t of ta) {
+      if (tb.has(t)) {
+        intersection++;
+      }
+    }
+    return intersection / (ta.size + tb.size - intersection);
+  }
+
   async init(): Promise<void> {
     if (this.initialized) {
       return;
@@ -167,6 +186,9 @@ export class KnowledgeStore {
 
   /**
    * Add a new fact. Returns the fact if added, or the existing one if duplicate.
+   * Uses two-level dedup:
+   *  1. Exact content hash — identical text after trim+lowercase
+   *  2. Fuzzy Jaccard — same type, token-set similarity > 0.8 → supersede older
    */
   async add(input: {
     type: KnowledgeFactType;
@@ -175,7 +197,7 @@ export class KnowledgeStore {
   }): Promise<KnowledgeFact> {
     await this.init();
 
-    // Dedup by content hash
+    // Level 1: Exact content hash dedup
     const hash = this.contentHash(input.content);
     const existingId = this.contentIndex.get(hash);
     if (existingId) {
@@ -193,10 +215,30 @@ export class KnowledgeStore {
       timestamp: Date.now(),
     };
 
+    // Level 2: Fuzzy dedup — find same-type fact with Jaccard > 0.8
+    // Supersede the older fact so the newer (presumably more accurate) one wins.
+    const FUZZY_THRESHOLD = 0.8;
+    let supersededId: string | undefined;
+    for (const [id, f] of this.facts) {
+      if (f.supersededBy || f.type !== input.type) {
+        continue;
+      }
+      if (KnowledgeStore.jaccard(f.content, input.content) >= FUZZY_THRESHOLD) {
+        supersededId = id;
+        break;
+      }
+    }
+
     this.facts.set(fact.id, fact);
     this.contentIndex.set(hash, fact.id);
     this.invalidateIdf();
     await this.appendLine(fact);
+
+    // Supersede after adding so the new fact ID is available
+    if (supersededId) {
+      await this.supersede(supersededId, fact.id);
+    }
+
     return fact;
   }
 

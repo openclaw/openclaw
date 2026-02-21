@@ -387,6 +387,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/memory-context:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/memory-core:
     devDependencies:
       openclaw:
