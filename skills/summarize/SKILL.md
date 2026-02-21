@@ -11,11 +11,19 @@ metadata:
         "install":
           [
             {
+              "id": "node",
+              "kind": "node",
+              "package": "@steipete/summarize",
+              "bins": ["summarize"],
+              "label": "Install summarize (npm)",
+            },
+            {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin"],
               "formula": "steipete/tap/summarize",
               "bins": ["summarize"],
-              "label": "Install summarize (brew)",
+              "label": "Install summarize (brew, macOS)",
             },
           ],
       },
