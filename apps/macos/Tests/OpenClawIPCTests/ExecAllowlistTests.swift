@@ -5,6 +5,35 @@ import Testing
 /// These cases cover optional `security=allowlist` behavior.
 /// Default install posture remains deny-by-default for exec on macOS node-host.
 struct ExecAllowlistTests {
+    private struct ShellParserParityFixture: Decodable {
+        struct Case: Decodable {
+            let id: String
+            let command: String
+            let ok: Bool
+            let executables: [String]
+        }
+
+        let cases: [Case]
+    }
+
+    private static func loadShellParserParityCases() throws -> [ShellParserParityFixture.Case] {
+        let fixtureURL = self.shellParserParityFixtureURL()
+        let data = try Data(contentsOf: fixtureURL)
+        let fixture = try JSONDecoder().decode(ShellParserParityFixture.self, from: data)
+        return fixture.cases
+    }
+
+    private static func shellParserParityFixtureURL() -> URL {
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            repoRoot.deleteLastPathComponent()
+        }
+        return repoRoot
+            .appendingPathComponent("test")
+            .appendingPathComponent("fixtures")
+            .appendingPathComponent("exec-allowlist-shell-parser-parity.json")
+    }
+
     @Test func matchUsesResolvedPath() {
         let entry = ExecAllowlistEntry(pattern: "/opt/homebrew/bin/rg")
         let resolution = ExecCommandResolution(
@@ -111,6 +140,24 @@ struct ExecAllowlistTests {
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)
+    }
+
+    @Test func resolveForAllowlistMatchesSharedShellParserFixture() throws {
+        let fixtures = try Self.loadShellParserParityCases()
+        for fixture in fixtures {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: ["/bin/sh", "-lc", fixture.command],
+                rawCommand: fixture.command,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+
+            #expect(!resolutions.isEmpty == fixture.ok)
+            if fixture.ok {
+                let executables = resolutions.map { $0.executableName.lowercased() }
+                let expected = fixture.executables.map { $0.lowercased() }
+                #expect(executables == expected)
+            }
+        }
     }
 
     @Test func resolveForAllowlistTreatsPlainShInvocationAsDirectExec() {
