@@ -21,7 +21,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   </Card>
 </CardGroup>
 
-## Quick setup
+## Onboarding
 
 <Steps>
   <Step title="Create the bot token in BotFather">
