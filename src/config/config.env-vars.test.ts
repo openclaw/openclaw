@@ -104,4 +104,78 @@ describe("config env vars", () => {
       });
     });
   });
+}
+
+  describe("lenient mode", () => {
+    it("preserves ${VAR} as literal when var is missing and lenient: true", () => {
+      const config = {
+        sandbox: {
+          docker: {
+            env: {
+              GITHUB_PAT: "${GITHUB_PAT}",
+            },
+          },
+        },
+      };
+      const envWithoutVar: NodeJS.ProcessEnv = {};
+      const result = resolveConfigEnvVars(config, envWithoutVar, { lenient: true }) as typeof config;
+      expect(result.sandbox.docker.env.GITHUB_PAT).toBe("${GITHUB_PAT}");
+    });
+
+    it("still substitutes vars that are present even in lenient mode", () => {
+      const config = {
+        sandbox: {
+          docker: {
+            env: {
+              GITHUB_PAT: "${GITHUB_PAT}",
+              OPENAI_API_KEY: "${OPENAI_API_KEY}",
+            },
+          },
+        },
+      };
+      const env: NodeJS.ProcessEnv = { GITHUB_PAT: "ghp_actual_value" };
+      const result = resolveConfigEnvVars(config, env, { lenient: true }) as typeof config;
+      // Present var is resolved normally
+      expect(result.sandbox.docker.env.GITHUB_PAT).toBe("ghp_actual_value");
+      // Missing var is preserved as literal
+      expect(result.sandbox.docker.env.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+    });
+
+    it("throws MissingEnvVarError for missing vars when lenient is not set (default behaviour)", () => {
+      const config = {
+        sandbox: {
+          docker: {
+            env: {
+              GITHUB_PAT: "${GITHUB_PAT}",
+            },
+          },
+        },
+      };
+      const envWithoutVar: NodeJS.ProcessEnv = {};
+      expect(() => resolveConfigEnvVars(config, envWithoutVar)).toThrow("Missing env var \"GITHUB_PAT\"");
+    });
+
+    it("preserves nested ${VAR} refs in arrays and objects when lenient", () => {
+      const config = {
+        agents: {
+          list: [
+            {
+              sandbox: {
+                docker: {
+                  env: {
+                    SECRET_ONE: "${SECRET_ONE}",
+                    SECRET_TWO: "${SECRET_TWO}",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      };
+      const result = resolveConfigEnvVars(config, {}, { lenient: true }) as typeof config;
+      expect(result.agents.list[0].sandbox.docker.env.SECRET_ONE).toBe("${SECRET_ONE}");
+      expect(result.agents.list[0].sandbox.docker.env.SECRET_TWO).toBe("${SECRET_TWO}");
+    });
+  });
+
 });
