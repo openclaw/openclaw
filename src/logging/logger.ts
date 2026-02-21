@@ -144,6 +144,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
             time: new Date().toISOString(),
           });
           fs.appendFileSync(settings.file, `${msg}\n`, { encoding: "utf8" });
+          currentFileBytes += Buffer.byteLength(msg, "utf8") + 1;
         }
         return;
       }
