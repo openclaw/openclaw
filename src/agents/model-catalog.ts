@@ -30,6 +30,10 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const GOOGLE_PROVIDER = "google";
+const GOOGLE_31_MODEL_ID = "gemini-3.1-pro-preview";
+const GOOGLE_31_MODEL_NAME = "Gemini 3.1 Pro Preview";
+const GOOGLE_31_CONTEXT_WINDOW = 1_000_000;
 
 function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   const hasSpark = models.some(
@@ -53,6 +57,24 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
     ...baseModel,
     id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
     name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+  });
+}
+
+function applyGoogle31ProPreviewFallback(models: ModelCatalogEntry[]): void {
+  const hasGoogle31 = models.some(
+    (entry) => entry.provider === GOOGLE_PROVIDER && entry.id.toLowerCase() === GOOGLE_31_MODEL_ID,
+  );
+  if (hasGoogle31) {
+    return;
+  }
+
+  models.push({
+    provider: GOOGLE_PROVIDER,
+    id: GOOGLE_31_MODEL_ID,
+    name: GOOGLE_31_MODEL_NAME,
+    reasoning: true,
+    contextWindow: GOOGLE_31_CONTEXT_WINDOW,
+    input: ["text", "image"],
   });
 }
 
@@ -140,6 +162,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       applyOpenAICodexSparkFallback(models);
+      applyGoogle31ProPreviewFallback(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
