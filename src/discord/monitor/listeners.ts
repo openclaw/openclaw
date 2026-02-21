@@ -4,23 +4,36 @@ import {
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
+  MessageUpdateListener,
   PresenceUpdateListener,
   type User,
 } from "@buape/carbon";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
+  allowListMatches,
+  isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
+  resolveDiscordMemberAccessState,
+  resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
-import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
-import { resolveDiscordChannelInfo } from "./message-utils.js";
+import {
+  formatDiscordReactionEmoji,
+  formatDiscordUserTag,
+  resolveDiscordSystemLocation,
+} from "./format.js";
+import { resolveDiscordChannelInfo, resolveDiscordMessageChannelId } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
+import { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } from "./threading.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -29,6 +42,8 @@ type Logger = ReturnType<typeof import("../../logging/subsystem.js").createSubsy
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
 export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) => Promise<void>;
+
+export type DiscordMessageUpdateEvent = Parameters<MessageUpdateListener["handle"]>[0];
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
@@ -39,6 +54,16 @@ type DiscordReactionListenerParams = {
   botUserId?: string;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+};
+
+type DiscordMessageUpdateListenerParams = DiscordReactionListenerParams & {
+  dmEnabled: boolean;
+  dmPolicy: DmPolicy;
+  allowFrom?: string[];
+  groupPolicy: GroupPolicy;
+  groupDmEnabled: boolean;
+  groupDmChannels?: string[];
+  allowBots: boolean;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
@@ -103,6 +128,22 @@ export class DiscordMessageListener extends MessageCreateListener {
   }
 }
 
+export class DiscordMessageUpdateListener extends MessageUpdateListener {
+  constructor(private params: DiscordMessageUpdateListenerParams) {
+    super();
+  }
+
+  async handle(data: DiscordMessageUpdateEvent, client: Client) {
+    await runDiscordMessageUpdateHandler({
+      data,
+      client,
+      handlerParams: this.params,
+      listener: this.constructor.name,
+      event: this.type,
+    });
+  }
+}
+
 export class DiscordReactionListener extends MessageReactionAddListener {
   constructor(private params: DiscordReactionListenerParams) {
     super();
@@ -137,6 +178,30 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 }
 
+async function runDiscordMessageUpdateHandler(params: {
+  data: DiscordMessageUpdateEvent;
+  client: Client;
+  handlerParams: DiscordMessageUpdateListenerParams;
+  listener: string;
+  event: string;
+}): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await handleDiscordMessageUpdateEvent({
+      data: params.data,
+      client: params.client,
+      handlerParams: params.handlerParams,
+    });
+  } finally {
+    logSlowDiscordListener({
+      logger: params.handlerParams.logger,
+      listener: params.listener,
+      event: params.event,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+}
+
 async function runDiscordReactionHandler(params: {
   data: DiscordReactionEvent;
   client: Client;
@@ -164,6 +229,223 @@ async function runDiscordReactionHandler(params: {
       event: params.event,
       durationMs: Date.now() - startedAt,
     });
+  }
+}
+
+async function handleDiscordMessageUpdateEvent(params: {
+  data: DiscordMessageUpdateEvent;
+  client: Client;
+  handlerParams: DiscordMessageUpdateListenerParams;
+}) {
+  const { data, client, handlerParams } = params;
+  try {
+    const message = data.message;
+    if (!message) {
+      return;
+    }
+    const editedTimestamp =
+      message.editedTimestamp ??
+      (data as { edited_timestamp?: string | null }).edited_timestamp ??
+      null;
+    if (!editedTimestamp) {
+      return;
+    }
+
+    const author =
+      message.author ?? (message as { rawData?: { author?: User | null } }).rawData?.author;
+    const authorId = author?.id ? String(author.id) : "";
+    if (handlerParams.botUserId && authorId && authorId === handlerParams.botUserId) {
+      return;
+    }
+    if (author?.bot && !handlerParams.allowBots) {
+      return;
+    }
+
+    const messageChannelId = resolveDiscordMessageChannelId({
+      message,
+      eventChannelId: data.channel_id,
+    });
+    if (!messageChannelId) {
+      return;
+    }
+
+    const channelInfo = await resolveDiscordChannelInfo(client, messageChannelId);
+    const isGuildMessage = Boolean(data.guild_id);
+    if (!channelInfo && !isGuildMessage) {
+      return;
+    }
+
+    const isDirectMessage = channelInfo?.type === ChannelType.DM;
+    const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
+
+    if (isDirectMessage) {
+      if (!handlerParams.dmEnabled) {
+        return;
+      }
+      if (handlerParams.dmPolicy === "disabled") {
+        return;
+      }
+      if (!authorId) {
+        return;
+      }
+      if (handlerParams.dmPolicy !== "open") {
+        const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+        const effectiveAllowFrom = [...(handlerParams.allowFrom ?? []), ...storeAllowFrom];
+        const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
+          "discord:",
+          "user:",
+          "pk:",
+        ]);
+        if (!allowList) {
+          return;
+        }
+        const authorTag = author ? formatDiscordUserTag(author as User) : undefined;
+        const allowed = allowListMatches(allowList, {
+          id: authorId,
+          name: author?.username ?? undefined,
+          tag: authorTag,
+        });
+        if (!allowed) {
+          return;
+        }
+      }
+    }
+
+    if (isGroupDm) {
+      if (!handlerParams.groupDmEnabled) {
+        return;
+      }
+      const channelName = channelInfo?.name ?? undefined;
+      const displayChannelName = channelName ?? messageChannelId;
+      const displayChannelSlug = displayChannelName ? normalizeDiscordSlug(displayChannelName) : "";
+      const groupDmAllowed = resolveGroupDmAllow({
+        channels: handlerParams.groupDmChannels,
+        channelId: messageChannelId,
+        channelName: displayChannelName,
+        channelSlug: displayChannelSlug,
+      });
+      if (!groupDmAllowed) {
+        return;
+      }
+    }
+
+    let threadParentId: string | undefined;
+    let threadParentName: string | undefined;
+    const threadChannel = resolveDiscordThreadChannel({
+      isGuildMessage,
+      message,
+      channelInfo,
+      messageChannelId,
+    });
+    if (threadChannel) {
+      const parentInfo = await resolveDiscordThreadParentInfo({
+        client,
+        threadChannel,
+        channelInfo,
+      });
+      threadParentId = parentInfo.id;
+      threadParentName = parentInfo.name;
+    }
+
+    const guildInfo = isGuildMessage
+      ? resolveDiscordGuildEntry({
+          guild: data.guild ?? undefined,
+          guildEntries: handlerParams.guildEntries,
+        })
+      : null;
+    if (
+      isGuildMessage &&
+      handlerParams.guildEntries &&
+      Object.keys(handlerParams.guildEntries).length > 0 &&
+      !guildInfo
+    ) {
+      return;
+    }
+
+    const channelName = channelInfo?.name ?? threadChannel?.name ?? undefined;
+    const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+    const parentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+    const channelConfig = isGuildMessage
+      ? resolveDiscordChannelConfigWithFallback({
+          guildInfo,
+          channelId: messageChannelId,
+          channelName,
+          channelSlug,
+          parentId: threadParentId,
+          parentName: threadParentName,
+          parentSlug,
+          scope: threadChannel ? "thread" : "channel",
+        })
+      : null;
+
+    if (isGuildMessage && channelConfig?.enabled === false) {
+      return;
+    }
+
+    const channelAllowlistConfigured =
+      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+    const channelAllowed = channelConfig?.allowed !== false;
+    if (
+      isGuildMessage &&
+      !isDiscordGroupAllowedByPolicy({
+        groupPolicy: handlerParams.groupPolicy,
+        guildAllowlisted: Boolean(guildInfo),
+        channelAllowlistConfigured,
+        channelAllowed,
+      })
+    ) {
+      return;
+    }
+    if (isGuildMessage && channelConfig?.allowed === false) {
+      return;
+    }
+
+    const memberRoles = (data as { member?: { roles?: string[] } }).member?.roles;
+    const memberRoleIds = Array.isArray(memberRoles)
+      ? memberRoles.map((roleId) => String(roleId))
+      : [];
+
+    const senderTag = author ? formatDiscordUserTag(author as User) : undefined;
+    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
+      memberRoleIds,
+      sender: {
+        id: authorId,
+        name: author?.username ?? undefined,
+        tag: senderTag,
+      },
+    });
+    if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
+      return;
+    }
+
+    const route = resolveAgentRoute({
+      cfg: handlerParams.cfg,
+      channel: "discord",
+      accountId: handlerParams.accountId,
+      guildId: data.guild_id ?? undefined,
+      memberRoleIds,
+      peer: {
+        kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+        id: isDirectMessage ? authorId : messageChannelId,
+      },
+      parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
+    });
+
+    const location = resolveDiscordSystemLocation({
+      isDirectMessage,
+      isGroupDm,
+      guild: data.guild ?? undefined,
+      channelName: channelName ?? messageChannelId,
+    });
+    const text = `Discord message edited in ${location}.`;
+    enqueueSystemEvent(text, {
+      sessionKey: route.sessionKey,
+      contextKey: `discord:message:edited:${messageChannelId}:${message.id}`,
+    });
+  } catch (err) {
+    handlerParams.logger.error(danger(`discord message update handler failed: ${String(err)}`));
   }
 }
 
