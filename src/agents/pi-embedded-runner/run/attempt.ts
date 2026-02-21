@@ -76,7 +76,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyExtraParamsToAgent, createSessionKeyHeaderWrapper } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeAntigravityThinkingBlocks,
@@ -668,6 +668,16 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+
+      // Inject X-Session-Key header so upstream reverse proxies can implement
+      // session-affine (sticky) routing for multi-turn conversations.
+      const effectiveSessionKey = params.sessionKey?.trim() || params.sessionId;
+      if (effectiveSessionKey) {
+        activeSession.agent.streamFn = createSessionKeyHeaderWrapper(
+          activeSession.agent.streamFn,
+          effectiveSessionKey,
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
