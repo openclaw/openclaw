@@ -384,7 +384,8 @@ export class KnowledgeStore {
    *  1. CJK stop-words are filtered out of query tokens.
    *  2. Each token is weighted by IDF — common tokens contribute little,
    *     rare/meaningful tokens dominate the score.
-   *  3. A minimum score threshold filters out weak matches.
+   *  3. Adaptive minimum score threshold — lowered for short queries (1-2
+   *     effective tokens) to prevent zero-result recall on conversational input.
    */
   search(query: string, limit = 25): KnowledgeFact[] {
     const queryTokens = [...new Set(KnowledgeStore.tokenize(query))];
@@ -411,8 +412,12 @@ export class KnowledgeStore {
       return []; // all query tokens are ultra-common → no useful search
     }
 
-    // Minimum score: at least 50% of IDF-weighted query must match
-    const minScore = 0.5;
+    // Adaptive minimum score based on effective query-token count.
+    // Short queries have few tokens after CJK bigram tokenization + IDF
+    // filtering, making it nearly impossible to reach a 0.5 threshold.
+    // Lower the bar for short queries so single-token matches still surface.
+    const nTokens = tokenWeights.length;
+    const minScore = nTokens <= 1 ? 0.15 : nTokens <= 2 ? 0.3 : 0.5;
 
     const scored: { fact: KnowledgeFact; score: number }[] = [];
     for (const f of this.facts.values()) {
@@ -434,7 +439,11 @@ export class KnowledgeStore {
 
     // Sort by IDF-weighted score descending, then by recency
     scored.sort((a, b) => b.score - a.score || b.fact.timestamp - a.fact.timestamp);
-    return scored.slice(0, limit).map((s) => s.fact);
+
+    // When the threshold is low (short queries), cap results more tightly
+    // to avoid flooding with marginally-relevant facts.
+    const effectiveLimit = nTokens <= 2 ? Math.min(limit, 10) : limit;
+    return scored.slice(0, effectiveLimit).map((s) => s.fact);
   }
 
   /**
