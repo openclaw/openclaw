@@ -3,6 +3,8 @@ export type SkillConfig = {
   apiKey?: string;
   env?: Record<string, string>;
   config?: Record<string, unknown>;
+  /** Arbitrary skill-defined config keys (e.g. host, defaultWarehouseId). */
+  [key: string]: string | boolean | Record<string, string> | Record<string, unknown> | undefined;
 };
 
 export type SkillsLoadConfig = {

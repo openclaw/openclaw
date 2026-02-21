@@ -160,6 +160,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       enabled?: boolean;
       apiKey?: string;
       env?: Record<string, string>;
+      config?: Record<string, string | number | boolean | null>;
     };
     const cfg = loadConfig();
     const skills = cfg.skills ? { ...cfg.skills } : {};
@@ -191,6 +192,19 @@ export const skillsHandlers: GatewayRequestHandlers = {
         }
       }
       current.env = nextEnv;
+    }
+    if (p.config && typeof p.config === "object") {
+      for (const [key, value] of Object.entries(p.config)) {
+        const trimmedKey = key.trim();
+        if (!trimmedKey || trimmedKey === "enabled" || trimmedKey === "apiKey" || trimmedKey === "env" || trimmedKey === "config") {
+          continue;
+        }
+        if (value === null || value === undefined) {
+          delete (current as Record<string, unknown>)[trimmedKey];
+        } else {
+          (current as Record<string, unknown>)[trimmedKey] = value;
+        }
+      }
     }
     entries[p.skillKey] = current;
     skills.entries = entries;

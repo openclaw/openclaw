@@ -114,11 +114,25 @@ function isWhitelistedSensitivePath(path: string): boolean {
   return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
 }
 
+/** Under skills.entries.<id>.* only apiKey is sensitive; other keys are skill-defined and not auto-redacted. */
+function isUnderSkillsEntries(path: string): boolean {
+  return path.startsWith("skills.entries.");
+}
+
 function matchesSensitivePattern(path: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
 export function isSensitiveConfigPath(path: string): boolean {
+  if (isUnderSkillsEntries(path)) {
+    const segments = path.split(".");
+    if (segments.length >= 3) {
+      const lastSegment = segments[segments.length - 1];
+      if (lastSegment !== "apiKey") {
+        return false;
+      }
+    }
+  }
   return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
 }
 

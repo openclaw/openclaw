@@ -20,28 +20,26 @@ describe("skills entries config schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("rejects unknown top-level fields", () => {
+  it("accepts arbitrary top-level fields on a skill entry (passthrough)", () => {
     const res = OpenClawSchema.safeParse({
       skills: {
         entries: {
           "custom-skill": {
             url: "https://example.invalid",
+            host: "api.example.com",
+            defaultWarehouseId: "wh-1",
           },
         },
       },
     });
 
-    expect(res.success).toBe(false);
-    if (res.success) {
+    expect(res.success).toBe(true);
+    if (!res.success) {
       return;
     }
-
-    expect(
-      res.error.issues.some(
-        (issue) =>
-          issue.path.join(".") === "skills.entries.custom-skill" &&
-          issue.message.toLowerCase().includes("unrecognized"),
-      ),
-    ).toBe(true);
+    const entry = res.data.skills?.entries?.["custom-skill"] as Record<string, unknown>;
+    expect(entry?.url).toBe("https://example.invalid");
+    expect(entry?.host).toBe("api.example.com");
+    expect(entry?.defaultWarehouseId).toBe("wh-1");
   });
 });

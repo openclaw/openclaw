@@ -204,6 +204,13 @@ export const SkillsUpdateParamsSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+    /** Arbitrary skill config keys (e.g. host, defaultWarehouseId). Merged into skills.entries[skillKey]. */
+    config: Type.Optional(
+      Type.Record(
+        NonEmptyString,
+        Type.Union(Type.String(), Type.Number(), Type.Boolean(), Type.Null()),
+      ),
+    ),
   },
   { additionalProperties: false },
 );
