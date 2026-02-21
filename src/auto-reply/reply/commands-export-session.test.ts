@@ -86,6 +86,8 @@ describe("buildExportSessionReply", () => {
     expect(html).not.toContain("MARKED_JS;");
     expect(html).not.toContain("HIGHLIGHT_JS;");
     expect(html).not.toContain("{{JS}}");
+    expect(html).toContain('class="system-prompt-full"');
+    expect(html).toContain("System Prompt");
 
     const sessionDataMatch = html.match(
       /<script id="session-data" type="application\/json">([^<]+)<\/script>/,
