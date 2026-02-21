@@ -11,20 +11,18 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
-const sendPollTelegram = vi.fn(async () => ({
-  messageId: "999",
-  chatId: "123",
-  pollId: "poll-1",
-}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
-  reactMessageTelegram,
-  sendMessageTelegram,
-  sendStickerTelegram,
-  sendPollTelegram,
-  deleteMessageTelegram,
+  reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
+    reactMessageTelegram(...args),
+  sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
+    sendMessageTelegram(...args),
+  sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
+    sendStickerTelegram(...args),
+  deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
+    deleteMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -55,7 +53,6 @@ describe("handleTelegramAction", () => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
-    sendPollTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -369,30 +366,6 @@ describe("handleTelegramAction", () => {
     );
   });
 
-  it("sends a poll", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
-        action: "poll",
-        to: "123",
-        question: "Ready?",
-        options: ["Yes", "No"],
-      },
-      cfg,
-    );
-    expect(sendPollTelegram).toHaveBeenCalledWith(
-      "123",
-      expect.objectContaining({
-        question: "Ready?",
-        options: ["Yes", "No"],
-        maxSelections: 1,
-      }),
-      expect.objectContaining({ token: "tok" }),
-    );
-  });
-
   it("respects deleteMessage gating", async () => {
     const cfg = {
       channels: {
@@ -622,6 +595,18 @@ describe("readTelegramButtons", () => {
 });
 
 describe("handleTelegramAction per-account gating", () => {
+  async function expectAccountStickerSend(cfg: OpenClawConfig, accountId = "media") {
+    await handleTelegramAction(
+      { action: "sendSticker", to: "123", fileId: "sticker-id", accountId },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker-id",
+      expect.objectContaining({ token: "tok-media" }),
+    );
+  }
+
   it("allows sticker when account config enables it", async () => {
     const cfg = {
       channels: {
@@ -632,16 +617,7 @@ describe("handleTelegramAction per-account gating", () => {
         },
       },
     } as OpenClawConfig;
-
-    await handleTelegramAction(
-      { action: "sendSticker", to: "123", fileId: "sticker-id", accountId: "media" },
-      cfg,
-    );
-    expect(sendStickerTelegram).toHaveBeenCalledWith(
-      "123",
-      "sticker-id",
-      expect.objectContaining({ token: "tok-media" }),
-    );
+    await expectAccountStickerSend(cfg);
   });
 
   it("blocks sticker when account omits it", async () => {
@@ -675,16 +651,7 @@ describe("handleTelegramAction per-account gating", () => {
         },
       },
     } as OpenClawConfig;
-
-    await handleTelegramAction(
-      { action: "sendSticker", to: "123", fileId: "sticker-id", accountId: "media" },
-      cfg,
-    );
-    expect(sendStickerTelegram).toHaveBeenCalledWith(
-      "123",
-      "sticker-id",
-      expect.objectContaining({ token: "tok-media" }),
-    );
+    await expectAccountStickerSend(cfg);
   });
 
   it("inherits top-level reaction gate when account overrides sticker only", async () => {

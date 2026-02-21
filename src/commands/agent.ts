@@ -558,7 +558,26 @@ export async function agentCommand(
             resolvedThinkLevel,
             timeoutMs,
             runId,
-            opts,
+            opts: {
+              ...opts,
+              streamParams: {
+                ...opts?.streamParams,
+                onReasoningStream:
+                  opts?.streamParams?.onReasoningStream ??
+                  ((token: string) => {
+                    try {
+                      const json =
+                        JSON.stringify({
+                          type: "mind_event",
+                          stream: "thought",
+                          data: { text: token },
+                          timestamp: Date.now(),
+                        }) + "\n";
+                      fs.writeSync(1, json);
+                    } catch {}
+                  }),
+              },
+            },
             runContext,
             spawnedBy,
             messageChannel,
@@ -597,19 +616,6 @@ export async function agentCommand(
               ) {
                 lifecycleEnded = true;
               }
-            },
-            onReasoningStream: (token) => {
-              // [NEW] Stream thinking events
-              try {
-                const json =
-                  JSON.stringify({
-                    type: "mind_event",
-                    stream: "thought",
-                    data: { text: token },
-                    timestamp: Date.now(),
-                  }) + "\n";
-                fs.writeSync(1, json);
-              } catch {}
             },
           });
         },

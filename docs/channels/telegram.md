@@ -21,7 +21,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   </Card>
 </CardGroup>
 
-## Quick setup
+## Onboarding
 
 <Steps>
   <Step title="Create the bot token in BotFather">
@@ -757,4 +757,5 @@ Telegram-specific high-signal fields:
 
 - [Pairing](/channels/pairing)
 - [Channel routing](/channels/channel-routing)
+- [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

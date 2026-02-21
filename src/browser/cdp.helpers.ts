@@ -113,6 +113,11 @@ function createCdpSender(ws: WebSocket) {
 }
 
 export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
+  const res = await fetchChecked(url, timeoutMs, init);
+  return (await res.json()) as T;
+}
+
+async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
@@ -121,24 +126,14 @@ export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: Request
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    return res;
   } finally {
     clearTimeout(t);
   }
 }
 
 export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-  } finally {
-    clearTimeout(t);
-  }
+  await fetchChecked(url, timeoutMs, init);
 }
 
 export async function withCdpSocket<T>(

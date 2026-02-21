@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 
 vi.mock("../plugins/hook-runner-global.js");
@@ -155,6 +156,31 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     await def.execute(
       "call-dedup",
       { url: "https://example.com" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires hook exactly once when tool goes through wrap + abort + toToolDefinitions", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;
+
+    const abortController = new AbortController();
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const withAbort = wrapToolWithAbortSignal(wrapped, abortController.signal);
+    const [def] = toToolDefinitions([withAbort]);
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-abort-dedup",
+      { command: "ls" },
       undefined,
       undefined,
       extensionContext,

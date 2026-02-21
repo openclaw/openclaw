@@ -115,6 +115,9 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
   - Webhook URL must use HTTPS.
   - Zalo sends events with `X-Bot-Api-Secret-Token` header for verification.
   - Gateway HTTP handles webhook requests at `channels.zalo.webhookPath` (defaults to the webhook URL path).
+  - Requests must use `Content-Type: application/json` (or `+json` media types).
+  - Duplicate events (`event_name + message_id`) are ignored for a short replay window.
+  - Burst traffic is rate-limited per path/source and may return HTTP 429.
 
 **Note:** getUpdates (polling) and webhook are mutually exclusive per Zalo API docs.
 

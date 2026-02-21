@@ -262,11 +262,8 @@ function buildPollSchema() {
   return {
     pollQuestion: Type.Optional(Type.String()),
     pollOption: Type.Optional(Type.Array(Type.String())),
-    pollDurationSeconds: Type.Optional(Type.Number()),
     pollDurationHours: Type.Optional(Type.Number()),
     pollMulti: Type.Optional(Type.Boolean()),
-    pollAnonymous: Type.Optional(Type.Boolean()),
-    pollPublic: Type.Optional(Type.Boolean()),
   };
 }
 
@@ -432,6 +429,7 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
+  requesterSenderId?: string;
 };
 
 function resolveMessageToolSchemaActions(params: {
@@ -659,6 +657,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action,
         params,
         defaultAccountId: accountId ?? undefined,
+        requesterSenderId: options?.requesterSenderId,
         gateway,
         toolContext,
         sessionKey: options?.agentSessionKey,

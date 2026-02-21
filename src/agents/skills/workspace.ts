@@ -32,6 +32,26 @@ const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
+/**
+ * Replace the user's home directory prefix with `~` in skill file paths
+ * to reduce system prompt token usage. Models understand `~` expansion,
+ * and the read tool resolves `~` to the home directory.
+ *
+ * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
+ *       → `~/.bun/.../skills/github/SKILL.md`
+ *
+ * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
+ */
+function compactSkillPaths(skills: Skill[]): Skill[] {
+  const home = os.homedir();
+  if (!home) return skills;
+  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  return skills.map((s) => ({
+    ...s,
+    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+  }));
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -448,7 +468,6 @@ export function buildWorkspaceSkillSnapshot(
   );
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
@@ -458,7 +477,11 @@ export function buildWorkspaceSkillSnapshot(
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
 
-  const prompt = [remoteNote, truncationNote, formatSkillsForPrompt(skillsForPrompt)]
+  const prompt = [
+    remoteNote,
+    truncationNote,
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+  ]
     .filter(Boolean)
     .join("\n");
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
@@ -467,6 +490,7 @@ export function buildWorkspaceSkillSnapshot(
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
+      requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
@@ -505,7 +529,7 @@ export function buildWorkspaceSkillsPrompt(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
-  return [remoteNote, truncationNote, formatSkillsForPrompt(skillsForPrompt)]
+  return [remoteNote, truncationNote, formatSkillsForPrompt(compactSkillPaths(skillsForPrompt))]
     .filter(Boolean)
     .join("\n");
 }

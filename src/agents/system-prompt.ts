@@ -1,3 +1,4 @@
+import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -13,6 +14,7 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: {
   skillsPrompt?: string;
@@ -78,7 +80,31 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
   if (!ownerLine || isMinimal) {
     return [];
   }
-  return ["## User Identity", ownerLine, ""];
+  return ["## Authorized Senders", ownerLine, ""];
+}
+
+function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
+  const hasSecret = ownerDisplaySecret?.trim();
+  const digest = hasSecret
+    ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
+    : createHash("sha256").update(ownerId).digest("hex");
+  return digest.slice(0, 12);
+}
+
+function buildOwnerIdentityLine(
+  ownerNumbers: string[],
+  ownerDisplay: OwnerIdDisplay,
+  ownerDisplaySecret?: string,
+) {
+  const normalized = ownerNumbers.map((value) => value.trim()).filter(Boolean);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  const displayOwnerNumbers =
+    ownerDisplay === "hash"
+      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
+      : normalized;
+  return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
@@ -100,6 +126,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
     "- [[reply_to_current]] replies to the triggering message.",
     "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
@@ -160,23 +187,6 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildLlmsTxtSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
-  if (params.isMinimal) {
-    return [];
-  }
-  if (!params.availableTools.has("web_fetch")) {
-    return [];
-  }
-  return [
-    "## llms.txt Discovery",
-    "When exploring a new domain or website (via web_fetch or browser), check for an llms.txt file that describes how AI agents should interact with the site:",
-    "- Try `/llms.txt` or `/.well-known/llms.txt` at the domain root",
-    "- If found, follow its guidance for interacting with that site's content and APIs",
-    "- llms.txt is an emerging standard (like robots.txt for AI) — not all sites have one, so don't warn if missing",
-    "",
-  ];
-}
-
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -201,6 +211,8 @@ export function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: OwnerIdDisplay;
+  ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
   toolSummaries?: Record<string, string>;
@@ -352,11 +364,12 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const ownerNumbers = (params.ownerNumbers ?? []).map((value) => value.trim()).filter(Boolean);
-  const ownerLine =
-    ownerNumbers.length > 0
-      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
-      : undefined;
+  const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
+  const ownerLine = buildOwnerIdentityLine(
+    params.ownerNumbers ?? [],
+    ownerDisplay,
+    params.ownerDisplaySecret,
+  );
   const reasoningHint = params.reasoningTagHint
     ? [
         "ALL internal reasoning MUST be inside <think>...</think>.",
@@ -571,7 +584,6 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
-    ...buildLlmsTxtSection({ isMinimal, availableTools }),
   ];
 
   if (extraSystemPrompt) {

@@ -2470,6 +2470,149 @@ describe("BlueBubbles webhook monitor", () => {
         }),
       );
     });
+
+    it("falls back to from-me webhook when send response has no message id", async () => {
+      mockEnqueueSystemEvent.mockClear();
+
+      const { sendMessageBlueBubbles } = await import("./send.js");
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+      });
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const inboundPayload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const inboundReq = createMockRequest("POST", "/bluebubbles-webhook", inboundPayload);
+      const inboundRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(inboundReq, inboundRes);
+      await flushAsync();
+
+      // Send response did not include a message id, so nothing should be enqueued yet.
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+
+      const fromMePayload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15557654321" },
+          isGroup: false,
+          isFromMe: true,
+          guid: "msg-out-456",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const fromMeReq = createMockRequest("POST", "/bluebubbles-webhook", fromMePayload);
+      const fromMeRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(fromMeReq, fromMeRes);
+      await flushAsync();
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        'Assistant sent "replying now" [message_id:2]',
+        expect.objectContaining({
+          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+        }),
+      );
+    });
+
+    it("matches from-me fallback by chatIdentifier when chatGuid is missing", async () => {
+      mockEnqueueSystemEvent.mockClear();
+
+      const { sendMessageBlueBubbles } = await import("./send.js");
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+      });
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const inboundPayload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const inboundReq = createMockRequest("POST", "/bluebubbles-webhook", inboundPayload);
+      const inboundRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(inboundReq, inboundRes);
+      await flushAsync();
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+
+      const fromMePayload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15557654321" },
+          isGroup: false,
+          isFromMe: true,
+          guid: "msg-out-789",
+          chatIdentifier: "+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const fromMeReq = createMockRequest("POST", "/bluebubbles-webhook", fromMePayload);
+      const fromMeRes = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(fromMeReq, fromMeRes);
+      await flushAsync();
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        'Assistant sent "replying now" [message_id:2]',
+        expect.objectContaining({
+          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+        }),
+      );
+    });
   });
 
   describe("reaction events", () => {

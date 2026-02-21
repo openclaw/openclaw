@@ -215,6 +215,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Weight for BM25 text relevance when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Multiplier for candidate pool size (default: 4).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
+    "Enable MMR re-ranking to reduce near-duplicate memory hits (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
+    "MMR relevance/diversity balance (0 = max diversity, 1 = max relevance, default: 0.7).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
+    "Enable exponential recency decay for hybrid scoring (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
+    "Half-life in days for temporal decay (default: 30).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
@@ -281,6 +289,17 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.installPath":
     "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
+  "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
+  "plugins.installs.*.resolvedVersion":
+    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
+  "plugins.installs.*.resolvedSpec":
+    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
+  "plugins.installs.*.integrity":
+    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.shasum":
+    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
+  "plugins.installs.*.resolvedAt":
+    "ISO timestamp when npm package metadata was last resolved for this install record.",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
@@ -290,6 +309,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageMaxDimensionPx":
+    "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
@@ -305,10 +326,14 @@ export const FIELD_HELP: Record<string, string> = {
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
+  "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
+  "commands.ownerDisplay":
+    "Controls how owner IDs are rendered in the system prompt. Allowed values: raw, hash. Default: raw.",
+  "commands.ownerDisplaySecret":
+    "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
@@ -331,6 +356,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow iMessage to write config in response to channel events/commands (default: true).",
   "channels.msteams.configWrites":
     "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
+  "channels.modelByChannel":
+    "Map provider -> channel id -> model override (values are provider/model or aliases).",
   ...IRC_FIELD_HELP,
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
@@ -352,6 +379,14 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
+  "messages.statusReactions":
+    "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
+  "messages.statusReactions.enabled":
+    "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+  "messages.statusReactions.emojis":
+    "Override default status reaction emojis. Keys: thinking, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
+  "messages.statusReactions.timing":
+    "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
@@ -364,6 +399,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Target max size for a Telegram stream preview chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
   "channels.telegram.draftChunk.breakPreference":
     "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
+  "channels.discord.streamMode":
+    "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
+  "channels.discord.draftChunk.minChars":
+    'Minimum chars before emitting a Discord stream preview update when channels.discord.streamMode="block" (default: 200).',
+  "channels.discord.draftChunk.maxChars":
+    'Target max size for a Discord stream preview chunk when channels.discord.streamMode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+  "channels.discord.draftChunk.breakPreference":
+    "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
   "channels.telegram.retry.minDelayMs": "Minimum retry delay in ms for Telegram outbound calls.",
@@ -397,6 +440,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
+  "channels.discord.voice.enabled":
+    "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+  "channels.discord.voice.autoJoin":
+    "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+  "channels.discord.voice.tts":
+    "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   "channels.discord.intents.presence":
     "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
   "channels.discord.intents.guildMembers":

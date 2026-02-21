@@ -1,6 +1,6 @@
-import type { Bot, Context } from "grammy";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Bot, Context } from "grammy";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
@@ -335,13 +335,15 @@ export const registerTelegramNativeCommands = ({
         return false;
       }
       if (!command.description) {
-        runtime.error?.(danger(`Telegram native command "/${command.name}" is missing a description.`));
+        runtime.error?.(
+          danger(`Telegram native command "/${command.name}" is missing a description.`),
+        );
         return false;
       }
       return true;
     });
   const reservedCommands = new Set(
-    listNativeCommandSpecs().map((command) => command.name.toLowerCase()),
+    listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
   );
   for (const command of skillCommands) {
     reservedCommands.add(command.name.toLowerCase());
@@ -357,7 +359,7 @@ export const registerTelegramNativeCommands = ({
   const pluginCommandSpecs = getPluginCommandSpecs();
   const existingCommands = new Set(
     [
-      ...nativeCommands.map((command) => command.name),
+      ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
       ...customCommands.map((command) => command.command),
     ].map((command) => command.toLowerCase()),
   );
@@ -369,10 +371,23 @@ export const registerTelegramNativeCommands = ({
     runtime.error?.(danger(issue));
   }
   const allCommandsFull: Array<{ command: string; description: string }> = [
-    ...nativeCommands.map((command) => ({
-      command: command.name,
-      description: command.description,
-    })),
+    ...nativeCommands
+      .map((command) => {
+        const normalized = normalizeTelegramCommandName(command.name);
+        if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
+          runtime.error?.(
+            danger(
+              `Native command "${command.name}" is invalid for Telegram (resolved to "${normalized}"). Skipping.`,
+            ),
+          );
+          return null;
+        }
+        return {
+          command: normalized,
+          description: command.description,
+        };
+      })
+      .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
     { command: "story", description: "Muestra el contenido actual de STORY.md" },
@@ -455,7 +470,8 @@ export const registerTelegramNativeCommands = ({
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
-        bot.command(command.name, async (ctx: TelegramNativeCommandContext) => {
+        const normalizedCommandName = normalizeTelegramCommandName(command.name);
+        bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {
             return;

@@ -227,6 +227,17 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   };
 };
 
+function resolveActiveErrorContext(params: {
+  lastAssistant: { provider?: string; model?: string } | undefined;
+  provider: string;
+  model: string;
+}): { provider: string; model: string } {
+  return {
+    provider: params.lastAssistant?.provider ?? params.provider,
+    model: params.lastAssistant?.model ?? params.model,
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -330,7 +341,11 @@ export async function runEmbeddedPiAgent(
         params.config,
       );
       if (!model) {
-        throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+        });
       }
 
       const ctxInfo = resolveContextWindowInfo({
@@ -623,10 +638,12 @@ export async function runEmbeddedPiAgent(
                   }
 
                   const { resolveModel } = await import("./model.js");
+                  const narrativeProviderParam = narrativeProvider || params.provider || "";
+                  const narrativeModelParam = narrativeModel || params.model || "";
                   const resolved = resolveModel(
-                    narrativeProvider,
-                    narrativeModel,
-                    agentDir,
+                    narrativeProviderParam,
+                    narrativeModelParam,
+                    params.agentDir ?? resolveOpenClawAgentDir(),
                     params.config,
                   );
 
@@ -785,14 +802,18 @@ export async function runEmbeddedPiAgent(
                         const allMessages = sm
                           .getBranch()
                           .filter(isMessageBranchEntry)
-                          .filter((entry) => entry.message?.role !== "system")
+                          .filter(
+                            (entry) =>
+                              (entry as Record<string, unknown>).message?.role !== "system",
+                          )
                           .map((entry) => ({
                             role:
-                              typeof entry.message?.role === "string"
-                                ? entry.message.role
+                              typeof (entry as Record<string, unknown>).message?.role === "string"
+                                ? (entry as Record<string, unknown>).message.role
                                 : undefined,
                             text: messageTextFromUnknown(
-                              entry.message?.text ?? entry.message?.content,
+                              (entry as Record<string, unknown>).message?.text ??
+                                (entry as Record<string, unknown>).message?.content,
                             ),
                             timestamp: entry.timestamp,
                           }));
@@ -864,8 +885,8 @@ export async function runEmbeddedPiAgent(
                           const { resolveModel } = await import("./model.js");
                           const { resolveOpenClawAgentDir } = await import("../agent-paths.js");
                           const resolved = resolveModel(
-                            narrativeProvider,
-                            narrativeModel,
+                            narrativeProvider || params.provider || "",
+                            narrativeModel || params.model || "",
                             params.agentDir ?? resolveOpenClawAgentDir(),
                             params.config,
                           );
@@ -992,6 +1013,7 @@ export async function runEmbeddedPiAgent(
               .join("\n\n"),
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
+            ownerDisplay: params.config?.commands?.ownerDisplay ?? "raw",
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             narrativeStory,
@@ -1014,11 +1036,17 @@ export async function runEmbeddedPiAgent(
           const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
+          const activeErrorContext = resolveActiveErrorContext({
+            lastAssistant,
+            provider,
+            model: modelId,
+          });
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
                 sessionKey: params.sessionKey ?? params.sessionId,
-                provider,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
               })
             : undefined;
           const assistantErrorText =
@@ -1384,7 +1412,8 @@ export async function runEmbeddedPiAgent(
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
-                      provider,
+                      provider: activeErrorContext.provider,
+                      model: activeErrorContext.model,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -1393,7 +1422,10 @@ export async function runEmbeddedPiAgent(
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? formatBillingErrorMessage(provider)
+                      ? formatBillingErrorMessage(
+                          activeErrorContext.provider,
+                          activeErrorContext.model,
+                        )
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -1402,8 +1434,8 @@ export async function runEmbeddedPiAgent(
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
-                provider,
-                model: modelId,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
               });
@@ -1438,7 +1470,8 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
-            provider,
+            provider: activeErrorContext.provider,
+            model: activeErrorContext.model,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
