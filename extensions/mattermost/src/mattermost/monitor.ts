@@ -468,7 +468,45 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
         if (!groupAllowedForCommands) {
-          logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
+          // Still record as pending history so other agents' replies
+          // appear as conversation context when this agent is @mentioned.
+          const earlyTeamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
+          const earlyRoute = core.channel.routing.resolveAgentRoute({
+            cfg,
+            channel: "mattermost",
+            accountId: account.accountId,
+            teamId: earlyTeamId,
+            peer: { kind, id: channelId },
+          });
+          const earlyThreadRootId = post.root_id?.trim() || undefined;
+          const earlyThreadKeys = resolveThreadSessionKeys({
+            baseSessionKey: earlyRoute.sessionKey,
+            threadId: earlyThreadRootId,
+            parentSessionKey: earlyThreadRootId ? earlyRoute.sessionKey : undefined,
+          });
+          const earlyHistoryKey = earlyThreadKeys.sessionKey;
+          const earlyBody =
+            rawText ||
+            (post.file_ids?.length
+              ? `[Mattermost ${post.file_ids.length === 1 ? "file" : "files"}]`
+              : "");
+          const earlyTrimmed = earlyBody.trim();
+          if (earlyHistoryKey && earlyTrimmed) {
+            recordPendingHistoryEntryIfEnabled({
+              historyMap: channelHistories,
+              limit: historyLimit,
+              historyKey: earlyHistoryKey,
+              entry: {
+                sender: senderName,
+                body: earlyTrimmed,
+                timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+                messageId: post.id ?? undefined,
+              },
+            });
+          }
+          logVerboseMessage(
+            `mattermost: drop group sender=${senderId} (not in groupAllowFrom, saved as pending history)`,
+          );
           return;
         }
       }
