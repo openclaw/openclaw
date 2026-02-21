@@ -53,7 +53,13 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  normalizeBasePath,
+  resolveNavGroupCollapseState,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+} from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -144,24 +150,32 @@ export function renderApp(state: AppViewState) {
       </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
         ${TAB_GROUPS.map((group) => {
-          const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-          const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+          const collapseState = resolveNavGroupCollapseState({
+            groupTabs: group.tabs,
+            activeTab: state.tab,
+            storedCollapsed: state.settings.navGroupsCollapsed[group.label] ?? false,
+          });
           return html`
-            <div class="nav-group ${isGroupCollapsed && !hasActiveTab ? "nav-group--collapsed" : ""}">
+            <div class="nav-group ${collapseState.collapsed ? "nav-group--collapsed" : ""}">
               <button
                 class="nav-label"
+                ?disabled=${!collapseState.canCollapse}
                 @click=${() => {
+                  if (!collapseState.canCollapse) {
+                    return;
+                  }
                   const next = { ...state.settings.navGroupsCollapsed };
-                  next[group.label] = !isGroupCollapsed;
+                  next[group.label] = !collapseState.storedCollapsed;
                   state.applySettings({
                     ...state.settings,
                     navGroupsCollapsed: next,
                   });
                 }}
-                aria-expanded=${!isGroupCollapsed}
+                aria-expanded=${!collapseState.collapsed}
+                aria-current=${collapseState.hasActiveTab ? "page" : null}
               >
                 <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
-                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
+                <span class="nav-label__chevron">${collapseState.collapsed ? "+" : "−"}</span>
               </button>
               <div class="nav-group__items">
                 ${group.tabs.map((tab) => renderTab(state, tab))}

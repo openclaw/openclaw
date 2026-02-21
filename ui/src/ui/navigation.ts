@@ -163,3 +163,25 @@ export function titleForTab(tab: Tab) {
 export function subtitleForTab(tab: Tab) {
   return t(`subtitles.${tab}`);
 }
+
+/**
+ * Determines the collapse state and interaction capabilities for a navigation group.
+ *
+ * A navigation group cannot be collapsed when the active tab belongs to it,
+ * ensuring the current page remains visible in the navigation.
+ */
+export function resolveNavGroupCollapseState(params: {
+  groupTabs: readonly string[];
+  activeTab: string;
+  storedCollapsed: boolean;
+}) {
+  const hasActiveTab = params.groupTabs.some((tab) => tab === params.activeTab);
+  const canCollapse = !hasActiveTab;
+  const collapsed = canCollapse && params.storedCollapsed;
+  return {
+    hasActiveTab,
+    canCollapse,
+    collapsed,
+    storedCollapsed: params.storedCollapsed,
+  };
+}

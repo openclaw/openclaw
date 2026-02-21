@@ -1,0 +1,1831 @@
+quality gate started: 2026-02-21T18:47:19Z
+repo: .
+==== pnpm install ====
+Scope: all 35 workspace projects
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +989
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 989, reused 988, downloaded 0, added 90
+Progress: resolved 989, reused 988, downloaded 0, added 425
+Progress: resolved 989, reused 988, downloaded 0, added 691
+Progress: resolved 989, reused 988, downloaded 0, added 932
+Progress: resolved 989, reused 988, downloaded 0, added 989, done
+
+dependencies:
++ @agentclientprotocol/sdk 0.14.1
++ @aws-sdk/client-bedrock 3.995.0
++ @buape/carbon 0.0.0-beta-20260216184201
++ @clack/prompts 1.0.1
++ @discordjs/opus 0.10.0
++ @discordjs/voice 0.19.0
++ @grammyjs/runner 2.0.3
++ @grammyjs/transformer-throttler 1.2.1
++ @homebridge/ciao 1.3.5
++ @line/bot-sdk 10.6.0
++ @lydell/node-pty 1.2.0-beta.3
++ @mariozechner/pi-agent-core 0.54.0
++ @mariozechner/pi-ai 0.54.0
++ @mariozechner/pi-coding-agent 0.54.0
++ @mariozechner/pi-tui 0.54.0
++ @mozilla/readability 0.6.0
++ @napi-rs/canvas 0.1.92
++ @sinclair/typebox 0.34.48
++ @slack/bolt 4.6.0
++ @slack/web-api 7.14.1
++ @whiskeysockets/baileys 7.0.0-rc.9
++ ajv 8.18.0
++ chalk 5.6.2
++ chokidar 5.0.0
++ cli-highlight 2.1.11
++ commander 14.0.3
++ croner 10.0.1
++ discord-api-types 0.38.40
++ dotenv 17.3.1
++ express 5.2.1
++ file-type 21.3.0
++ grammy 1.40.0
++ https-proxy-agent 7.0.6
++ jiti 2.6.1
++ json5 2.2.3
++ jszip 3.10.1
++ linkedom 0.18.12
++ long 5.3.2
++ markdown-it 14.1.1
++ node-edge-tts 1.2.10
++ node-llama-cpp 3.15.1
++ opusscript 0.0.8
++ osc-progress 0.3.0
++ pdfjs-dist 5.4.624
++ playwright-core 1.58.2
++ qrcode-terminal 0.12.0
++ sharp 0.34.5
++ sqlite-vec 0.1.7-alpha.2
++ tar 7.5.9
++ tslog 4.10.2
++ undici 7.22.0
++ ws 8.19.0
++ yaml 2.8.2
++ zod 4.3.6
+
+devDependencies:
++ @grammyjs/types 3.24.0
++ @lit-labs/signals 0.2.0
++ @lit/context 1.1.6
++ @types/express 5.0.6
++ @types/markdown-it 14.1.2
++ @types/node 25.3.0
++ @types/qrcode-terminal 0.12.2
++ @types/ws 8.18.1
++ @typescript/native-preview 7.0.0-dev.20260221.1
++ @vitest/coverage-v8 4.0.18
++ lit 3.3.2
++ oxfmt 0.34.0
++ oxlint 1.49.0
++ oxlint-tsgolint 0.14.2
++ signal-utils 0.21.1
++ tsdown 0.20.3
++ tsx 4.21.0
++ typescript 5.9.3
++ vitest 4.0.18
+
+╭ Warning ─────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│   Ignored build scripts: @discordjs/opus.                                    │
+│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+│   to run scripts.                                                            │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+. prepare$ command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0
+. prepare: Done
+Done in 4.9s using pnpm v10.23.0
+[PASS] pnpm install
+==== pnpm build ====
+
+> openclaw@2026.2.21 build /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.2.21 canvas:a2ui:bundle /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> bash scripts/bundle-a2ui.sh
+
+<DIR>/a2ui.bundle.js  chunk │ size: 537.00 kB
+
+✔ rolldown v1.0.0-rc.5 Finished in 51.04 ms
+ℹ tsdown v0.20.3 powered by rolldown v1.0.0-rc.3
+ℹ config file: /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831/tsdown.config.ts 
+ℹ entry: src/index.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/cli/daemon-cli.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/plugin-sdk/index.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/entry.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/infra/warning-filter.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/extensionAPI.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/plugin-sdk/account-id.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ entry: src/hooks/llm-slug-generator.ts, src/hooks/bundled/boot-md/handler.ts, src/hooks/bundled/bootstrap-extra-files/handler.ts, src/hooks/bundled/session-memory/handler.ts, src/hooks/bundled/command-logger/handler.ts
+ℹ target: node22.12.0
+ℹ tsconfig: tsconfig.json
+ℹ Build start
+ℹ dist/plugin-sdk/account-id.js  0.71 kB │ gzip: 0.35 kB
+ℹ 1 files, total: 0.71 kB
+ℹ dist/warning-filter.js  1.74 kB │ gzip: 0.64 kB
+ℹ 1 files, total: 1.74 kB
+✔ Build complete in 73ms
+✔ Build complete in 81ms
+ℹ dist/daemon-cli.js  519.21 kB │ gzip: 112.58 kB
+ℹ 1 files, total: 519.21 kB
+✔ Build complete in 371ms
+ℹ Granting execute permission to dist/index.js
+ℹ Granting execute permission to dist/entry.js
+ℹ dist/extensionAPI.js                          2.66 kB │ gzip:  1.10 kB
+ℹ dist/pi-embedded-C7e8N3IU.js               2743.67 kB
+ℹ dist/pi-embedded-helpers-CTAqk_Fp.js        273.45 kB │ gzip: 64.72 kB
+ℹ dist/config-BSw2EjDs.js                     218.90 kB │ gzip: 44.38 kB
+ℹ dist/manager-BDsq7-DQ.js                    131.32 kB │ gzip: 30.66 kB
+ℹ dist/model-selection-OjE3-TRY.js            129.98 kB │ gzip: 29.43 kB
+ℹ dist/send-COcLHOF_.js                       106.30 kB │ gzip: 25.38 kB
+ℹ dist/web-CSi30vXh.js                         81.23 kB │ gzip: 20.78 kB
+ℹ dist/send-DmSeDU0R.js                        71.45 kB │ gzip: 19.03 kB
+ℹ dist/runner-B8sg1G6G.js                      64.18 kB │ gzip: 15.38 kB
+ℹ dist/pw-ai-CDd_mLlz.js                       62.86 kB │ gzip: 15.02 kB
+ℹ dist/image-D3dRer_T.js                       59.37 kB │ gzip: 15.41 kB
+ℹ dist/chrome-BkwB96ur.js                      57.17 kB │ gzip: 14.61 kB
+ℹ dist/deliver-1mGtcQyL.js                     45.81 kB │ gzip: 11.33 kB
+ℹ dist/skills-DGte8gjC.js                      44.80 kB │ gzip: 11.59 kB
+ℹ dist/qmd-manager-DcWxj2CV.js                 40.53 kB │ gzip: 10.77 kB
+ℹ dist/registry-dD2_jBuv.js                    39.00 kB │ gzip: 11.51 kB
+ℹ dist/thinking-C0rsVu42.js                    34.06 kB │ gzip:  6.38 kB
+ℹ dist/commands-registry-Bn5Et9Wl.js           33.53 kB │ gzip:  7.55 kB
+ℹ dist/agent-scope-BwpIA8AB.js                 28.37 kB │ gzip:  7.41 kB
+ℹ dist/manifest-registry-DOlyZDjG.js           27.96 kB │ gzip:  6.79 kB
+ℹ dist/ir-C_UO7zX_.js                          27.38 kB │ gzip:  6.91 kB
+ℹ dist/image-ops-CK3EyTQS.js                   17.61 kB │ gzip:  5.18 kB
+ℹ dist/send-Bc85fMBv.js                        17.16 kB │ gzip:  5.09 kB
+ℹ dist/send-naCsCqql.js                        17.09 kB │ gzip:  4.59 kB
+ℹ dist/plugins-B15qlrXp.js                     15.63 kB │ gzip:  3.66 kB
+ℹ dist/send-Bfv0YvwY.js                        14.66 kB │ gzip:  4.36 kB
+ℹ dist/tool-loop-detection-CiuLuN6V.js         14.24 kB │ gzip:  3.59 kB
+ℹ dist/sqlite-Bly7DIKt.js                      13.47 kB │ gzip:  4.25 kB
+ℹ dist/chunk-BK8U4d_z.js                       13.12 kB │ gzip:  3.60 kB
+ℹ dist/subsystem-CGx2ESmP.js                   12.74 kB │ gzip:  3.84 kB
+ℹ dist/skill-commands-B3Fv1Eqj.js              12.12 kB │ gzip:  3.74 kB
+ℹ dist/ssrf-CxfFyMRZ.js                        11.10 kB │ gzip:  2.94 kB
+ℹ dist/local-roots-CkICMIko.js                 10.41 kB │ gzip:  3.53 kB
+ℹ dist/login-qr-C2s2gCWe.js                    10.41 kB │ gzip:  3.60 kB
+ℹ dist/diagnostic-oeJJuIfH.js                  10.13 kB │ gzip:  2.55 kB
+ℹ dist/resolve-route-9vI2fbvM.js                9.08 kB │ gzip:  2.56 kB
+ℹ dist/accounts-B7JHFO05.js                     8.86 kB │ gzip:  2.68 kB
+ℹ dist/tool-images-B7QCXVMD.js                  8.48 kB │ gzip:  2.61 kB
+ℹ dist/paths-Bp5uKvNR.js                        8.32 kB │ gzip:  2.25 kB
+ℹ dist/session-key-BCzIW1Y2.js                  7.88 kB │ gzip:  1.92 kB
+ℹ dist/outbound-BJjU2Eh-.js                     7.58 kB │ gzip:  2.42 kB
+ℹ dist/session-y3I2qscK.js                      6.51 kB │ gzip:  2.35 kB
+ℹ dist/reply-prefix-DQ6NFtvx.js                 6.47 kB │ gzip:  1.93 kB
+ℹ dist/target-errors-FQkZxYJw.js                6.24 kB │ gzip:  1.88 kB
+ℹ dist/paths-5iQF9bSz.js                        6.15 kB │ gzip:  1.66 kB
+ℹ dist/gemini-auth-DZVFjhPc.js                  5.80 kB │ gzip:  1.94 kB
+ℹ dist/replies-BvtUt9r5.js                      4.78 kB │ gzip:  1.55 kB
+ℹ dist/whatsapp-actions-BAxWeOmz.js             4.43 kB │ gzip:  1.59 kB
+ℹ dist/github-copilot-token-ttqQRqMA.js         4.15 kB │ gzip:  1.58 kB
+ℹ dist/inbound-context-QOi5vzUt.js              3.95 kB │ gzip:  1.15 kB
+ℹ dist/redact-1NGYV_8p.js                       3.87 kB │ gzip:  1.47 kB
+ℹ dist/pi-auth-json-BXE7xf_r.js                 3.84 kB │ gzip:  1.46 kB
+ℹ dist/channel-activity-BiOl3BoV.js             3.63 kB │ gzip:  1.20 kB
+ℹ dist/render-B1VqYyvo.js                       3.29 kB │ gzip:  1.14 kB
+ℹ dist/message-channel-On7Q-_2D.js              3.23 kB │ gzip:  1.07 kB
+ℹ dist/audio-preflight-DxwhkIb_.js              3.18 kB │ gzip:  1.34 kB
+ℹ dist/env-MtDjQbRJ.js                          3.04 kB │ gzip:  1.07 kB
+ℹ dist/retry-ZCtozxSf.js                        2.97 kB │ gzip:  1.07 kB
+ℹ dist/diagnostic-session-state-C1vRJs5w.js     2.56 kB │ gzip:  0.90 kB
+ℹ dist/login-CmY2YufM.js                        2.53 kB │ gzip:  1.12 kB
+ℹ dist/fetch-BMa0enEg.js                        2.44 kB │ gzip:  0.86 kB
+ℹ dist/command-poll-backoff-DtXYsHEc.js         2.27 kB │ gzip:  0.94 kB
+ℹ dist/store-DFTgk03B.js                        2.15 kB │ gzip:  1.02 kB
+ℹ dist/bindings-CouyEDd-.js                     2.14 kB │ gzip:  0.70 kB
+ℹ dist/polls-DQcEziPg.js                        1.96 kB │ gzip:  0.63 kB
+ℹ dist/accounts-Bbrx4iEQ.js                     1.80 kB │ gzip:  0.68 kB
+ℹ dist/accounts-fsYgfUsB.js                     1.77 kB │ gzip:  0.66 kB
+ℹ dist/markdown-tables-Cp2gx1N9.js              1.72 kB │ gzip:  0.70 kB
+ℹ dist/conversation-label-BShfMyKA.js           1.51 kB │ gzip:  0.63 kB
+ℹ dist/targets-DmSpDM4F.js                      1.48 kB │ gzip:  0.57 kB
+ℹ dist/active-listener-D0EIHDe6.js              1.39 kB │ gzip:  0.58 kB
+ℹ dist/fetch-timeout-BheTNyes.js                1.37 kB │ gzip:  0.70 kB
+ℹ dist/errors-CPfngF0S.js                       1.27 kB │ gzip:  0.55 kB
+ℹ dist/tables-DayZmw4B.js                       1.15 kB │ gzip:  0.57 kB
+ℹ dist/pi-model-discovery-j5tVLINv.js           1.06 kB │ gzip:  0.44 kB
+ℹ dist/tokens-7XcrbeWT.js                       0.88 kB │ gzip:  0.42 kB
+ℹ dist/transcript-events-C8Tqw4td.js            0.59 kB │ gzip:  0.29 kB
+ℹ dist/outbound-attachment-BZqoJtjR.js          0.57 kB │ gzip:  0.33 kB
+ℹ dist/proxy-BaSHbVlA.js                        0.48 kB │ gzip:  0.30 kB
+ℹ dist/rolldown-runtime-Cbj13DAv.js             0.42 kB │ gzip:  0.28 kB
+ℹ dist/chat-type-DFDuk3FY.js                    0.33 kB │ gzip:  0.20 kB
+ℹ 82 files, total: 4673.42 kB
+✔ Build complete in 624ms
+ℹ dist/plugin-sdk/index.js                               128.77 kB │ gzip: 30.83 kB
+ℹ dist/plugin-sdk/reply-xiDroFVD.js                     2755.41 kB
+ℹ dist/plugin-sdk/pi-embedded-helpers-D4LowsVF.js        272.96 kB │ gzip: 64.39 kB
+ℹ dist/plugin-sdk/config-CTp93rr7.js                     219.43 kB │ gzip: 44.60 kB
+ℹ dist/plugin-sdk/manager-CFOqxoey.js                    131.33 kB │ gzip: 30.68 kB
+ℹ dist/plugin-sdk/model-selection-OJUAhnpl.js            130.01 kB │ gzip: 29.29 kB
+ℹ dist/plugin-sdk/send-kteHuauN.js                       106.54 kB │ gzip: 25.45 kB
+ℹ dist/plugin-sdk/channel-web-Do7wpzWL.js                 82.30 kB │ gzip: 20.73 kB
+ℹ dist/plugin-sdk/send-DZPUr_p-.js                        72.26 kB │ gzip: 19.16 kB
+ℹ dist/plugin-sdk/runner-yG-JFEwl.js                      64.80 kB │ gzip: 15.58 kB
+ℹ dist/plugin-sdk/pw-ai-DaYlMTU7.js                       62.87 kB │ gzip: 15.02 kB
+ℹ dist/plugin-sdk/image-B1bFlP14.js                       59.37 kB │ gzip: 15.46 kB
+ℹ dist/plugin-sdk/chrome-uJ70ctNZ.js                      57.17 kB │ gzip: 14.60 kB
+ℹ dist/plugin-sdk/deliver-CEuc927s.js                     45.84 kB │ gzip: 11.35 kB
+ℹ dist/plugin-sdk/skills-DHgtld9F.js                      45.19 kB │ gzip: 11.74 kB
+ℹ dist/plugin-sdk/qmd-manager-IdShRKTi.js                 40.53 kB │ gzip: 10.77 kB
+ℹ dist/plugin-sdk/registry-BODM0liu.js                    39.27 kB │ gzip: 11.58 kB
+ℹ dist/plugin-sdk/thinking-CT0vXDJs.js                    36.16 kB │ gzip:  6.76 kB
+ℹ dist/plugin-sdk/commands-registry-BfeEJBpX.js           33.53 kB │ gzip:  7.55 kB
+ℹ dist/plugin-sdk/agent-scope-Xg97m-eH.js                 28.37 kB │ gzip:  7.41 kB
+ℹ dist/plugin-sdk/manifest-registry-BKc0Ujlf.js           27.96 kB │ gzip:  6.79 kB
+ℹ dist/plugin-sdk/ir-GLTSswZ6.js                          27.38 kB │ gzip:  6.90 kB
+ℹ dist/plugin-sdk/plugins-DibeMwuf.js                     25.94 kB │ gzip:  5.56 kB
+ℹ dist/plugin-sdk/image-ops-C-FmeLM-.js                   17.61 kB │ gzip:  5.17 kB
+ℹ dist/plugin-sdk/send-DZg8BbTr.js                        17.54 kB │ gzip:  4.70 kB
+ℹ dist/plugin-sdk/send-BuxGUhN5.js                        17.16 kB │ gzip:  5.12 kB
+ℹ dist/plugin-sdk/tool-loop-detection-CLbeYmBk.js         14.24 kB │ gzip:  3.59 kB
+ℹ dist/plugin-sdk/sqlite-BmIX4qWz.js                      13.47 kB │ gzip:  4.23 kB
+ℹ dist/plugin-sdk/chunk-DahOhGDR.js                       13.15 kB │ gzip:  3.60 kB
+ℹ dist/plugin-sdk/send-BvDBU4oB.js                        13.09 kB │ gzip:  3.95 kB
+ℹ dist/plugin-sdk/subsystem-CcWTQzT4.js                   12.85 kB │ gzip:  3.87 kB
+ℹ dist/plugin-sdk/skill-commands-DsXtTTtD.js              12.34 kB │ gzip:  3.82 kB
+ℹ dist/plugin-sdk/ssrf-DKZ8eBrk.js                        11.32 kB │ gzip:  2.95 kB
+ℹ dist/plugin-sdk/login-qr-X71Sr7wE.js                    10.42 kB │ gzip:  3.61 kB
+ℹ dist/plugin-sdk/local-roots-ClrRhF7x.js                 10.41 kB │ gzip:  3.53 kB
+ℹ dist/plugin-sdk/diagnostic-Dnq3k3ok.js                  10.33 kB │ gzip:  2.59 kB
+ℹ dist/plugin-sdk/resolve-route-CpkkvxQM.js                9.08 kB │ gzip:  2.56 kB
+ℹ dist/plugin-sdk/accounts-B4AwEIkX.js                     9.02 kB │ gzip:  2.71 kB
+ℹ dist/plugin-sdk/tool-images-KxE68Cxp.js                  8.48 kB │ gzip:  2.61 kB
+ℹ dist/plugin-sdk/paths-DVWx7USN.js                        8.32 kB │ gzip:  2.25 kB
+ℹ dist/plugin-sdk/session-key-C_0eELjb.js                  7.88 kB │ gzip:  1.92 kB
+ℹ dist/plugin-sdk/outbound-BKKOcG4e.js                     7.58 kB │ gzip:  2.41 kB
+ℹ dist/plugin-sdk/session-CWolI-Nl.js                      6.52 kB │ gzip:  2.35 kB
+ℹ dist/plugin-sdk/reply-prefix-Djwts-UR.js                 6.50 kB │ gzip:  1.94 kB
+ℹ dist/plugin-sdk/target-errors-WjRRqiUb.js                6.24 kB │ gzip:  1.87 kB
+ℹ dist/plugin-sdk/paths-BNQjLbn7.js                        6.15 kB │ gzip:  1.66 kB
+ℹ dist/plugin-sdk/api-key-rotation-BvdjF-CB.js             5.80 kB │ gzip:  1.96 kB
+ℹ dist/plugin-sdk/replies-B5-gixlU.js                      4.78 kB │ gzip:  1.55 kB
+ℹ dist/plugin-sdk/github-copilot-token-Cg0YPPSu.js         4.15 kB │ gzip:  1.59 kB
+ℹ dist/plugin-sdk/inbound-context-D5EzMeL_.js              3.95 kB │ gzip:  1.15 kB
+ℹ dist/plugin-sdk/redact-DPnDWsnT.js                       3.87 kB │ gzip:  1.47 kB
+ℹ dist/plugin-sdk/pi-auth-json-DqMEE-PG.js                 3.85 kB │ gzip:  1.47 kB
+ℹ dist/plugin-sdk/channel-activity-uMQNJ7J0.js             3.63 kB │ gzip:  1.20 kB
+ℹ dist/plugin-sdk/render-BiJZ5W4Z.js                       3.29 kB │ gzip:  1.14 kB
+ℹ dist/plugin-sdk/message-channel-CUaOB1wh.js              3.23 kB │ gzip:  1.07 kB
+ℹ dist/plugin-sdk/whatsapp-actions-DoGuTAnM.js             3.23 kB │ gzip:  1.28 kB
+ℹ dist/plugin-sdk/audio-preflight-CY85csRp.js              3.20 kB │ gzip:  1.35 kB
+ℹ dist/plugin-sdk/command-format-DlCJ6Vf_.js               3.04 kB │ gzip:  1.07 kB
+ℹ dist/plugin-sdk/retry-C-P8F-Uu.js                        2.97 kB │ gzip:  1.07 kB
+ℹ dist/plugin-sdk/store-DGNHfylD.js                        2.88 kB │ gzip:  1.29 kB
+ℹ dist/plugin-sdk/web-BeopIQDP.js                          2.58 kB │ gzip:  1.10 kB
+ℹ dist/plugin-sdk/diagnostic-session-state-Wd5tNeQG.js     2.56 kB │ gzip:  0.90 kB
+ℹ dist/plugin-sdk/login-DWGvSjh3.js                        2.54 kB │ gzip:  1.12 kB
+ℹ dist/plugin-sdk/fetch-b2Zm8y7X.js                        2.44 kB │ gzip:  0.86 kB
+ℹ dist/plugin-sdk/command-poll-backoff-CBq0jVRw.js         2.27 kB │ gzip:  0.94 kB
+ℹ dist/plugin-sdk/bindings-DEVKMeKf.js                     2.14 kB │ gzip:  0.70 kB
+ℹ dist/plugin-sdk/polls-3WJMd-G-.js                        1.96 kB │ gzip:  0.63 kB
+ℹ dist/plugin-sdk/accounts-Ca1fjBtk.js                     1.95 kB │ gzip:  0.69 kB
+ℹ dist/plugin-sdk/accounts-RCIdUtOX.js                     1.93 kB │ gzip:  0.70 kB
+ℹ dist/plugin-sdk/markdown-tables-DXOal6UY.js              1.72 kB │ gzip:  0.69 kB
+ℹ dist/plugin-sdk/conversation-label-yNSj43Jt.js           1.51 kB │ gzip:  0.63 kB
+ℹ dist/plugin-sdk/resolve-outbound-target-COH7wHsC.js      1.43 kB │ gzip:  0.56 kB
+ℹ dist/plugin-sdk/active-listener-CeeW7eBs.js              1.40 kB │ gzip:  0.58 kB
+ℹ dist/plugin-sdk/fetch-timeout-ChYuW7LE.js                1.37 kB │ gzip:  0.70 kB
+ℹ dist/plugin-sdk/errors-Bv8oZiTO.js                       1.27 kB │ gzip:  0.54 kB
+ℹ dist/plugin-sdk/tables-D0R3bNAK.js                       1.15 kB │ gzip:  0.57 kB
+ℹ dist/plugin-sdk/pi-model-discovery-LbcEa65a.js           1.06 kB │ gzip:  0.44 kB
+ℹ dist/plugin-sdk/tokens-B2zFpfuZ.js                       0.88 kB │ gzip:  0.42 kB
+ℹ dist/plugin-sdk/transcript-events-x1D4Vniz.js            0.59 kB │ gzip:  0.29 kB
+ℹ dist/plugin-sdk/outbound-attachment-m4SDqC56.js          0.57 kB │ gzip:  0.33 kB
+ℹ dist/plugin-sdk/proxy-MquBDehr.js                        0.48 kB │ gzip:  0.30 kB
+ℹ dist/plugin-sdk/rolldown-runtime-Cbj13DAv.js             0.42 kB │ gzip:  0.28 kB
+ℹ dist/plugin-sdk/chat-type-CEMQNtWX.js                    0.33 kB │ gzip:  0.20 kB
+ℹ 83 files, total: 4829.50 kB
+✔ Build complete in 627ms
+ℹ dist/bundled/session-memory/handler.js           10.31 kB │ gzip:  3.56 kB
+ℹ dist/bundled/boot-md/handler.js                   7.96 kB │ gzip:  2.84 kB
+ℹ dist/llm-slug-generator.js                        4.05 kB │ gzip:  1.80 kB
+ℹ dist/bundled/bootstrap-extra-files/handler.js     1.72 kB │ gzip:  0.72 kB
+ℹ dist/bundled/command-logger/handler.js            1.52 kB │ gzip:  0.75 kB
+ℹ dist/pi-embedded-8wmZtJ44.js                   2743.80 kB
+ℹ dist/pi-embedded-helpers-CBLaPgGy.js            273.39 kB │ gzip: 64.73 kB
+ℹ dist/config-Dtyi8tbK.js                         218.89 kB │ gzip: 44.38 kB
+ℹ dist/manager-DuQAGXXO.js                        131.31 kB │ gzip: 30.66 kB
+ℹ dist/model-auth-Baw-kdO1.js                     129.98 kB │ gzip: 29.48 kB
+ℹ dist/send-BqwHbkPb.js                           106.30 kB │ gzip: 25.37 kB
+ℹ dist/web-r2mBJAZ_.js                             81.34 kB │ gzip: 20.83 kB
+ℹ dist/send-CtHxmF9Q.js                            71.46 kB │ gzip: 19.04 kB
+ℹ dist/runner-B9kb1aBh.js                          64.14 kB │ gzip: 15.38 kB
+ℹ dist/pw-ai-BYnZi4cs.js                           62.93 kB │ gzip: 15.05 kB
+ℹ dist/image-CFfWPRX3.js                           59.36 kB │ gzip: 15.41 kB
+ℹ dist/chrome-GJa2DqgU.js                          57.19 kB │ gzip: 14.62 kB
+ℹ dist/deliver-NXeuUgwD.js                         45.81 kB │ gzip: 11.33 kB
+ℹ dist/qmd-manager-Cs49cAqA.js                     40.57 kB │ gzip: 10.78 kB
+ℹ dist/registry-BmY4gNy6.js                        39.58 kB │ gzip: 11.65 kB
+ℹ dist/skills-DLRwGFBf.js                          36.95 kB │ gzip:  9.78 kB
+ℹ dist/thinking-2XQ3oVP7.js                        34.06 kB │ gzip:  6.39 kB
+ℹ dist/commands-registry-Ih2B-UJw.js               33.52 kB │ gzip:  7.55 kB
+ℹ dist/manifest-registry-CY0aE-kW.js               27.78 kB │ gzip:  6.74 kB
+ℹ dist/ir-CqsnSacn.js                              27.38 kB │ gzip:  6.91 kB
+ℹ dist/workspace-C6WgTYr8.js                       24.88 kB │ gzip:  6.64 kB
+ℹ dist/image-ops-Di1Eegus.js                       17.58 kB │ gzip:  5.17 kB
+ℹ dist/send-BTukpu1n.js                            17.16 kB │ gzip:  5.09 kB
+ℹ dist/send-CQehcgXm.js                            17.09 kB │ gzip:  4.59 kB
+ℹ dist/plugins-TJvbNSdo.js                         15.64 kB │ gzip:  3.67 kB
+ℹ dist/send-DBUuFf4e.js                            14.66 kB │ gzip:  4.36 kB
+ℹ dist/tool-loop-detection-BjQsVGUc.js             14.24 kB │ gzip:  3.59 kB
+ℹ dist/sqlite-D-QJYTSW.js                          13.45 kB │ gzip:  4.24 kB
+ℹ dist/chunk-CWUSbsSi.js                           13.12 kB │ gzip:  3.60 kB
+ℹ dist/subsystem-B5g771Td.js                       12.74 kB │ gzip:  3.83 kB
+ℹ dist/skill-commands-CqCy8ids.js                  12.11 kB │ gzip:  3.75 kB
+ℹ dist/ssrf-BTMDZjHT.js                            11.10 kB │ gzip:  2.94 kB
+ℹ dist/login-qr-6RYklHlC.js                        10.48 kB │ gzip:  3.63 kB
+ℹ dist/local-roots-CiMZVqut.js                     10.46 kB │ gzip:  3.54 kB
+ℹ dist/diagnostic-D7GCxNJa.js                      10.13 kB │ gzip:  2.55 kB
+ℹ dist/resolve-route-iHUEniXo.js                    9.12 kB │ gzip:  2.58 kB
+ℹ dist/frontmatter-CdkBcBAo.js                      8.88 kB │ gzip:  2.66 kB
+ℹ dist/accounts-CfUI5fOs.js                         8.88 kB │ gzip:  2.69 kB
+ℹ dist/tool-images-VEoh5TwB.js                      8.48 kB │ gzip:  2.61 kB
+ℹ dist/paths-CyR9Pa1R.js                            8.32 kB │ gzip:  2.25 kB
+ℹ dist/session-key-BCzIW1Y2.js                      7.88 kB │ gzip:  1.92 kB
+ℹ dist/outbound-Cb5pNEIA.js                         7.58 kB │ gzip:  2.42 kB
+ℹ dist/session-CK-lGxXO.js                          6.52 kB │ gzip:  2.35 kB
+ℹ dist/reply-prefix-BmXR6pJV.js                     6.47 kB │ gzip:  1.93 kB
+ℹ dist/target-errors-BGjeS36u.js                    6.24 kB │ gzip:  1.87 kB
+ℹ dist/paths-BEAbheM8.js                            6.15 kB │ gzip:  1.66 kB
+ℹ dist/gemini-auth-2NE_xKk0.js                      5.79 kB │ gzip:  1.94 kB
+ℹ dist/agent-scope-BaNPxUDt.js                      5.41 kB │ gzip:  1.56 kB
+ℹ dist/replies-Co2kW1zx.js                          4.78 kB │ gzip:  1.55 kB
+ℹ dist/whatsapp-actions-C7O7hhdk.js                 4.51 kB │ gzip:  1.61 kB
+ℹ dist/github-copilot-token-Dgb9dAHW.js             4.15 kB │ gzip:  1.58 kB
+ℹ dist/inbound-context-BlHX0H3E.js                  3.95 kB │ gzip:  1.15 kB
+ℹ dist/pi-auth-json-JwKuLE-n.js                     3.91 kB │ gzip:  1.50 kB
+ℹ dist/redact-jSxx6Ep2.js                           3.87 kB │ gzip:  1.47 kB
+ℹ dist/channel-activity--Llibokq.js                 3.63 kB │ gzip:  1.20 kB
+ℹ dist/render-CDCvpfhh.js                           3.29 kB │ gzip:  1.14 kB
+ℹ dist/audio-preflight-DJZMNFLK.js                  3.29 kB │ gzip:  1.39 kB
+ℹ dist/message-channel-CQCCb6Xy.js                  3.23 kB │ gzip:  1.07 kB
+ℹ dist/retry-C1grpecz.js                            2.97 kB │ gzip:  1.07 kB
+ℹ dist/diagnostic-session-state-Bxo4UHOL.js         2.56 kB │ gzip:  0.90 kB
+ℹ dist/login-BXrZItg7.js                            2.54 kB │ gzip:  1.12 kB
+ℹ dist/fetch-DtI0mtzx.js                            2.44 kB │ gzip:  0.86 kB
+ℹ dist/command-poll-backoff-Bup9wS1y.js             2.27 kB │ gzip:  0.94 kB
+ℹ dist/command-format-Ck2WauwF.js                   2.25 kB │ gzip:  0.86 kB
+ℹ dist/bindings-t1-P4kBT.js                         2.14 kB │ gzip:  0.71 kB
+ℹ dist/store-BhpNzGEt.js                            2.14 kB │ gzip:  1.02 kB
+ℹ dist/polls-CCuCaqgv.js                            1.96 kB │ gzip:  0.63 kB
+ℹ dist/accounts-KXQIhk1d.js                         1.80 kB │ gzip:  0.68 kB
+ℹ dist/accounts-nMA3v-oF.js                         1.77 kB │ gzip:  0.66 kB
+ℹ dist/markdown-tables-PH0_9MSV.js                  1.72 kB │ gzip:  0.69 kB
+ℹ dist/conversation-label-DXUkoKcB.js               1.51 kB │ gzip:  0.63 kB
+ℹ dist/targets-CFovdgJI.js                          1.48 kB │ gzip:  0.57 kB
+ℹ dist/active-listener-D7gm28o1.js                  1.40 kB │ gzip:  0.58 kB
+ℹ dist/fetch-timeout-DL3f_O53.js                    1.37 kB │ gzip:  0.70 kB
+ℹ dist/errors-BoQgnc8X.js                           1.27 kB │ gzip:  0.55 kB
+ℹ dist/tables-B5n9kpwW.js                           1.15 kB │ gzip:  0.56 kB
+ℹ dist/pi-model-discovery-DaNAekda.js               1.06 kB │ gzip:  0.44 kB
+ℹ dist/tokens-xJsz2RTu.js                           0.88 kB │ gzip:  0.42 kB
+ℹ dist/boolean-B8-BqKGQ.js                          0.86 kB │ gzip:  0.38 kB
+ℹ dist/transcript-events-DDYvbmRV.js                0.59 kB │ gzip:  0.29 kB
+ℹ dist/outbound-attachment-B7UkTnbO.js              0.57 kB │ gzip:  0.32 kB
+ℹ dist/proxy-CBJ1upuz.js                            0.48 kB │ gzip:  0.30 kB
+ℹ dist/rolldown-runtime-Cbj13DAv.js                 0.42 kB │ gzip:  0.28 kB
+ℹ dist/chat-type-C_KiWNAH.js                        0.33 kB │ gzip:  0.20 kB
+ℹ dist/config-ClSsetRi.js                           0.32 kB │ gzip:  0.21 kB
+ℹ dist/legacy-names-Bn-k7U5-.js                     0.26 kB │ gzip:  0.17 kB
+ℹ 91 files, total: 4700.98 kB
+✔ Build complete in 628ms
+ℹ dist/index.js                                       23.56 kB │ gzip:   9.16 kB
+ℹ dist/reply-ruFjCQOs.js                            2572.06 kB
+ℹ dist/gateway-cli-AK4Pa4vx.js                       775.67 kB │ gzip: 185.33 kB
+ℹ dist/config-LKvtD-ha.js                            222.47 kB │ gzip:  45.27 kB
+ℹ dist/model-selection-D3ukzNMJ.js                   141.13 kB │ gzip:  31.86 kB
+ℹ dist/manager-Bj-xyZ7q.js                           131.32 kB │ gzip:  30.66 kB
+ℹ dist/audit-DwvTKt9J.js                             117.46 kB │ gzip:  28.02 kB
+ℹ dist/send-BjHtpkgJ.js                              106.30 kB │ gzip:  25.43 kB
+ℹ dist/tui-CrMMWSxp.js                               101.04 kB │ gzip:  24.03 kB
+ℹ dist/models-cli-THF0mGDH.js                         98.00 kB │ gzip:  23.68 kB
+ℹ dist/client-DxXj-g8m.js                             87.57 kB │ gzip:  16.30 kB
+ℹ dist/sandbox-Btfb742y.js                            80.21 kB │ gzip:  19.77 kB
+ℹ dist/channel-web-CuEcbpCX.js                        79.73 kB │ gzip:  20.06 kB
+ℹ dist/prompt-select-styled-uQ79MXnQ.js               78.44 kB │ gzip:  21.18 kB
+ℹ dist/status-Cl8qBjLa.js                             76.15 kB │ gzip:  19.52 kB
+ℹ dist/auth-choice-C8Ul4cyT.js                        74.80 kB │ gzip:  13.63 kB
+ℹ dist/sessions-gCFaZkYo.js                           72.99 kB │ gzip:  18.95 kB
+ℹ dist/browser-cli---xtOMbl.js                        66.81 kB │ gzip:  12.36 kB
+ℹ dist/runner-Bl4d8l3L.js                             63.70 kB │ gzip:  15.31 kB
+ℹ dist/pw-ai-CJTRYD9H.js                              63.02 kB │ gzip:  15.09 kB
+ℹ dist/send-C8OM05Vc.js                               60.07 kB │ gzip:  16.28 kB
+ℹ dist/routes-BM5aLPZX.js                             56.89 kB │ gzip:  10.99 kB
+ℹ dist/channels-cli-Cxpe9ZGQ.js                       56.14 kB │ gzip:  14.81 kB
+ℹ dist/chrome-D291AR5n.js                             54.53 kB │ gzip:  13.78 kB
+ℹ dist/health-BHwwI-Ku.js                             53.61 kB │ gzip:  12.77 kB
+ℹ dist/nodes-cli-CsBI_SHV.js                          53.25 kB │ gzip:  11.95 kB
+ℹ dist/doctor-config-flow-z1-6An1a.js                 50.84 kB │ gzip:  11.54 kB
+ℹ dist/update-cli-Cp2fcu5m.js                         49.22 kB │ gzip:  14.35 kB
+ℹ dist/exec-approvals-CAr0jd5Q.js                     45.29 kB │ gzip:  10.68 kB
+ℹ dist/node-cli--1i55PGd.js                           44.26 kB │ gzip:  11.90 kB
+ℹ dist/deliver-CN7Gv9zx.js                            43.86 kB │ gzip:  10.79 kB
+ℹ dist/acp-cli-8209YQm8.js                            43.15 kB │ gzip:  11.46 kB
+ℹ dist/pi-embedded-helpers-BkRhRAbY.js                43.10 kB │ gzip:  11.29 kB
+ℹ dist/register.agent-CQFbGYRT.js                     41.66 kB │ gzip:  11.48 kB
+ℹ dist/qmd-manager-B9BKW9OH.js                        40.59 kB │ gzip:  10.80 kB
+ℹ dist/onboard-C48-Fbcl.js                            40.18 kB │ gzip:   8.49 kB
+ℹ dist/auth-token-4izNQ8Bg.js                         37.87 kB │ gzip:   6.89 kB
+ℹ dist/skills-DF14CP8t.js                             37.60 kB │ gzip:   9.93 kB
+ℹ dist/hooks-cli-syhcKGCr.js                          37.14 kB │ gzip:   9.42 kB
+ℹ dist/tool-display-BvrygsZB.js                       36.31 kB │ gzip:   8.81 kB
+ℹ dist/server-context-elLZbdeu.js                     34.36 kB │ gzip:   8.75 kB
+ℹ dist/memory-cli-9_XJrDV3.js                         34.13 kB │ gzip:   8.63 kB
+ℹ dist/register.message-svZ8tt4Y.js                   33.86 kB │ gzip:   8.34 kB
+ℹ dist/commands-registry-Bp-_uSyW.js                  32.05 kB │ gzip:   7.26 kB
+ℹ dist/configure-ChWlQwuX.js                          31.92 kB │ gzip:   8.67 kB
+ℹ dist/daemon-cli-PkyUl-iC.js                         31.73 kB │ gzip:   8.54 kB
+ℹ dist/plugins-cli-CeBeWzZW.js                        30.05 kB │ gzip:   8.40 kB
+ℹ dist/manifest-registry-D2lPzXIl.js                  29.96 kB │ gzip:   7.24 kB
+ℹ dist/dock-SQwuNDYw.js                               29.36 kB │ gzip:   5.38 kB
+ℹ dist/ir-BsKYH-lb.js                                 27.41 kB │ gzip:   6.92 kB
+ℹ dist/cron-cli-B5lsF56W.js                           25.92 kB │ gzip:   6.46 kB
+ℹ dist/push-apns-CGbVAmKP.js                          25.50 kB │ gzip:   7.07 kB
+ℹ dist/session-dirs-CDtYk6k3.js                       25.31 kB │ gzip:   5.66 kB
+ℹ dist/session-cost-usage-CNxpZ3DJ.js                 25.10 kB │ gzip:   5.99 kB
+ℹ dist/service-6NL-JAsm.js                            23.77 kB │ gzip:   6.16 kB
+ℹ dist/skill-commands-DctUiVqT.js                     22.78 kB │ gzip:   6.13 kB
+ℹ dist/onboard-channels-C9fSaMQE.js                   22.73 kB │ gzip:   5.86 kB
+ℹ dist/sandbox-cli-B83OEgrg.js                        22.34 kB │ gzip:   5.81 kB
+ℹ dist/registry-B-j4DRfe.js                           21.81 kB │ gzip:   6.30 kB
+ℹ dist/register.maintenance-BpZlSvDl.js               21.09 kB │ gzip:   6.18 kB
+ℹ dist/image-CDMmo-O7.js                              19.78 kB │ gzip:   5.87 kB
+ℹ dist/onboarding.finalize-CtcAgps1.js                19.34 kB │ gzip:   6.20 kB
+ℹ dist/subsystem-BCQGGxdd.js                          18.87 kB │ gzip:   5.46 kB
+ℹ dist/utils-CP9YLh6M.js                              18.71 kB │ gzip:   6.05 kB
+ℹ dist/daemon-runtime-Wf08Fo9E.js                     18.69 kB │ gzip:   4.87 kB
+ℹ dist/skills-install-CR-FLxJm.js                     18.52 kB │ gzip:   5.13 kB
+ℹ dist/agent-scope-B36jktKj.js                        18.11 kB │ gzip:   4.66 kB
+ℹ dist/send-o6kVC0ac.js                               17.16 kB │ gzip:   5.11 kB
+ℹ dist/send-BXUNtniw.js                               17.08 kB │ gzip:   4.61 kB
+ℹ dist/completion-cli-CsAn8_EL.js                     16.93 kB │ gzip:   4.53 kB
+ℹ dist/call-aWI20avM.js                               16.77 kB │ gzip:   4.94 kB
+ℹ dist/onboard-custom-C_S2Fhsk.js                     16.73 kB │ gzip:   4.80 kB
+ℹ dist/server-node-events-CiKbABef.js                 16.72 kB │ gzip:   5.03 kB
+ℹ dist/model-picker-BSH1qwE7.js                       16.67 kB │ gzip:   4.40 kB
+ℹ dist/security-cli-iTkLzOQP.js                       16.28 kB │ gzip:   4.67 kB
+ℹ dist/plugins-CTO4bTbI.js                            15.95 kB │ gzip:   3.75 kB
+ℹ dist/program-context-B_sCymRS.js                    15.79 kB │ gzip:   3.71 kB
+ℹ dist/systemd-B9qciaS6.js                            15.70 kB │ gzip:   4.61 kB
+ℹ dist/pairing-store-CJvIulCt.js                      15.39 kB │ gzip:   3.86 kB
+ℹ dist/register.status-health-sessions-DBZI3iR2.js    15.27 kB │ gzip:   5.12 kB
+ℹ dist/gmail-setup-utils-BIG9LSHW.js                  15.16 kB │ gzip:   4.48 kB
+ℹ dist/webhooks-cli-DpGKOv-V.js                       14.91 kB │ gzip:   4.18 kB
+ℹ dist/send-DZqD2orA.js                               14.66 kB │ gzip:   4.36 kB
+ℹ dist/auth-G84EF23T.js                               14.64 kB │ gzip:   3.94 kB
+ℹ dist/onboard-helpers-DWQskLiA.js                    14.59 kB │ gzip:   4.51 kB
+ℹ dist/tool-loop-detection-D7w0itwC.js                14.27 kB │ gzip:   3.61 kB
+ℹ dist/image-ops-CtnOR38U.js                          14.01 kB │ gzip:   4.14 kB
+ℹ dist/onboarding-CqQr43qd.js                         13.65 kB │ gzip:   4.18 kB
+ℹ dist/lifecycle-core-8AaaqhBw.js                     13.60 kB │ gzip:   3.55 kB
+ℹ dist/sqlite-gCU8YLod.js                             13.47 kB │ gzip:   4.23 kB
+ℹ dist/exec-approvals-cli-cXxT-lsU.js                 13.33 kB │ gzip:   3.83 kB
+ℹ dist/chunk-Bph8iEQD.js                              13.12 kB │ gzip:   3.60 kB
+ℹ dist/qr-cli-BUQcsL_O.js                             12.92 kB │ gzip:   3.94 kB
+ℹ dist/bonjour-discovery-CuFoTIHp.js                  12.86 kB │ gzip:   3.71 kB
+ℹ dist/model-DfP08Eup.js                              12.48 kB │ gzip:   3.01 kB
+ℹ dist/installs-DGStEcsm.js                           12.30 kB │ gzip:   3.17 kB
+ℹ dist/devices-cli-DNsSZ85w.js                        12.16 kB │ gzip:   3.38 kB
+ℹ dist/systemd-hints-4ZaowQnr.js                      11.90 kB │ gzip:   3.35 kB
+ℹ dist/skills-cli-ByuLuPwT.js                         11.88 kB │ gzip:   2.96 kB
+ℹ dist/update-check-k7KXGY1Z.js                       11.70 kB │ gzip:   3.09 kB
+ℹ dist/install-safe-path-tCLiMpmO.js                  11.51 kB │ gzip:   3.47 kB
+ℹ dist/ports-D_IqQOiD.js                              11.33 kB │ gzip:   3.38 kB
+ℹ dist/ssrf-BCYMnxkM.js                               11.10 kB │ gzip:   2.94 kB
+ℹ dist/register.onboard-B2SZ073s.js                   10.77 kB │ gzip:   3.87 kB
+ℹ dist/login-qr-B6kpEnkE.js                           10.53 kB │ gzip:   3.65 kB
+ℹ dist/update-b9Hk-Kjj.js                             10.35 kB │ gzip:   2.52 kB
+ℹ dist/diagnostic-B714gh-r.js                         10.13 kB │ gzip:   2.55 kB
+ℹ dist/plugin-auto-enable-DE6HfbtK.js                  9.89 kB │ gzip:   2.52 kB
+ℹ dist/accounts-CznR-8mo.js                            9.81 kB │ gzip:   2.90 kB
+ℹ dist/workspace-CJfxRcnL.js                           9.70 kB │ gzip:   2.91 kB
+ℹ dist/tailscale-Lro1Kj8C.js                           9.21 kB │ gzip:   2.90 kB
+ℹ dist/paths-B4BZAPZh.js                               9.12 kB │ gzip:   2.47 kB
+ℹ dist/resolve-route-CDs3U4WK.js                       9.11 kB │ gzip:   2.57 kB
+ℹ dist/ws-C7EXRv8z.js                                  8.91 kB │ gzip:   2.95 kB
+ℹ dist/frontmatter-C_R2lwvR.js                         8.88 kB │ gzip:   2.65 kB
+ℹ dist/npm-registry-spec-BqFnRso-.js                   8.88 kB │ gzip:   2.75 kB
+ℹ dist/config-cli-Bsb3cjHJ.js                          8.87 kB │ gzip:   2.57 kB
+ℹ dist/session-key-DCt45XZa.js                         8.77 kB │ gzip:   2.06 kB
+ℹ dist/logs-cli-CaI786Di.js                            8.71 kB │ gzip:   2.93 kB
+ℹ dist/table-DQ25Z456.js                               8.48 kB │ gzip:   2.75 kB
+ℹ dist/tool-images-DoR5YQkw.js                         8.48 kB │ gzip:   2.61 kB
+ℹ dist/inspect-CZm8fEUc.js                             8.41 kB │ gzip:   2.40 kB
+ℹ dist/nodes-screen-5fMfTT2n.js                        8.21 kB │ gzip:   2.42 kB
+ℹ dist/pi-tools.policy-CuHWKSDR.js                     8.20 kB │ gzip:   2.47 kB
+ℹ dist/provider-auth-helpers-C3FheCFK.js               8.12 kB │ gzip:   2.91 kB
+ℹ dist/exec-DYqRzFbo.js                                8.11 kB │ gzip:   2.60 kB
+ℹ dist/auth-choice-options-DmQgUlhC.js                 7.92 kB │ gzip:   2.10 kB
+ℹ dist/dns-cli-CSmr--NB.js                             7.83 kB │ gzip:   2.90 kB
+ℹ dist/register.setup-DSXwttQO.js                      7.68 kB │ gzip:   3.08 kB
+ℹ dist/directory-cli-DeXixVz6.js                       7.61 kB │ gzip:   2.34 kB
+ℹ dist/outbound-DaAUOa7R.js                            7.57 kB │ gzip:   2.42 kB
+ℹ dist/system-cli-J9CthRcl.js                          7.56 kB │ gzip:   2.39 kB
+ℹ dist/skill-scanner-CMBwwxis.js                       7.39 kB │ gzip:   2.46 kB
+ℹ dist/delivery-queue-CxDDEWQg.js                      7.27 kB │ gzip:   2.36 kB
+ℹ dist/catalog-DxFePbMV.js                             7.05 kB │ gzip:   2.14 kB
+ℹ dist/openai-model-default-BX1R-IGl.js                6.75 kB │ gzip:   2.23 kB
+ℹ dist/control-ui-assets-COTjW_yJ.js                   6.62 kB │ gzip:   1.99 kB
+ℹ dist/skills-status-etIIQhJr.js                       6.62 kB │ gzip:   2.18 kB
+ℹ dist/session-D4x4d_Uz.js                             6.51 kB │ gzip:   2.35 kB
+ℹ dist/reply-prefix-CFSzlge_.js                        6.47 kB │ gzip:   1.93 kB
+ℹ dist/paths-C6eomcf_.js                               6.36 kB │ gzip:   1.68 kB
+ℹ dist/target-errors-BxTcTDYc.js                       6.26 kB │ gzip:   1.88 kB
+ℹ dist/local-roots-kq2C9EhR.js                         6.14 kB │ gzip:   2.20 kB
+ℹ dist/onboarding.gateway-config-BQiFPaN9.js           6.05 kB │ gzip:   2.04 kB
+ℹ dist/pairing-cli-DJhW0qoA.js                         6.03 kB │ gzip:   2.11 kB
+ℹ dist/onboard-skills-DHWv8ecG.js                      5.80 kB │ gzip:   2.20 kB
+ℹ dist/api-key-rotation-CC4XX61r.js                    5.80 kB │ gzip:   1.96 kB
+ℹ dist/docs-cli-Fq8eLJ3M.js                            5.69 kB │ gzip:   2.07 kB
+ℹ dist/register.configure-BVlj-sLO.js                  5.66 kB │ gzip:   2.40 kB
+ℹ dist/cli-QrgSi1Gh.js                                 5.10 kB │ gzip:   2.11 kB
+ℹ dist/widearea-dns-DlYZcNfh.js                        5.04 kB │ gzip:   1.91 kB
+ℹ dist/entry-status-CAs6m3_l.js                        5.00 kB │ gzip:   1.12 kB
+ℹ dist/agents.config-BuHqzfGy.js                       4.80 kB │ gzip:   1.42 kB
+ℹ dist/replies-CN_8Lgmo.js                             4.78 kB │ gzip:   1.55 kB
+ℹ dist/thinking-EAliFiVK.js                            4.78 kB │ gzip:   1.23 kB
+ℹ dist/shared-C02igtSu.js                              4.66 kB │ gzip:   1.76 kB
+ℹ dist/whatsapp-actions-CjRYMkYB.js                    4.63 kB │ gzip:   1.67 kB
+ℹ dist/fetch-guard-bFjgj5XZ.js                         4.39 kB │ gzip:   1.66 kB
+ℹ dist/with-timeout-BRQhGblr.js                        4.33 kB │ gzip:   1.73 kB
+ℹ dist/message-channel-Bena1Tzd.js                     4.33 kB │ gzip:   1.27 kB
+ℹ dist/progress-B7Ig_SnC.js                            4.19 kB │ gzip:   1.40 kB
+ℹ dist/github-copilot-token-D2zp6kMZ.js                4.15 kB │ gzip:   1.58 kB
+ℹ dist/doctor-completion-7SPUwBiv.js                   4.14 kB │ gzip:   1.38 kB
+ℹ dist/onboard-remote-6Rm32Uw3.js                      4.11 kB │ gzip:   1.67 kB
+ℹ dist/web-WByPby1o.js                                 4.10 kB │ gzip:   1.70 kB
+ℹ dist/model-catalog-Dv8nbDzF.js                       4.00 kB │ gzip:   1.43 kB
+ℹ dist/redact-f-Q-hFt_.js                              3.98 kB │ gzip:   1.50 kB
+ℹ dist/inbound-context-CmmmT8IP.js                     3.95 kB │ gzip:   1.15 kB
+ℹ dist/audio-preflight-g1kD7C3S.js                     3.85 kB │ gzip:   1.63 kB
+ℹ dist/config-guard-C_9kvw_c.js                        3.79 kB │ gzip:   1.46 kB
+ℹ dist/status.update-nVUdpY5R.js                       3.75 kB │ gzip:   1.21 kB
+ℹ dist/argv-iDNY1AU9.js                                3.74 kB │ gzip:   1.21 kB
+ℹ dist/openclaw-root-BM-yQZH6.js                       3.72 kB │ gzip:   1.12 kB
+ℹ dist/fs-safe-CUjO1ca2.js                             3.65 kB │ gzip:   1.26 kB
+ℹ dist/channel-activity-BmUkycB-.js                    3.63 kB │ gzip:   1.20 kB
+ℹ dist/models-config-BkR5gams.js                       3.63 kB │ gzip:   1.28 kB
+ℹ dist/clack-prompter-DYi7d4RF.js                      3.51 kB │ gzip:   1.14 kB
+ℹ dist/tui-cli-Cyz_KEgc.js                             3.50 kB │ gzip:   1.56 kB
+ℹ dist/render-CXDO_kgw.js                              3.29 kB │ gzip:   1.14 kB
+ℹ dist/control-service-DLGKGEuo.js                     3.25 kB │ gzip:   1.18 kB
+ℹ dist/systemd-linger-Btz3I4eK.js                      3.19 kB │ gzip:   1.01 kB
+ℹ dist/note-Bdo-j1cj.js                                3.17 kB │ gzip:   1.14 kB
+ℹ dist/path-env-B_baz5L6.js                            3.15 kB │ gzip:   1.22 kB
+ℹ dist/constants-CEbQvI8z.js                           3.14 kB │ gzip:   0.86 kB
+ℹ dist/ports-C7x93Br6.js                               3.12 kB │ gzip:   1.11 kB
+ℹ dist/rpc-BhG5EXT-.js                                 3.11 kB │ gzip:   1.43 kB
+ℹ dist/retry-Clkcl3C1.js                               2.96 kB │ gzip:   1.07 kB
+ℹ dist/system-run-command-DKiCEPJc.js                  2.90 kB │ gzip:   1.01 kB
+ℹ dist/hooks-status-BcXQ9UzC.js                        2.88 kB │ gzip:   1.13 kB
+ℹ dist/bindings-Dnyf3pJk.js                            2.87 kB │ gzip:   0.87 kB
+ℹ dist/shared-yqKiZQBR.js                              2.84 kB │ gzip:   1.06 kB
+ℹ dist/heartbeat-visibility-U4BL57eQ.js                2.73 kB │ gzip:   0.96 kB
+ℹ dist/diagnostic-session-state-CUslJyKP.js            2.56 kB │ gzip:   0.90 kB
+ℹ dist/login-BdZEgVVi.js                               2.54 kB │ gzip:   1.11 kB
+ℹ dist/pairing-token-DGufCZxz.js                       2.52 kB │ gzip:   1.05 kB
+ℹ dist/fetch-EupTshKr.js                               2.44 kB │ gzip:   0.86 kB
+ℹ dist/format-duration-D0B0Uo-I.js                     2.42 kB │ gzip:   0.91 kB
+ℹ dist/command-poll-backoff-BiwOFDEK.js                2.27 kB │ gzip:   0.94 kB
+ℹ dist/store-DH3Bsx5y.js                               2.24 kB │ gzip:   1.05 kB
+ℹ dist/paths-CrFY6bY4.js                               2.23 kB │ gzip:   0.87 kB
+ℹ dist/onboard-hooks-DC-FLxt6.js                       2.21 kB │ gzip:   1.03 kB
+ℹ dist/format-relative-BXoxEQVN.js                     2.13 kB │ gzip:   0.86 kB
+ℹ dist/node-service-g4m7k3So.js                        2.09 kB │ gzip:   0.62 kB
+ℹ dist/node-match-CN8o4Vi3.js                          2.07 kB │ gzip:   0.77 kB
+ℹ dist/channel-selection-BouenmYp.js                   2.06 kB │ gzip:   0.73 kB
+ℹ dist/runtime-guard-CiTT2sxK.js                       1.98 kB │ gzip:   0.82 kB
+ℹ dist/polls-DhH5YkzN.js                               1.96 kB │ gzip:   0.63 kB
+ℹ dist/command-format-DEKzLnLg.js                      1.95 kB │ gzip:   0.74 kB
+ℹ dist/stagger-B6VQyn1F.js                             1.94 kB │ gzip:   0.76 kB
+ℹ dist/accounts-DTj1Pkjk.js                            1.80 kB │ gzip:   0.68 kB
+ℹ dist/accounts-Dq_1iSiE.js                            1.77 kB │ gzip:   0.66 kB
+ℹ dist/markdown-tables-DgpbH7zx.js                     1.72 kB │ gzip:   0.69 kB
+ℹ dist/commands-Dzc2eVxa.js                            1.67 kB │ gzip:   0.56 kB
+ℹ dist/brew-DjNEjKAo.js                                1.65 kB │ gzip:   0.58 kB
+ℹ dist/transcript-tools-INJPQ2KD.js                    1.59 kB │ gzip:   0.60 kB
+ℹ dist/auth-choice-prompt-Cn6U3t8O.js                  1.57 kB │ gzip:   0.66 kB
+ℹ dist/input-provenance-BzbXHcaD.js                    1.54 kB │ gzip:   0.54 kB
+ℹ dist/conversation-label-Bn5j3lUT.js                  1.51 kB │ gzip:   0.63 kB
+ℹ dist/usage-format-BzKEDn0q.js                        1.50 kB │ gzip:   0.59 kB
+ℹ dist/ipv4-BSb3QXZR.js                                1.48 kB │ gzip:   0.74 kB
+ℹ dist/targets-bG1Q8FzV.js                             1.48 kB │ gzip:   0.57 kB
+ℹ dist/errors-BF3TeRH2.js                              1.43 kB │ gzip:   0.60 kB
+ℹ dist/health-format-DQNr1Hum.js                       1.42 kB │ gzip:   0.66 kB
+ℹ dist/legacy-names-u6U1_9U0.js                        1.41 kB │ gzip:   0.59 kB
+ℹ dist/active-listener-CJ5IzmcP.js                     1.40 kB │ gzip:   0.58 kB
+ℹ dist/fetch-timeout-Db3da8yR.js                       1.37 kB │ gzip:   0.70 kB
+ℹ dist/plugin-registry-Dv_d-e8R.js                     1.36 kB │ gzip:   0.58 kB
+ℹ dist/diagnostics-BSNRBc9z.js                         1.28 kB │ gzip:   0.59 kB
+ℹ dist/shell-argv-BbiXH_xm.js                          1.28 kB │ gzip:   0.53 kB
+ℹ dist/parse-log-line-BHCUQaF3.js                      1.23 kB │ gzip:   0.52 kB
+ℹ dist/tailnet-B2SPYrh4.js                             1.23 kB │ gzip:   0.56 kB
+ℹ dist/channel-options-DQExfCow.js                     1.22 kB │ gzip:   0.57 kB
+ℹ dist/env-VriqyjXT.js                                 1.21 kB │ gzip:   0.58 kB
+ℹ dist/gateway-rpc-B-irhdQH.js                         1.17 kB │ gzip:   0.62 kB
+ℹ dist/tables-BnEdRv9R.js                              1.15 kB │ gzip:   0.56 kB
+ℹ dist/dm-policy-shared-Bvgc9MH1.js                    1.10 kB │ gzip:   0.50 kB
+ℹ dist/pi-model-discovery-4uUnLc3n.js                  1.06 kB │ gzip:   0.44 kB
+ℹ dist/is-main-DrpmTCqv.js                             1.00 kB │ gzip:   0.39 kB
+ℹ dist/command-options-BtDai3oC.js                     0.94 kB │ gzip:   0.38 kB
+ℹ dist/status-B-4I7YGE.js                              0.89 kB │ gzip:   0.40 kB
+ℹ dist/tokens-DTYwPL5L.js                              0.88 kB │ gzip:   0.42 kB
+ℹ dist/dangerous-tools-BL-M3lPt.js                     0.87 kB │ gzip:   0.49 kB
+ℹ dist/boolean-BsqeuxE6.js                             0.86 kB │ gzip:   0.38 kB
+ℹ dist/cli-utils-DN_hM6ov.js                           0.86 kB │ gzip:   0.42 kB
+ℹ dist/status-BrV-afZE.js                              0.82 kB │ gzip:   0.35 kB
+ℹ dist/path-safety-BqPJ8DDQ.js                         0.81 kB │ gzip:   0.35 kB
+ℹ dist/helpers-By2rxBQ5.js                             0.79 kB │ gzip:   0.39 kB
+ℹ dist/format-DNqZrSx7.js                              0.76 kB │ gzip:   0.39 kB
+ℹ dist/enable-HSYin9n7.js                              0.74 kB │ gzip:   0.34 kB
+ℹ dist/config-validation-DThhJXX6.js                   0.73 kB │ gzip:   0.40 kB
+ℹ dist/logging-C81FDh59.js                             0.73 kB │ gzip:   0.38 kB
+ℹ dist/trash-DXPbQEbW.js                               0.71 kB │ gzip:   0.38 kB
+ℹ dist/wsl-C4424szg.js                                 0.68 kB │ gzip:   0.36 kB
+ℹ dist/clawbot-cli-D5Y6vB3z.js                         0.68 kB │ gzip:   0.39 kB
+ℹ dist/help-format-DijWjbvl.js                         0.67 kB │ gzip:   0.30 kB
+ℹ dist/auth-choice-legacy-aJ8D6F_s.js                  0.64 kB │ gzip:   0.31 kB
+ℹ dist/onboard-config-B9jTl83d.js                      0.64 kB │ gzip:   0.32 kB
+ℹ dist/clipboard-wk6ijNhx.js                           0.63 kB │ gzip:   0.37 kB
+ℹ dist/transcript-events-DdnTeoR1.js                   0.59 kB │ gzip:   0.29 kB
+ℹ dist/workspace-dirs-BuMBSBZu.js                      0.58 kB │ gzip:   0.33 kB
+ℹ dist/outbound-attachment-BkYB8p_T.js                 0.57 kB │ gzip:   0.32 kB
+ℹ dist/channels-status-issues-CYU3t14B.js              0.55 kB │ gzip:   0.30 kB
+ℹ dist/runtime-status-BHt4ST_m.js                      0.55 kB │ gzip:   0.29 kB
+ℹ dist/model-param-b-D1rP7U2U.js                       0.49 kB │ gzip:   0.32 kB
+ℹ dist/links-DZH9q9ib.js                               0.49 kB │ gzip:   0.31 kB
+ℹ dist/proxy-DU7W9XSc.js                               0.48 kB │ gzip:   0.30 kB
+ℹ dist/pi-auth-json-6qU0gPho.js                        0.46 kB │ gzip:   0.27 kB
+ℹ dist/parse-timeout-UOA56UND.js                       0.46 kB │ gzip:   0.26 kB
+ℹ dist/prompt-style-VqCNjBi8.js                        0.45 kB │ gzip:   0.25 kB
+ℹ dist/parse-port-DSdUR1RE.js                          0.43 kB │ gzip:   0.25 kB
+ℹ dist/rolldown-runtime-Cbj13DAv.js                    0.42 kB │ gzip:   0.28 kB
+ℹ dist/helpers-BcGbMZD1.js                             0.41 kB │ gzip:   0.26 kB
+ℹ dist/secret-equal-D7A3Bol7.js                        0.39 kB │ gzip:   0.26 kB
+ℹ dist/allow-from-C4p9SsVb.js                          0.39 kB │ gzip:   0.24 kB
+ℹ dist/plugins-allowlist-sArtGE-d.js                   0.34 kB │ gzip:   0.22 kB
+ℹ dist/chat-type-DyovJwCt.js                           0.33 kB │ gzip:   0.20 kB
+ℹ dist/pairing-labels-ksedT2zY.js                      0.26 kB │ gzip:   0.18 kB
+ℹ dist/prompts-Xu2Sveka.js                             0.24 kB │ gzip:   0.17 kB
+ℹ dist/logging-w5jq5901.js                             0.01 kB │ gzip:   0.03 kB
+ℹ 279 files, total: 7785.75 kB
+✔ Build complete in 753ms
+ℹ dist/entry.js                                       83.47 kB │ gzip:  22.69 kB
+ℹ dist/subagent-registry-BIQ3-iIe.js                2549.76 kB
+ℹ dist/gateway-cli-Ckiv61Wj.js                       775.54 kB │ gzip: 185.28 kB
+ℹ dist/config-wIcW5Gct.js                            222.40 kB │ gzip:  45.24 kB
+ℹ dist/auth-profiles-CSDsnoUB.js                     141.01 kB │ gzip:  32.11 kB
+ℹ dist/manager-HRbz3JWv.js                           131.19 kB │ gzip:  30.61 kB
+ℹ dist/audit-g1_UBfDk.js                             117.45 kB │ gzip:  28.01 kB
+ℹ dist/send-Dc8aTjJ4.js                              106.29 kB │ gzip:  25.36 kB
+ℹ dist/tui-CoAvVHBY.js                               101.03 kB │ gzip:  24.02 kB
+ℹ dist/client-DrK7aLru.js                             87.56 kB │ gzip:  16.30 kB
+ℹ dist/models-KIO89ucz.js                             84.33 kB │ gzip:  20.33 kB
+ℹ dist/web-B5H0uw-l.js                                82.74 kB │ gzip:  21.46 kB
+ℹ dist/sandbox-C5mXeZqi.js                            80.08 kB │ gzip:  19.70 kB
+ℹ dist/prompt-select-styled-dcngxLNX.js               78.33 kB │ gzip:  21.12 kB
+ℹ dist/status-DEQp561h.js                             76.39 kB │ gzip:  19.59 kB
+ℹ dist/auth-choice-CcBSTSir.js                        74.80 kB │ gzip:  13.62 kB
+ℹ dist/sessions-BHlxEQsM.js                           72.88 kB │ gzip:  18.96 kB
+ℹ dist/browser-cli-D8uIG1vd.js                        66.63 kB │ gzip:  12.29 kB
+ℹ dist/runner-C5EHKraK.js                             63.69 kB │ gzip:  15.29 kB
+ℹ dist/pw-ai-CBz7ptcV.js                              62.85 kB │ gzip:  15.00 kB
+ℹ dist/send-BalUK4wA.js                               59.99 kB │ gzip:  16.23 kB
+ℹ dist/routes-DpCRxN-m.js                             56.88 kB │ gzip:  10.99 kB
+ℹ dist/channels-cli-u-Ld57hC.js                       56.00 kB │ gzip:  14.77 kB
+ℹ dist/chrome-RpfNFwcw.js                             54.48 kB │ gzip:  13.76 kB
+ℹ dist/health-CkVCOac1.js                             53.83 kB │ gzip:  12.82 kB
+ℹ dist/nodes-cli-SLG_Sdxg.js                          53.08 kB │ gzip:  11.86 kB
+ℹ dist/doctor-config-flow-C37C_--J.js                 50.80 kB │ gzip:  11.52 kB
+ℹ dist/update-cli-CfnopIv-.js                         49.17 kB │ gzip:  14.33 kB
+ℹ dist/exec-approvals-DK5-bAn8.js                     45.28 kB │ gzip:  10.67 kB
+ℹ dist/node-cli-BMto_M1-.js                           44.08 kB │ gzip:  11.82 kB
+ℹ dist/deliver-Bxicjxns.js                            43.80 kB │ gzip:  10.78 kB
+ℹ dist/pi-embedded-helpers-vJVd8hTN.js                43.09 kB │ gzip:  11.28 kB
+ℹ dist/acp-cli-uf0Og6X1.js                            42.98 kB │ gzip:  11.38 kB
+ℹ dist/qmd-manager-DDgSZImZ.js                        40.48 kB │ gzip:  10.75 kB
+ℹ dist/onboard-B_W6vtaR.js                            40.09 kB │ gzip:   8.43 kB
+ℹ dist/auth-token-B1EpAGbU.js                         37.87 kB │ gzip:   6.88 kB
+ℹ dist/skills-Bq1s47OA.js                             37.55 kB │ gzip:   9.91 kB
+ℹ dist/hooks-cli-B6QRzUvK.js                          37.01 kB │ gzip:   9.36 kB
+ℹ dist/tool-display-DixohEVL.js                       36.30 kB │ gzip:   8.80 kB
+ℹ dist/server-context-C0UCoI5N.js                     34.35 kB │ gzip:   8.74 kB
+ℹ dist/memory-cli-HobxC8o5.js                         34.05 kB │ gzip:   8.60 kB
+ℹ dist/register.message-BsVAzihM.js                   33.72 kB │ gzip:   8.30 kB
+ℹ dist/commands-registry-BGTY0-SZ.js                  32.00 kB │ gzip:   7.24 kB
+ℹ dist/configure-Bl7khp-m.js                          31.83 kB │ gzip:   8.63 kB
+ℹ dist/daemon-cli-CMdyu1LL.js                         31.66 kB │ gzip:   8.50 kB
+ℹ dist/manifest-registry-XSxPcu0S.js                  29.95 kB │ gzip:   7.22 kB
+ℹ dist/plugins-cli-4w0SAmWx.js                        29.91 kB │ gzip:   8.35 kB
+ℹ dist/dock-BkVflx2Q.js                               29.31 kB │ gzip:   5.36 kB
+ℹ dist/agents-BqU00crl.js                             28.46 kB │ gzip:   7.06 kB
+ℹ dist/ir-DwFJAkDs.js                                 27.41 kB │ gzip:   6.91 kB
+ℹ dist/cron-cli-vCVDEa-v.js                           25.75 kB │ gzip:   6.37 kB
+ℹ dist/push-apns-DzwYdxMS.js                          25.42 kB │ gzip:   7.04 kB
+ℹ dist/session-dirs-wlQzwmdb.js                       25.32 kB │ gzip:   5.66 kB
+ℹ dist/session-cost-usage-C-v6E-Lz.js                 25.10 kB │ gzip:   6.00 kB
+ℹ dist/service-DcFI40_W.js                            23.77 kB │ gzip:   6.16 kB
+ℹ dist/session-utils-06S8Eqst.js                      23.16 kB │ gzip:   6.26 kB
+ℹ dist/skill-commands-C60rmpK4.js                     22.73 kB │ gzip:   6.10 kB
+ℹ dist/onboard-channels-CBOP-YeS.js                   22.69 kB │ gzip:   5.85 kB
+ℹ dist/sandbox-cli-Dc6Ha7mZ.js                        22.16 kB │ gzip:   5.74 kB
+ℹ dist/register.maintenance-mxjt9oOG.js               21.05 kB │ gzip:   6.16 kB
+ℹ dist/image-B2F54WOS.js                              19.77 kB │ gzip:   5.84 kB
+ℹ dist/onboarding.finalize-hF4bOwkw.js                19.30 kB │ gzip:   6.18 kB
+ℹ dist/daemon-runtime-HzByP2ge.js                     18.69 kB │ gzip:   4.87 kB
+ℹ dist/skills-install-DZS_DbXS.js                     18.51 kB │ gzip:   5.12 kB
+ℹ dist/agent-scope-DhajVyRS.js                        18.06 kB │ gzip:   4.64 kB
+ℹ dist/send-D_D0pX5n.js                               17.16 kB │ gzip:   5.09 kB
+ℹ dist/send-BJZfVffT.js                               17.07 kB │ gzip:   4.58 kB
+ℹ dist/completion-cli-B-ZrjMZ9.js                     16.94 kB │ gzip:   4.52 kB
+ℹ dist/call-Ct9iv6uA.js                               16.73 kB │ gzip:   4.92 kB
+ℹ dist/onboard-custom-BBxJ7dCf.js                     16.73 kB │ gzip:   4.81 kB
+ℹ dist/model-picker-CSSRdUVJ.js                       16.66 kB │ gzip:   4.40 kB
+ℹ dist/server-node-events-agn7PcBD.js                 16.60 kB │ gzip:   4.99 kB
+ℹ dist/security-cli-CFxudfuz.js                       16.11 kB │ gzip:   4.59 kB
+ℹ dist/models-cli-R6nSsYNe.js                         16.05 kB │ gzip:   4.14 kB
+ℹ dist/plugins-Dhh2a3qc.js                            15.86 kB │ gzip:   3.73 kB
+ℹ dist/systemd-BrybH4HV.js                            15.70 kB │ gzip:   4.59 kB
+ℹ dist/pairing-store-EvuYdP2c.js                      15.34 kB │ gzip:   3.83 kB
+ℹ dist/gmail-setup-utils-D5-xvxtS.js                  15.12 kB │ gzip:   4.46 kB
+ℹ dist/register.agent-CVs2rMb_.js                     14.84 kB │ gzip:   5.30 kB
+ℹ dist/webhooks-cli-DMzoKrmD.js                       14.73 kB │ gzip:   4.09 kB
+ℹ dist/send-BoI2t7pu.js                               14.65 kB │ gzip:   4.34 kB
+ℹ dist/auth-BcWLEKcS.js                               14.64 kB │ gzip:   3.93 kB
+ℹ dist/onboard-helpers-Kw9tt2My.js                    14.55 kB │ gzip:   4.49 kB
+ℹ dist/tool-loop-detection-BU3fbtCd.js                14.16 kB │ gzip:   3.55 kB
+ℹ dist/image-ops-CKJNUuNW.js                          14.01 kB │ gzip:   4.14 kB
+ℹ dist/run-main-B4wfIcks.js                           13.82 kB │ gzip:   4.16 kB
+ℹ dist/onboarding-BFeOZ1UH.js                         13.56 kB │ gzip:   4.13 kB
+ℹ dist/lifecycle-core-BhEoPIVR.js                     13.52 kB │ gzip:   3.51 kB
+ℹ dist/exec-approvals-cli-CuG1-_MT.js                 13.16 kB │ gzip:   3.74 kB
+ℹ dist/chunk-D6AoZjLE.js                              13.12 kB │ gzip:   3.60 kB
+ℹ dist/qr-cli-Dm77dkih.js                             12.87 kB │ gzip:   3.91 kB
+ℹ dist/bonjour-discovery-Dey40AZW.js                  12.86 kB │ gzip:   3.71 kB
+ℹ dist/model-CGvZc2jw.js                              12.48 kB │ gzip:   3.01 kB
+ℹ dist/installs-DDy4Ij7L.js                           12.29 kB │ gzip:   3.16 kB
+ℹ dist/devices-cli-BWX7ui5Q.js                        11.99 kB │ gzip:   3.29 kB
+ℹ dist/systemd-hints-BvvDa-7l.js                      11.90 kB │ gzip:   3.35 kB
+ℹ dist/sqlite-CQGamAhm.js                             11.82 kB │ gzip:   3.79 kB
+ℹ dist/skills-cli-C3w3yY1V.js                         11.71 kB │ gzip:   2.87 kB
+ℹ dist/update-check-DfBZVR4k.js                       11.70 kB │ gzip:   3.09 kB
+ℹ dist/install-safe-path-BK8js28D.js                  11.51 kB │ gzip:   3.47 kB
+ℹ dist/banner-DKvjmzMG.js                             11.47 kB │ gzip:   4.71 kB
+ℹ dist/ssrf-Ixuyn7h8.js                               11.10 kB │ gzip:   2.94 kB
+ℹ dist/register.onboard-BBXsUWtZ.js                   10.64 kB │ gzip:   3.83 kB
+ℹ dist/login-qr--XUFeHDV.js                           10.36 kB │ gzip:   3.57 kB
+ℹ dist/update-ChO83Ek6.js                             10.34 kB │ gzip:   2.50 kB
+ℹ dist/program-T-X1OQHx.js                            10.32 kB │ gzip:   4.01 kB
+ℹ dist/diagnostic-C6WTf4ZE.js                         10.12 kB │ gzip:   2.55 kB
+ℹ dist/plugin-auto-enable-mCJO4D5a.js                  9.84 kB │ gzip:   2.49 kB
+ℹ dist/ports-CjVslX4J.js                               9.79 kB │ gzip:   2.88 kB
+ℹ dist/accounts-BrsscXpo.js                            9.73 kB │ gzip:   2.86 kB
+ℹ dist/workspace-DWI9N-Ks.js                           9.69 kB │ gzip:   2.89 kB
+ℹ dist/register.subclis-CpLAMNPX.js                    9.59 kB │ gzip:   2.49 kB
+ℹ dist/resolve-route-C4DUT14V.js                       9.11 kB │ gzip:   2.56 kB
+ℹ dist/net-DZ5Ayk-W.js                                 8.91 kB │ gzip:   2.94 kB
+ℹ dist/frontmatter-D-YR-Ghi.js                         8.87 kB │ gzip:   2.64 kB
+ℹ dist/npm-registry-spec-DkaZNHAW.js                   8.87 kB │ gzip:   2.74 kB
+ℹ dist/tailscale-BxzsxqAY.js                           8.86 kB │ gzip:   2.76 kB
+ℹ dist/session-key-DjZ7Z1hW.js                         8.77 kB │ gzip:   2.06 kB
+ℹ dist/config-cli-D6twYx83.js                          8.73 kB │ gzip:   2.49 kB
+ℹ dist/logs-cli-Imf3RTk7.js                            8.53 kB │ gzip:   2.85 kB
+ℹ dist/tool-images-CW04CAn5.js                         8.47 kB │ gzip:   2.60 kB
+ℹ dist/table-C9BoE_4p.js                               8.43 kB │ gzip:   2.72 kB
+ℹ dist/register.status-health-sessions-Df2Wb9Wu.js     8.41 kB │ gzip:   3.00 kB
+ℹ dist/inspect-CvEo0D8s.js                             8.41 kB │ gzip:   2.40 kB
+ℹ dist/nodes-screen-B9hOtN5Z.js                        8.20 kB │ gzip:   2.40 kB
+ℹ dist/pi-tools.policy-DFtVhKON.js                     8.20 kB │ gzip:   2.47 kB
+ℹ dist/provider-auth-helpers-f5Ap627p.js               8.11 kB │ gzip:   2.90 kB
+ℹ dist/exec-CBKBIMpA.js                                8.06 kB │ gzip:   2.57 kB
+ℹ dist/auth-choice-options-mnJuKKBX.js                 7.92 kB │ gzip:   2.09 kB
+ℹ dist/dns-cli-B90TL0kp.js                             7.65 kB │ gzip:   2.81 kB
+ℹ dist/register.setup-CK-TdvxO.js                      7.55 kB │ gzip:   3.04 kB
+ℹ dist/outbound-Do14Alu9.js                            7.52 kB │ gzip:   2.40 kB
+ℹ dist/directory-cli-Bl96xwjV.js                       7.44 kB │ gzip:   2.26 kB
+ℹ dist/skill-scanner-Cb7mXGIR.js                       7.38 kB │ gzip:   2.46 kB
+ℹ dist/delivery-queue-CzNZXd1M.js                      7.26 kB │ gzip:   2.35 kB
+ℹ dist/sessions-BDlr1jZy.js                            7.23 kB │ gzip:   2.42 kB
+ℹ dist/catalog-Da8o-cxw.js                             7.04 kB │ gzip:   2.13 kB
+ℹ dist/command-registry-UiZn0pqe.js                    6.92 kB │ gzip:   1.93 kB
+ℹ dist/openai-model-default-C2j7o0p3.js                6.74 kB │ gzip:   2.21 kB
+ℹ dist/control-ui-assets-BC2GSxMJ.js                   6.61 kB │ gzip:   1.98 kB
+ℹ dist/skills-status-BECHKy03.js                       6.57 kB │ gzip:   2.16 kB
+ℹ dist/session-CY9oenC0.js                             6.51 kB │ gzip:   2.34 kB
+ℹ dist/reply-prefix-D4RfrCeP.js                        6.47 kB │ gzip:   1.93 kB
+ℹ dist/paths-DNdWAq7b.js                               6.36 kB │ gzip:   1.68 kB
+ℹ dist/target-errors-C6mkRlU9.js                       6.26 kB │ gzip:   1.88 kB
+ℹ dist/local-roots-LE1f_G0M.js                         6.09 kB │ gzip:   2.18 kB
+ℹ dist/onboarding.gateway-config-DrBtM-y_.js           5.86 kB │ gzip:   1.96 kB
+ℹ dist/pairing-cli-D5hmPD-k.js                         5.86 kB │ gzip:   2.03 kB
+ℹ dist/onboard-skills-sI_CVhoo.js                      5.80 kB │ gzip:   2.20 kB
+ℹ dist/gemini-auth-BnahwSlu.js                         5.80 kB │ gzip:   1.94 kB
+ℹ dist/docs-cli-D1JNNFJd.js                            5.54 kB │ gzip:   2.00 kB
+ℹ dist/register.configure-D7Iaq8Ny.js                  5.53 kB │ gzip:   2.36 kB
+ℹ dist/widearea-dns-Bm3RmzUh.js                        5.03 kB │ gzip:   1.90 kB
+ℹ dist/entry-status-BQkcejku.js                        5.00 kB │ gzip:   1.12 kB
+ℹ dist/cli-CpCyRRLs.js                                 4.97 kB │ gzip:   2.06 kB
+ℹ dist/agents.config-B46Ur--G.js                       4.81 kB │ gzip:   1.43 kB
+ℹ dist/replies-BgPgYx22.js                             4.78 kB │ gzip:   1.55 kB
+ℹ dist/thinking-8sKPnzpp.js                            4.78 kB │ gzip:   1.23 kB
+ℹ dist/shared-C5WC5c0v.js                              4.66 kB │ gzip:   1.76 kB
+ℹ dist/whatsapp-actions-CCF27LaB.js                    4.44 kB │ gzip:   1.59 kB
+ℹ dist/fetch-guard-Dp7VnmeK.js                         4.39 kB │ gzip:   1.66 kB
+ℹ dist/with-timeout-CKScdFV4.js                        4.33 kB │ gzip:   1.72 kB
+ℹ dist/message-channel-CVHJDItx.js                     4.32 kB │ gzip:   1.26 kB
+ℹ dist/doctor-completion-DVu0KIlm.js                   4.14 kB │ gzip:   1.37 kB
+ℹ dist/progress-BAHiAaDW.js                            4.14 kB │ gzip:   1.37 kB
+ℹ dist/github-copilot-token-DuFIqfeC.js                4.14 kB │ gzip:   1.58 kB
+ℹ dist/onboard-remote-DrpDJRnB.js                      4.11 kB │ gzip:   1.67 kB
+ℹ dist/model-catalog-BhSwPfFx.js                       4.01 kB │ gzip:   1.43 kB
+ℹ dist/redact-B40lik2B.js                              3.98 kB │ gzip:   1.50 kB
+ℹ dist/inbound-context-72dOKfLG.js                     3.95 kB │ gzip:   1.15 kB
+ℹ dist/pi-auth-json-BITCZZsw.js                        3.86 kB │ gzip:   1.43 kB
+ℹ dist/system-cli-BiP3BNHy.js                          3.80 kB │ gzip:   1.14 kB
+ℹ dist/status.update-DTBGPOLO.js                       3.75 kB │ gzip:   1.21 kB
+ℹ dist/openclaw-root-B5pKN_cp.js                       3.72 kB │ gzip:   1.12 kB
+ℹ dist/audio-preflight-8NV1ilfj.js                     3.67 kB │ gzip:   1.54 kB
+ℹ dist/fs-safe-CERgjtot.js                             3.65 kB │ gzip:   1.26 kB
+ℹ dist/channel-activity-myOnmDZi.js                    3.63 kB │ gzip:   1.20 kB
+ℹ dist/models-config-BWztkNNJ.js                       3.62 kB │ gzip:   1.27 kB
+ℹ dist/clack-prompter-B1aVoXd5.js                      3.46 kB │ gzip:   1.11 kB
+ℹ dist/tui-cli-BZTJWf9c.js                             3.32 kB │ gzip:   1.48 kB
+ℹ dist/render-e7fENCYH.js                              3.29 kB │ gzip:   1.14 kB
+ℹ dist/control-service-BjyasOaw.js                     3.23 kB │ gzip:   1.18 kB
+ℹ dist/systemd-linger-B8oXYjfA.js                      3.19 kB │ gzip:   1.01 kB
+ℹ dist/note-DDecZomM.js                                3.16 kB │ gzip:   1.13 kB
+ℹ dist/constants-YI1d6slK.js                           3.14 kB │ gzip:   0.86 kB
+ℹ dist/path-env-Co_fin1B.js                            3.14 kB │ gzip:   1.21 kB
+ℹ dist/config-guard-CM3xNz1J.js                        3.13 kB │ gzip:   1.16 kB
+ℹ dist/ports-BxzJ3ENr.js                               3.13 kB │ gzip:   1.11 kB
+ℹ dist/rpc-CaGOkuoj.js                                 3.11 kB │ gzip:   1.43 kB
+ℹ dist/retry-C4Q_VPOo.js                               2.96 kB │ gzip:   1.06 kB
+ℹ dist/system-run-command-DKiCEPJc.js                  2.90 kB │ gzip:   1.01 kB
+ℹ dist/hooks-status-CNo1bkDq.js                        2.87 kB │ gzip:   1.12 kB
+ℹ dist/bindings-BO7DQ_-I.js                            2.86 kB │ gzip:   0.86 kB
+ℹ dist/shared-BLko2ysA.js                              2.83 kB │ gzip:   1.05 kB
+ℹ dist/heartbeat-visibility-B8TDjqpW.js                2.73 kB │ gzip:   0.96 kB
+ℹ dist/diagnostic-session-state-CIjIGxEE.js            2.56 kB │ gzip:   0.90 kB
+ℹ dist/pairing-token-Byh6drgn.js                       2.51 kB │ gzip:   1.04 kB
+ℹ dist/login-CzwTWjxa.js                               2.49 kB │ gzip:   1.08 kB
+ℹ dist/fetch-DLXV2q8j.js                               2.44 kB │ gzip:   0.86 kB
+ℹ dist/format-duration-BOC0O2XQ.js                     2.42 kB │ gzip:   0.91 kB
+ℹ dist/command-poll-backoff-anX686I1.js                2.27 kB │ gzip:   0.94 kB
+ℹ dist/store-DRvx-vgM.js                               2.23 kB │ gzip:   1.04 kB
+ℹ dist/paths-Dzc_6Z5O.js                               2.22 kB │ gzip:   0.86 kB
+ℹ dist/format-relative-DX-rh76l.js                     2.13 kB │ gzip:   0.86 kB
+ℹ dist/node-service-B1F4gM4E.js                        2.09 kB │ gzip:   0.62 kB
+ℹ dist/node-match-DKGjoxbG.js                          2.07 kB │ gzip:   0.77 kB
+ℹ dist/channel-selection-D5cjTEHf.js                   2.06 kB │ gzip:   0.73 kB
+ℹ dist/onboard-hooks-BkBM4N4x.js                       2.05 kB │ gzip:   0.96 kB
+ℹ dist/runtime-guard-Cs_ClFhP.js                       1.97 kB │ gzip:   0.81 kB
+ℹ dist/polls-DXeUmcgz.js                               1.96 kB │ gzip:   0.63 kB
+ℹ dist/stagger-CQar2eKe.js                             1.94 kB │ gzip:   0.76 kB
+ℹ dist/accounts-1gFWxwAw.js                            1.80 kB │ gzip:   0.68 kB
+ℹ dist/accounts-CuhuCyTF.js                            1.77 kB │ gzip:   0.66 kB
+ℹ dist/markdown-tables-CVgUytSx.js                     1.72 kB │ gzip:   0.70 kB
+ℹ dist/commands-j9S9qRB6.js                            1.66 kB │ gzip:   0.55 kB
+ℹ dist/brew-gjfOeXAi.js                                1.65 kB │ gzip:   0.58 kB
+ℹ dist/transcript-tools-C29dpy1Y.js                    1.59 kB │ gzip:   0.60 kB
+ℹ dist/command-format-D3syQOZg.js                      1.58 kB │ gzip:   0.63 kB
+ℹ dist/auth-choice-prompt-DF6R_pgV.js                  1.57 kB │ gzip:   0.66 kB
+ℹ dist/input-provenance-D0lNkCf6.js                    1.54 kB │ gzip:   0.54 kB
+ℹ dist/conversation-label-Bd1q4yDY.js                  1.51 kB │ gzip:   0.63 kB
+ℹ dist/usage-format-BXPHPKra.js                        1.50 kB │ gzip:   0.59 kB
+ℹ dist/ipv4-Dz51vmVq.js                                1.48 kB │ gzip:   0.74 kB
+ℹ dist/targets-DJmA1jvy.js                             1.48 kB │ gzip:   0.57 kB
+ℹ dist/errors-Ba_ROWsq.js                              1.43 kB │ gzip:   0.60 kB
+ℹ dist/health-format-DkjSgkDx.js                       1.41 kB │ gzip:   0.65 kB
+ℹ dist/scan-paths-B22E7-Cg.js                          1.41 kB │ gzip:   0.59 kB
+ℹ dist/active-listener-BRGwoGuP.js                     1.40 kB │ gzip:   0.59 kB
+ℹ dist/fetch-timeout-L2NTusph.js                       1.37 kB │ gzip:   0.70 kB
+ℹ dist/plugin-registry-CzLccLat.js                     1.32 kB │ gzip:   0.57 kB
+ℹ dist/diagnostics-CqEodocN.js                         1.28 kB │ gzip:   0.59 kB
+ℹ dist/shell-argv-DjSugwgF.js                          1.28 kB │ gzip:   0.53 kB
+ℹ dist/parse-log-line-C6yJx969.js                      1.23 kB │ gzip:   0.52 kB
+ℹ dist/tailnet-Cmumpn76.js                             1.23 kB │ gzip:   0.56 kB
+ℹ dist/gateway-rpc-ByG9Odv5.js                         1.17 kB │ gzip:   0.62 kB
+ℹ dist/channel-options-DpMCL0iM.js                     1.17 kB │ gzip:   0.55 kB
+ℹ dist/tables-CKA-N6SU.js                              1.15 kB │ gzip:   0.56 kB
+ℹ dist/dm-policy-shared-D-f2srFu.js                    1.10 kB │ gzip:   0.49 kB
+ℹ dist/pi-model-discovery-Do3xMEtM.js                  1.06 kB │ gzip:   0.44 kB
+ℹ dist/is-main-BG2RT3Fv.js                             1.00 kB │ gzip:   0.39 kB
+ℹ dist/command-options-6wdtBBWB.js                     0.94 kB │ gzip:   0.38 kB
+ℹ dist/status-lE34uDVF.js                              0.89 kB │ gzip:   0.40 kB
+ℹ dist/dangerous-tools-B8QrxStA.js                     0.87 kB │ gzip:   0.49 kB
+ℹ dist/tokens-ANnYrShl.js                              0.87 kB │ gzip:   0.41 kB
+ℹ dist/cli-utils-CCaEbxAz.js                           0.86 kB │ gzip:   0.42 kB
+ℹ dist/status-BUedPCLb.js                              0.82 kB │ gzip:   0.35 kB
+ℹ dist/path-safety-CP6a8uVu.js                         0.81 kB │ gzip:   0.35 kB
+ℹ dist/helpers-BMqFgDx8.js                             0.79 kB │ gzip:   0.39 kB
+ℹ dist/format-B0yJsjEo.js                              0.76 kB │ gzip:   0.39 kB
+ℹ dist/enable-CknE1f0w.js                              0.74 kB │ gzip:   0.34 kB
+ℹ dist/config-validation-E6Hkqmhr.js                   0.73 kB │ gzip:   0.41 kB
+ℹ dist/trash-CWQQXWX3.js                               0.71 kB │ gzip:   0.39 kB
+ℹ dist/wsl-jdLWdiKy.js                                 0.68 kB │ gzip:   0.36 kB
+ℹ dist/logging-PVQxLC6I.js                             0.68 kB │ gzip:   0.36 kB
+ℹ dist/help-format-B0pWGnZs.js                         0.66 kB │ gzip:   0.29 kB
+ℹ dist/auth-choice-legacy-DxCamFcQ.js                  0.64 kB │ gzip:   0.31 kB
+ℹ dist/onboard-config-7cR7QGjL.js                      0.64 kB │ gzip:   0.32 kB
+ℹ dist/clipboard-C0XDE_OY.js                           0.63 kB │ gzip:   0.37 kB
+ℹ dist/program-context-5q-A0wbP.js                     0.61 kB │ gzip:   0.32 kB
+ℹ dist/transcript-events-D5O01TlD.js                   0.59 kB │ gzip:   0.29 kB
+ℹ dist/workspace-dirs-DVvmMbIu.js                      0.58 kB │ gzip:   0.33 kB
+ℹ dist/outbound-attachment-Bc9bVXwP.js                 0.57 kB │ gzip:   0.32 kB
+ℹ dist/channels-status-issues-CmHZBwQD.js              0.55 kB │ gzip:   0.30 kB
+ℹ dist/runtime-status-D6c3G7my.js                      0.55 kB │ gzip:   0.29 kB
+ℹ dist/model-param-b-Cp9d4e-0.js                       0.49 kB │ gzip:   0.32 kB
+ℹ dist/clawbot-cli-BAd_xH5A.js                         0.49 kB │ gzip:   0.31 kB
+ℹ dist/links-CW8Bx7rK.js                               0.48 kB │ gzip:   0.30 kB
+ℹ dist/proxy-DL3MD6-P.js                               0.48 kB │ gzip:   0.30 kB
+ℹ dist/parse-timeout-zNJBr1fY.js                       0.46 kB │ gzip:   0.26 kB
+ℹ dist/prompt-style-DwCXob2h.js                        0.44 kB │ gzip:   0.23 kB
+ℹ dist/parse-port-DnJYkByg.js                          0.43 kB │ gzip:   0.25 kB
+ℹ dist/rolldown-runtime-Cbj13DAv.js                    0.42 kB │ gzip:   0.28 kB
+ℹ dist/helpers-cLP5YLeQ.js                             0.41 kB │ gzip:   0.26 kB
+ℹ dist/secret-equal-CbntzRkh.js                        0.39 kB │ gzip:   0.26 kB
+ℹ dist/allow-from-BIJVrwCW.js                          0.39 kB │ gzip:   0.24 kB
+ℹ dist/plugins-allowlist-CCpr61rO.js                   0.34 kB │ gzip:   0.22 kB
+ℹ dist/chat-type-CeFzWU-6.js                           0.33 kB │ gzip:   0.20 kB
+ℹ dist/pairing-labels-BNdJ5vj7.js                      0.26 kB │ gzip:   0.18 kB
+ℹ dist/prompts-m1IJwIAx.js                             0.24 kB │ gzip:   0.17 kB
+ℹ dist/logging-CFvkxgcX.js                             0.01 kB │ gzip:   0.03 kB
+ℹ 280 files, total: 7798.74 kB
+✔ Build complete in 756ms
+
+> openclaw@2026.2.21 build:plugin-sdk:dts /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[copy-hook-metadata] Copied boot-md/HOOK.md
+[copy-hook-metadata] Copied bootstrap-extra-files/HOOK.md
+[copy-hook-metadata] Copied command-logger/HOOK.md
+[copy-hook-metadata] Copied session-memory/HOOK.md
+[copy-hook-metadata] Done
+[copy-export-html-templates] Copied template.html
+[copy-export-html-templates] Copied template.css
+[copy-export-html-templates] Copied template.js
+[copy-export-html-templates] Copied vendor/highlight.min.js
+[copy-export-html-templates] Copied vendor/marked.min.js
+[copy-export-html-templates] Done
+[PASS] pnpm build
+==== pnpm format:check (advisory) ====
+
+> openclaw@2026.2.21 format:check /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> oxfmt --check
+
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 3907ms on 5100 files using 8 threads.
+[PASS] pnpm format:check
+==== pnpm tsgo ====
+[PASS] pnpm tsgo
+==== pnpm lint ====
+
+> openclaw@2026.2.21 lint /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> oxlint --type-aware
+
+Found 0 warnings and 0 errors.
+Finished in 4.7s on 3661 files using 8 threads.
+[PASS] pnpm lint
+==== pnpm test ====
+
+> openclaw@2026.2.21 test /Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831
+> node scripts/test-parallel.mjs
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831[39m
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831[39m
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831[39m
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/newdldewdl/clawd/openclaw/.worktrees/openclaw-22831[39m
+
+ [32m✓[39m src/memory/qmd-manager.test.ts [2m([22m[2m41 tests[22m[2m)[22m[33m 678[2mms[22m[39m
+     [33m[2m✓[22m[39m retries boot update when qmd reports a retryable lock error [33m 507[2mms[22m[39m
+ [32m✓[39m src/gateway/session-utils.fs.test.ts [2m([22m[2m42 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/gateway/session-utils.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/telegram/bot-message-dispatch.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/agent-runner.runreplyagent.test.ts [2m([22m[2m37 tests[22m[2m)[22m[33m 1774[2mms[22m[39m
+ [32m✓[39m src/gateway/call.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 185[2mms[22m[39m
+ [32m✓[39m src/security/audit.test.ts [2m([22m[2m81 tests[22m[2m)[22m[33m 813[2mms[22m[39m
+ [32m✓[39m src/gateway/auth.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/telegram/send.test.ts [2m([22m[2m61 tests[22m[2m)[22m[32m 144[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/session.test.ts [2m([22m[2m38 tests[22m[2m)[22m[33m 439[2mms[22m[39m
+ [32m✓[39m src/gateway/server-chat.agent-events.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/agents-mutate.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/commands.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 189[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.returns-default-unset.test.ts [2m([22m[2m40 tests[22m[2m)[22m[33m 355[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.test.ts [2m([22m[2m57 tests[22m[2m)[22m[32m 136[2mms[22m[39m
+ [32m✓[39m src/slack/monitor/events/interactions.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/gateway/hooks-mapping.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/reply-flow.test.ts [2m([22m[2m80 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 122[2mms[22m[39m
+ [32m✓[39m src/gateway/tools-invoke-http.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 136[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/send.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/monitor.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/monitor.test.ts [2m([22m[2m60 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-regressions.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 235[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/twitch-client.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/server-methods.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m src/discord/monitor.test.ts [2m([22m[2m53 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/actions/actions.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/cron/service.runs-one-shot-main-job-disables-it.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 140[2mms[22m[39m
+ [32m✓[39m src/telegram/bot.create-telegram-bot.test.ts [2m([22m[2m56 tests[22m[2m)[22m[33m 534[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/reply-utils.test.ts [2m([22m[2m64 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 277[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound.test.ts [2m([22m[2m55 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/config/includes.test.ts [2m([22m[2m53 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/agent.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/gateway/net.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/actions.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/model-picker.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-bus.fuzz.test.ts [2m([22m[2m76 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/exec-approvals.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/attachments.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-bus.integration.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/gateway/gateway-misc.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/slack/monitor/media.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 145[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/deliver.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/routing/resolve-route.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/infra/update-runner.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/gateway/channel-health-monitor.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 111[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/agents/subagent-registry.steer-restart.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/gateway/server-node-events.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/config/sessions.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/auto-reply/status.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/agents/tool-loop-detection.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/gateway/sessions-patch.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/tts/tts.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/channels/status-reactions.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/discord/send.sends-basic-channel-messages.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 115[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/thread-bindings.ttl.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/slack/monitor.tool-result.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 135[2mms[22m[39m
+ [32m✓[39m src/telegram/format.wrap-md.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/manager.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.antigravity.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+ [32m✓[39m src/telegram/bot.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 362[2mms[22m[39m
+ [32m✓[39m src/commands/models.list.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 467[2mms[22m[39m
+ [32m✓[39m src/gateway/hooks.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/signal/format.chunking.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-profile.fuzz.test.ts [2m([22m[2m51 tests[22m[2m)[22m[33m 326[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/chat.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/session-memory/handler.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 270[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/access-control.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/dispatch-from-config.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/message-handler.process.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/native-command.model-picker.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/slack/monitor/slash.test.ts [2m([22m[2m20 tests[22m[2m)[22m[33m 2229[2mms[22m[39m
+ [32m✓[39m src/slack/monitor/message-handler/prepare.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/gateway/boot.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-profile-http.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/webhook-security.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/plugins/uninstall.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m extensions/discord/src/subagent-hooks.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cron/normalize.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cli/cron-cli.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 153[2mms[22m[39m
+ [32m✓[39m src/discord/send.creates-thread.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/chat.abort-persistence.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/browser/extension-relay.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 134[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-profile.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/hooks/internal-hooks.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/outbound.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/auto-reply/chunk.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-runner.sanitize-session-history.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/infra/session-cost-usage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m extensions/memory-lancedb/index.test.ts [2m([22m[2m12 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 198[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/plugins-core.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/reactions.test.ts [2m([22m[2m46 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/gateway/server-runtime-config.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/auto-reply/command-control.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/agents/ollama-stream.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/send.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/daemon/service-env.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/attachments.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/gateway/auth-rate-limit.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/onboarding.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/abort.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m extensions/lobster/src/lobster-tool.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/route-reply.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 135[2mms[22m[39m
+ [32m✓[39m src/gateway/client.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.skill-filter.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/messenger.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/auto-reply/inbound.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/usage.sessions-usage.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/security/external-content.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/tui/tui-event-handlers.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/wizard/onboarding.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/security/windows-acl.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.auth.normalizes-keys.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+ [32m✓[39m src/security/skill-scanner.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/agents/sessions-spawn-hooks.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 1699[2mms[22m[39m
+     [33m[2m✓[22m[39m runs subagent_spawning and emits subagent_spawned with requester metadata [33m 1689[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 483[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-runner/model.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/gateway/startup-auth.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/nodes.invoke-wake.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/memory/manager.batch.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 121[2mms[22m[39m
+ [32m✓[39m src/memory/mmr.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/gateway/chat-attachments.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/config/io.write-config.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 194[2mms[22m[39m
+ [32m✓[39m src/agents/auth-profiles/usage.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-wake.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/telegram/draft-stream.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 85[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/update.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/telegram/model-buttons.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 134[2mms[22m[39m
+ [32m✓[39m src/agents/pi-tools.before-tool-call.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 308[2mms[22m[39m
+ [32m✓[39m src/memory/index.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 305[2mms[22m[39m
+ [32m✓[39m src/gateway/server-channels.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m extensions/diagnostics-otel/src/service.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/send.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/reply-state.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/web/media.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 212[2mms[22m[39m
+ [32m✓[39m src/auto-reply/commands-registry.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m extensions/line/src/channel.sendPayload.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/tui/components/searchable-select-list.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/infra-runtime.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/usage.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/gateway/control-ui.http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/commands-subagents-focus.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/signal/monitor.tool-result.sends-tool-summaries-responseprefix.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/gateway/server-restart-deferral.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/agents/model-fallback.probe.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/targets.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/memory-cli.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/hooks/loader.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 115[2mms[22m[39m
+ [32m✓[39m src/canvas-host/server.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 172[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/bot.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/web/monitor-inbox.blocks-messages-from-unauthorized-senders-not-allowfrom.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/hooks/install.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 318[2mms[22m[39m
+ [32m✓[39m src/browser/server-context.remote-tab-ops.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/media/store.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 296[2mms[22m[39m
+ [32m✓[39m extensions/zalo/src/monitor.webhook.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 221[2mms[22m[39m
+ [32m✓[39m src/slack/monitor/monitor.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 138[2mms[22m[39m
+ [32m✓[39m src/browser/chrome.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+ [32m✓[39m src/telegram/bot-native-commands.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/line/markdown-to-line.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-discovery.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/cli/devices-cli.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/provider.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/browser/server.agent-contract-form-layout-act-commands.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 464[2mms[22m[39m
+ [32m✓[39m src/imessage/monitor.gating.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-subscribe.handlers.tools.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/config/env-substitution.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/media-send.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/gateway/server.plugin-http-auth.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/whatsapp/resolve-outbound-target.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/mentions.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/telegram/bot/helpers.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply/web-auto-reply-monitor.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+ [32m✓[39m src/gateway/server-cron.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/agents/cli-credentials.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/security/fix.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 189[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/media.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/gateway/config-reload.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/utils.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/telegram/bot/delivery.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/send.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 197[2mms[22m[39m
+ [32m✓[39m src/shared/text/reasoning-tags.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/status.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/followup-runner.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/providers/google-shared.preserves-parameters-type-is-missing.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 100[2mms[22m[39m
+ [32m✓[39m src/web/monitor-inbox.allows-messages-from-senders-allowfrom-list.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 107[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/commands-subagents-spawn.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/format-time/format-time.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/web/monitor-inbox.captures-media-path-image-messages.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 89[2mms[22m[39m
+ [32m✓[39m src/config/config-misc.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/media-helpers.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/hooks/frontmatter.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 133[2mms[22m[39m
+ [32m✓[39m src/agents/openclaw-tools.subagents.sessions-spawn-depth-limits.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/browser/client.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/gateway/chat-abort.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/message-utils.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/daemon/launchd.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/reply-plumbing.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/update-startup.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/gateway/server-startup-memory.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/memory/internal.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/infra/device-pairing.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 223[2mms[22m[39m
+ [32m✓[39m src/gateway/server/plugins-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/registry.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 315[2mms[22m[39m
+ [32m✓[39m src/web/monitor-inbox.streams-inbound-messages.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 127[2mms[22m[39m
+ [32m✓[39m src/plugins/discovery.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/signal/monitor/event-handler.mention-gating.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply.block-streaming.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 248[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/push.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/restart-helper.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/gateway/http-endpoint-helpers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/manager/events.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/config/sessions/sessions.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 141[2mms[22m[39m
+ [32m✓[39m src/cron/service.jobs.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.nested-lists.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods.control-plane-rate-limit.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/browser/cdp.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 258[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/discord.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/gateway/chat-sanitize.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/acp/client.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/config/env-preserve.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 212[2mms[22m[39m
+ [32m✓[39m src/gateway/node-invoke-system-run-approval.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/search-manager.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/cli/argv.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/auto-reply/envelope.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 114[2mms[22m[39m
+ [32m✓[39m src/gateway/http-auth-helpers.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/reply-delivery.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/model-selection.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/process/command-queue.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 100[2mms[22m[39m
+ [32m✓[39m extensions/mattermost/src/channel.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/infra/control-ui-assets.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/cli/config-cli.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply.directive.parse.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 70[2mms[22m[39m
+ [32m✓[39m src/auto-reply/heartbeat.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/browser/profiles.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/line/rich-menu.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply/deliver-reply.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+ [32m✓[39m src/browser/server.agent-contract-snapshot-endpoints.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 329[2mms[22m[39m
+ [32m✓[39m extensions/mattermost/src/mattermost/monitor-websocket.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/web/inbound.media.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m src/plugins/tools.optional.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/file-consent-helpers.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.model-override-wiring.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/discord/resolve-users.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/auto-reply/tool-meta.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-subscribe.tools.media.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/telegram/sticker-cache.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-subscribe.handlers.tools.media.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/browser/config.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/web/session.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/browser/server.auth-token-gates-http.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/gateway/server-http.hooks-request-timeout.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/imessage/monitor.shutdown.unhandled-rejection.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m19 passed[39m[22m[90m (19)[39m
+[2m      Tests [22m [1m[32m336 passed[39m[22m[90m (336)[39m
+[2m   Start at [22m 12:47:56
+[2m   Duration [22m 56.69s[2m (transform 8.79s, setup 1.77s, import 42.79s, tests 6.93s, environment 2ms)[22m
+
+ [32m✓[39m src/gateway/protocol/index.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/browser/pw-tools-core.waits-next-download-saves-it.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-bus.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/gateway/protocol/cron-validators.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m extensions/thread-ownership/index.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/probe.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/gateway/ws-log.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/plugins-channel.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/gateway/server-discovery.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/gateway/method-scopes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.ghost-reminder.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/targets.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/gateway/server/presence-events.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/gateway/server-plugins.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m extensions/lobster/src/windows-spawn.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/docker-setup.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 548[2mms[22m[39m
+     [33m[2m✓[22m[39m handles env defaults, home-volume mounts, and apt build args [33m 378[2mms[22m[39m
+ [32m✓[39m extensions/mattermost/src/mattermost/reconnect.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 107[2mms[22m[39m
+ [32m✓[39m src/gateway/origin-check.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/gateway/probe.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m extensions/whatsapp/src/resolve-target.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m extensions/google-gemini-cli-auth/oauth.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/gateway/assistant-identity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply/web-auto-reply-utils.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply/monitor/process-message.inbound-contract.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 168[2mms[22m[39m
+ [32m✓[39m extensions/llm-task/src/llm-task-tool.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 97[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply/heartbeat-runner.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/token.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.blockquote-spacing.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/gateway/control-ui-csp.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/infra/fetch.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/program/message/helpers.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/gateway/server-methods/skills.update.normalizes-api-key.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/web/inbound.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m56 passed[39m[22m[90m (56)[39m
+[2m      Tests [22m [1m[32m568 passed[39m[22m[90m (568)[39m
+[2m   Start at [22m 12:47:56
+[2m   Duration [22m 65.72s[2m (transform 13.05s, setup 4.84s, import 104.52s, tests 1.86s, environment 9ms)[22m
+
+ [32m✓[39m src/line/bot-handlers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/policy.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/archive.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1229[2mms[22m[39m
+     [33m[2m✓[22m[39m extracts tar archives [33m 850[2mms[22m[39m
+ [32m✓[39m src/plugins/voice-call.plugin.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-target.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/discord/monitor.tool-result.sends-status-replies-responseprefix.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 109[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/directive-handling.model.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/monitor.webhook-security.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 346[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 1373[2mms[22m[39m
+ [32m✓[39m src/telegram/monitor.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/tui/tui-formatters.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/env-preserve-io.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-visibility.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cron/service.every-jobs-fire.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 232[2mms[22m[39m
+ [32m✓[39m src/infra/path-env.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-subagent.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/config/sessions.cache.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/adapters/pty.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/infra/openclaw-root.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/channels/channel-helpers.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cli/pairing-cli.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 165[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/channel.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/monitor/replies.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/bot.checkBotMentioned.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/monitor/mentions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.model-override.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 141[2mms[22m[39m
+ [32m✓[39m src/browser/browser-utils.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/channels/channel-config.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/browser.create.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/inbound-meta.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/auto-reply/media-note.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-extension.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 143[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-16156-list-skips-cron.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 117[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.before-agent-start.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cron/session-reaper.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/telegram/bot/delivery.resolve-media-retry.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/tailscale.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run-loop.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/commands/signal-install.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/terminal/table.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/onboarding.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/types.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-state-store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.threading.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+ [32m✓[39m src/agents/pi-tools.sandbox-mounted-paths.workspace-only.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m src/infra/infra-store.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/cron/service.store.migration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.claude.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.scheduler.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/config/config.sandbox-docker.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/browser/pw-ai.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1602[2mms[22m[39m
+ [32m✓[39m src/config/config.identity-defaults.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 232[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-lock.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m src/agents/pi-auth-json.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/line/auto-reply-delivery.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/agents/subagent-registry.nested.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/agents/auth-profiles.cooldown-auto-expiry.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/merge-patch.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/commands/agent/session.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/get-reply-run.media-only.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/qr-cli.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/agents/command-poll-backoff.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/infra/install-source-utils.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/memory/batch-voyage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/telegram/status-reaction-variants.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cron/service/jobs.schedule-error-isolation.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/post-compaction-audit.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-13992-regression.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/agents/tools/web-fetch.cf-markdown.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m extensions/line/src/channel.logout.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/paths.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/session.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.pinning.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/agents/system-prompt-stability.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/line/reply-chunks.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/channel.directory.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/channels/ack-reactions.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/cli/profile.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/message-handler.preflight.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 138[2mms[22m[39m
+ [32m✓[39m src/config/config.plugin-validation.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 299[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/validate-sandbox-security.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 125[2mms[22m[39m
+ [32m✓[39m src/discord/send.permissions.authz.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/memory/backend-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/memory/temporal-decay.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/auto-reply/model.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 125[2mms[22m[39m
+ [32m✓[39m src/config/plugin-auto-enable.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32m✓[39m src/infra/npm-pack-install.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-paths.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/slack.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/config-hash.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/browser/server-context.hot-reload-profiles.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-cli.coverage.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1978[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/docker.config-hash-recreate.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/tui/tui-stream-assembler.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/browser/server.evaluate-disabled-does-not-block-storage.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 314[2mms[22m[39m
+     [33m[2m✓[22m[39m blocks act:evaluate but still allows cookies/storage reads [33m 312[2mms[22m[39m
+ [32m✓[39m src/cli/logs-cli.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/logger.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/agents/tools/sessions-access.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cron/service.store-migration.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 549[2mms[22m[39m
+ [32m✓[39m src/web/outbound.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+ [32m✓[39m src/plugins/manifest-registry.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/logging/console-capture.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 346[2mms[22m[39m
+ [32m✓[39m src/agents/subagent-registry.announce-loop-guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 89[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-camera.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/agents/workspace.bootstrap-cache.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m extensions/nostr/src/nostr-profile-import.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-runner/run.overflow-compaction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 382[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/reply-dispatcher.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/telegram/bot-native-commands.plugin-auth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/commands-session-ttl.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/subagents-utils.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/web/inbound/send-api.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/net/fetch-guard.ssrf.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 271[2mms[22m[39m
+ [32m✓[39m src/agents/compaction.retry.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/agents/openai-responses.reasoning-replay.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/shared/shared-misc.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/infra/http-body.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/daemon/service-audit.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/discord/chunk.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/tmp-openclaw-dir.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/cron/service.restart-catchup.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply.broadcast-groups.broadcasts-sequentially-configured-order.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 6619[2mms[22m[39m
+     [33m[2m✓[22m[39m broadcasts in parallel by default [33m 5771[2mms[22m[39m
+ [32m✓[39m src/commands/doctor-gateway-services.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m extensions/googlechat/src/monitor.webhook-routing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m extensions/telegram/src/channel.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 122[2mms[22m[39m
+ [32m✓[39m src/browser/profiles-service.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/providers/telnyx.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run.option-collisions.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 351[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/send/targets.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/shell-env.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/media/mime.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-voyage.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/agents/bash-tools.process.poll-timeout.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 158[2mms[22m[39m
+ [32m✓[39m src/config/schema.hints.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 201[2mms[22m[39m
+ [32m✓[39m ui/src/ui/views/usage-render-details.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/agent-runner-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/commands-setunset.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/unhandled-rejections.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/auto-reply/skill-commands.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 402[2mms[22m[39m
+ [32m✓[39m src/acp/translator.session-rate-limit.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.hr-spacing.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 619[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.minimax.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/discord/resolve-channels.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/web/auto-reply.web-auto-reply.last-route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 320[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/google/video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/register.option-collisions.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 245[2mms[22m[39m
+ [32m✓[39m src/cron/run-log.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+ [32m✓[39m src/agents/tools/discord-actions-moderation.authz.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/boot-md/handler.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/auto-reply/fallback-state.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/memory/manager.embedding-batches.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 648[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/post-compaction-context.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/commands/doctor-state-integrity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+ [32m✓[39m src/daemon/constants.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/config/channel-capabilities.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/memory/manager.read-file.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/line/webhook-node.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m extensions/line/src/channel.startup.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/actions/reactions.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/docx.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m extensions/googlechat/src/resolve-target.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/mattermost/src/mattermost/reactions.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/cron/service.delivery-plan.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 144[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-runner/extra-params.cache-retention-default.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/webhook.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 152[2mms[22m[39m
+ [32m✓[39m src/agents/bash-tools.process.supervisor.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/media-stream.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/monitor/media.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/actions/pins.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/telephony-tts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/config.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/resolve-targets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/inbound.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/providers/twilio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/directory-live.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/accounts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/client.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m extensions/googlechat/src/api.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-cli/register.invoke.nodes-run-approval-timeout.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 111[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 404[2mms[22m[39m
+     [33m[2m✓[22m[39m handles media heartbeat delivery and announce cleanup modes [33m 390[2mms[22m[39m
+ [32m✓[39m src/config/schema.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 3993[2mms[22m[39m
+     [33m[2m✓[22m[39m exports schema + hints [33m 3930[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.transcript-prune.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 218[2mms[22m[39m
+ [32m✓[39m src/slack/draft-stream.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/version.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/cron/service.read-ops-nonblocking.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 197[2mms[22m[39m
+ [32m✓[39m src/telegram/format.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/conversation-store-fs.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 70[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/config-schema.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/browser/pw-session.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.install.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/cli/exec-approvals-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/commands/auth-choice.apply.huggingface.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/acp/session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m extensions/imessage/src/channel.outbound.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-forwarder.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 595[2mms[22m[39m
+     [33m[2m✓[22m[39m skips main jobs with empty systemEvent text [33m 342[2mms[22m[39m
+ [32m✓[39m src/infra/infra-parsing.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cli/program.force.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply/agent-runner-helpers.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/polls.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/infra/ports.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 263[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.auto-audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/infra/abort-pattern.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/infra/unhandled-rejections.fatal-detection.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 122[2mms[22m[39m
+ [32m✓[39m src/agents/models-config.providers.nvidia.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/line/webhook.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/agents/auth-profiles/oauth.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 102[2mms[22m[39m
+ [32m✓[39m src/commands/status.update.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/utils/queue-helpers.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivery-target-thread-session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/tui/tui.submit-handler.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 128[2mms[22m[39m
+ [32m✓[39m src/cron/schedule.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 254[2mms[22m[39m
+ [32m✓[39m src/browser/pw-tools-core.last-file-chooser-arm-wins.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/process/kill-tree.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/adapters/child.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/slack/send.blocks.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 216[2mms[22m[39m
+ [32m✓[39m src/pairing/setup-code.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 140[2mms[22m[39m
+ [32m✓[39m src/commands/status-all/channels.mattermost-token-summary.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/browser/pw-tools-core.screenshots-element-selector.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 267[2mms[22m[39m
+ [32m✓[39m src/browser/server-lifecycle.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/imessage/send.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 135[2mms[22m[39m
+ [32m✓[39m extensions/bluebubbles/src/config-schema.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 197[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.pruning.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 260[2mms[22m[39m
+ [32m✓[39m src/cli/program/command-registry.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 295[2mms[22m[39m
+ [32m✓[39m src/memory/manager.async-search.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 1736[2mms[22m[39m
+     [33m[2m✓[22m[39m does not await sync when searching [33m 571[2mms[22m[39m
+     [33m[2m✓[22m[39m waits for in-flight search sync during close [33m 1147[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 155[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.deepgram.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 211[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-targets.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32m✓[39m src/telegram/reaction-level.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/telegram/fetch.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 306[2mms[22m[39m
+ [32m✓[39m src/infra/restart-sentinel.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/config/commands.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/line/template-messages.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/config.env-vars.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/provider.lifecycle.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m src/agents/subagent-announce-queue.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/channel.directory.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m extensions/zalouser/src/status-issues.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/probe.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/monitor/allowlist.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/agents/pi-embedded-runner.guard.waitforidle-before-flush.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 115[2mms[22m[39m
+ [32m✓[39m src/media-understanding/resolve.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/bot.stripBotMention.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/protocol.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/errors.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/media-understanding/media-understanding-misc.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 259[2mms[22m[39m
+ [32m✓[39m extensions/tlon/src/urbit/base-url.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/slack/monitor.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 117[2mms[22m[39m
+ [32m✓[39m src/plugins/services.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/cli/models-cli.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 246[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-17852-daily-skip.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/tui/tui.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 291[2mms[22m[39m
+ [32m✓[39m src/discord/targets.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 161[2mms[22m[39m
+ [32m✓[39m extensions/tlon/src/urbit/auth.ssrf.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 386[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail-setup-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 219[2mms[22m[39m
+ [32m✓[39m src/memory/manager.watcher-config.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 218[2mms[22m[39m
+ [32m✓[39m extensions/zalo/src/channel.directory.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m src/telegram/bot-message-context.dm-threads.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1146[2mms[22m[39m
+     [33m[2m✓[22m[39m uses thread session key for dm topics [33m 698[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-compaction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 457[2mms[22m[39m
+ [32m✓[39m src/cli/acp-cli.option-collisions.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 590[2mms[22m[39m
+ [32m✓[39m src/wizard/onboarding.gateway-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 235[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/channel.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 189[2mms[22m[39m
+ [32m✓[39m extensions/tlon/src/urbit/sse-client.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 267[2mms[22m[39m
+ [32m✓[39m src/telegram/token.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 229[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/normalize.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/agents/usage.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 144[2mms[22m[39m
+ [32m✓[39m src/imessage/monitor/deliver.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m extensions/googlechat/src/targets.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/client.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/media/input-files.fetch-guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 951[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects oversized streamed payloads and cancels the stream [33m 508[2mms[22m[39m
+ [32m✓[39m src/browser/pw-role-snapshot.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 150[2mms[22m[39m
+ [32m✓[39m src/hooks/workspace.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 153[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/bound-delivery-router.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/browser/control-auth.auto-token.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 259[2mms[22m[39m
+ [32m✓[39m src/whatsapp/normalize.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/telegram/network-errors.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/memory/session-files.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 331[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/fs-paths.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 125[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-command.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/line/accounts.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 132[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 164[2mms[22m[39m
+ [32m✓[39m src/cron/service.jobs.top-of-hour-stagger.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 236[2mms[22m[39m
+ [32m✓[39m src/tui/gateway-chat.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/cli/cron-cli/shared.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/slack/actions.blocks.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/web/inbound/media.node.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/commands/doctor-memory-search.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/fs-safe.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-inspect.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/utils/delivery-context.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/media/parse.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/tui/theme/theme.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/agents/sandbox/fs-bridge.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 630[2mms[22m[39m
+     [33m[2m✓[22m[39m uses POSIX-safe shell prologue in all bridge commands [33m 459[2mms[22m[39m
+ [32m✓[39m src/utils/utils-misc.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cli/cli-utils.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 233[2mms[22m[39m
+ [32m✓[39m src/media/server.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1339[2mms[22m[39m
+     [33m[2m✓[22m[39m serves media and cleans up after send [33m 532[2mms[22m[39m
+ [32m✓[39m src/config/config.irc.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 332[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke.sanitize-env.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 117[2mms[22m[39m
+ [32m✓[39m src/web/inbound/access-control.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/provider.proxy.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 109[2mms[22m[39m
+ [32m✓[39m src/config/config.compaction-settings.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1030[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves memory flush config values [33m 680[2mms[22m[39m
+ [32m✓[39m src/browser/paths.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 418[2mms[22m[39m
+ [32m✓[39m src/media/store.redirect.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 355[2mms[22m[39m
+ [32m✓[39m src/infra/npm-integrity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/cron/cron-protocol-conformance.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 235[2mms[22m[39m
+ [32m✓[39m src/browser/pw-tools-core.clamps-timeoutms-scrollintoview.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/bootstrap-extra-files/handler.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 38541[2mms[22m[39m
+     [33m[2m✓[22m[39m re-applies subagent bootstrap allowlist after extras are added [33m 38265[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/supervisor.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 426[2mms[22m[39m
+ [32m✓[39m src/telegram/webhook.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 242[2mms[22m[39m
+ [32m✓[39m src/slack/format.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 696[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.test.ts [2m([22m[2m54 tests[22m[2m)[22m[33m 359[2mms[22m[39m
+ [32m✓[39m src/config/model-alias-defaults.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/commands/dashboard.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/memory/manager.vector-dedupe.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 602[2mms[22m[39m
+     [33m[2m✓[22m[39m deletes existing vector rows before inserting replacements [33m 587[2mms[22m[39m
+ [32m✓[39m src/agents/subagent-depth.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/providers/qwen-portal-oauth.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.table-bullets.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 458[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-send-service.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/terminal/restore.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/telegram/accounts.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/imessage/targets.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/web/login.coverage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 169[2mms[22m[39m
+ [32m✓[39m src/config/legacy-migrate.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1951[2mms[22m[39m
+     [33m[2m✓[22m[39m moves routing.transcribeAudio into tools.media.audio.models [33m 1524[2mms[22m[39m
+     [33m[2m✓[22m[39m moves routing.groupChat.requireMention into channel group defaults [33m 340[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/monitor/rooms.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 140[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 127[2mms[22m[39m
+ [32m✓[39m extensions/voice-call/src/providers/plivo.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 89[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/polls-store.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 199[2mms[22m[39m
+ [32m✓[39m src/config/config.pruning-defaults.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 404[2mms[22m[39m
+ [32m✓[39m src/logging/redact.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m extensions/twitch/src/plugin.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m extensions/tlon/src/urbit/send.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 102[2mms[22m[39m
+ [32m✓[39m src/slack/monitor.threading.missing-thread-ts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 218[2mms[22m[39m
+ [32m✓[39m src/telegram/bot-native-command-menu.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/auto-reply/reply.raw-body.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 979[2mms[22m[39m
+     [33m[2m✓[22m[39m handles directives and history in the prompt [33m 950[2mms[22m[39m
+ [32m✓[39m src/cli/deps.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+ [32m✓[39m src/infra/warning-filter.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1250[2mms[22m[39m
+     [33m[2m✓[22m[39m installs once and suppresses known warnings at emit time [33m 1230[2mms[22m[39m
+ [32m✓[39m src/config/sessions/delivery-info.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/agents/model-catalog.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 280[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/threading.auto-thread.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 100[2mms[22m[39m
+ [32m✓[39m src/media/host.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/daemon/program-args.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m src/tui/tui-session-actions.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 130[2mms[22m[39m
+ [32m✓[39m src/telegram/send.proxy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 54078[2mms[22m[39m
+     [33m[2m✓[22m[39m uses proxy fetch for sendMessage [33m 54016[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-active-hours.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+ [32m✓[39m src/commands/models.list.auth-sync.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 1321[2mms[22m[39m
+     [33m[2m✓[22m[39m marks models available when auth exists only in auth-profiles.json [33m 1297[2mms[22m[39m
+ [32m✓[39m src/commands/models/list.list-command.forward-compat.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 295[2mms[22m[39m
+ [32m✓[39m extensions/nextcloud-talk/src/policy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 152[2mms[22m[39m
+ [32m✓[39m src/link-understanding/detect.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/external-keys.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/browser/client-fetch.loopback-auth.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/telegram/probe.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/slack/threading-tool-context.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/line/flex-templates.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/channels/command-gating.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/logging/console-timestamp.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/config-schema.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 184[2mms[22m[39m
+ [32m✓[39m src/browser/navigation-guard.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 194[2mms[22m[39m
+ [32m✓[39m src/discord/components.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/agents/skills/refresh.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 601[2mms[22m[39m
+     [33m[2m✓[22m[39m ignores node_modules, dist, .git, and Python venvs by default [33m 595[2mms[22m[39m
+ [32m✓[39m src/routing/session-key.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/retry.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 131[2mms[22m[39m
+ [32m✓[39m src/auto-reply/thinking.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/utils/run-with-concurrency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/process/spawn-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m extensions/irc/src/monitor.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 688[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps channel target for group messages [33m 341[2mms[22m[39m
+ [32m✓[39m src/config/config.discord.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 426[2mms[22m[39m
+     [33m[2m✓[22m[39m loads discord guild map + dm group settings [33m 357[2mms[22m[39m
+ [32m✓[39m extensions/tlon/src/config-schema.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 188[2mms[22m[39m
+ [32m✓[39m extensions/tlon/src/monitor/processed-messages.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/agents/model-auth.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 101[2mms[22m[39m
+ [32m✓[39m src/memory/query-expansion.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m extensions/googlechat/src/monitor.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/runtime-overrides.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 89[2mms[22m[39m
+ [32m✓[39m src/commands/doctor-session-locks.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 673[2mms[22m[39m
+     [33m[2m✓[22m[39m removes stale locks in repair mode [33m 415[2mms[22m[39m
+ [32m✓[39m src/providers/google-shared.ensures-function-call-comes-after-user-turn.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/media/inbound-path-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/openai/audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 267[2mms[22m[39m
+ [32m✓[39m src/discord/monitor/message-handler.inbound-contract.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 234[2mms[22m[39m
+ [32m✓[39m src/commands/openai-codex-oauth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/agents/tool-mutation.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 158[2mms[22m[39m
+ [32m✓[39m extensions/zalouser/src/channel.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 91[2mms[22m[39m
+
+<--- Last few GCs --->
+
+[46838:0x83e80c000]  1458926 ms: Scavenge (during sweeping) 4028.1 (4115.6) -> 4016.2 (4115.6) MB, pooled: 0.0 MB, 639.29 / 0.01 ms (average mu = 0.369, current mu = 0.328) task; 
+[46838:0x83e80c000]  1711283 ms: Mark-Compact (reduce) 4060.6 (4143.7) -> 4031.7 (4111.1) MB, pooled: 0.0 MB, 160536.93 / 112.26 ms (+ 8246.8 ms in 593 steps since start of marking, biggest step 153.2 ms, walltime since start of marking 224421 ms) (averag
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0x1074136dc node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 2: 0x107721f80 v8::Utils::ReportOOMFailure(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 3: 0x107721f38 v8::internal::V8::FatalProcessOutOfMemory(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 4: 0x1078ce1c4 v8::internal::Heap::ShouldOptimizeForLoadTime() const [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 5: 0x1078cd880 v8::internal::Heap::EagerlyFreeExternalMemoryAndWasmCode() [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 6: 0x1078cca14 v8::internal::Heap::CollectGarbage(v8::internal::AllocationSpace, v8::internal::GarbageCollectionReason, v8::GCCallbackFlags, v8::internal::PerformHeapLimitCheck) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 7: 0x1078c4f54 std::__1::invoke_result<v8::internal::HeapAllocator::AllocateRawWithRetryOrFailSlowPath(int, v8::internal::AllocationType, v8::internal::AllocationOrigin, v8::internal::AllocationAlignment, v8::internal::AllocationHint)::$_0&>::type v8::internal::HeapAllocator::CollectGarbageAndRetryAllocation<v8::internal::HeapAllocator::AllocateRawWithRetryOrFailSlowPath(int, v8::internal::AllocationType, v8::internal::AllocationOrigin, v8::internal::AllocationAlignment, v8::internal::AllocationHint)::$_0&>(v8::internal::HeapAllocator::AllocateRawWithRetryOrFailSlowPath(int, v8::internal::AllocationType, v8::internal::AllocationOrigin, v8::internal::AllocationAlignment, v8::internal::AllocationHint)::$_0&, v8::internal::AllocationType) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 8: 0x1078c3dc0 v8::internal::HeapAllocator::AllocateRawWithRetryOrFailSlowPath(int, v8::internal::AllocationType, v8::internal::AllocationOrigin, v8::internal::AllocationAlignment, v8::internal::AllocationHint) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+ 9: 0x1078ac20c v8::internal::Factory::NewFillerObject(int, v8::internal::AllocationAlignment, v8::internal::AllocationType, v8::internal::AllocationOrigin) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+10: 0x107bb77d8 v8::internal::Runtime_AllocateInYoungGeneration(int, unsigned long*, v8::internal::Isolate*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+11: 0x107235474 Builtins_CEntry_Return1_ArgvOnStack_NoBuiltinExit [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+12: 0x1072b4410 Builtins_RegExpPrototypeExec [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+13: 0x12c188740 
+14: 0x12c187ad8 
+15: 0x129bea748 
+16: 0x12a800988 
+17: 0x1072aa058 Builtins_PromiseFulfillReactionJob [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+18: 0x1071c2920 Builtins_RunMicrotasks [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+19: 0x107192850 Builtins_JSRunMicrotasksEntry [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+20: 0x107839218 v8::internal::(anonymous namespace)::Invoke(v8::internal::Isolate*, v8::internal::(anonymous namespace)::InvokeParams const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+21: 0x1078398c8 v8::internal::(anonymous namespace)::InvokeWithTryCatch(v8::internal::Isolate*, v8::internal::(anonymous namespace)::InvokeParams const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+22: 0x1078399b8 v8::internal::Execution::TryRunMicrotasks(v8::internal::Isolate*, v8::internal::MicrotaskQueue*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+23: 0x10785aea8 v8::internal::MicrotaskQueue::RunMicrotasks(v8::internal::Isolate*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+24: 0x10785acc4 v8::internal::MicrotaskQueue::PerformCheckpointInternal(v8::Isolate*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+25: 0x1071973cc Builtins_CallApiCallbackOptimizedNoProfiling [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+26: 0x12c0879b0 
+27: 0x10719296c Builtins_JSEntryTrampoline [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+28: 0x107192610 Builtins_JSEntry [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+29: 0x107839248 v8::internal::(anonymous namespace)::Invoke(v8::internal::Isolate*, v8::internal::(anonymous namespace)::InvokeParams const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+30: 0x107838c2c v8::internal::Execution::Call(v8::internal::Isolate*, v8::internal::DirectHandle<v8::internal::Object>, v8::internal::DirectHandle<v8::internal::Object>, v8::base::Vector<v8::internal::DirectHandle<v8::internal::Object> const>) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+31: 0x1084450f4 v8::Function::Call(v8::Isolate*, v8::Local<v8::Context>, v8::Local<v8::Value>, int, v8::Local<v8::Value>*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+32: 0x10736d924 node::InternalCallbackScope::Close() [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+33: 0x10736db9c node::InternalMakeCallback(node::Environment*, v8::Local<v8::Object>, v8::Local<v8::Object>, v8::Local<v8::Function>, int, v8::Local<v8::Value>*, node::async_context, v8::Local<v8::Value>) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+34: 0x10737c994 node::AsyncWrap::MakeCallback(v8::Local<v8::Function>, int, v8::Local<v8::Value>*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+35: 0x1074dc81c node::StreamBase::CallJSOnreadMethod(long, v8::Local<v8::ArrayBuffer>, unsigned long, node::StreamBase::StreamBaseJSChecks) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+36: 0x1074ddbfc node::EmitToJSStreamListener::OnStreamRead(long, uv_buf_t const&) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+37: 0x1074e0f44 node::LibuvStreamWrap::OnUvRead(long, uv_buf_t const*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+38: 0x1074e133c node::LibuvStreamWrap::ReadStart()::$_1::__invoke(uv_stream_s*, long, uv_buf_t const*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+39: 0x102f22334 uv__stream_io [/opt/homebrew/Cellar/libuv/1.51.0/lib/libuv.1.0.0.dylib]
+40: 0x102f27b58 uv__io_poll [/opt/homebrew/Cellar/libuv/1.51.0/lib/libuv.1.0.0.dylib]
+41: 0x102f19668 uv_run [/opt/homebrew/Cellar/libuv/1.51.0/lib/libuv.1.0.0.dylib]
+42: 0x10736e8cc node::SpinEventLoopInternal(node::Environment*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+43: 0x1074410b0 node::NodeMainInstance::Run(node::ExitCode*, node::Environment*) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+44: 0x107440de4 node::NodeMainInstance::Run() [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+45: 0x1073e6550 node::Start(int, char**) [/opt/homebrew/Cellar/node/25.6.0/lib/libnode.141.dylib]
+46: 0x18bd45d54 start [/usr/lib/dyld]
+ [32m✓[39m src/memory/manager.atomic-reindex.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 974[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps the prior index when a full reindex fails [33m 942[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/poll-types.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 55567[2mms[22m[39m
+     [33m[2m✓[22m[39m parses legacy m.poll payloads [33m 55526[2mms[22m[39m
+ [32m✓[39m src/agents/system-prompt-report.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/process/child-process-bridge.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 353[2mms[22m[39m
+     [33m[2m✓[22m[39m forwards SIGTERM to the wrapped child [33m 351[2mms[22m[39m
+ [32m✓[39m extensions/mattermost/src/mattermost/client.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m extensions/matrix/src/matrix/actions/limits.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m extensions/msteams/src/sent-message-cache.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m extensions/feishu/src/targets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/system-events.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/commands/onboard-interactive.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m extensions/nextcloud-talk/src/monitor.read-body.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m124 passed[39m[22m[90m (124)[39m
+[2m      Tests [22m [1m[32m1172 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (1173)[39m
+[2m   Start at [22m 12:47:56
+[2m   Duration [22m 1750.42s[2m (transform 97.45s, setup 53.86s, import 3236.51s, tests 63.76s, environment 1.33s)[22m
+
+ [32m✓[39m src/browser/pw-session.create-page.navigation-guard.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 116[2mms[22m[39m

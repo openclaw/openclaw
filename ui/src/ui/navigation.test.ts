@@ -6,6 +6,7 @@ import {
   normalizeBasePath,
   normalizePath,
   pathForTab,
+  resolveNavGroupCollapseState,
   subtitleForTab,
   tabFromPath,
   titleForTab,
@@ -185,5 +186,87 @@ describe("TAB_GROUPS", () => {
     const allTabs = TAB_GROUPS.flatMap((g) => g.tabs);
     const uniqueTabs = new Set(allTabs);
     expect(uniqueTabs.size).toBe(allTabs.length);
+  });
+});
+
+describe("resolveNavGroupCollapseState", () => {
+  it("prevents collapse when active tab is in group", () => {
+    const result = resolveNavGroupCollapseState({
+      groupTabs: ["overview", "channels", "instances"],
+      activeTab: "channels",
+      storedCollapsed: true,
+    });
+
+    expect(result.hasActiveTab).toBe(true);
+    expect(result.canCollapse).toBe(false);
+    expect(result.collapsed).toBe(false);
+    expect(result.storedCollapsed).toBe(true);
+  });
+
+  it("allows collapse when active tab is not in group and stored as collapsed", () => {
+    const result = resolveNavGroupCollapseState({
+      groupTabs: ["agents", "skills", "nodes"],
+      activeTab: "chat",
+      storedCollapsed: true,
+    });
+
+    expect(result.hasActiveTab).toBe(false);
+    expect(result.canCollapse).toBe(true);
+    expect(result.collapsed).toBe(true);
+    expect(result.storedCollapsed).toBe(true);
+  });
+
+  it("allows expansion when active tab is not in group and stored as expanded", () => {
+    const result = resolveNavGroupCollapseState({
+      groupTabs: ["agents", "skills", "nodes"],
+      activeTab: "chat",
+      storedCollapsed: false,
+    });
+
+    expect(result.hasActiveTab).toBe(false);
+    expect(result.canCollapse).toBe(true);
+    expect(result.collapsed).toBe(false);
+    expect(result.storedCollapsed).toBe(false);
+  });
+
+  it("preserves stored state when active tab not in group", () => {
+    const resultCollapsed = resolveNavGroupCollapseState({
+      groupTabs: ["config", "debug", "logs"],
+      activeTab: "overview",
+      storedCollapsed: true,
+    });
+
+    const resultExpanded = resolveNavGroupCollapseState({
+      groupTabs: ["config", "debug", "logs"],
+      activeTab: "overview",
+      storedCollapsed: false,
+    });
+
+    expect(resultCollapsed.collapsed).toBe(true);
+    expect(resultExpanded.collapsed).toBe(false);
+  });
+
+  it("always expands when first tab in group is active", () => {
+    const result = resolveNavGroupCollapseState({
+      groupTabs: ["chat"],
+      activeTab: "chat",
+      storedCollapsed: true,
+    });
+
+    expect(result.hasActiveTab).toBe(true);
+    expect(result.canCollapse).toBe(false);
+    expect(result.collapsed).toBe(false);
+  });
+
+  it("always expands when last tab in group is active", () => {
+    const result = resolveNavGroupCollapseState({
+      groupTabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
+      activeTab: "cron",
+      storedCollapsed: true,
+    });
+
+    expect(result.hasActiveTab).toBe(true);
+    expect(result.canCollapse).toBe(false);
+    expect(result.collapsed).toBe(false);
   });
 });
