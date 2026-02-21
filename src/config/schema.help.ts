@@ -392,7 +392,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    "Enable Telegram live stream preview via message edits (default: true; legacy streamMode auto-maps here).",
+    "Enable Telegram live stream preview via message edits (default: false; legacy streamMode auto-maps here).",
   "channels.discord.streamMode":
     "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
   "channels.discord.draftChunk.minChars":

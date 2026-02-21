@@ -134,6 +134,39 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After thinking", undefined);
   });
 
+  it("sends first update immediately after forceNewMessage within throttle window", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = {
+        sendMessage: vi
+          .fn()
+          .mockResolvedValueOnce({ message_id: 17 })
+          .mockResolvedValueOnce({ message_id: 42 }),
+        editMessageText: vi.fn().mockResolvedValue(true),
+        deleteMessage: vi.fn().mockResolvedValue(true),
+      };
+      const stream = createTelegramDraftStream({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        api: api as any,
+        chatId: 123,
+        throttleMs: 1000,
+      });
+
+      stream.update("Hello");
+      await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+      stream.update("Hello edited");
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      stream.forceNewMessage();
+      stream.update("Second message");
+      await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(2));
+      expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Second message", undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({

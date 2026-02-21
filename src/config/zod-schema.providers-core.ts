@@ -117,7 +117,7 @@ function normalizeTelegramStreamingConfig(value: {
     delete value.streamMode;
     return;
   }
-  value.streaming = true;
+  value.streaming = false;
 }
 
 export const TelegramAccountSchemaBase = z
