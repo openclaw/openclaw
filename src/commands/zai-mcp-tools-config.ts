@@ -25,12 +25,19 @@ export async function configureZaiMcpTools(apiKey: string, workspaceDir: string)
   await fs.mkdir(configDir, { recursive: true });
 
   // Read existing config or create new one
-  let config: ZaiMcpToolsConfig = { mcpServers: {} };
+  let config: ZaiMcpToolsConfig;
   try {
     const existing = await fs.readFile(configPath, "utf-8");
-    config = { mcpServers: {}, ...JSON.parse(existing) };
+    const parsed = JSON.parse(existing);
+    // Ensure mcpServers exists (robust merging)
+    config = {
+      mcpServers: {},
+      ...parsed,
+      mcpServers: parsed.mcpServers || {},
+    };
   } catch {
-    // File doesn't exist, create new config
+    // File doesn't exist or invalid JSON, create new config
+    config = { mcpServers: {} };
   }
 
   // Configure MCP tools
