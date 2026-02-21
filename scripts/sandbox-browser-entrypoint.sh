@@ -11,6 +11,7 @@ VNC_PORT="${OPENCLAW_BROWSER_VNC_PORT:-${CLAWDBOT_BROWSER_VNC_PORT:-5900}}"
 NOVNC_PORT="${OPENCLAW_BROWSER_NOVNC_PORT:-${CLAWDBOT_BROWSER_NOVNC_PORT:-6080}}"
 ENABLE_NOVNC="${OPENCLAW_BROWSER_ENABLE_NOVNC:-${CLAWDBOT_BROWSER_ENABLE_NOVNC:-1}}"
 HEADLESS="${OPENCLAW_BROWSER_HEADLESS:-${CLAWDBOT_BROWSER_HEADLESS:-0}}"
+ALLOW_NO_SANDBOX="${OPENCLAW_BROWSER_NO_SANDBOX:-${CLAWDBOT_BROWSER_NO_SANDBOX:-0}}"
 
 mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
 
@@ -43,8 +44,14 @@ CHROME_ARGS+=(
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--metrics-recording-only"
-  "--no-sandbox"
 )
+
+if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
+  CHROME_ARGS+=(
+    "--no-sandbox"
+    "--disable-setuid-sandbox"
+  )
+fi
 
 chromium "${CHROME_ARGS[@]}" about:blank &
 
