@@ -300,6 +300,7 @@ describe("monitorSlackProvider tool results", () => {
       return { text: "final reply" };
     });
 
+    setDirectMessageReplyMode("all");
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent(),
     });
