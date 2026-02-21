@@ -45,6 +45,16 @@ export function getShellConfig(): { shell: string; args: string[] } {
       return { shell: sh, args: ["-c"] };
     }
   }
+
+  // Issue #12836: Prefer bash over sh for better compatibility with agent-generated scripts
+  // which often use bashisms (arrays, [[ ]], etc.)
+  if (shellName === "sh" || !envShell) {
+    const bash = resolveShellFromPath("bash");
+    if (bash) {
+      return { shell: bash, args: ["-c"] };
+    }
+  }
+
   const shell = envShell && envShell.length > 0 ? envShell : "sh";
   return { shell, args: ["-c"] };
 }

@@ -441,7 +441,7 @@ export function buildAgentSystemPrompt(params: {
           "- find: find files by glob pattern",
           "- ls: list directory contents",
           "- apply_patch: apply multi-file patches",
-          `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
+          `- ${execToolName}: run shell commands (supports background via yieldMs/background); use 'env' param for dynamic data to avoid shell injection`,
           `- ${processToolName}: manage background exec sessions`,
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
