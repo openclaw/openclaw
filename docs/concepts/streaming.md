@@ -78,7 +78,7 @@ progressive output.
 - Joiner is derived from `blockStreamingChunk.breakPreference`
   (`paragraph` → `\n\n`, `newline` → `\n`, `sentence` → space).
 - Channel overrides are available via `*.blockStreamingCoalesce` (including per-account configs).
-- Default coalesce `minChars` is bumped to 1500 for Signal/Slack/Discord unless overridden.
+- Default coalesce `minChars` is bumped to 1500 for Signal/Slack/Discord/Matrix unless overridden.
 
 ## Human-like pacing between blocks
 

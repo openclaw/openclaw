@@ -11,6 +11,7 @@ import {
   type RuntimeLogger,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import { resolveMatrixAccountConfig } from "../accounts.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
@@ -668,12 +669,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onIdle: typingCallbacks.onIdle,
         });
 
+      const accountMatrixCfg = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
       const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
         ctx: ctxPayload,
         cfg,
         dispatcher,
         replyOptions: {
           ...replyOptions,
+          disableBlockStreaming:
+            typeof accountMatrixCfg.blockStreaming === "boolean"
+              ? !accountMatrixCfg.blockStreaming
+              : undefined,
           skillFilter: roomConfig?.skills,
           onModelSelected,
         },

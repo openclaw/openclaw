@@ -243,6 +243,40 @@ Notes:
 | Polls           | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
 | Location        | ✅ Supported (geo URI; altitude ignored)                                              |
 | Native commands | ✅ Supported                                                                          |
+| Block streaming | ✅ Supported (coalesce: 1500 chars / 1s idle)                                         |
+
+## Streaming
+
+Matrix supports **block streaming**: completed text blocks are sent as separate messages while the model is still generating, reducing perceived latency for long replies.
+
+Enable it globally:
+
+```json5
+{
+  agents: {
+    defaults: {
+      blockStreamingDefault: "on",
+    },
+  },
+}
+```
+
+Or per-channel:
+
+```json5
+{
+  channels: {
+    matrix: {
+      blockStreaming: true, // force on for Matrix regardless of global default
+      blockStreamingCoalesce: { minChars: 1500, idleMs: 1000 },
+    },
+  },
+}
+```
+
+Default coalesce: **1500 chars minimum** per block, flush after **1s idle**. This matches Signal, Slack, and Discord defaults.
+
+See [Streaming and Chunking](/concepts/streaming) for full details on chunking, coalescing, and human-like pacing.
 
 ## Troubleshooting
 

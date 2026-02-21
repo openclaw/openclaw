@@ -81,6 +81,10 @@ export type MatrixConfig = {
   responsePrefix?: string;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /** Enable block streaming for this channel/account (overrides global default). */
+  blockStreaming?: boolean;
+  /** Block streaming coalesce config (minChars, maxChars, idleMs). */
+  blockStreamingCoalesce?: { minChars?: number; maxChars?: number; idleMs?: number };
   /** Auto-join invites (always|allowlist|off). Default: always. */
   autoJoin?: "always" | "allowlist" | "off";
   /** Allowlist for auto-join invites (room IDs, aliases). */

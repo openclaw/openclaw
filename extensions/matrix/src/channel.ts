@@ -108,6 +108,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    blockStreaming: true,
+  },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: { configPrefixes: ["channels.matrix"] },
   configSchema: buildChannelConfigSchema(MatrixConfigSchema),
