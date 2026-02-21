@@ -242,4 +242,36 @@ describe("security fix", () => {
     expectPerms((await fs.stat(transcriptPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
   });
+
+  it("hardens cron directory, jobs.json, and run log files", async () => {
+    const stateDir = await createStateDir("cron-perms");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+
+    // Create cron files with overly permissive modes
+    const cronDir = path.join(stateDir, "cron");
+    await fs.mkdir(cronDir, { recursive: true, mode: 0o755 });
+    const jobsPath = path.join(cronDir, "jobs.json");
+    await fs.writeFile(jobsPath, '{"version":1,"jobs":[]}\n', "utf-8");
+    await fs.chmod(jobsPath, 0o644);
+    const jobsBakPath = path.join(cronDir, "jobs.json.bak");
+    await fs.writeFile(jobsBakPath, '{"version":1,"jobs":[]}\n', "utf-8");
+    await fs.chmod(jobsBakPath, 0o644);
+
+    const runsDir = path.join(cronDir, "runs");
+    await fs.mkdir(runsDir, { recursive: true, mode: 0o755 });
+    const runLogPath = path.join(runsDir, "daily-update.jsonl");
+    await fs.writeFile(runLogPath, '{"ts":1}\n', "utf-8");
+    await fs.chmod(runLogPath, 0o644);
+
+    const env = createFixEnv(stateDir, configPath);
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    expect(res.ok).toBe(true);
+
+    expectPerms((await fs.stat(cronDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(jobsPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(jobsBakPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(runsDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(runLogPath)).mode & 0o777, 0o600);
+  });
 });

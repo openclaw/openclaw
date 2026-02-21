@@ -384,6 +384,41 @@ async function chmodCredentialsAndAgentState(params: {
   }
 }
 
+async function chmodCronState(params: {
+  stateDir: string;
+  actions: SecurityFixAction[];
+  applyPerms: (params: {
+    path: string;
+    mode: number;
+    require: "dir" | "file";
+  }) => Promise<SecurityFixAction>;
+}): Promise<void> {
+  const cronDir = path.join(params.stateDir, "cron");
+  params.actions.push(await params.applyPerms({ path: cronDir, mode: 0o700, require: "dir" }));
+
+  const jobsPath = path.join(cronDir, "jobs.json");
+  params.actions.push(await params.applyPerms({ path: jobsPath, mode: 0o600, require: "file" }));
+
+  const jobsBakPath = path.join(cronDir, "jobs.json.bak");
+  params.actions.push(await params.applyPerms({ path: jobsBakPath, mode: 0o600, require: "file" }));
+
+  const runsDir = path.join(cronDir, "runs");
+  params.actions.push(await params.applyPerms({ path: runsDir, mode: 0o700, require: "dir" }));
+
+  const runEntries = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of runEntries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!entry.name.endsWith(".jsonl")) {
+      continue;
+    }
+    const p = path.join(runsDir, entry.name);
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await params.applyPerms({ path: p, mode: 0o600, require: "file" }));
+  }
+}
+
 export async function fixSecurityFootguns(opts?: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
@@ -459,6 +494,11 @@ export async function fixSecurityFootguns(opts?: {
     applyPerms,
   }).catch((err) => {
     errors.push(`chmodCredentialsAndAgentState failed: ${String(err)}`);
+  });
+
+  // Harden cron directory and its sensitive files (jobs.json, run logs).
+  await chmodCronState({ stateDir, actions, applyPerms }).catch((err) => {
+    errors.push(`chmodCronState failed: ${String(err)}`);
   });
 
   return {
