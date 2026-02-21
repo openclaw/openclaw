@@ -1,0 +1,304 @@
+import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
+import {
+  DEFAULT_NODE_DAEMON_RUNTIME,
+  isNodeDaemonRuntime,
+} from "../../commands/node-daemon-runtime.js";
+import { resolveIsNixMode } from "../../config/paths.js";
+import {
+  resolveNodeLaunchAgentLabel,
+  resolveNodeSystemdServiceName,
+  resolveNodeWindowsTaskName,
+} from "../../daemon/constants.js";
+import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import { resolveNodeService } from "../../daemon/node-service.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import { loadNodeHostConfig } from "../../node-host/config.js";
+import { defaultRuntime } from "../../runtime.js";
+import { colorize } from "../../terminal/theme.js";
+import { formatCliCommand } from "../command-format.js";
+import {
+  runServiceRestart,
+  runServiceStart,
+  runServiceStop,
+  runServiceUninstall,
+} from "../daemon-cli/lifecycle-core.js";
+import {
+  buildDaemonServiceSnapshot,
+  createDaemonActionContext,
+  installDaemonServiceAndEmit,
+} from "../daemon-cli/response.js";
+import {
+  createCliStatusTextStyles,
+  formatRuntimeStatus,
+  parsePort,
+  resolveRuntimeStatusColor,
+} from "../daemon-cli/shared.js";
+
+type NodeDaemonInstallOptions = {
+  host?: string;
+  port?: string | number;
+  tls?: boolean;
+  tlsFingerprint?: string;
+  nodeId?: string;
+  displayName?: string;
+  runtime?: string;
+  force?: boolean;
+  json?: boolean;
+};
+
+type NodeDaemonLifecycleOptions = {
+  json?: boolean;
+};
+
+type NodeDaemonStatusOptions = {
+  json?: boolean;
+};
+
+function renderNodeServiceStartHints(): string[] {
+  const base = [formatCliCommand("openclaw node install"), formatCliCommand("openclaw node start")];
+  switch (process.platform) {
+    case "darwin":
+      return [
+        ...base,
+        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
+      ];
+    case "linux":
+      return [...base, `systemctl --user start ${resolveNodeSystemdServiceName()}.service`];
+    case "win32":
+      return [...base, `schtasks /Run /TN "${resolveNodeWindowsTaskName()}"`];
+    default:
+      return base;
+  }
+}
+
+function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (process.platform === "darwin") {
+    const logs = resolveGatewayLogPaths(env);
+    return [
+      `Launchd stdout (if installed): ${logs.stdoutPath}`,
+      `Launchd stderr (if installed): ${logs.stderrPath}`,
+    ];
+  }
+  if (process.platform === "linux") {
+    const unit = resolveNodeSystemdServiceName();
+    return [`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`];
+  }
+  if (process.platform === "win32") {
+    const task = resolveNodeWindowsTaskName();
+    return [`Logs: schtasks /Query /TN "${task}" /V /FO LIST`];
+  }
+  return [];
+}
+
+function resolveNodeDefaults(
+  opts: NodeDaemonInstallOptions,
+  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
+) {
+  const host = opts.host?.trim() || config?.gateway?.host || "127.0.0.1";
+  const portOverride = parsePort(opts.port);
+  if (opts.port !== undefined && portOverride === null) {
+    return { host, port: null };
+  }
+  const port = portOverride ?? config?.gateway?.port ?? 18789;
+  return { host, port };
+}
+
+export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
+  const json = Boolean(opts.json);
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
+
+  if (resolveIsNixMode(process.env)) {
+    fail("Nix mode detected; service install is disabled.");
+    return;
+  }
+
+  const config = await loadNodeHostConfig();
+  const { host, port } = resolveNodeDefaults(opts, config);
+  if (!Number.isFinite(port ?? NaN) || (port ?? 0) <= 0) {
+    fail("Invalid port");
+    return;
+  }
+
+  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_NODE_DAEMON_RUNTIME;
+  if (!isNodeDaemonRuntime(runtimeRaw)) {
+    fail('Invalid --runtime (use "node" or "bun")');
+    return;
+  }
+
+  const service = resolveNodeService();
+  let loaded = false;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (err) {
+    fail(`Node service check failed: ${String(err)}`);
+    return;
+  }
+  if (loaded && !opts.force) {
+    emit({
+      ok: true,
+      result: "already-installed",
+      message: `Node service already ${service.loadedText}.`,
+      service: buildDaemonServiceSnapshot(service, loaded),
+      warnings: warnings.length ? warnings : undefined,
+    });
+    if (!json) {
+      defaultRuntime.log(`Node service already ${service.loadedText}.`);
+      defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw node install --force")}`);
+    }
+    return;
+  }
+
+  const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
+  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
+  const { programArguments, workingDirectory, environment, description } =
+    await buildNodeInstallPlan({
+      env: process.env,
+      host,
+      port: port ?? 18789,
+      tls,
+      tlsFingerprint: tlsFingerprint || undefined,
+      nodeId: opts.nodeId,
+      displayName: opts.displayName,
+      runtime: runtimeRaw,
+      warn: (message) => {
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
+    });
+
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Node",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: process.env,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+        description,
+      });
+    },
+  });
+}
+
+export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = {}) {
+  return await runServiceUninstall({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    opts,
+    stopBeforeUninstall: false,
+    assertNotLoadedAfterUninstall: false,
+  });
+}
+
+export async function runNodeDaemonStart(opts: NodeDaemonLifecycleOptions = {}) {
+  return await runServiceStart({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderStartHints: renderNodeServiceStartHints,
+    opts,
+  });
+}
+
+export async function runNodeDaemonRestart(opts: NodeDaemonLifecycleOptions = {}) {
+  await runServiceRestart({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderStartHints: renderNodeServiceStartHints,
+    opts,
+  });
+}
+
+export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
+  return await runServiceStop({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    opts,
+  });
+}
+
+export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
+  const json = Boolean(opts.json);
+  const service = resolveNodeService();
+  const [loaded, command, runtime] = await Promise.all([
+    service.isLoaded({ env: process.env }).catch(() => false),
+    service.readCommand(process.env).catch(() => null),
+    service
+      .readRuntime(process.env)
+      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+  ]);
+
+  const payload = {
+    service: {
+      ...buildDaemonServiceSnapshot(service, loaded),
+      command,
+      runtime,
+    },
+  };
+
+  if (json) {
+    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+
+  const { rich, label, accent, infoText, okText, warnText, errorText } =
+    createCliStatusTextStyles();
+
+  const serviceStatus = loaded ? okText(service.loadedText) : warnText(service.notLoadedText);
+  defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
+
+  if (command?.programArguments?.length) {
+    defaultRuntime.log(`${label("Command:")} ${infoText(command.programArguments.join(" "))}`);
+  }
+  if (command?.sourcePath) {
+    defaultRuntime.log(`${label("Service file:")} ${infoText(command.sourcePath)}`);
+  }
+  if (command?.workingDirectory) {
+    defaultRuntime.log(`${label("Working dir:")} ${infoText(command.workingDirectory)}`);
+  }
+
+  const runtimeLine = formatRuntimeStatus(runtime);
+  if (runtimeLine) {
+    const runtimeColor = resolveRuntimeStatusColor(runtime?.status);
+    defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+
+  if (!loaded) {
+    defaultRuntime.log("");
+    for (const hint of renderNodeServiceStartHints()) {
+      defaultRuntime.log(`${warnText("Start with:")} ${infoText(hint)}`);
+    }
+    return;
+  }
+
+  const baseEnv = {
+    ...(process.env as Record<string, string | undefined>),
+    ...(command?.environment ?? undefined),
+  };
+  const hintEnv = {
+    ...baseEnv,
+    OPENCLAW_LOG_PREFIX: baseEnv.OPENCLAW_LOG_PREFIX ?? "node",
+  } as NodeJS.ProcessEnv;
+
+  if (runtime?.missingUnit) {
+    defaultRuntime.error(errorText("Service unit not found."));
+    for (const hint of buildNodeRuntimeHints(hintEnv)) {
+      defaultRuntime.error(errorText(hint));
+    }
+    return;
+  }
+
+  if (runtime?.status === "stopped") {
+    defaultRuntime.error(errorText("Service is loaded but not running."));
+    for (const hint of buildNodeRuntimeHints(hintEnv)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  }
+}

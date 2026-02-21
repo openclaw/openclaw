@@ -1,0 +1,104 @@
+require "shellwords"
+
+default_platform(:ios)
+
+def load_env_file(path)
+  return unless File.exist?(path)
+
+  File.foreach(path) do |line|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    key, value = stripped.split("=", 2)
+    next if key.nil? || key.empty? || value.nil?
+
+    ENV[key] = value if ENV[key].nil? || ENV[key].strip.empty?
+  end
+end
+
+platform :ios do
+  private_lane :asc_api_key do
+    load_env_file(File.join(__dir__, ".env"))
+
+    api_key = nil
+
+    key_path = ENV["APP_STORE_CONNECT_API_KEY_PATH"]
+    if key_path && !key_path.strip.empty?
+      api_key = app_store_connect_api_key(path: key_path)
+    else
+      p8_path = ENV["ASC_KEY_PATH"]
+      if p8_path && !p8_path.strip.empty?
+      key_id = ENV["ASC_KEY_ID"]
+      issuer_id = ENV["ASC_ISSUER_ID"]
+      UI.user_error!("Missing ASC_KEY_ID or ASC_ISSUER_ID for ASC_KEY_PATH auth.") if [key_id, issuer_id].any? { |v| v.nil? || v.strip.empty? }
+
+        api_key = app_store_connect_api_key(
+        key_id: key_id,
+        issuer_id: issuer_id,
+        key_filepath: p8_path
+      )
+      else
+        key_id = ENV["ASC_KEY_ID"]
+        issuer_id = ENV["ASC_ISSUER_ID"]
+        key_content = ENV["ASC_KEY_CONTENT"]
+
+        UI.user_error!("Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH (json) or ASC_KEY_PATH (p8) or ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_CONTENT.") if [key_id, issuer_id, key_content].any? { |v| v.nil? || v.strip.empty? }
+
+        is_base64 = key_content.include?("BEGIN PRIVATE KEY") ? false : true
+
+        api_key = app_store_connect_api_key(
+          key_id: key_id,
+          issuer_id: issuer_id,
+          key_content: key_content,
+          is_key_content_base64: is_base64
+        )
+      end
+    end
+
+    api_key
+  end
+
+  desc "Build + upload to TestFlight"
+  lane :beta do
+    api_key = asc_api_key
+
+    team_id = ENV["IOS_DEVELOPMENT_TEAM"]
+    if team_id.nil? || team_id.strip.empty?
+      helper_path = File.expand_path("../../scripts/ios-team-id.sh", __dir__)
+      if File.exist?(helper_path)
+        # Keep CI/local compatibility where teams are present in keychain but not Xcode account metadata.
+        team_id = sh("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 bash #{helper_path.shellescape}").strip
+      end
+    end
+    UI.user_error!("Missing IOS_DEVELOPMENT_TEAM (Apple Team ID). Add it to fastlane/.env or export it in your shell.") if team_id.nil? || team_id.strip.empty?
+
+    build_app(
+      project: "OpenClaw.xcodeproj",
+      scheme: "OpenClaw",
+      export_method: "app-store",
+      clean: true,
+      xcargs: "DEVELOPMENT_TEAM=#{team_id} -allowProvisioningUpdates",
+      export_xcargs: "-allowProvisioningUpdates",
+      export_options: {
+        signingStyle: "automatic"
+      }
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true
+    )
+  end
+
+  desc "Upload App Store metadata (and optionally screenshots)"
+  lane :metadata do
+    api_key = asc_api_key
+
+    deliver(
+      api_key: api_key,
+      force: true,
+      skip_screenshots: ENV["DELIVER_SCREENSHOTS"] != "1",
+      skip_metadata: ENV["DELIVER_METADATA"] != "1"
+    )
+  end
+end

@@ -1,0 +1,224 @@
+name: Auto response
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+  pull_request_target:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  auto-response:
+    permissions:
+      issues: write
+      pull-requests: write
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - name: Handle labeled items
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            // Labels prefixed with "r:" are auto-response triggers.
+            const rules = [
+              {
+                label: "r: skill",
+                close: true,
+                message:
+                  "Thanks for the contribution! New skills should be published to [Clawhub](https://clawhub.ai) for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
+              },
+              {
+                label: "r: support",
+                close: true,
+                message:
+                  "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+              },
+              {
+                label: "r: testflight",
+                close: true,
+                message: "Not available, build from source.",
+              },
+              {
+                label: "r: third-party-extension",
+                close: true,
+                message:
+                  "Please make this as a third-party plugin that you maintain yourself in your own repo. Docs: https://docs.openclaw.ai/plugin. Feel free to open a PR after to add it to our community plugins page: https://docs.openclaw.ai/plugins/community",
+              },
+              {
+                label: "r: moltbook",
+                close: true,
+                lock: true,
+                lockReason: "off-topic",
+                message:
+                  "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
+              },
+            ];
+
+            const triggerLabel = "trigger-response";
+            const target = context.payload.issue ?? context.payload.pull_request;
+            if (!target) {
+              return;
+            }
+
+            const labelSet = new Set(
+              (target.labels ?? [])
+                .map((label) => (typeof label === "string" ? label : label?.name))
+                .filter((name) => typeof name === "string"),
+            );
+
+            const hasTriggerLabel = labelSet.has(triggerLabel);
+            if (hasTriggerLabel) {
+              labelSet.delete(triggerLabel);
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: target.number,
+                  name: triggerLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const isLabelEvent = context.payload.action === "labeled";
+            if (!hasTriggerLabel && !isLabelEvent) {
+              return;
+            }
+
+            const issue = context.payload.issue;
+            if (issue) {
+              const title = issue.title ?? "";
+              const body = issue.body ?? "";
+              const haystack = `${title}\n${body}`.toLowerCase();
+              const hasMoltbookLabel = labelSet.has("r: moltbook");
+              const hasTestflightLabel = labelSet.has("r: testflight");
+              const hasSecurityLabel = labelSet.has("security");
+              if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["security"],
+                });
+                labelSet.add("security");
+              }
+              if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["r: testflight"],
+                });
+                labelSet.add("r: testflight");
+              }
+              if (haystack.includes("moltbook") && !hasMoltbookLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["r: moltbook"],
+                });
+                labelSet.add("r: moltbook");
+              }
+            }
+
+            const invalidLabel = "invalid";
+            const dirtyLabel = "dirty";
+            const noisyPrMessage =
+              "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
+
+            const pullRequest = context.payload.pull_request;
+            if (pullRequest) {
+              if (labelSet.has(dirtyLabel)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  body: noisyPrMessage,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
+              const labelCount = labelSet.size;
+              if (labelCount > 20) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  body: noisyPrMessage,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
+              if (labelSet.has(invalidLabel)) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
+            }
+
+            if (issue && labelSet.has(invalidLabel)) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
+              return;
+            }
+
+            const rule = rules.find((item) => labelSet.has(item.label));
+            if (!rule) {
+              return;
+            }
+
+            const issueNumber = target.number;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: rule.message,
+            });
+
+            if (rule.close) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                state: "closed",
+              });
+            }
+
+            if (rule.lock) {
+              await github.rest.issues.lock({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                lock_reason: rule.lockReason ?? "resolved",
+              });
+            }
