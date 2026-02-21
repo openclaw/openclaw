@@ -185,6 +185,8 @@ export type TelegramTopicConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
+  /** If true, skip automatic voice-note transcription for mention detection in this topic. */
+  disableAudioPreflight?: boolean;
 };
 
 export type TelegramGroupConfig = {
@@ -204,6 +206,8 @@ export type TelegramGroupConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
+  /** If true, skip automatic voice-note transcription for mention detection in this group. */
+  disableAudioPreflight?: boolean;
 };
 
 export type TelegramDirectConfig = {
