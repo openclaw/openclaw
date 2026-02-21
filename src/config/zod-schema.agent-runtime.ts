@@ -185,7 +185,9 @@ export const SandboxBrowserSchema = z
     enabled: z.boolean().optional(),
     image: z.string().optional(),
     containerPrefix: z.string().optional(),
+    network: z.string().optional(),
     cdpPort: z.number().int().positive().optional(),
+    cdpSourceRange: z.string().optional(),
     vncPort: z.number().int().positive().optional(),
     noVncPort: z.number().int().positive().optional(),
     headless: z.boolean().optional(),
@@ -194,6 +196,16 @@ export const SandboxBrowserSchema = z
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
     binds: z.array(z.string()).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.network?.trim().toLowerCase() === "host") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["network"],
+        message:
+          'Sandbox security: browser network mode "host" is blocked. Use "bridge" or a custom bridge network instead.',
+      });
+    }
   })
   .strict()
   .optional();
