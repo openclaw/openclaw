@@ -596,22 +596,22 @@ describe("sendMessageTelegram", () => {
         fileName: "video.mp4",
       });
 
-      const opts: Parameters<typeof sendMessageTelegram>[2] = {
+      const sendOptions: NonNullable<Parameters<typeof sendMessageTelegram>[2]> = {
         token: "tok",
         api,
         mediaUrl: "https://example.com/video.mp4",
         asVideoNote: true,
-        ...("replyToMessageId" in testCase.options
-          ? { replyToMessageId: testCase.options.replyToMessageId }
-          : {}),
-        ...(Array.isArray(testCase.options.buttons)
-          ? {
-              buttons: testCase.options.buttons.map((row) => row.map((button) => ({ ...button }))),
-            }
-          : {}),
       };
-
-      await sendMessageTelegram(chatId, testCase.text, opts);
+      if (
+        "replyToMessageId" in testCase.options &&
+        testCase.options.replyToMessageId !== undefined
+      ) {
+        sendOptions.replyToMessageId = testCase.options.replyToMessageId;
+      }
+      if ("buttons" in testCase.options && testCase.options.buttons) {
+        sendOptions.buttons = testCase.options.buttons;
+      }
+      await sendMessageTelegram(chatId, testCase.text, sendOptions);
 
       expect(sendVideoNote).toHaveBeenCalledWith(
         chatId,
@@ -790,8 +790,12 @@ describe("sendMessageTelegram", () => {
         api,
         mediaUrl: testCase.mediaUrl,
         ...("asVoice" in testCase && testCase.asVoice ? { asVoice: true } : {}),
-        ...("messageThreadId" in testCase ? { messageThreadId: testCase.messageThreadId } : {}),
-        ...("replyToMessageId" in testCase ? { replyToMessageId: testCase.replyToMessageId } : {}),
+        ...("messageThreadId" in testCase && testCase.messageThreadId !== undefined
+          ? { messageThreadId: testCase.messageThreadId }
+          : {}),
+        ...("replyToMessageId" in testCase && testCase.replyToMessageId !== undefined
+          ? { replyToMessageId: testCase.replyToMessageId }
+          : {}),
       });
 
       const called = testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
@@ -1321,13 +1325,13 @@ describe("editMessageTelegram", () => {
       if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
         expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
       }
-      if ("firstExpectReplyMarkup" in testCase) {
+      if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
         expect(firstParams, testCase.name).toEqual(
           expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
         );
       }
 
-      if ("secondExpectReplyMarkup" in testCase) {
+      if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
         const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
           string,
           unknown

@@ -15,7 +15,7 @@ export type OutboundPayloadJson = {
   channelData?: Record<string, unknown>;
 };
 
-function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>): string[] {
+function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
   for (const list of lists) {
@@ -37,7 +37,9 @@ function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>):
   return merged;
 }
 
-export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): ReplyPayload[] {
+export function normalizeReplyPayloadsForDelivery(
+  payloads: readonly ReplyPayload[],
+): ReplyPayload[] {
   return payloads.flatMap((payload) => {
     const parsed = parseReplyDirectives(payload.text ?? "");
     const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
@@ -68,7 +70,9 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
   });
 }
 
-export function normalizeOutboundPayloads(payloads: ReplyPayload[]): NormalizedOutboundPayload[] {
+export function normalizeOutboundPayloads(
+  payloads: readonly ReplyPayload[],
+): NormalizedOutboundPayload[] {
   return normalizeReplyPayloadsForDelivery(payloads)
     .map((payload) => {
       const channelData = payload.channelData;
@@ -89,7 +93,9 @@ export function normalizeOutboundPayloads(payloads: ReplyPayload[]): NormalizedO
     );
 }
 
-export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): OutboundPayloadJson[] {
+export function normalizeOutboundPayloadsForJson(
+  payloads: readonly ReplyPayload[],
+): OutboundPayloadJson[] {
   return normalizeReplyPayloadsForDelivery(payloads).map((payload) => ({
     text: payload.text ?? "",
     mediaUrl: payload.mediaUrl ?? null,
@@ -98,7 +104,11 @@ export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): Outb
   }));
 }
 
-export function formatOutboundPayloadLog(payload: NormalizedOutboundPayload): string {
+export function formatOutboundPayloadLog(
+  payload: Pick<NormalizedOutboundPayload, "text" | "channelData"> & {
+    mediaUrls: readonly string[];
+  },
+): string {
   const lines: string[] = [];
   if (payload.text) {
     lines.push(payload.text.trimEnd());
