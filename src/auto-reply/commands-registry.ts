@@ -371,12 +371,17 @@ export function resolveCommandArgMenu(params: {
 
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
   const trimmed = raw.trim();
-  if (!trimmed.startsWith("/")) {
-    return trimmed;
+
+  // Matrix clients (Element, nheko) escape unrecognized slash commands as //command
+  // Normalize // to / at the start of the message to handle this
+  const unescaped = trimmed.startsWith("//") ? trimmed.slice(1) : trimmed;
+
+  if (!unescaped.startsWith("/")) {
+    return unescaped;
   }
 
-  const newline = trimmed.indexOf("\n");
-  const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+  const newline = unescaped.indexOf("\n");
+  const singleLine = newline === -1 ? unescaped : unescaped.slice(0, newline).trim();
 
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch
