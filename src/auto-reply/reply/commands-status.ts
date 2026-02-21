@@ -33,6 +33,7 @@ export async function buildStatusReply(params: {
   command: CommandContext;
   sessionEntry?: SessionEntry;
   sessionKey: string;
+  parentSessionKey?: string;
   sessionScope?: SessionScope;
   storePath?: string;
   provider: string;
@@ -52,6 +53,7 @@ export async function buildStatusReply(params: {
     command,
     sessionEntry,
     sessionKey,
+    parentSessionKey,
     sessionScope,
     storePath,
     provider,
@@ -176,6 +178,7 @@ export async function buildStatusReply(params: {
     agentId: statusAgentId,
     sessionEntry,
     sessionKey,
+    parentSessionKey,
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,

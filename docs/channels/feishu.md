@@ -523,7 +523,7 @@ See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
 
 ---
 
-## Configuration reference
+## Configuration
 
 Full configuration: [Gateway configuration](/gateway/configuration)
 

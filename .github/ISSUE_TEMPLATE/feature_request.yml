@@ -21,7 +21,7 @@ body:
     attributes:
       label: Problem to solve
       description: What user pain this solves and why current behavior is insufficient.
-      placeholder: Teams cannot distinguish agent personas in mixed channels, causing misrouted follow-ups.
+      placeholder: Agents cannot distinguish persona context in mixed channels, causing misrouted follow-ups.
     validations:
       required: true
   - type: textarea

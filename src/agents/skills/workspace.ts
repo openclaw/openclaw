@@ -490,6 +490,7 @@ export function buildWorkspaceSkillSnapshot(
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
+      requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,

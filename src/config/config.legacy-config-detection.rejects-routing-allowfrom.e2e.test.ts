@@ -378,11 +378,46 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
     }
   });
-  it("defaults telegram.streamMode to partial when telegram section exists", async () => {
+  it("defaults telegram.streaming to false when telegram section exists", async () => {
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.streamMode).toBe("partial");
+      expect(res.config.channels?.telegram?.streaming).toBe(false);
+      expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    }
+  });
+  it("migrates legacy telegram.streamMode=off to streaming=false", async () => {
+    const res = validateConfigObject({ channels: { telegram: { streamMode: "off" } } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.telegram?.streaming).toBe(false);
+      expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    }
+  });
+  it("migrates legacy telegram.streamMode=block to streaming=true", async () => {
+    const res = validateConfigObject({ channels: { telegram: { streamMode: "block" } } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.telegram?.streaming).toBe(true);
+      expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    }
+  });
+  it("migrates legacy telegram.accounts.*.streamMode to streaming", async () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              streamMode: "off",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.telegram?.accounts?.ops?.streaming).toBe(false);
+      expect(res.config.channels?.telegram?.accounts?.ops?.streamMode).toBeUndefined();
     }
   });
   it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {

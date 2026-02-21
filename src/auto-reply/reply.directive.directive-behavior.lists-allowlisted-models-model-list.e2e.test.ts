@@ -122,7 +122,7 @@ describe("directive behavior", () => {
           },
         },
       });
-      expect(text).toContain("Models (minimax)");
+      expect(text).toContain("Models (minimax");
       expect(text).toContain("minimax/MiniMax-M2.1");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });

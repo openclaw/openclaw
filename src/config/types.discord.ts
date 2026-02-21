@@ -1,5 +1,6 @@
 import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
+  BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
@@ -10,6 +11,9 @@ import type {
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
+
+export type DiscordStreamMode = "partial" | "block" | "off";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -91,6 +95,22 @@ export type DiscordIntentsConfig = {
   guildMembers?: boolean;
 };
 
+export type DiscordVoiceAutoJoinConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID to join. */
+  channelId: string;
+};
+
+export type DiscordVoiceConfig = {
+  /** Enable Discord voice channel conversations (default: true). */
+  enabled?: boolean;
+  /** Voice channels to auto-join on startup. */
+  autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Optional TTS overrides for Discord voice output. */
+  tts?: TtsConfig;
+};
+
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
@@ -120,6 +140,11 @@ export type DiscordUiComponentsConfig = {
 
 export type DiscordUiConfig = {
   components?: DiscordUiComponentsConfig;
+};
+
+export type DiscordSlashCommandConfig = {
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
 };
 
 export type DiscordAccountConfig = {
@@ -153,6 +178,16 @@ export type DiscordAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /**
+   * Live preview streaming mode (edit-based, like Telegram).
+   * - "partial": send a message and continuously edit it with new content as tokens arrive.
+   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
+   * - "off": no preview streaming (default).
+   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
+   */
+  streamMode?: DiscordStreamMode;
+  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
+  draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -183,6 +218,8 @@ export type DiscordAccountConfig = {
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
@@ -194,8 +231,12 @@ export type DiscordAccountConfig = {
   agentComponents?: DiscordAgentComponentsConfig;
   /** Discord UI customization (components, modals, etc.). */
   ui?: DiscordUiConfig;
+  /** Slash command configuration. */
+  slashCommand?: DiscordSlashCommandConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** Voice channel conversation settings. */
+  voice?: DiscordVoiceConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
   /** Outbound response prefix override for this channel/account. */

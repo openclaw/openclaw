@@ -274,7 +274,11 @@ export async function runEmbeddedPiAgent(
         params.config,
       );
       if (!model) {
-        throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+        });
       }
 
       const ctxInfo = resolveContextWindowInfo({
@@ -710,8 +714,8 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Session is now smaller; allow compaction retries again.
-                  overflowCompactionAttempts = 0;
+                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
+                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
                   continue;
                 }
                 log.warn(

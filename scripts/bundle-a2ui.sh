@@ -166,10 +166,18 @@ if [[ "$NODE_USES_WINDOWS_PATHS" -eq 1 ]]; then
   renderer_tsconfig_win="$(to_node_path "$A2UI_RENDERER_DIR/tsconfig.json")"
   app_rolldown_config_win="$(to_node_path "$A2UI_APP_DIR/rolldown.config.mjs")"
   cmd.exe /d /s /c "pnpm -s exec tsc -p $renderer_tsconfig_win"
-  cmd.exe /d /s /c "pnpm -s exec rolldown -c $app_rolldown_config_win"
+  if command -v rolldown >/dev/null 2>&1; then
+    cmd.exe /d /s /c "rolldown -c $app_rolldown_config_win"
+  else
+    cmd.exe /d /s /c "pnpm -s dlx rolldown -c $app_rolldown_config_win"
+  fi
 else
   pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
-  rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+  if command -v rolldown >/dev/null 2>&1; then
+    rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+  else
+    pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+  fi
 fi
 
 echo "$current_hash" > "$HASH_FILE"
