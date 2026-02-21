@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -38,6 +38,22 @@ async function expectChatNotFoundWithChatId(
     expect(message).toMatch(/chat not found/i);
     expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
   }
+}
+
+function mockLoadedMedia({
+  buffer = Buffer.from("media"),
+  contentType,
+  fileName,
+}: {
+  buffer?: Buffer;
+  contentType?: string;
+  fileName?: string;
+}): void {
+  loadWebMedia.mockResolvedValueOnce({
+    buffer,
+    ...(contentType ? { contentType } : {}),
+    ...(fileName ? { fileName } : {}),
+  });
 }
 
 describe("sent-message-cache", () => {
@@ -189,34 +205,81 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("falls back to plain text when Telegram rejects HTML", async () => {
-    const chatId = "123";
+  it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
     const parseErr = new Error(
       "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
     );
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(parseErr)
-      .mockResolvedValueOnce({
-        message_id: 42,
-        chat: { id: chatId },
+    const cases = [
+      {
+        name: "plain text send",
+        chatId: "123",
+        text: "_oops_",
+        htmlText: "<i>oops</i>",
+        messageId: 42,
+        options: { verbose: true } as const,
+        firstCall: { parse_mode: "HTML" },
+        secondCall: undefined,
+      },
+      {
+        name: "threaded reply send",
+        chatId: "-1001234567890",
+        text: "_bad markdown_",
+        htmlText: "<i>bad markdown</i>",
+        messageId: 60,
+        options: { messageThreadId: 271, replyToMessageId: 100 } as const,
+        firstCall: {
+          parse_mode: "HTML",
+          message_thread_id: 271,
+          reply_to_message_id: 100,
+        },
+        secondCall: {
+          message_thread_id: 271,
+          reply_to_message_id: 100,
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const sendMessage = vi
+        .fn()
+        .mockRejectedValueOnce(parseErr)
+        .mockResolvedValueOnce({
+          message_id: testCase.messageId,
+          chat: { id: testCase.chatId },
+        });
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      const res = await sendMessageTelegram(testCase.chatId, testCase.text, {
+        token: "tok",
+        api,
+        ...testCase.options,
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
 
-    const res = await sendMessageTelegram(chatId, "_oops_", {
-      token: "tok",
-      api,
-      verbose: true,
-    });
-
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "<i>oops</i>", {
-      parse_mode: "HTML",
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_oops_");
-    expect(res.chatId).toBe(chatId);
-    expect(res.messageId).toBe("42");
+      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
+        1,
+        testCase.chatId,
+        testCase.htmlText,
+        testCase.firstCall,
+      );
+      if (testCase.secondCall) {
+        expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
+          2,
+          testCase.chatId,
+          testCase.text,
+          testCase.secondCall,
+        );
+      } else {
+        expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
+          2,
+          testCase.chatId,
+          testCase.text,
+        );
+      }
+      expect(res.chatId, testCase.name).toBe(testCase.chatId);
+      expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
+    }
   });
 
   it("keeps link_preview_options disabled for both html and plain-text fallback", async () => {
@@ -306,41 +369,6 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("preserves thread params in plain text fallback", async () => {
-    const chatId = "-1001234567890";
-    const parseErr = new Error(
-      "400: Bad Request: can't parse entities: Can't find end of the entity",
-    );
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(parseErr)
-      .mockResolvedValueOnce({
-        message_id: 60,
-        chat: { id: chatId },
-      });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    const res = await sendMessageTelegram(chatId, "_bad markdown_", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-      replyToMessageId: 100,
-    });
-
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "<i>bad markdown</i>", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-      reply_to_message_id: 100,
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_bad markdown_", {
-      message_thread_id: 271,
-      reply_to_message_id: 100,
-    });
-    expect(res.messageId).toBe("60");
-  });
-
   it("includes thread params in media messages", async () => {
     const chatId = "-1001234567890";
     const sendPhoto = vi.fn().mockResolvedValue({
@@ -351,7 +379,7 @@ describe("sendMessageTelegram", () => {
       sendPhoto: typeof sendPhoto;
     };
 
-    loadWebMedia.mockResolvedValueOnce({
+    mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/jpeg",
       fileName: "photo.jpg",
@@ -388,7 +416,7 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    loadWebMedia.mockResolvedValueOnce({
+    mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/jpeg",
       fileName: "photo.jpg",
@@ -423,7 +451,7 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    loadWebMedia.mockResolvedValueOnce({
+    mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/jpeg",
       fileName: "photo.jpg",
@@ -455,7 +483,7 @@ describe("sendMessageTelegram", () => {
       sendPhoto: typeof sendPhoto;
     };
 
-    loadWebMedia.mockResolvedValueOnce({
+    mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/jpeg",
       fileName: "photo.jpg",
@@ -491,7 +519,7 @@ describe("sendMessageTelegram", () => {
         sendMessage: typeof sendMessage;
       };
 
-      loadWebMedia.mockResolvedValueOnce({
+      mockLoadedMedia({
         buffer: Buffer.from("fake-video"),
         contentType: "video/mp4",
         fileName: "video.mp4",
@@ -521,7 +549,7 @@ describe("sendMessageTelegram", () => {
         sendVideo: typeof sendVideo;
       };
 
-      loadWebMedia.mockResolvedValueOnce({
+      mockLoadedMedia({
         buffer: Buffer.from("fake-video"),
         contentType: "video/mp4",
         fileName: "video.mp4",
@@ -590,7 +618,7 @@ describe("sendMessageTelegram", () => {
         sendMessage: typeof sendMessage;
       };
 
-      loadWebMedia.mockResolvedValueOnce({
+      mockLoadedMedia({
         buffer: Buffer.from("fake-video"),
         contentType: "video/mp4",
         fileName: "video.mp4",
@@ -680,7 +708,7 @@ describe("sendMessageTelegram", () => {
       sendAnimation: typeof sendAnimation;
     };
 
-    loadWebMedia.mockResolvedValueOnce({
+    mockLoadedMedia({
       buffer: Buffer.from("GIF89a"),
       fileName: "fun.gif",
     });
@@ -779,7 +807,7 @@ describe("sendMessageTelegram", () => {
         sendVoice: typeof sendVoice;
       };
 
-      loadWebMedia.mockResolvedValueOnce({
+      mockLoadedMedia({
         buffer: Buffer.from("audio"),
         contentType: testCase.contentType,
         fileName: testCase.fileName,
@@ -1006,7 +1034,7 @@ describe("sendMessageTelegram", () => {
       sendPhoto: typeof sendPhoto;
     };
 
-    loadWebMedia.mockResolvedValueOnce({
+    mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/jpeg",
       fileName: "photo.jpg",
@@ -1075,26 +1103,18 @@ describe("reactMessageTelegram", () => {
 });
 
 describe("sendStickerTelegram", () => {
-  beforeEach(() => {
-    loadConfig.mockReturnValue({});
-    botApi.sendSticker.mockReset();
-    botCtorSpy.mockReset();
-  });
-
   const positiveSendCases = [
     {
       name: "sends a sticker by file_id",
       fileId: "CAACAgIAAxkBAAI...sticker_file_id",
       expectedFileId: "CAACAgIAAxkBAAI...sticker_file_id",
       expectedMessageId: 100,
-      assertResult: true,
     },
     {
       name: "trims whitespace from fileId",
       fileId: "  fileId123  ",
       expectedFileId: "fileId123",
       expectedMessageId: 106,
-      assertResult: false,
     },
   ] as const;
 
@@ -1115,10 +1135,8 @@ describe("sendStickerTelegram", () => {
       });
 
       expect(sendSticker).toHaveBeenCalledWith(chatId, testCase.expectedFileId, undefined);
-      if (testCase.assertResult) {
-        expect(res.messageId).toBe(String(testCase.expectedMessageId));
-        expect(res.chatId).toBe(chatId);
-      }
+      expect(res.messageId).toBe(String(testCase.expectedMessageId));
+      expect(res.chatId).toBe(chatId);
     });
   }
 
@@ -1253,11 +1271,6 @@ describe("shared send behaviors", () => {
 });
 
 describe("editMessageTelegram", () => {
-  beforeEach(() => {
-    botApi.editMessageText.mockReset();
-    botCtorSpy.mockReset();
-  });
-
   it("handles button payload + parse fallback behavior", async () => {
     const cases: Array<{
       name: string;
