@@ -14,6 +14,7 @@ import type { TelegramProbe } from "../../telegram/probe.js";
 import type { TelegramTokenResolution } from "../../telegram/token.js";
 import {
   createChannelTestPluginBase,
+  createMSTeamsTestPluginBase,
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
@@ -131,20 +132,7 @@ const msteamsOutbound: ChannelOutboundAdapter = {
 };
 
 const msteamsPlugin: ChannelPlugin = {
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-    aliases: ["teams"],
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
+  ...createMSTeamsTestPluginBase(),
   outbound: msteamsOutbound,
 };
 
