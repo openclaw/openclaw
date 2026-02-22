@@ -154,6 +154,19 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
   });
+
+  it("hot-reloads memory config changes without gateway restart", () => {
+    const plan = buildGatewayReloadPlan(["memory.qmd.command"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartMemory).toBe(true);
+    expect(plan.hotReasons).toContain("memory.qmd.command");
+  });
+
+  it("hot-reloads memory backend changes without gateway restart", () => {
+    const plan = buildGatewayReloadPlan(["memory.backend"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartMemory).toBe(true);
+  });
 });
 
 describe("resolveGatewayReloadSettings", () => {

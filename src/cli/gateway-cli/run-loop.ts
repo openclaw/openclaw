@@ -7,6 +7,7 @@ import {
   markGatewaySigusr1RestartHandled,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { clearQmdManagerCache } from "../../memory/search-manager.js";
 import {
   getActiveTaskCount,
   resetAllLanes,
@@ -145,6 +146,11 @@ export async function runGatewayLoop(params: {
       // coordinator level — rather than inside individual subsystem init
       // functions, to avoid surprising cross-cutting side effects.
       resetAllLanes();
+
+      // Clear the QMD memory manager cache so that config changes (scope,
+      // collections, command path, etc.) take effect immediately after an
+      // in-process restart without requiring a full process kill.
+      clearQmdManagerCache();
     });
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

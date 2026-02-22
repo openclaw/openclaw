@@ -22,6 +22,7 @@ export type GatewayReloadPlan = {
   restartBrowserControl: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
+  restartMemory: boolean;
   restartChannels: Set<ChannelKind>;
   noopPaths: string[];
 };
@@ -38,6 +39,7 @@ type ReloadAction =
   | "restart-browser-control"
   | "restart-cron"
   | "restart-heartbeat"
+  | "restart-memory"
   | `restart-channel:${ChannelId}`;
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
@@ -62,6 +64,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-browser-control"],
   },
+  { prefix: "memory", kind: "hot", actions: ["restart-memory"] },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -185,6 +188,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
+    restartMemory: false,
     restartChannels: new Set(),
     noopPaths: [],
   };
@@ -210,6 +214,9 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
         break;
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
+        break;
+      case "restart-memory":
+        plan.restartMemory = true;
         break;
       default:
         break;

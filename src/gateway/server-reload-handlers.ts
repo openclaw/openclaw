@@ -14,6 +14,7 @@ import {
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
+import { clearQmdManagerCache } from "../memory/search-manager.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
@@ -63,6 +64,10 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
+    }
+
+    if (plan.restartMemory) {
+      clearQmdManagerCache();
     }
 
     resetDirectoryCache();
