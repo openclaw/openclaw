@@ -303,6 +303,20 @@ describe("isFailoverErrorMessage", () => {
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });
+
+  it("matches gateway/websocket connection failures as timeout failover", () => {
+    const samples = [
+      "Connection error.",
+      "gateway not connected",
+      "gateway closed (1006): abnormal closure (no close frame)",
+      "websocket disconnected while waiting for response",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
 });
 
 describe("parseImageSizeError", () => {
