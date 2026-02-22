@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { loadHookEntriesFromDir } from "./workspace.js";
+import { loadHookEntriesFromDir, loadWorkspaceHookEntries } from "./workspace.js";
 
 describe("hooks workspace", () => {
   it("ignores package.json hook paths that traverse outside package directory", () => {
@@ -100,6 +100,33 @@ describe("hooks workspace", () => {
     );
 
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
+  });
+
+  it("ignores workspace hooks dir symlink that escapes workspace root", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-root-link-"));
+    const workspaceDir = path.join(root, "workspace");
+    const outsideHooksDir = path.join(root, "outside-hooks");
+    fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    fs.mkdirSync(outsideHooksDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideHooksDir, "HOOK.md"), "---\nname: outside\n---\n");
+    fs.writeFileSync(path.join(outsideHooksDir, "handler.js"), "export default async () => {};\n");
+
+    const workspaceHooksDir = path.join(workspaceDir, "hooks");
+    try {
+      fs.symlinkSync(
+        outsideHooksDir,
+        workspaceHooksDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch {
+      return;
+    }
+
+    const entries = loadWorkspaceHookEntries(workspaceDir, {
+      managedHooksDir: path.join(root, "managed-hooks"),
+      bundledHooksDir: path.join(root, "bundled-hooks"),
+    });
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
 });
