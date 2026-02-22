@@ -109,6 +109,26 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runAnthropicHeaderCase(params: {
+    cfg: Record<string, unknown>;
+    modelId: string;
+    options?: SimpleStreamOptions;
+  }) {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, params.cfg, "anthropic", params.modelId);
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: params.modelId,
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, params.options ?? {});
+
+    expect(calls).toHaveLength(1);
+    return calls[0]?.headers;
+  }
+
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -204,50 +224,33 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
       anthropicBeta: ["files-api-2025-04-14"],
     });
-
-    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-5");
-
-    const model = {
-      api: "anthropic-messages",
-      provider: "anthropic",
-      id: "claude-sonnet-4-5",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {
-      apiKey: "sk-ant-api03-test",
-      headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-sonnet-4-5",
+      options: {
+        apiKey: "sk-ant-api03-test",
+        headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
+      },
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers).toEqual({
+    expect(headers).toEqual({
       "anthropic-beta":
         "prompt-caching-2024-07-31,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,files-api-2025-04-14,context-1m-2025-08-07",
     });
   });
 
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
-
-    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-haiku-3-5");
-
-    const model = {
-      api: "anthropic-messages",
-      provider: "anthropic",
-      id: "claude-haiku-3-5",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers).toEqual({ "X-Custom": "1" });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-haiku-3-5",
+      options: { headers: { "X-Custom": "1" } },
+    });
+    expect(headers).toEqual({ "X-Custom": "1" });
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
@@ -295,27 +298,18 @@ describe("applyExtraParamsToAgent", () => {
     },
     {
       name: "without config via provider/model hints",
-      run: () => {
-        const payload = { store: false };
-        const baseStreamFn: StreamFn = (_model, _context, options) => {
-          options?.onPayload?.(payload);
-          return {} as ReturnType<StreamFn>;
-        };
-        const agent = { streamFn: baseStreamFn };
-
-        applyExtraParamsToAgent(agent, undefined, "openai-codex", "codex-mini-latest");
-
-        const model = {
-          api: "openai-codex-responses",
-          provider: "openai-codex",
-          id: "codex-mini-latest",
-          baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-        } as Model<"openai-codex-responses">;
-        const context: Context = { messages: [] };
-
-        void agent.streamFn?.(model, context, {});
-        return payload;
-      },
+      run: () =>
+        runStoreMutationCase({
+          applyProvider: "openai-codex",
+          applyModelId: "codex-mini-latest",
+          model: {
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            id: "codex-mini-latest",
+            baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+          } as Model<"openai-codex-responses">,
+          options: {},
+        }),
     },
   ])(
     "does not force store=true for Codex responses (Codex requires store=false) ($name)",

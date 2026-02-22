@@ -34,6 +34,14 @@ const normalizeText = (value?: string) =>
     .join("\n")
     .trim();
 
+function captureShellEnv() {
+  const envSnapshot = captureEnv(["SHELL"]);
+  if (!isWin && defaultShell) {
+    process.env.SHELL = defaultShell;
+  }
+  return envSnapshot;
+}
+
 async function waitForCompletion(sessionId: string) {
   let status = "running";
   await expect
@@ -62,6 +70,34 @@ async function runBackgroundEchoLines(lines: string[]) {
   return sessionId;
 }
 
+async function readProcessLog(
+  sessionId: string,
+  options: { offset?: number; limit?: number } = {},
+) {
+  return processTool.execute("call-log", {
+    action: "log",
+    sessionId,
+    ...options,
+  });
+}
+
+async function runBackgroundAndWaitForCompletion(params: {
+  tool: ReturnType<typeof createExecTool>;
+  callId: string;
+  command: string;
+}) {
+  const result = await params.tool.execute(params.callId, {
+    command: params.command,
+    background: true,
+  });
+
+  expect(result.details.status).toBe("running");
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  const status = await waitForCompletion(sessionId);
+  expect(status).toBe("completed");
+  return { sessionId };
+}
+
 beforeEach(() => {
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
@@ -71,10 +107,7 @@ describe("exec tool backgrounding", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["SHELL"]);
-    if (!isWin && defaultShell) {
-      process.env.SHELL = defaultShell;
-    }
+    envSnapshot = captureShellEnv();
   });
 
   afterEach(() => {
@@ -225,10 +258,7 @@ describe("exec tool backgrounding", () => {
     const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
-    const log = await processTool.execute("call2", {
-      action: "log",
-      sessionId,
-    });
+    const log = await readProcessLog(sessionId);
     const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
     const firstLine = textBlock.split("\n")[0]?.trim();
     expect(textBlock).toContain("showing last 200 of 201 lines");
@@ -260,11 +290,7 @@ describe("exec tool backgrounding", () => {
     const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
-    const log = await processTool.execute("call2", {
-      action: "log",
-      sessionId,
-      offset: 30,
-    });
+    const log = await readProcessLog(sessionId, { offset: 30 });
 
     const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
     const renderedLines = textBlock.split("\n");
@@ -310,10 +336,7 @@ describe("exec exit codes", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["SHELL"]);
-    if (!isWin && defaultShell) {
-      process.env.SHELL = defaultShell;
-    }
+    envSnapshot = captureShellEnv();
   });
 
   afterEach(() => {
@@ -384,15 +407,11 @@ describe("exec notifyOnExit", () => {
       sessionKey: "agent:main:main",
     });
 
-    const result = await tool.execute("call2", {
+    await runBackgroundAndWaitForCompletion({
+      tool,
+      callId: "call2",
       command: shortDelayCmd,
-      background: true,
     });
-
-    expect(result.details.status).toBe("running");
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    const status = await waitForCompletion(sessionId);
-    expect(status).toBe("completed");
     expect(peekSystemEvents("agent:main:main")).toEqual([]);
   });
 
@@ -405,15 +424,11 @@ describe("exec notifyOnExit", () => {
       sessionKey: "agent:main:main",
     });
 
-    const result = await tool.execute("call3", {
+    await runBackgroundAndWaitForCompletion({
+      tool,
+      callId: "call3",
       command: shortDelayCmd,
-      background: true,
     });
-
-    expect(result.details.status).toBe("running");
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    const status = await waitForCompletion(sessionId);
-    expect(status).toBe("completed");
     const events = peekSystemEvents("agent:main:main");
     expect(events.length).toBeGreaterThan(0);
     expect(events.some((event) => event.includes("Exec completed"))).toBe(true);

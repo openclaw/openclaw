@@ -49,6 +49,30 @@ describe("handleSlackAction", () => {
     } as OpenClawConfig;
   }
 
+  function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
+    return {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first" as const,
+      hasRepliedRef,
+    };
+  }
+
+  async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
+    readSlackMessages.mockClear();
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
+    const opts = readSlackMessages.mock.calls[0]?.[1] as { token?: string } | undefined;
+    return opts?.token;
+  }
+
+  async function resolveSendToken(cfg: OpenClawConfig): Promise<string | undefined> {
+    sendSlackMessage.mockClear();
+    await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
+    const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
+    return opts?.token;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -285,12 +309,7 @@ describe("handleSlackAction", () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     sendSlackMessage.mockClear();
     const hasRepliedRef = { value: false };
-    const context = {
-      currentChannelId: "C123",
-      currentThreadTs: "1111111111.111111",
-      replyToMode: "first" as const,
-      hasRepliedRef,
-    };
+    const context = createReplyToFirstContext(hasRepliedRef);
 
     // First message should be threaded
     await handleSlackAction(
@@ -322,12 +341,7 @@ describe("handleSlackAction", () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     sendSlackMessage.mockClear();
     const hasRepliedRef = { value: false };
-    const context = {
-      currentChannelId: "C123",
-      currentThreadTs: "1111111111.111111",
-      replyToMode: "first" as const,
-      hasRepliedRef,
-    };
+    const context = createReplyToFirstContext(hasRepliedRef);
 
     await handleSlackAction(
       {
@@ -521,32 +535,21 @@ describe("handleSlackAction", () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
     } as OpenClawConfig;
-    readSlackMessages.mockClear();
-    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
-    await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
-    const opts = readSlackMessages.mock.calls[0]?.[1] as { token?: string } | undefined;
-    expect(opts?.token).toBe("xoxp-1");
+    expect(await resolveReadToken(cfg)).toBe("xoxp-1");
   });
 
   it("falls back to bot token for reads when user token missing", async () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-1" } },
     } as OpenClawConfig;
-    readSlackMessages.mockClear();
-    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
-    await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
-    const opts = readSlackMessages.mock.calls[0]?.[1] as { token?: string } | undefined;
-    expect(opts?.token).toBeUndefined();
+    expect(await resolveReadToken(cfg)).toBeUndefined();
   });
 
   it("uses bot token for writes when userTokenReadOnly is true", async () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
     } as OpenClawConfig;
-    sendSlackMessage.mockClear();
-    await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
-    const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
-    expect(opts?.token).toBeUndefined();
+    expect(await resolveSendToken(cfg)).toBeUndefined();
   });
 
   it("allows user token writes when bot token is missing", async () => {
@@ -555,10 +558,7 @@ describe("handleSlackAction", () => {
         slack: { userToken: "xoxp-1", userTokenReadOnly: false },
       },
     } as OpenClawConfig;
-    sendSlackMessage.mockClear();
-    await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
-    const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
-    expect(opts?.token).toBe("xoxp-1");
+    expect(await resolveSendToken(cfg)).toBe("xoxp-1");
   });
 
   it("returns all emojis when no limit is provided", async () => {

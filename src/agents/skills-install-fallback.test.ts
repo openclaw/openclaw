@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSkill } from "./skills-install.js";
+import {
+  hasBinaryMock,
+  runCommandWithTimeoutMock,
+  scanDirectoryWithSummaryMock,
+} from "./skills-install.test-mocks.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
-
-const runCommandWithTimeoutMock = vi.fn();
-const scanDirectoryWithSummaryMock = vi.fn();
-const hasBinaryMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -69,6 +70,17 @@ async function writeSkillWithInstaller(
   return writeSkillWithInstallers(workspaceDir, name, [{ id: "deps", kind, ...extra }]);
 }
 
+function mockBinaryAvailability(availableBinaries: string[]) {
+  const available = new Set(availableBinaries);
+  hasBinaryMock.mockImplementation((bin: string) => available.has(bin));
+}
+
+function getAptGetCalls() {
+  return runCommandWithTimeoutMock.mock.calls.filter(
+    (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
+  );
+}
+
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
@@ -99,18 +111,7 @@ describe("skills-install fallback edge cases", () => {
 
   it("apt-get available but sudo missing/unusable returns helpful error for go install", async () => {
     // go not available, brew not available, apt-get + sudo are available, sudo check fails
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "go") {
-        return false;
-      }
-      if (bin === "brew") {
-        return false;
-      }
-      if (bin === "apt-get" || bin === "sudo") {
-        return true;
-      }
-      return false;
-    });
+    mockBinaryAvailability(["apt-get", "sudo"]);
 
     // sudo -n true fails (no passwordless sudo)
     runCommandWithTimeoutMock.mockResolvedValueOnce({
@@ -136,23 +137,13 @@ describe("skills-install fallback edge cases", () => {
     );
 
     // Verify apt-get install was NOT called
-    const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
-      (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
-    );
+    const aptCalls = getAptGetCalls();
     expect(aptCalls).toHaveLength(0);
   });
 
   it("status-selected go installer fails gracefully when apt fallback needs sudo", async () => {
     // no go/brew, but apt and sudo are present
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "go" || bin === "brew") {
-        return false;
-      }
-      if (bin === "apt-get" || bin === "sudo") {
-        return true;
-      }
-      return false;
-    });
+    mockBinaryAvailability(["apt-get", "sudo"]);
 
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
@@ -176,18 +167,7 @@ describe("skills-install fallback edge cases", () => {
 
   it("handles sudo probe spawn failures without throwing", async () => {
     // go not available, brew not available, apt-get + sudo appear available
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "go") {
-        return false;
-      }
-      if (bin === "brew") {
-        return false;
-      }
-      if (bin === "apt-get" || bin === "sudo") {
-        return true;
-      }
-      return false;
-    });
+    mockBinaryAvailability(["apt-get", "sudo"]);
 
     runCommandWithTimeoutMock.mockRejectedValueOnce(
       new Error('Executable not found in $PATH: "sudo"'),
@@ -204,26 +184,13 @@ describe("skills-install fallback edge cases", () => {
     expect(result.stderr).toContain("Executable not found");
 
     // Verify apt-get install was NOT called
-    const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
-      (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
-    );
+    const aptCalls = getAptGetCalls();
     expect(aptCalls).toHaveLength(0);
   });
 
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {
     // uv not available, brew not available, curl IS available
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "uv") {
-        return false;
-      }
-      if (bin === "brew") {
-        return false;
-      }
-      if (bin === "curl") {
-        return true;
-      }
-      return false;
-    });
+    mockBinaryAvailability(["curl"]);
 
     const result = await installSkill({
       workspaceDir,
