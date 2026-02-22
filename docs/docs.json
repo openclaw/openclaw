@@ -528,12 +528,12 @@
       "destination": "/channels/pairing"
     },
     {
-      "source": "/plans/cron-add-hardening",
-      "destination": "/experiments/plans/cron-add-hardening"
+      "source": "/experiments/plans/cron-add-hardening",
+      "destination": "/automation/cron-jobs"
     },
     {
-      "source": "/plans/group-policy-hardening",
-      "destination": "/experiments/plans/group-policy-hardening"
+      "source": "/experiments/plans/group-policy-hardening",
+      "destination": "/channels/groups"
     },
     {
       "source": "/poll",
@@ -1281,8 +1281,6 @@
                 "group": "Experiments",
                 "pages": [
                   "experiments/onboarding-config-protocol",
-                  "experiments/plans/cron-add-hardening",
-                  "experiments/plans/group-policy-hardening",
                   "experiments/research/memory",
                   "experiments/proposals/model-config"
                 ]
