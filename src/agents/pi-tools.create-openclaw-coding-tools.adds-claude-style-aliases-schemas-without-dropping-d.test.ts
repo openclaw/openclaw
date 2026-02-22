@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
@@ -9,6 +8,10 @@ import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
 const defaultTools = createOpenClawCodingTools();
+const tinyPngBuffer = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
+  "base64",
+);
 
 describe("createOpenClawCodingTools", () => {
   it("keeps read tool image metadata intact", async () => {
@@ -18,17 +21,7 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-"));
     try {
       const imagePath = path.join(tmpDir, "sample.png");
-      const png = await sharp({
-        create: {
-          width: 8,
-          height: 8,
-          channels: 3,
-          background: { r: 0, g: 128, b: 255 },
-        },
-      })
-        .png()
-        .toBuffer();
-      await fs.writeFile(imagePath, png);
+      await fs.writeFile(imagePath, tinyPngBuffer);
 
       const result = await readTool?.execute("tool-1", {
         path: imagePath,
@@ -48,8 +41,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
   it("returns text content without image blocks for text files", async () => {
-    const tools = createOpenClawCodingTools();
-    const readTool = tools.find((tool) => tool.name === "read");
+    const readTool = defaultTools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-"));
