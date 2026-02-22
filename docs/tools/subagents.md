@@ -25,7 +25,7 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
 
 Thread binding controls:
 
-These commands work on channels that implement thread bindings. Current support is Discord.
+These commands work on channels that support persistent thread bindings. See **Thread supporting channels** below.
 
 - `/focus <subagent-label|session-key|session-id|session-label>`
 - `/unfocus`
@@ -91,9 +91,12 @@ Tool params:
 
 When thread bindings are enabled for a channel, a sub-agent can stay bound to a thread so follow-up user messages in that thread keep routing to the same sub-agent session.
 
-Current implementation:
+### Thread supporting channels
 
-- Discord supports persistent thread-bound subagent sessions.
+- Discord: supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`) and manual thread controls (`/focus`, `/unfocus`, `/agents`, `/session ttl`).
+- Slack: supports thread-aware announce delivery.
+- Telegram: supports topic-aware announce delivery.
+- Matrix: supports thread-aware announce delivery.
 
 Quick flow:
 
