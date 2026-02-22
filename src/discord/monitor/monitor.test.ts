@@ -119,9 +119,9 @@ describe("agent components", () => {
   };
 
   beforeEach(() => {
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-    enqueueSystemEventMock.mockReset();
+    readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    enqueueSystemEventMock.mockClear();
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {
@@ -282,17 +282,17 @@ describe("discord component interactions", () => {
   beforeEach(() => {
     clearDiscordComponentEntries();
     lastDispatchCtx = undefined;
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-    enqueueSystemEventMock.mockReset();
-    dispatchReplyMock.mockReset().mockImplementation(async (params: DispatchParams) => {
+    readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    enqueueSystemEventMock.mockClear();
+    dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
       lastDispatchCtx = params.ctx;
       await params.dispatcherOptions.deliver({ text: "ok" });
     });
-    deliverDiscordReplyMock.mockReset();
-    recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
-    readSessionUpdatedAtMock.mockReset().mockReturnValue(undefined);
-    resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions-test.json");
+    deliverDiscordReplyMock.mockClear();
+    recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
+    readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
+    resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
   });
 
   it("routes button clicks with reply references", async () => {
