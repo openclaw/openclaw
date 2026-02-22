@@ -58,6 +58,38 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("beta");
   });
 
+  it("ignores backup and disabled plugin directories in scanned roots", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+
+    const backupDir = path.join(globalExt, "feishu.backup-20260222");
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(path.join(backupDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const disabledDir = path.join(globalExt, "telegram.disabled.20260222");
+    fs.mkdirSync(disabledDir, { recursive: true });
+    fs.writeFileSync(path.join(disabledDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const bakDir = path.join(globalExt, "discord.bak");
+    fs.mkdirSync(bakDir, { recursive: true });
+    fs.writeFileSync(path.join(bakDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const liveDir = path.join(globalExt, "live");
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    const ids = candidates.map((candidate) => candidate.idHint);
+    expect(ids).toContain("live");
+    expect(ids).not.toContain("feishu.backup-20260222");
+    expect(ids).not.toContain("telegram.disabled.20260222");
+    expect(ids).not.toContain("discord.bak");
+  });
+
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
