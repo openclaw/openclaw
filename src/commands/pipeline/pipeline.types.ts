@@ -55,6 +55,9 @@ export type PipelineSpec = {
   runDir: string;
   createdAt: string;
 
+  /** Explicit phase ordering. Steps' `phase` must be in this list. */
+  phases: string[];
+
   /** The agent id to execute steps under (e.g. flash-orchestrator). */
   agentId?: string;
 

@@ -100,17 +100,38 @@ export async function runPipeline(spec: PipelineSpecZ, opts: PipelineRunOptions)
   // const maxLoops = new Map((spec.loops ?? []).map((l) => [l.id, l.maxIterations ?? 3]));
   // const loopCounts = new Map<string, number>();
 
+  const phases = spec.phases;
+  const phaseIdx = new Map(phases.map((p, i) => [p, i] as const));
+  for (const s of steps) {
+    if (!phaseIdx.has(s.phase)) {
+      throw new Error(
+        `Step ${s.id} uses phase '${s.phase}' but spec.phases does not include it. Add it to phases.`,
+      );
+    }
+  }
+
   const wantedPhase = opts.phase;
   const untilPhase = opts.until;
 
+  const startIdx = wantedPhase ? phaseIdx.get(wantedPhase) : 0;
+  if (wantedPhase && startIdx === undefined) {
+    throw new Error(`--phase '${wantedPhase}' is not in spec.phases`);
+  }
+  const untilIdx = untilPhase ? phaseIdx.get(untilPhase) : phases.length - 1;
+  if (untilPhase && untilIdx === undefined) {
+    throw new Error(`--until '${untilPhase}' is not in spec.phases`);
+  }
+
   const phaseAllowed = (phase: string) => {
-    if (wantedPhase && phase !== wantedPhase) {
+    const idx = phaseIdx.get(phase);
+    if (idx === undefined) {
       return false;
     }
-    if (untilPhase) {
-      // very rough ordering: string compare not reliable; for now treat as exact match or run all.
-      // TODO: implement explicit phase ordering in spec.
-      return true;
+    if (startIdx !== undefined && idx < startIdx) {
+      return false;
+    }
+    if (untilIdx !== undefined && idx > untilIdx) {
+      return false;
     }
     return true;
   };

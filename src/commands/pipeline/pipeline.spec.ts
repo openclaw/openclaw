@@ -7,6 +7,7 @@ export const pipelineSpecSchema = z.object({
   name: z.string().min(1),
   runDir: z.string().min(1),
   createdAt: z.string().min(1),
+  phases: z.array(z.string().min(1)).min(1),
   agentId: z.string().optional(),
   steps: z
     .array(
