@@ -186,18 +186,49 @@ export function filterToolResultMediaUrls(
  * Extract media file paths from a tool result.
  *
  * Strategy (first match wins):
+ * 0. Structured `details.mediaUrl` / `details.mediaUrls` (e.g. TTS tool).
  * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
  * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
+ *
+ * When `options.detailsOnly` is true, only strategy 0 is applied. This is used
+ * when text-based MEDIA: extraction is already handled elsewhere (e.g.
+ * emitToolOutput → parseReplyDirectives).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-export function extractToolResultMediaPaths(result: unknown): string[] {
+export function extractToolResultMediaPaths(
+  result: unknown,
+  options?: { detailsOnly?: boolean },
+): string[] {
   if (!result || typeof result !== "object") {
     return [];
   }
   const record = result as Record<string, unknown>;
+
+  // Strategy 0: Structured media URL(s) from result details.
+  // Tools like TTS set details.mediaUrl directly to bypass text-based MEDIA:
+  // parsing, which is subject to sandbox security policy restrictions.
+  const details = record.details as Record<string, unknown> | undefined;
+  if (details) {
+    if (typeof details.mediaUrl === "string" && details.mediaUrl.trim()) {
+      return [details.mediaUrl.trim()];
+    }
+    if (Array.isArray(details.mediaUrls)) {
+      const urls = (details.mediaUrls as unknown[])
+        .filter((u): u is string => typeof u === "string" && u.trim() !== "")
+        .map((u) => u.trim());
+      if (urls.length > 0) {
+        return urls;
+      }
+    }
+  }
+
+  if (options?.detailsOnly) {
+    return [];
+  }
+
   const content = Array.isArray(record.content) ? record.content : null;
   if (!content) {
     return [];
@@ -244,7 +275,6 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 
   // Fall back to details.path when image content exists but no MEDIA: text.
   if (hasImageContent) {
-    const details = record.details as Record<string, unknown> | undefined;
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
       return [p];
@@ -252,6 +282,21 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   }
 
   return [];
+}
+
+/**
+ * Extract the `audioAsVoice` flag from a tool result's details.
+ * Used alongside `extractToolResultMediaPaths` to propagate voice-bubble
+ * metadata from tools like TTS.
+ */
+export function extractToolResultAudioAsVoice(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = (result as Record<string, unknown>).details as
+    | Record<string, unknown>
+    | undefined;
+  return details?.audioAsVoice === true;
 }
 
 export function isToolResultError(result: unknown): boolean {
