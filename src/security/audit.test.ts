@@ -974,6 +974,20 @@ describe("security audit", () => {
   });
 
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
+    const trustedProxyCfg = (trustedProxies: string[]): OpenClawConfig => ({
+      gateway: {
+        bind: "loopback",
+        allowRealIpFallback: true,
+        trustedProxies,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    });
+
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
@@ -1011,36 +1025,22 @@ describe("security audit", () => {
       },
       {
         name: "loopback trusted-proxy with loopback-only proxies",
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            allowRealIpFallback: true,
-            trustedProxies: ["127.0.0.1"],
-            auth: {
-              mode: "trusted-proxy",
-              trustedProxy: {
-                userHeader: "x-forwarded-user",
-              },
-            },
-          },
-        },
+        cfg: trustedProxyCfg(["127.0.0.1"]),
         expectedSeverity: "warn",
       },
       {
         name: "loopback trusted-proxy with non-loopback proxy range",
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            allowRealIpFallback: true,
-            trustedProxies: ["127.0.0.1", "10.0.0.0/8"],
-            auth: {
-              mode: "trusted-proxy",
-              trustedProxy: {
-                userHeader: "x-forwarded-user",
-              },
-            },
-          },
-        },
+        cfg: trustedProxyCfg(["127.0.0.1", "10.0.0.0/8"]),
+        expectedSeverity: "critical",
+      },
+      {
+        name: "loopback trusted-proxy with 127.0.0.2",
+        cfg: trustedProxyCfg(["127.0.0.2"]),
+        expectedSeverity: "critical",
+      },
+      {
+        name: "loopback trusted-proxy with 127.0.0.0/8 range",
+        cfg: trustedProxyCfg(["127.0.0.0/8"]),
         expectedSeverity: "critical",
       },
     ];
