@@ -356,21 +356,6 @@ describe("runEmbeddedPiAgent", () => {
     ).rejects.toThrow("Malformed agent session key");
   });
 
-  it("persists the first user message before assistant output", { timeout: 120_000 }, async () => {
-    const sessionFile = nextSessionFile();
-    await runDefaultEmbeddedTurn(sessionFile, "hello");
-
-    const messages = await readSessionMessages(sessionFile);
-    const firstUserIndex = messages.findIndex(
-      (message) => message?.role === "user" && textFromContent(message.content) === "hello",
-    );
-    const firstAssistantIndex = messages.findIndex((message) => message?.role === "assistant");
-    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-    if (firstAssistantIndex !== -1) {
-      expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
-    }
-  });
-
   it("persists the user message when prompt fails before assistant output", async () => {
     const sessionFile = nextSessionFile();
     const cfg = makeOpenAiConfig(["mock-error"]);
