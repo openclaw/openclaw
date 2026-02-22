@@ -12,6 +12,7 @@
  */
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { computeRetryDelay, isRetryableRound } from "./src/retry-backoff.js";
 
 export {
   RETRYABLE_REASONS,
@@ -40,6 +41,14 @@ const plugin = {
           retryMaxRounds: 2,
         },
       };
+    });
+
+    api.on("on_all_candidates_failed", (event) => {
+      if (!isRetryableRound(event.attempts, event.round)) {
+        return; // not retryable or max rounds exceeded
+      }
+      const delayMs = computeRetryDelay(event.round);
+      return { retry: true, delayMs };
     });
   },
 };

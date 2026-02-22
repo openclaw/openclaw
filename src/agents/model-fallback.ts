@@ -22,6 +22,7 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 type ModelCandidate = {
   provider: string;
@@ -316,94 +317,110 @@ export async function runWithModelFallback<T>(params: {
 
   const hasFallbackCandidates = candidates.length > 1;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    if (authStore) {
-      const profileIds = resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-      });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
-
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown.
-        // For the primary model (i === 0), probe it if the soonest cooldown
-        // expiry is close or already past. This avoids staying on a fallback
-        // model long after the real rate-limit window clears.
-        const now = Date.now();
-        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
-        const shouldProbe = shouldProbePrimaryDuringCooldown({
-          isPrimary: i === 0,
-          hasFallbackCandidates,
-          now,
-          throttleKey: probeThrottleKey,
-          authStore,
-          profileIds,
-        });
-        if (!shouldProbe) {
-          // Skip without attempting
-          attempts.push({
-            provider: candidate.provider,
-            model: candidate.model,
-            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: "rate_limit",
-          });
-          continue;
-        }
-        // Primary model probe: attempt it despite cooldown to detect recovery.
-        // If it fails, the error is caught below and we fall through to the
-        // next candidate as usual.
-        lastProbeAttempt.set(probeThrottleKey, now);
-      }
+  // Outer retry loop — plugins can request retrying all candidates after backoff
+  for (let round = 0; ; round += 1) {
+    // Clear attempts from previous round so the final summary only contains the last round
+    if (round > 0) {
+      attempts.length = 0;
+      lastError = undefined;
     }
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      if (authStore) {
+        const profileIds = resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store: authStore,
+          provider: candidate.provider,
+        });
+        const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+
+        if (profileIds.length > 0 && !isAnyProfileAvailable) {
+          const now = Date.now();
+          const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+          const shouldProbe = shouldProbePrimaryDuringCooldown({
+            isPrimary: i === 0,
+            hasFallbackCandidates,
+            now,
+            throttleKey: probeThrottleKey,
+            authStore,
+            profileIds,
+          });
+          if (!shouldProbe) {
+            attempts.push({
+              provider: candidate.provider,
+              model: candidate.model,
+              error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+              reason: "rate_limit",
+            });
+            continue;
+          }
+          lastProbeAttempt.set(probeThrottleKey, now);
+        }
       }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
-      if (isLikelyContextOverflowError(errMessage)) {
-        throw err;
-      }
-      const normalized =
-        coerceToFailoverError(err, {
+      try {
+        const result = await params.run(candidate.provider, candidate.model);
+        return {
+          result,
           provider: candidate.provider,
           model: candidate.model,
-        }) ?? err;
-      if (!isFailoverError(normalized)) {
-        throw err;
-      }
+          attempts,
+        };
+      } catch (err) {
+        if (shouldRethrowAbort(err)) {
+          throw err;
+        }
+        const errMessage = err instanceof Error ? err.message : String(err);
+        if (isLikelyContextOverflowError(errMessage)) {
+          throw err;
+        }
+        const normalized =
+          coerceToFailoverError(err, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err;
+        if (!isFailoverError(normalized)) {
+          throw err;
+        }
 
-      lastError = normalized;
-      const described = describeFailoverError(normalized);
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described.message,
-        reason: described.reason,
-        status: described.status,
-        code: described.code,
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: normalized,
-        attempt: i + 1,
-        total: candidates.length,
-      });
+        lastError = normalized;
+        const described = describeFailoverError(normalized);
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: described.message,
+          reason: described.reason,
+          status: described.status,
+          code: described.code,
+        });
+        await params.onError?.({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: normalized,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+      }
     }
+
+    // All candidates failed — ask plugins whether to retry
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("on_all_candidates_failed")) {
+      const hookResult = await hookRunner.runOnAllCandidatesFailed(
+        { attempts, round },
+        {},
+      );
+      if (hookResult?.retry) {
+        const delayMs = hookResult.delayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+        continue; // retry all candidates
+      }
+    }
+
+    // No plugin requested retry — throw
+    break;
   }
 
   throwFallbackFailureSummary({
