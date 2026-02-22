@@ -29,6 +29,25 @@ describe("system run command helpers", () => {
     expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo hi"])).toBe("echo hi");
   });
 
+  test("extractShellCommandFromArgv unwraps /usr/bin/env shell wrappers", () => {
+    expect(extractShellCommandFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"])).toBe("echo hi");
+    expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "zsh", "-c", "echo hi"])).toBe(
+      "echo hi",
+    );
+  });
+
+  test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {
+    expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe("echo hi");
+    expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
+  });
+
+  test("extractShellCommandFromArgv ignores env wrappers when no shell wrapper follows", () => {
+    expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"])).toBe(
+      null,
+    );
+    expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar"])).toBe(null);
+  });
+
   test("extractShellCommandFromArgv includes trailing cmd.exe args after /c", () => {
     expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"])).toBe(
       "echo SAFE&&whoami",
@@ -58,6 +77,14 @@ describe("system run command helpers", () => {
   test("validateSystemRunCommandConsistency accepts rawCommand matching sh wrapper argv", () => {
     const res = validateSystemRunCommandConsistency({
       argv: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: "echo hi",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test("validateSystemRunCommandConsistency accepts rawCommand matching env shell wrapper argv", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/usr/bin/env", "bash", "-lc", "echo hi"],
       rawCommand: "echo hi",
     });
     expect(res.ok).toBe(true);
