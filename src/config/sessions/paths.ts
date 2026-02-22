@@ -160,6 +160,15 @@ function resolvePathWithinSessionsDir(
     }
   }
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    // In multi-agent setups, the sessionsDir used for resolution may differ
+    // from the agent that owns the session file. Allow absolute paths only
+    // when they are structurally inside <stateDir>/agents/<agentId>/sessions/.
+    if (path.isAbsolute(trimmed)) {
+      const safeAbsolute = extractAgentIdFromAbsoluteSessionPath(trimmed);
+      if (safeAbsolute) {
+        return path.resolve(trimmed);
+      }
+    }
     throw new Error("Session file path must be within sessions directory");
   }
   return path.resolve(resolvedBase, normalized);
