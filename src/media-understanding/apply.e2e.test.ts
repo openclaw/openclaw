@@ -632,6 +632,38 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("<file");
   });
 
+  it("does not reclassify PDF attachments as text/plain", async () => {
+    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "report.pdf",
+      content: pseudoPdf,
+    });
+
+    const cfg: OpenClawConfig = {
+      ...createMediaDisabledConfig(),
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              files: { allowedMimes: ["text/plain"] },
+            },
+          },
+        },
+      },
+    };
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+      cfg,
+    });
+
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:file>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
   it("respects configured allowedMimes for text-like attachments", async () => {
     const tsvText = "a\tb\tc\n1\t2\t3";
     const tsvPath = await createTempMediaFile({
