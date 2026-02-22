@@ -55,9 +55,40 @@ export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
-const externalTransports = new Set<LogTransport>();
+type GlobalLogTransportRegistry = {
+  transports: Set<LogTransport>;
+  loggers: Set<TsLogger<LogObj>>;
+  attached: WeakMap<object, Set<LogTransport>>;
+};
+
+const GLOBAL_LOG_TRANSPORTS_KEY = "__openclaw_external_log_transports__";
+const loggerGlobal = globalThis as typeof globalThis & {
+  [GLOBAL_LOG_TRANSPORTS_KEY]?: GlobalLogTransportRegistry;
+};
+const logTransportRegistry =
+  loggerGlobal[GLOBAL_LOG_TRANSPORTS_KEY] ??
+  (loggerGlobal[GLOBAL_LOG_TRANSPORTS_KEY] = {
+    transports: new Set<LogTransport>(),
+    loggers: new Set<TsLogger<LogObj>>(),
+    attached: new WeakMap<object, Set<LogTransport>>(),
+  });
+
+const externalTransports = logTransportRegistry.transports;
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
+  const loggerKey = logger as unknown as object;
+  const attachedSet =
+    logTransportRegistry.attached.get(loggerKey) ??
+    (() => {
+      const created = new Set<LogTransport>();
+      logTransportRegistry.attached.set(loggerKey, created);
+      return created;
+    })();
+
+  if (attachedSet.has(transport)) {
+    return;
+  }
+
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) {
       return;
@@ -68,6 +99,8 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
       // never block on logging failures
     }
   });
+
+  attachedSet.add(transport);
 }
 
 function resolveSettings(): ResolvedSettings {
@@ -131,6 +164,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       // never block on logging failures
     }
   });
+  logTransportRegistry.loggers.add(logger);
   for (const transport of externalTransports) {
     attachExternalTransport(logger, transport);
   }
@@ -217,10 +251,16 @@ export function resetLogger() {
 
 export function registerLogTransport(transport: LogTransport): () => void {
   externalTransports.add(transport);
+
   const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   if (logger) {
-    attachExternalTransport(logger, transport);
+    logTransportRegistry.loggers.add(logger);
   }
+
+  for (const activeLogger of logTransportRegistry.loggers) {
+    attachExternalTransport(activeLogger, transport);
+  }
+
   return () => {
     externalTransports.delete(transport);
   };
