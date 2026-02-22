@@ -21,6 +21,11 @@ const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
 let remoteRegistry: NodeRegistry | null = null;
 
+/** Tracks the next allowed probe time per node to implement exponential backoff on failures. */
+const probeBackoff = new Map<string, { nextAllowedMs: number; delayMs: number }>();
+const PROBE_BACKOFF_INITIAL_MS = 30_000; // 30 seconds
+const PROBE_BACKOFF_MAX_MS = 5 * 60_000; // 5 minutes
+
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
   const name = record?.displayName?.trim();
@@ -168,8 +173,17 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
   upsertNode({ nodeId, bins });
 }
 
+function escalateProbeBackoff(nodeId: string) {
+  const existing = probeBackoff.get(nodeId);
+  const delayMs = existing
+    ? Math.min(existing.delayMs * 2, PROBE_BACKOFF_MAX_MS)
+    : PROBE_BACKOFF_INITIAL_MS;
+  probeBackoff.set(nodeId, { nextAllowedMs: Date.now() + delayMs, delayMs });
+}
+
 export function removeRemoteNodeInfo(nodeId: string) {
   remoteNodes.delete(nodeId);
+  probeBackoff.delete(nodeId);
 }
 
 function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
@@ -258,6 +272,12 @@ export async function refreshRemoteNodeBins(params: {
     return;
   }
 
+  // Exponential backoff: skip probe if previous attempt failed recently.
+  const backoff = probeBackoff.get(params.nodeId);
+  if (backoff && Date.now() < backoff.nextAllowedMs) {
+    return;
+  }
+
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
   for (const workspaceDir of workspaceDirs) {
@@ -291,9 +311,11 @@ export async function refreshRemoteNodeBins(params: {
     );
     if (!res.ok) {
       logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
+      escalateProbeBackoff(params.nodeId);
       return;
     }
     const bins = parseBinProbePayload(res.payloadJSON, res.payload);
+    probeBackoff.delete(params.nodeId);
     const existingBins = remoteNodes.get(params.nodeId)?.bins;
     const nextBins = new Set(bins);
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
@@ -305,6 +327,7 @@ export async function refreshRemoteNodeBins(params: {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
     logRemoteBinProbeFailure(params.nodeId, err);
+    escalateProbeBackoff(params.nodeId);
   }
 }
 
