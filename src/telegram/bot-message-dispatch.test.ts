@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../config/paths.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -37,6 +38,143 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+
+describe("dispatchTelegramMessage ack reaction removal", () => {
+  function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
+    const base = {
+      ctxPayload: {},
+      primaryCtx: { message: { chat: { id: 123, type: "private" } } },
+      msg: {
+        chat: { id: 123, type: "private" },
+        message_id: 456,
+        message_thread_id: 777,
+      },
+      chatId: 123,
+      isGroup: false,
+      resolvedThreadId: undefined,
+      replyThreadId: 777,
+      threadSpec: { id: 777, scope: "dm" },
+      historyKey: undefined,
+      historyLimit: 0,
+      groupHistories: new Map(),
+      route: { agentId: "default", accountId: "default" },
+      skillFilter: undefined,
+      sendTyping: vi.fn(),
+      sendRecordVoice: vi.fn(),
+      ackReactionPromise: null,
+      reactionApi: null,
+      removeAckAfterReply: false,
+    } as unknown as TelegramMessageContext;
+
+    return {
+      ...base,
+      ...overrides,
+      primaryCtx: {
+        ...(base.primaryCtx as object),
+        ...(overrides?.primaryCtx ? (overrides.primaryCtx as object) : null),
+      } as TelegramMessageContext["primaryCtx"],
+      msg: {
+        ...(base.msg as object),
+        ...(overrides?.msg ? (overrides.msg as object) : null),
+      } as TelegramMessageContext["msg"],
+      route: {
+        ...(base.route as object),
+        ...(overrides?.route ? (overrides.route as object) : null),
+      } as TelegramMessageContext["route"],
+    };
+  }
+
+  function createBot(): Bot {
+    return { api: { sendMessage: vi.fn(), editMessageText: vi.fn() } } as unknown as Bot;
+  }
+
+  function createRuntime(): Parameters<typeof dispatchTelegramMessage>[0]["runtime"] {
+    return {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: () => {
+        throw new Error("exit");
+      },
+    };
+  }
+
+  beforeEach(() => {
+    createTelegramDraftStream.mockReset();
+    dispatchReplyWithBufferedBlockDispatcher.mockReset();
+    deliverReplies.mockReset();
+  });
+
+  it("removes ack reaction after block-streamed delivery with no final reply", async () => {
+    const reactionApi = vi.fn().mockResolvedValue(true);
+    const context = createContext({
+      msg: { chat: { id: 7, type: "supergroup" }, message_id: 99 },
+      chatId: 7,
+      isGroup: true,
+      threadSpec: { id: 1, scope: "topic" },
+      removeAckAfterReply: true,
+      ackReactionPromise: Promise.resolve(true),
+      reactionApi,
+    });
+
+    // Simulate block streaming: deliver is called (blocks), but queuedFinal = false
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "block 1" }, { kind: "block" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchTelegramMessage({
+      context,
+      bot: createBot(),
+      cfg: {},
+      runtime: createRuntime(),
+      replyToMode: "first",
+      streamMode: "off",
+      textLimit: 4096,
+      telegramCfg: {},
+      opts: { token: "token" },
+    });
+
+    // Wait for the fire-and-forget promise chain inside removeAckReactionAfterReply
+    await new Promise((r) => setTimeout(r, 10));
+
+    // reactionApi should be called with empty array to clear the reaction
+    expect(reactionApi).toHaveBeenCalledWith(7, 99, []);
+  });
+
+  it("does not remove ack reaction when nothing was delivered", async () => {
+    const reactionApi = vi.fn().mockResolvedValue(true);
+    const context = createContext({
+      msg: { chat: { id: 7, type: "supergroup" }, message_id: 99 },
+      chatId: 7,
+      isGroup: true,
+      threadSpec: { id: 1, scope: "topic" },
+      removeAckAfterReply: true,
+      ackReactionPromise: Promise.resolve(true),
+      reactionApi,
+    });
+
+    // No delivery, no final
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: false });
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchTelegramMessage({
+      context,
+      bot: createBot(),
+      cfg: {},
+      runtime: createRuntime(),
+      replyToMode: "first",
+      streamMode: "off",
+      textLimit: 4096,
+      telegramCfg: {},
+      opts: { token: "token" },
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(reactionApi).not.toHaveBeenCalled();
+  });
+});
 
 describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
