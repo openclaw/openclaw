@@ -225,6 +225,7 @@ OPENCLAW_WORKSPACE_DIR=/home/$USER/.openclaw/workspace
 
 GOG_KEYRING_PASSWORD=change-me-now
 XDG_CONFIG_HOME=/home/node/.openclaw
+OPENCLAW_BUN_VERSION=1.3.9
 ```
 
 Generate strong secrets:
@@ -245,7 +246,10 @@ Create or update `docker-compose.yml`.
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE}
-    build: .
+    build:
+      context: .
+      args:
+        BUN_VERSION: ${OPENCLAW_BUN_VERSION:-1.3.9}
     restart: unless-stopped
     env_file:
       - .env
@@ -266,6 +270,16 @@ services:
       # Recommended: keep the Gateway loopback-only on the VM; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node dist/index.js gateway call health --json --timeout 8000 > /dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     command:
       [
         "node",
@@ -309,17 +323,33 @@ FROM node:22-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
+ARG GOG_VERSION=0.0.0
+ARG GOPLACES_VERSION=0.0.0
+ARG WACLI_VERSION=0.0.0
+
 # Example binary 1: Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
+RUN set -eux; \
+  curl -fL -o /tmp/gog.tar.gz "https://github.com/steipete/gog/releases/download/v${GOG_VERSION}/gog_Linux_x86_64.tar.gz"; \
+  curl -fL -o /tmp/gog_checksums.txt "https://github.com/steipete/gog/releases/download/v${GOG_VERSION}/checksums.txt"; \
+  grep 'gog_Linux_x86_64.tar.gz' /tmp/gog_checksums.txt | sha256sum -c -; \
+  tar -xzf /tmp/gog.tar.gz -C /tmp; \
+  install -m 0755 /tmp/gog /usr/local/bin/gog
 
 # Example binary 2: Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+RUN set -eux; \
+  curl -fL -o /tmp/goplaces.tar.gz "https://github.com/steipete/goplaces/releases/download/v${GOPLACES_VERSION}/goplaces_Linux_x86_64.tar.gz"; \
+  curl -fL -o /tmp/goplaces_checksums.txt "https://github.com/steipete/goplaces/releases/download/v${GOPLACES_VERSION}/checksums.txt"; \
+  grep 'goplaces_Linux_x86_64.tar.gz' /tmp/goplaces_checksums.txt | sha256sum -c -; \
+  tar -xzf /tmp/goplaces.tar.gz -C /tmp; \
+  install -m 0755 /tmp/goplaces /usr/local/bin/goplaces
 
 # Example binary 3: WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
+RUN set -eux; \
+  curl -fL -o /tmp/wacli.tar.gz "https://github.com/steipete/wacli/releases/download/v${WACLI_VERSION}/wacli_Linux_x86_64.tar.gz"; \
+  curl -fL -o /tmp/wacli_checksums.txt "https://github.com/steipete/wacli/releases/download/v${WACLI_VERSION}/checksums.txt"; \
+  grep 'wacli_Linux_x86_64.tar.gz' /tmp/wacli_checksums.txt | sha256sum -c -; \
+  tar -xzf /tmp/wacli.tar.gz -C /tmp; \
+  install -m 0755 /tmp/wacli /usr/local/bin/wacli
 
 # Add more binaries below using the same pattern
 
@@ -340,6 +370,34 @@ ENV NODE_ENV=production
 
 CMD ["node","dist/index.js"]
 ```
+
+---
+
+## Bun pinning and maintenance windows
+
+The Docker build pins Bun with `BUN_VERSION` and verifies the downloaded Bun
+archive against the release `SHASUMS256.txt` file before installation. Keep the
+pin in `.env` so operators can coordinate upgrades safely.
+
+Maintenance window process:
+
+1. Choose a Bun release from `https://github.com/oven-sh/bun/releases`.
+2. Update `OPENCLAW_BUN_VERSION` in `.env`.
+3. Rebuild and confirm Bun version inside the built image:
+
+```bash
+docker compose build --no-cache openclaw-gateway
+docker compose run --rm openclaw-gateway bun --version
+```
+
+4. Deploy the updated image:
+
+```bash
+docker compose up -d openclaw-gateway
+```
+
+If checksum verification fails during build, do not bypass it. Reconfirm the
+release version and artifact names before retrying.
 
 ---
 
@@ -378,6 +436,45 @@ Success:
 
 ```
 [gateway] listening on ws://0.0.0.0:18789
+```
+
+### Container health behavior (expected)
+
+The Compose service runs this health probe against the configured Gateway port:
+
+```bash
+node dist/index.js gateway call health --json --timeout 8000
+```
+
+- `healthy`: Docker can reach the Gateway and `gateway call health` returns success.
+- `starting`: Startup grace period is still active (`start_period: 180s`) while first boot tasks finish (for example: migration, first build warm-up, or provider initialization).
+- `unhealthy`: Health probe retries exceeded (`retries: 5`) and Docker marks the container unhealthy.
+
+Check current health state:
+
+```bash
+docker compose ps
+```
+
+Inspect detailed probe history:
+
+```bash
+docker inspect --format '{{json .State.Health}}' $(docker compose ps -q openclaw-gateway) | jq
+```
+
+If the container is unhealthy, run these commands in order:
+
+```bash
+docker compose logs --tail=200 openclaw-gateway
+docker compose exec openclaw-gateway node dist/index.js gateway call health --json --timeout 8000
+docker compose restart openclaw-gateway
+```
+
+If health still fails, verify auth and bind configuration in `.env` (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_BIND`, `OPENCLAW_GATEWAY_PORT`), then rebuild and relaunch:
+
+```bash
+docker compose build --no-cache openclaw-gateway
+docker compose up -d openclaw-gateway
 ```
 
 ---
@@ -428,6 +525,23 @@ git pull
 docker compose build
 docker compose up -d
 ```
+
+### Binary update workflow (pinned + verifiable)
+
+Use this flow for persistent binaries baked into your image.
+Do not install these binaries at runtime.
+
+1. **Bump the pinned version**
+   - Update `ARG <BINARY>_VERSION=...` in your Dockerfile.
+   - Keep release URLs pinned to the same version tag (`/releases/download/v<version>/...`).
+2. **Verify release provenance**
+   - Confirm the tag, attached artifacts, and checksums in the upstream GitHub release page.
+   - Verify that the tarball filename in `checksums.txt` exactly matches the archive you download.
+3. **Rebuild and validate**
+   - Rebuild: `docker compose build --no-cache openclaw-gateway`
+   - Relaunch: `docker compose up -d openclaw-gateway`
+   - Validate binaries: `docker compose exec openclaw-gateway which gog goplaces wacli`
+   - Validate runtime health: `docker compose logs --tail=100 openclaw-gateway`
 
 ---
 

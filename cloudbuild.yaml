@@ -1,0 +1,106 @@
+# Cloud Build pipeline for OpenClaw on Google Cloud Run.
+#
+# Usage:
+#   gcloud builds submit --config cloudbuild.yaml
+#
+# Prerequisites:
+#   - Artifact Registry repository created:
+#       gcloud artifacts repositories create ${_REPO_NAME} \
+#         --repository-format=docker --location=${_REGION}
+#   - Cloud Run API enabled:
+#       gcloud services enable run.googleapis.com
+#   - Secret Manager secrets created (see scripts/gcp/setup-secrets.sh)
+#
+# Override defaults with --substitutions:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_REGION=europe-west1,_SERVICE_NAME=my-openclaw
+
+steps:
+  # 1. Build the Docker image using the Cloud Run-optimized Dockerfile
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_IMAGE_NAME}:${SHORT_SHA}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_IMAGE_NAME}:latest"
+      - "-f"
+      - "Dockerfile.cloudrun"
+      - "."
+
+  # 2. Push all tags to Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_IMAGE_NAME}"
+
+  # 3. Deploy to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE_NAME}"
+      - "--image"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_IMAGE_NAME}:${SHORT_SHA}"
+      - "--region"
+      - "${_REGION}"
+      - "--platform"
+      - "managed"
+      - "--port"
+      - "8080"
+      # Resources: match Fly.io defaults (2 vCPU, 2 GB)
+      - "--cpu"
+      - "2"
+      - "--memory"
+      - "2Gi"
+      # Scaling: single instance required for SQLite (file-level locking).
+      # min=1 prevents cold starts that would disconnect messaging channels.
+      - "--min-instances"
+      - "1"
+      - "--max-instances"
+      - "1"
+      # WebSocket: gen2 supports up to 3600s request timeout.
+      - "--timeout"
+      - "3600"
+      - "--execution-environment"
+      - "gen2"
+      # Keep CPU always allocated for background WebSocket processing.
+      - "--no-cpu-throttling"
+      # Session affinity routes repeat clients to the same instance.
+      - "--session-affinity"
+      # GCS FUSE volume for SQLite persistence.
+      # Replace BUCKET_NAME with your bucket before deploying.
+      # Create the bucket:
+      #   gcloud storage buckets create gs://${PROJECT_ID}-openclaw-data --location=${_REGION}
+      - "--add-volume"
+      - "name=openclaw-data,type=cloud-storage,bucket=${_BUCKET_NAME}"
+      - "--add-volume-mount"
+      - "volume=openclaw-data,mount-path=/data"
+      # Environment: state directory on the persistent volume.
+      - "--set-env-vars"
+      - "NODE_ENV=production,OPENCLAW_STATE_DIR=/data,NODE_OPTIONS=--max-old-space-size=1536"
+      # Secrets: map Secret Manager entries to env vars.
+      # Create secrets first with scripts/gcp/setup-secrets.sh
+      - "--set-secrets"
+      - "OPENCLAW_GATEWAY_TOKEN=openclaw-gateway-token:latest"
+      # Health check: use the HTTP /health endpoint.
+      - "--startup-probe"
+      - "httpGet.path=/health,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,failureThreshold=18,timeoutSeconds=5"
+      - "--liveness-probe"
+      - "httpGet.path=/health,httpGet.port=8080,periodSeconds=30,failureThreshold=3,timeoutSeconds=10"
+
+substitutions:
+  _REGION: us-central1
+  _REPO_NAME: openclaw
+  _IMAGE_NAME: openclaw-gateway
+  _SERVICE_NAME: openclaw-gateway
+  _BUCKET_NAME: ${PROJECT_ID}-openclaw-data
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: "E2_HIGHCPU_8"
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_IMAGE_NAME}"
