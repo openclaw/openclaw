@@ -1,3 +1,4 @@
+import { resolveCompactionInstructions } from "../../agents/compaction-instructions.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -68,13 +69,14 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     abortEmbeddedPiRun(sessionId);
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
-  const customInstructions = extractCompactInstructions({
+  const userInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
     isGroup: params.isGroup,
   });
+  const customInstructions = userInstructions ?? resolveCompactionInstructions(params.cfg);
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,

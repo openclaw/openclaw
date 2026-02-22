@@ -104,6 +104,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        customInstructions: z.string().optional(),
       })
       .strict()
       .optional(),
