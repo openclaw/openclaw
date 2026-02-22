@@ -10,7 +10,13 @@ describe("ws connect policy", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
-      deviceRaw: { id: "dev-1", publicKey: "pk", signature: "sig", signedAt: Date.now() },
+      deviceRaw: {
+        id: "dev-1",
+        publicKey: "pk",
+        signature: "sig",
+        signedAt: Date.now(),
+        nonce: "nonce-1",
+      },
     });
     expect(bypass.allowBypass).toBe(true);
     expect(bypass.device).toBeNull();
@@ -18,7 +24,13 @@ describe("ws connect policy", () => {
     const regular = resolveControlUiAuthPolicy({
       isControlUi: false,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
-      deviceRaw: { id: "dev-2", publicKey: "pk", signature: "sig", signedAt: Date.now() },
+      deviceRaw: {
+        id: "dev-2",
+        publicKey: "pk",
+        signature: "sig",
+        signedAt: Date.now(),
+        nonce: "nonce-2",
+      },
     });
     expect(regular.allowBypass).toBe(false);
     expect(regular.device?.id).toBe("dev-2");
