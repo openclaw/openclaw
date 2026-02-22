@@ -58,13 +58,13 @@ function mockSnapshot(token = "abc") {
 describe("dashboardCommand", () => {
   beforeEach(() => {
     resetRuntime();
-    readConfigFileSnapshotMock.mockReset();
-    resolveGatewayPortMock.mockReset();
-    resolveControlUiLinksMock.mockReset();
-    detectBrowserOpenSupportMock.mockReset();
-    openUrlMock.mockReset();
-    formatControlUiSshHintMock.mockReset();
-    copyToClipboardMock.mockReset();
+    readConfigFileSnapshotMock.mockClear();
+    resolveGatewayPortMock.mockClear();
+    resolveControlUiLinksMock.mockClear();
+    detectBrowserOpenSupportMock.mockClear();
+    openUrlMock.mockClear();
+    formatControlUiSshHintMock.mockClear();
+    copyToClipboardMock.mockClear();
   });
 
   it("opens and copies the dashboard link by default", async () => {
