@@ -286,7 +286,7 @@ describe("createOpenClawCodingTools", () => {
 
     expect(parentId?.type).toBe("string");
     expect(parentId?.anyOf).toBeUndefined();
-    expect(count?.oneOf).toBeDefined();
+    expect(count?.oneOf).toBeUndefined();
   });
   it("avoids anyOf/oneOf/allOf in tool schemas", () => {
     expect(findUnionKeywordOffenders(defaultTools)).toEqual([]);
