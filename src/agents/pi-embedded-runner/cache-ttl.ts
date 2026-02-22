@@ -26,7 +26,10 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
   if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
     return true;
   }
-  if (normalizedProvider === "openrouter" && isOpenRouterCacheTtlModel(normalizedModelId)) {
+  if (
+    (normalizedProvider === "openrouter" || normalizedProvider === "fal-openrouter") &&
+    isOpenRouterCacheTtlModel(normalizedModelId)
+  ) {
     return true;
   }
   if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) {
