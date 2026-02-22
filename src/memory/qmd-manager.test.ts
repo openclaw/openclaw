@@ -414,6 +414,132 @@ describe("QmdMemoryManager", () => {
     expect(addSessions).toBeDefined();
   });
 
+  it("migrates unscoped legacy collections before adding scoped names", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const legacyCollections = new Map<
+      string,
+      {
+        path: string;
+        mask: string;
+      }
+    >([
+      ["memory-root", { path: workspaceDir, mask: "MEMORY.md" }],
+      ["memory-alt", { path: workspaceDir, mask: "memory.md" }],
+      ["memory-dir", { path: path.join(workspaceDir, "memory"), mask: "**/*.md" }],
+    ]);
+    const removeCalls: string[] = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify(
+            [...legacyCollections.entries()].map(([name, info]) => ({
+              name,
+              path: info.path,
+              mask: info.mask,
+            })),
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        legacyCollections.delete(name);
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const pathArg = args[2] ?? "";
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const hasConflict = [...legacyCollections.entries()].some(
+          ([existingName, info]) =>
+            existingName !== name && info.path === pathArg && info.mask === mask,
+        );
+        if (hasConflict) {
+          emitAndClose(child, "stderr", "collection already exists", 1);
+          return child;
+        }
+        legacyCollections.set(name, { path: pathArg, mask });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removeCalls).toEqual(["memory-root", "memory-alt", "memory-dir"]);
+    expect(legacyCollections.has("memory-root-main")).toBe(true);
+    expect(legacyCollections.has("memory-alt-main")).toBe(true);
+    expect(legacyCollections.has("memory-dir-main")).toBe(true);
+    expect(legacyCollections.has("memory-root")).toBe(false);
+    expect(legacyCollections.has("memory-alt")).toBe(false);
+    expect(legacyCollections.has("memory-dir")).toBe(false);
+  });
+
+  it("does not migrate unscoped collections when listed metadata differs", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const differentPath = path.join(tmpRoot, "other-memory");
+    await fs.mkdir(differentPath, { recursive: true });
+    const removeCalls: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ name: "memory-root", path: differentPath, mask: "MEMORY.md" }]),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removeCalls).not.toContain("memory-root");
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd legacy collection migration skipped for memory-root"),
+    );
+  });
+
   it("times out qmd update during sync when configured", async () => {
     vi.useFakeTimers();
     cfg = {
