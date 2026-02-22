@@ -9,6 +9,9 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
+const WS_REJECT_TIMEOUT_MS = 2_000;
+const WS_CONNECT_TIMEOUT_MS = 2_000;
+
 async function listen(
   server: ReturnType<typeof createGatewayHttpServer>,
   host = "127.0.0.1",
@@ -38,7 +41,7 @@ async function expectWsRejected(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
-    const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
+    const timer = setTimeout(() => reject(new Error("timeout")), WS_REJECT_TIMEOUT_MS);
     ws.once("open", () => {
       clearTimeout(timer);
       ws.terminate();
@@ -242,7 +245,7 @@ describe("gateway canvas host auth", () => {
 
             await new Promise<void>((resolve, reject) => {
               const ws = new WebSocket(`ws://${host}:${listener.port}${activeWsPath}`);
-              const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
+              const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
               ws.once("open", () => {
                 clearTimeout(timer);
                 ws.terminate();
@@ -360,7 +363,7 @@ describe("gateway canvas host auth", () => {
 
               await new Promise<void>((resolve, reject) => {
                 const ws = new WebSocket(`ws://[::1]:${listener.port}${wsPath}`);
-                const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
+                const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
                 ws.once("open", () => {
                   clearTimeout(timer);
                   ws.terminate();

@@ -111,21 +111,6 @@ describe("wrapFetchWithAbortSignal", () => {
     }
   });
 
-  it("cleans up listener and rethrows when fetch throws synchronously", () => {
-    const syncError = new TypeError("sync fetch failure");
-    const fetchImpl = withFetchPreconnect(
-      vi.fn(() => {
-        throw syncError;
-      }),
-    );
-    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
-
-    const { fakeSignal, removeEventListener } = createForeignSignalHarness();
-
-    expect(() => wrapped("https://example.com", { signal: fakeSignal })).toThrow(syncError);
-    expect(removeEventListener).toHaveBeenCalledOnce();
-  });
-
   it("preserves original rejection when listener cleanup throws", async () => {
     const fetchError = new TypeError("fetch failed");
     const cleanupError = new TypeError("cleanup failed");
@@ -140,9 +125,17 @@ describe("wrapFetchWithAbortSignal", () => {
     expect(removeEventListener).toHaveBeenCalledOnce();
   });
 
-  it("preserves original sync throw when listener cleanup throws", () => {
+  it.each([
+    {
+      name: "cleans up listener and rethrows when fetch throws synchronously",
+      makeSignalHarness: () => createForeignSignalHarness(),
+    },
+    {
+      name: "preserves original sync throw when listener cleanup throws",
+      makeSignalHarness: () => createThrowingCleanupSignalHarness(new TypeError("cleanup failed")),
+    },
+  ])("$name", ({ makeSignalHarness }) => {
     const syncError = new TypeError("sync fetch failure");
-    const cleanupError = new TypeError("cleanup failed");
     const fetchImpl = withFetchPreconnect(
       vi.fn(() => {
         throw syncError;
@@ -150,7 +143,7 @@ describe("wrapFetchWithAbortSignal", () => {
     );
     const wrapped = wrapFetchWithAbortSignal(fetchImpl);
 
-    const { fakeSignal, removeEventListener } = createThrowingCleanupSignalHarness(cleanupError);
+    const { fakeSignal, removeEventListener } = makeSignalHarness();
 
     expect(() => wrapped("https://example.com", { signal: fakeSignal })).toThrow(syncError);
     expect(removeEventListener).toHaveBeenCalledOnce();

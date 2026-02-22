@@ -17,6 +17,47 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   return normalizeStringEntries(Array.isArray(list) ? list : undefined);
 }
 
+const DISCORD_ALLOWLIST_ID_PREFIXES = ["discord:", "user:", "pk:"] as const;
+
+function isDiscordNameBasedAllowEntry(raw: string | number): boolean {
+  const text = String(raw).trim();
+  if (!text || text === "*") {
+    return false;
+  }
+  const maybeId = text.replace(/^<@!?/, "").replace(/>$/, "");
+  if (/^\d+$/.test(maybeId)) {
+    return false;
+  }
+  const prefixed = DISCORD_ALLOWLIST_ID_PREFIXES.find((prefix) => text.startsWith(prefix));
+  if (prefixed) {
+    const candidate = text.slice(prefixed.length);
+    if (candidate) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function addDiscordNameBasedEntries(params: {
+  target: Set<string>;
+  values: unknown;
+  source: string;
+}): void {
+  if (!Array.isArray(params.values)) {
+    return;
+  }
+  for (const value of params.values) {
+    if (!isDiscordNameBasedAllowEntry(value as string | number)) {
+      continue;
+    }
+    const text = String(value).trim();
+    if (!text) {
+      continue;
+    }
+    params.target.add(`${params.source}:${text}`);
+  }
+}
+
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
   if (
@@ -141,6 +182,69 @@ export async function collectChannelSecurityFindings(params: {
       const discordCfg =
         (account as { config?: Record<string, unknown> } | null)?.config ??
         ({} as Record<string, unknown>);
+      const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+      const discordNameBasedAllowEntries = new Set<string>();
+      addDiscordNameBasedEntries({
+        target: discordNameBasedAllowEntries,
+        values: discordCfg.allowFrom,
+        source: "channels.discord.allowFrom",
+      });
+      addDiscordNameBasedEntries({
+        target: discordNameBasedAllowEntries,
+        values: (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom,
+        source: "channels.discord.dm.allowFrom",
+      });
+      addDiscordNameBasedEntries({
+        target: discordNameBasedAllowEntries,
+        values: storeAllowFrom,
+        source: "~/.openclaw/credentials/discord-allowFrom.json",
+      });
+      const discordGuildEntries = (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
+      for (const [guildKey, guildValue] of Object.entries(discordGuildEntries)) {
+        if (!guildValue || typeof guildValue !== "object") {
+          continue;
+        }
+        const guild = guildValue as Record<string, unknown>;
+        addDiscordNameBasedEntries({
+          target: discordNameBasedAllowEntries,
+          values: guild.users,
+          source: `channels.discord.guilds.${guildKey}.users`,
+        });
+        const channels = guild.channels;
+        if (!channels || typeof channels !== "object") {
+          continue;
+        }
+        for (const [channelKey, channelValue] of Object.entries(
+          channels as Record<string, unknown>,
+        )) {
+          if (!channelValue || typeof channelValue !== "object") {
+            continue;
+          }
+          const channel = channelValue as Record<string, unknown>;
+          addDiscordNameBasedEntries({
+            target: discordNameBasedAllowEntries,
+            values: channel.users,
+            source: `channels.discord.guilds.${guildKey}.channels.${channelKey}.users`,
+          });
+        }
+      }
+      if (discordNameBasedAllowEntries.size > 0) {
+        const examples = Array.from(discordNameBasedAllowEntries).slice(0, 5);
+        const more =
+          discordNameBasedAllowEntries.size > examples.length
+            ? ` (+${discordNameBasedAllowEntries.size - examples.length} more)`
+            : "";
+        findings.push({
+          checkId: "channels.discord.allowFrom.name_based_entries",
+          severity: "warn",
+          title: "Discord allowlist contains name or tag entries",
+          detail:
+            "Discord name/tag allowlist matching uses normalized slugs and can collide across users. " +
+            `Found: ${examples.join(", ")}${more}.`,
+          remediation:
+            "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>) in channels.discord.allowFrom and channels.discord.guilds.*.users.",
+        });
+      }
       const nativeEnabled = resolveNativeCommandsEnabled({
         providerId: "discord",
         providerSetting: coerceNativeSetting(
@@ -160,7 +264,7 @@ export async function collectChannelSecurityFindings(params: {
         const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
         const groupPolicy =
           (discordCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
-        const guildEntries = (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
+        const guildEntries = discordGuildEntries;
         const guildsConfigured = Object.keys(guildEntries).length > 0;
         const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
           if (!guild || typeof guild !== "object") {
@@ -184,7 +288,6 @@ export async function collectChannelSecurityFindings(params: {
         });
         const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
         const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
-        const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
         const ownerAllowFromConfigured =
           normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
 

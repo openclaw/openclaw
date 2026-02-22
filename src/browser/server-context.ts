@@ -137,7 +137,6 @@ function createProfileContext(
 
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
-    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
 
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
@@ -149,7 +148,6 @@ function createProfileContext(
           cdpUrl: profile.cdpUrl,
           url,
           ...ssrfPolicyOpts,
-          navigationChecked: true,
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
@@ -166,7 +164,6 @@ function createProfileContext(
       cdpUrl: profile.cdpUrl,
       url,
       ...ssrfPolicyOpts,
-      navigationChecked: true,
     })
       .then((r) => r.targetId)
       .catch(() => null);
@@ -196,6 +193,7 @@ function createProfileContext(
     };
 
     const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
+    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const endpoint = endpointUrl.search
       ? (() => {
           endpointUrl.searchParams.set("url", url);

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
@@ -111,6 +112,9 @@ describe("writeOAuthCredentials", () => {
     "OPENCLAW_OAUTH_DIR",
   ]);
 
+  let tempStateDir: string;
+  const authProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
+
   afterEach(async () => {
     await lifecycle.cleanup();
   });
@@ -139,6 +143,116 @@ describe("writeOAuthCredentials", () => {
     await expect(
       fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+    const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
+    const workerAgentDir = path.join(tempStateDir, "agents", "worker", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.mkdir(kidAgentDir, { recursive: true });
+    await fs.mkdir(workerAgentDir, { recursive: true });
+
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
+
+    const creds = {
+      refresh: "refresh-sync",
+      access: "access-sync",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, undefined, {
+      syncSiblingAgents: true,
+    });
+
+    for (const dir of [mainAgentDir, kidAgentDir, workerAgentDir]) {
+      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
+      const parsed = JSON.parse(raw) as {
+        profiles?: Record<string, OAuthCredentials & { type?: string }>;
+      };
+      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+        refresh: "refresh-sync",
+        access: "access-sync",
+        type: "oauth",
+      });
+    }
+  });
+
+  it("writes OAuth credentials only to target dir by default", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-nosync-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+    const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.mkdir(kidAgentDir, { recursive: true });
+
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
+
+    const creds = {
+      refresh: "refresh-kid",
+      access: "access-kid",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
+
+    const kidRaw = await fs.readFile(authProfilePathFor(kidAgentDir), "utf8");
+    const kidParsed = JSON.parse(kidRaw) as {
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    };
+    expect(kidParsed.profiles?.["openai-codex:default"]).toMatchObject({
+      access: "access-kid",
+      type: "oauth",
+    });
+
+    await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toThrow();
+  });
+
+  it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-external-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    // Create standard-layout agents tree *outside* OPENCLAW_STATE_DIR
+    const externalRoot = path.join(tempStateDir, "external", "agents");
+    const extMain = path.join(externalRoot, "main", "agent");
+    const extKid = path.join(externalRoot, "kid", "agent");
+    const extWorker = path.join(externalRoot, "worker", "agent");
+    await fs.mkdir(extMain, { recursive: true });
+    await fs.mkdir(extKid, { recursive: true });
+    await fs.mkdir(extWorker, { recursive: true });
+
+    const creds = {
+      refresh: "refresh-ext",
+      access: "access-ext",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, extKid, {
+      syncSiblingAgents: true,
+    });
+
+    // All siblings under the external root should have credentials
+    for (const dir of [extMain, extKid, extWorker]) {
+      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
+      const parsed = JSON.parse(raw) as {
+        profiles?: Record<string, OAuthCredentials & { type?: string }>;
+      };
+      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+        refresh: "refresh-ext",
+        access: "access-ext",
+        type: "oauth",
+      });
+    }
+
+    // Global state dir should NOT have credentials written
+    const globalMain = path.join(tempStateDir, "agents", "main", "agent");
+    await expect(fs.readFile(authProfilePathFor(globalMain), "utf8")).rejects.toThrow();
   });
 });
 
@@ -208,16 +322,6 @@ describe("applyMinimaxApiConfig", () => {
   it("does not set reasoning for non-reasoning models", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
-  });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyMinimaxApiConfig(createConfigWithFallbacks());
-    expectFallbacksPreserved(cfg);
-  });
-
-  it("adds model alias", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"]?.alias).toBe("Minimax");
   });
 
   it("preserves existing model params when adding alias", () => {
@@ -416,19 +520,9 @@ describe("applyXaiConfig", () => {
     });
     expect(cfg.agents?.defaults?.model?.primary).toBe(XAI_DEFAULT_MODEL_REF);
   });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyXaiConfig(createConfigWithFallbacks());
-    expectFallbacksPreserved(cfg);
-  });
 });
 
 describe("applyXaiProviderConfig", () => {
-  it("adds model alias", () => {
-    const cfg = applyXaiProviderConfig({});
-    expect(cfg.agents?.defaults?.models?.[XAI_DEFAULT_MODEL_REF]?.alias).toBe("Grok");
-  });
-
   it("merges xAI models and keeps existing provider overrides", () => {
     const cfg = applyXaiProviderConfig(
       createLegacyProviderConfig({
@@ -443,6 +537,37 @@ describe("applyXaiProviderConfig", () => {
     expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(["custom-model", "grok-4"]);
+  });
+});
+
+describe("fallback preservation helpers", () => {
+  it("preserves existing model fallbacks", () => {
+    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig] as const;
+    for (const applyConfig of fallbackCases) {
+      const cfg = applyConfig(createConfigWithFallbacks());
+      expectFallbacksPreserved(cfg);
+    }
+  });
+});
+
+describe("provider alias defaults", () => {
+  it("adds expected alias for provider defaults", () => {
+    const aliasCases = [
+      {
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1"),
+        modelRef: "minimax/MiniMax-M2.1",
+        alias: "Minimax",
+      },
+      {
+        applyConfig: () => applyXaiProviderConfig({}),
+        modelRef: XAI_DEFAULT_MODEL_REF,
+        alias: "Grok",
+      },
+    ] as const;
+    for (const testCase of aliasCases) {
+      const cfg = testCase.applyConfig();
+      expect(cfg.agents?.defaults?.models?.[testCase.modelRef]?.alias).toBe(testCase.alias);
+    }
   });
 });
 
