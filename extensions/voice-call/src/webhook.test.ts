@@ -1,3 +1,4 @@
+import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -52,6 +53,84 @@ const createManager = (calls: CallRecord[]) => {
 
   return { manager, endCall };
 };
+
+async function sendRawUpgrade(params: {
+  host: string;
+  port: number;
+  path: string;
+  hostHeader: string;
+}): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: params.host, port: params.port });
+    socket.setEncoding("utf8");
+    socket.setTimeout(2000);
+
+    let response = "";
+
+    socket.on("connect", () => {
+      socket.write(
+        `GET ${params.path} HTTP/1.1\r\n` +
+          `Host: ${params.hostHeader}\r\n` +
+          "Connection: Upgrade\r\n" +
+          "Upgrade: websocket\r\n" +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+          "Sec-WebSocket-Version: 13\r\n" +
+          "\r\n",
+      );
+    });
+
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy(new Error("upgrade request timed out"));
+    });
+
+    socket.on("error", reject);
+    socket.on("close", () => resolve(response));
+  });
+}
+
+async function sendRawPost(params: {
+  host: string;
+  port: number;
+  path: string;
+  hostHeader: string;
+  body?: string;
+}): Promise<string> {
+  const body = params.body ?? "event=health-check";
+  return await new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: params.host, port: params.port });
+    socket.setEncoding("utf8");
+    socket.setTimeout(2000);
+
+    let response = "";
+
+    socket.on("connect", () => {
+      socket.write(
+        `POST ${params.path} HTTP/1.1\r\n` +
+          `Host: ${params.hostHeader}\r\n` +
+          "Content-Type: application/x-www-form-urlencoded\r\n" +
+          `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
+          "Connection: close\r\n" +
+          "\r\n" +
+          body,
+      );
+    });
+
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy(new Error("post request timed out"));
+    });
+
+    socket.on("error", reject);
+    socket.on("close", () => resolve(response));
+  });
+}
 
 describe("VoiceCallWebhookServer stale call reaper", () => {
   beforeEach(() => {
@@ -111,6 +190,135 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
       await server.start();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(endCall).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer websocket upgrade hardening", () => {
+  it("rejects malformed host headers without crashing the process", async () => {
+    const baseConfig = createConfig();
+    const config: VoiceCallConfig = {
+      ...baseConfig,
+      staleCallReaperSeconds: 0,
+      streaming: {
+        ...baseConfig.streaming,
+        enabled: true,
+        openaiApiKey: "test-openai-key",
+      },
+    };
+
+    const manager = {
+      getActiveCalls: () => [],
+      endCall: vi.fn(async () => ({ success: true })),
+      getCallByProviderCallId: vi.fn(() => undefined),
+      getCall: vi.fn(() => undefined),
+      processEvent: vi.fn(),
+      speakInitialMessage: vi.fn(async () => {}),
+      speak: vi.fn(async () => {}),
+    } as unknown as CallManager;
+
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      await server.start();
+      const listeningServer = (server as unknown as { server?: { address?: () => unknown } })
+        .server;
+      const address = listeningServer?.address?.() as { port?: number } | string | null | undefined;
+      if (!address || typeof address === "string" || typeof address.port !== "number") {
+        throw new Error("webhook server did not expose a listen address");
+      }
+      const webhookUrl = `http://${config.serve.bind}:${address.port}${config.serve.path}`;
+
+      const upgradeResponse = await sendRawUpgrade({
+        host: config.serve.bind,
+        port: address.port,
+        path: config.streaming.streamPath,
+        hostHeader: "[::1",
+      });
+
+      expect(upgradeResponse).toContain("400 Bad Request");
+
+      // Ensure malformed upgrade requests do not take down the webhook server.
+      const healthyRes = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "event=health-check",
+      });
+      expect(healthyRes.status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer HTTP host header hardening", () => {
+  function createServerForHttpHostTests() {
+    const config = createConfig({ staleCallReaperSeconds: 0 });
+    const manager = {
+      getActiveCalls: () => [],
+      endCall: vi.fn(async () => ({ success: true })),
+      getCallByProviderCallId: vi.fn(() => undefined),
+      getCall: vi.fn(() => undefined),
+      processEvent: vi.fn(),
+      speakInitialMessage: vi.fn(async () => {}),
+      speak: vi.fn(async () => {}),
+    } as unknown as CallManager;
+    return new VoiceCallWebhookServer(config, manager, provider);
+  }
+
+  it("rejects malformed POST host headers and keeps the server healthy", async () => {
+    const server = createServerForHttpHostTests();
+
+    try {
+      await server.start();
+      const listeningServer = (server as unknown as { server?: { address?: () => unknown } })
+        .server;
+      const address = listeningServer?.address?.() as { port?: number } | string | null | undefined;
+      if (!address || typeof address === "string" || typeof address.port !== "number") {
+        throw new Error("webhook server did not expose a listen address");
+      }
+      const webhookUrl = `http://127.0.0.1:${address.port}/voice/webhook`;
+
+      const malformedResponse = await sendRawPost({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/voice/webhook",
+        hostHeader: "[::1",
+      });
+      expect(malformedResponse).toContain("400 Bad Request");
+
+      const healthyRes = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "event=health-check",
+      });
+      expect(healthyRes.status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects POST host headers with user-info injection", async () => {
+    const server = createServerForHttpHostTests();
+
+    try {
+      await server.start();
+      const listeningServer = (server as unknown as { server?: { address?: () => unknown } })
+        .server;
+      const address = listeningServer?.address?.() as { port?: number } | string | null | undefined;
+      if (!address || typeof address === "string" || typeof address.port !== "number") {
+        throw new Error("webhook server did not expose a listen address");
+      }
+
+      const response = await sendRawPost({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/voice/webhook",
+        hostHeader: "attacker.example@legitimate.example",
+      });
+      expect(response).toContain("400 Bad Request");
     } finally {
       await server.stop();
     }
