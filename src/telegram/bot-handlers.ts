@@ -114,13 +114,32 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const FORWARD_BURST_DEBOUNCE_MS = 80;
+  type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
     debounceKey: string | null;
+    debounceLane: TelegramDebounceLane;
     botUsername?: string;
+  };
+  const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
+    const forwardMeta = msg as {
+      forward_origin?: unknown;
+      forward_from?: unknown;
+      forward_from_chat?: unknown;
+      forward_sender_name?: unknown;
+      forward_date?: unknown;
+    };
+    return (forwardMeta.forward_origin ??
+      forwardMeta.forward_from ??
+      forwardMeta.forward_from_chat ??
+      forwardMeta.forward_sender_name ??
+      forwardMeta.forward_date)
+      ? "forward"
+      : "default";
   };
   const buildSyntheticTextMessage = (params: {
     base: Message;
@@ -148,16 +167,19 @@ export const registerTelegramHandlers = ({
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
+    resolveDebounceMs: (entry) =>
+      entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
-      if (entry.allMedia.length > 0) {
-        return false;
-      }
       const text = entry.msg.text ?? entry.msg.caption ?? "";
-      if (!text.trim()) {
+      const hasText = text.trim().length > 0;
+      if (hasText && hasControlCommand(text, cfg, { botUsername: entry.botUsername })) {
         return false;
       }
-      return !hasControlCommand(text, cfg, { botUsername: entry.botUsername });
+      if (entry.debounceLane === "forward") {
+        return true;
+      }
+      return entry.allMedia.length === 0 && hasText;
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -172,7 +194,8 @@ export const registerTelegramHandlers = ({
         .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) {
+      const combinedMedia = entries.flatMap((entry) => entry.allMedia);
+      if (!combinedText.trim() && combinedMedia.length === 0) {
         return;
       }
       const first = entries[0];
@@ -185,7 +208,7 @@ export const registerTelegramHandlers = ({
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
       await processMessage(
         buildSyntheticContext(baseCtx, syntheticMessage),
-        [],
+        combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
       );
@@ -722,8 +745,9 @@ export const registerTelegramHandlers = ({
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationKey =
       resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
+    const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}`
+      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
       : null;
     await inboundDebouncer.enqueue({
       ctx,
@@ -731,6 +755,7 @@ export const registerTelegramHandlers = ({
       allMedia,
       storeAllowFrom,
       debounceKey,
+      debounceLane,
       botUsername: ctx.me?.username,
     });
   };
