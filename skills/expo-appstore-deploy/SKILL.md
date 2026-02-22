@@ -78,6 +78,23 @@ ios: {
 }
 ```
 
+## App Store Connect Status Reference
+
+| 상태           | 의미                       | 다음 액션                   |
+| -------------- | -------------------------- | --------------------------- |
+| 제출 준비 중   | IPA 업로드+Processing 완료 | 메타데이터 입력 → 심사 제출 |
+| 심사 대기 중   | 심사 큐에 진입             | 대기 (1-7일)                |
+| 심사 중        | Apple 심사 진행            | 대기                        |
+| 판매 준비 완료 | 승인됨                     | 출시!                       |
+| 거부됨         | 심사 탈락                  | 사유 확인 → 수정 → 재제출   |
+
+## Browser Access Notes
+
+- **App Store Connect / Google Play Console**: `profile=chrome` 필수 (기존 로그인 세션 필요)
+- `profile=openclaw`은 별도 프로필이라 인증 사이트 접근 불가
+- 외출 중 상태 확인: 아이폰 **App Store Connect 앱** 활용
+- Chrome 탭 연결: OpenClaw 확장 아이콘 클릭 → badge ON
+
 ## Known Failure Patterns
 
 ### "Install dependencies" Build Failure
@@ -103,6 +120,11 @@ npm uninstall <package> --save-dev
 
 **Cause:** Empty string in eas.json submit config.
 **Fix:** Remove `ascAppId` field entirely for first submit (auto-creates app), then add the returned ID.
+
+### "You've already submitted this build"
+
+**Not an error** — previous submission succeeded. Check App Store Connect status.
+If new build needed, `autoIncrement: true` handles version bump automatically.
 
 ## Android Deploy Pipeline
 
