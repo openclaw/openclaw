@@ -895,7 +895,7 @@ export async function runEmbeddedAttempt(
       });
 
       const {
-        assistantTexts,
+        assistantTexts: rawAssistantTexts,
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
@@ -908,6 +908,7 @@ export async function runEmbeddedAttempt(
         getUsageTotals,
         getCompactionCount,
       } = subscription;
+      let assistantTexts = rawAssistantTexts;
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1308,8 +1309,8 @@ export async function runEmbeddedAttempt(
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
       if (hookRunner?.hasHooks("llm_output")) {
-        hookRunner
-          .runLlmOutput(
+        try {
+          const llmOutputResult = await hookRunner.runLlmOutput(
             {
               runId: params.runId,
               sessionId: params.sessionId,
@@ -1326,10 +1327,13 @@ export async function runEmbeddedAttempt(
               workspaceDir: params.workspaceDir,
               messageProvider: params.messageProvider ?? undefined,
             },
-          )
-          .catch((err) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+          );
+          if (llmOutputResult?.assistantTexts) {
+            assistantTexts = llmOutputResult.assistantTexts;
+          }
+        } catch (err) {
+          log.warn(`llm_output hook failed: ${String(err)}`);
+        }
       }
 
       return {

@@ -401,6 +401,10 @@ export type PluginHookLlmOutputEvent = {
   };
 };
 
+export type PluginHookLlmOutputResult = {
+  assistantTexts?: string[];
+};
+
 // agent_end hook
 export type PluginHookAgentEndEvent = {
   messages: unknown[];
@@ -688,7 +692,7 @@ export type PluginHookHandlerMap = {
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookLlmOutputResult | void> | PluginHookLlmOutputResult | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
