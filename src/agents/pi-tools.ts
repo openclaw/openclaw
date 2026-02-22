@@ -42,6 +42,7 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolWorkspaceRootGuard,
+  wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
@@ -317,7 +318,13 @@ export function createOpenClawCodingTools(options?: {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
         });
-        return [workspaceOnly ? wrapToolWorkspaceRootGuard(sandboxed, sandboxRoot) : sandboxed];
+        return [
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
+                containerWorkdir: sandbox.containerWorkdir,
+              })
+            : sandboxed,
+        ];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       const wrapped = createOpenClawReadTool(freshReadTool, {
@@ -410,15 +417,21 @@ export function createOpenClawCodingTools(options?: {
       ? allowWorkspaceWrites
         ? [
             workspaceOnly
-              ? wrapToolWorkspaceRootGuard(
+              ? wrapToolWorkspaceRootGuardWithOptions(
                   createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
             workspaceOnly
-              ? wrapToolWorkspaceRootGuard(
+              ? wrapToolWorkspaceRootGuardWithOptions(
                   createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
           ]
