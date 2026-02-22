@@ -319,6 +319,11 @@ export type GatewayConfig = {
    * Default: false (safer fail-closed behavior).
    */
   allowRealIpFallback?: boolean;
+  /**
+   * Reject websocket clients that send proxy headers from an untrusted source.
+   * If unset, defaults to true when bind != loopback or auth.mode=trusted-proxy.
+   */
+  rejectUntrustedProxyHeaders?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
   /**
