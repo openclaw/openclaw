@@ -7,6 +7,7 @@ export type MemoryConfig = {
     provider: "openai";
     model?: string;
     apiKey: string;
+    baseUrl?: string;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -53,6 +54,14 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-large": 3072,
 };
 
+function normalizeEmbeddingModelKey(model: string): string {
+  const raw = String(model || "").trim();
+  if (!raw) return raw;
+  // Support provider-prefixed ids, e.g. "openai/text-embedding-3-large"
+  const parts = raw.split("/").filter(Boolean);
+  return (parts[parts.length - 1] || raw).trim();
+}
+
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length === 0) {
@@ -62,7 +71,8 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 }
 
 export function vectorDimsForModel(model: string): number {
-  const dims = EMBEDDING_DIMENSIONS[model];
+  const normalized = normalizeEmbeddingModelKey(model);
+  const dims = EMBEDDING_DIMENSIONS[normalized];
   if (!dims) {
     throw new Error(`Unsupported embedding model: ${model}`);
   }
@@ -101,7 +111,7 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
 
@@ -119,6 +129,8 @@ export const memoryConfigSchema = {
         provider: "openai",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseUrl:
+          typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
@@ -137,6 +149,12 @@ export const memoryConfigSchema = {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
       help: "OpenAI embedding model to use",
+    },
+    "embedding.baseUrl": {
+      label: "Embedding Base URL",
+      placeholder: "https://api.openai.com/v1",
+      help: "Optional OpenAI-compatible embeddings endpoint",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
