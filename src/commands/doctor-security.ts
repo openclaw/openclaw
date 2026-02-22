@@ -12,6 +12,14 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
+  if (cfg.approvals?.exec?.enabled === false) {
+    warnings.push(
+      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
+      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+    );
+  }
+
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
   // ===========================================
