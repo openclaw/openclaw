@@ -47,6 +47,7 @@ export const MatrixConfigSchema = z.object({
   encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
   groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
+  forceRoomRouting: z.boolean().optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),

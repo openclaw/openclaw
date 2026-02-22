@@ -67,6 +67,13 @@ export type MatrixConfig = {
   allowlistOnly?: boolean;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /**
+   * If true, rooms matched by channels.matrix.groups/rooms are always routed as room sessions,
+   * even when DM heuristics classify them as direct (for example, two-member rooms).
+   *
+   * Default: false.
+   */
+  forceRoomRouting?: boolean;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */

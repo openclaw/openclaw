@@ -245,6 +245,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicyRaw = accountConfig.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
+  const forceRoomRouting = accountConfig.forceRoomRouting ?? false;
   const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
   const threadReplies = accountConfig.threadReplies ?? "inbound";
   const dmConfig = accountConfig.dm;
@@ -273,6 +274,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     roomsConfig,
     mentionRegexes,
     groupPolicy,
+    forceRoomRouting,
     replyToMode,
     threadReplies,
     dmEnabled,
