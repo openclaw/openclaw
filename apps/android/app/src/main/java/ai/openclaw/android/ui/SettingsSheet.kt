@@ -33,10 +33,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -57,6 +60,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -432,6 +437,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
           )
+          var tokenVisible by remember { mutableStateOf(false) }
           OutlinedTextField(
             value = gatewayToken,
             onValueChange = viewModel::setGatewayToken,
@@ -439,6 +445,15 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
             singleLine = true,
+            visualTransformation = if (tokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+              IconButton(onClick = { tokenVisible = !tokenVisible }) {
+                Icon(
+                  imageVector = if (tokenVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                  contentDescription = if (tokenVisible) "Hide token" else "Show token",
+                )
+              }
+            },
           )
           ListItem(
             headlineContent = { Text("Require TLS") },
