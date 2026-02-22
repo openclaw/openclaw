@@ -99,9 +99,15 @@ describe("monitorSignalProvider tool results", () => {
         autoStart: false,
         baseUrl: "http://127.0.0.1:8080",
         abortSignal: abortController.signal,
+        reconnectPolicy: {
+          initialMs: 1,
+          maxMs: 1,
+          factor: 1,
+          jitter: 0,
+        },
       });
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5);
       await monitorPromise;
 
       expect(streamMock).toHaveBeenCalledTimes(2);
