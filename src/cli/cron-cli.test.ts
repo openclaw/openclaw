@@ -62,7 +62,7 @@ function buildProgram() {
 }
 
 function resetGatewayMock() {
-  callGatewayFromCli.mockReset();
+  callGatewayFromCli.mockClear();
   callGatewayFromCli.mockImplementation(defaultGatewayMock);
 }
 
