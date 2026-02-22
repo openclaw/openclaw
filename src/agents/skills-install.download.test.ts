@@ -223,30 +223,31 @@ describe("installSkill download extraction safety", () => {
     });
   });
 
-  it("rejects targetDir outside the per-skill tools root", async () => {
+  it("rejects targetDir escapes outside the per-skill tools root", async () => {
     await withTempWorkspace(async ({ workspaceDir, stateDir }) => {
-      const targetDir = path.join(workspaceDir, "outside");
-      const url = "https://example.invalid/good.zip";
-
-      mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
-
-      await writeDownloadSkill({
-        workspaceDir,
-        name: "targetdir-escape",
-        installId: "dl",
-        url,
-        archive: "zip",
-        targetDir,
-      });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "targetdir-escape",
-        installId: "dl",
-      });
-      expect(result.ok).toBe(false);
-      expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
-      expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(0);
+      for (const testCase of [
+        { name: "targetdir-escape", targetDir: path.join(workspaceDir, "outside") },
+        { name: "relative-traversal", targetDir: "../outside" },
+      ]) {
+        mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
+        await writeDownloadSkill({
+          workspaceDir,
+          name: testCase.name,
+          installId: "dl",
+          url: "https://example.invalid/good.zip",
+          archive: "zip",
+          targetDir: testCase.targetDir,
+        });
+        const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
+        const result = await installSkill({
+          workspaceDir,
+          skillName: testCase.name,
+          installId: "dl",
+        });
+        expect(result.ok).toBe(false);
+        expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
+        expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
+      }
 
       expect(stateDir.length).toBeGreaterThan(0);
     });
@@ -266,19 +267,6 @@ describe("installSkill download extraction safety", () => {
           "utf-8",
         ),
       ).toBe("hi");
-    });
-  });
-
-  it("rejects relative targetDir traversal", async () => {
-    await withTempWorkspace(async ({ workspaceDir }) => {
-      const result = await installZipDownloadSkill({
-        workspaceDir,
-        name: "relative-traversal",
-        targetDir: "../outside",
-      });
-      expect(result.ok).toBe(false);
-      expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
-      expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(0);
     });
   });
 });
