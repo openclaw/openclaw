@@ -624,7 +624,7 @@ const GEMINI_CLI_FREE_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 
 function buildGeminiCli31Model(): ProviderModelConfig {
   return {
     id: "gemini-3.1-pro-preview",
-    name: "Gemini 3.1 Pro",
+    name: "Gemini 3.1 Pro (Cloud Code Assist)",
     api: "google-gemini-cli",
     reasoning: true,
     input: ["text", "image"],
