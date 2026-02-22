@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
@@ -105,19 +106,18 @@ describe("web auto-reply", () => {
     expect(listenerFactory).toHaveBeenCalledTimes(1);
 
     closeResolvers[0]?.();
-    const waitForSecondCall = async () => {
-      const started = Date.now();
-      while (listenerFactory.mock.calls.length < 2 && Date.now() - started < 200) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    };
-    await waitForSecondCall();
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 500, interval: 5 },
+    );
     expect(listenerFactory).toHaveBeenCalledTimes(2);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
 
     controller.abort();
     closeResolvers[1]?.();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await Promise.resolve();
     await run;
   });
   it("forces reconnect when watchdog closes without onClose", async () => {
@@ -219,103 +219,105 @@ describe("web auto-reply", () => {
     expect(listenerFactory).toHaveBeenCalledTimes(1);
 
     closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 500, interval: 5 },
+    );
     expect(listenerFactory).toHaveBeenCalledTimes(2);
 
     closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
     await run;
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {
-    const originalTz = process.env.TZ;
-    process.env.TZ = "Europe/Vienna";
+    await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
+      const originalMax = process.getMaxListeners();
+      process.setMaxListeners?.(1); // force low to confirm bump
 
-    const originalMax = process.getMaxListeners();
-    process.setMaxListeners?.(1); // force low to confirm bump
+      const store = await makeSessionStore({
+        main: { sessionId: "sid", updatedAt: Date.now() },
+      });
 
-    const store = await makeSessionStore({
-      main: { sessionId: "sid", updatedAt: Date.now() },
-    });
+      try {
+        const sendMedia = vi.fn();
+        const reply = vi.fn().mockResolvedValue(undefined);
+        const sendComposing = vi.fn();
+        const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
-    try {
-      const sendMedia = vi.fn();
-      const reply = vi.fn().mockResolvedValue(undefined);
-      const sendComposing = vi.fn();
-      const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+        let capturedOnMessage:
+          | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+          | undefined;
+        const listenerFactory = async (opts: {
+          onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+        }) => {
+          capturedOnMessage = opts.onMessage;
+          return { close: vi.fn() };
+        };
 
-      let capturedOnMessage:
-        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-        | undefined;
-      const listenerFactory = async (opts: {
-        onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-      }) => {
-        capturedOnMessage = opts.onMessage;
-        return { close: vi.fn() };
-      };
-
-      setLoadConfigMock(() => ({
-        agents: {
-          defaults: {
-            envelopeTimezone: "utc",
+        setLoadConfigMock(() => ({
+          agents: {
+            defaults: {
+              envelopeTimezone: "utc",
+            },
           },
-        },
-        session: { store: store.storePath },
-      }));
+          session: { store: store.storePath },
+        }));
 
-      await monitorWebChannel(false, listenerFactory as never, false, resolver);
-      expect(capturedOnMessage).toBeDefined();
+        await monitorWebChannel(false, listenerFactory as never, false, resolver);
+        expect(capturedOnMessage).toBeDefined();
 
-      // Two messages from the same sender with fixed timestamps
-      await capturedOnMessage?.(
-        makeInboundMessage({
-          body: "first",
-          from: "+1",
-          to: "+2",
-          id: "m1",
-          timestamp: 1735689600000, // Jan 1 2025 00:00:00 UTC
-          sendComposing,
-          reply,
-          sendMedia,
-        }),
-      );
-      await capturedOnMessage?.(
-        makeInboundMessage({
-          body: "second",
-          from: "+1",
-          to: "+2",
-          id: "m2",
-          timestamp: 1735693200000, // Jan 1 2025 01:00:00 UTC
-          sendComposing,
-          reply,
-          sendMedia,
-        }),
-      );
+        // Two messages from the same sender with fixed timestamps
+        await capturedOnMessage?.(
+          makeInboundMessage({
+            body: "first",
+            from: "+1",
+            to: "+2",
+            id: "m1",
+            timestamp: 1735689600000, // Jan 1 2025 00:00:00 UTC
+            sendComposing,
+            reply,
+            sendMedia,
+          }),
+        );
+        await capturedOnMessage?.(
+          makeInboundMessage({
+            body: "second",
+            from: "+1",
+            to: "+2",
+            id: "m2",
+            timestamp: 1735693200000, // Jan 1 2025 01:00:00 UTC
+            sendComposing,
+            reply,
+            sendMedia,
+          }),
+        );
 
-      expect(resolver).toHaveBeenCalledTimes(2);
-      const firstArgs = resolver.mock.calls[0][0];
-      const secondArgs = resolver.mock.calls[1][0];
-      const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
-      const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
-      const firstPattern = escapeRegExp(firstTimestamp);
-      const secondPattern = escapeRegExp(secondTimestamp);
-      expect(firstArgs.Body).toMatch(
-        new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`),
-      );
-      expect(firstArgs.Body).not.toContain("second");
-      expect(secondArgs.Body).toMatch(
-        new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
-      );
-      expect(secondArgs.Body).not.toContain("first");
+        expect(resolver).toHaveBeenCalledTimes(2);
+        const firstArgs = resolver.mock.calls[0][0];
+        const secondArgs = resolver.mock.calls[1][0];
+        const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
+        const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
+        const firstPattern = escapeRegExp(firstTimestamp);
+        const secondPattern = escapeRegExp(secondTimestamp);
+        expect(firstArgs.Body).toMatch(
+          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`),
+        );
+        expect(firstArgs.Body).not.toContain("second");
+        expect(secondArgs.Body).toMatch(
+          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
+        );
+        expect(secondArgs.Body).not.toContain("first");
 
-      // Max listeners bumped to avoid warnings in multi-instance test runs
-      expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
-    } finally {
-      process.setMaxListeners?.(originalMax);
-      process.env.TZ = originalTz;
-      await store.cleanup();
-    }
+        // Max listeners bumped to avoid warnings in multi-instance test runs
+        expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
+      } finally {
+        process.setMaxListeners?.(originalMax);
+        await store.cleanup();
+      }
+    });
   });
 });

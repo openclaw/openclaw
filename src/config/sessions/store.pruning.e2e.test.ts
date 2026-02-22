@@ -10,6 +10,8 @@ import type { SessionEntry } from "./types.js";
 vi.mock("../config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
+const { loadConfig } = await import("../config.js");
+const mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -22,6 +24,19 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
+function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  mockLoadConfig.mockReturnValue({
+    session: {
+      maintenance: {
+        mode: "enforce",
+        pruneAfter: "7d",
+        maxEntries: 500,
+        rotateBytes: 10_485_760,
+      },
+    },
+  });
+}
+
 async function createCaseDir(prefix: string): Promise<string> {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
@@ -32,7 +47,6 @@ describe("Integration: saveSessionStore with pruning", () => {
   let testDir: string;
   let storePath: string;
   let savedCacheTtl: string | undefined;
-  let mockLoadConfig: ReturnType<typeof vi.fn>;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-integ-"));
@@ -48,9 +62,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
-
-    const configModule = await import("../config.js");
-    mockLoadConfig = configModule.loadConfig as ReturnType<typeof vi.fn>;
+    mockLoadConfig.mockReset();
   });
 
   afterEach(() => {
@@ -64,16 +76,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -89,16 +92,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("archives transcript files for stale sessions pruned on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const staleSessionId = "stale-session";
@@ -127,16 +121,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const staleSessionId = "stale-session";

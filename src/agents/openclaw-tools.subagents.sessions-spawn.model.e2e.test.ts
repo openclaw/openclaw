@@ -8,9 +8,11 @@ import {
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+import { SUBAGENT_SPAWN_ACCEPTED_NOTE } from "./subagent-spawn.js";
 
 const callGatewayMock = getCallGatewayMock();
 type GatewayCall = { method?: string; params?: unknown };
+type SessionsSpawnConfigOverride = Parameters<typeof setSessionsSpawnConfigOverride>[0];
 
 function mockLongRunningSpawnFlow(params: {
   calls: GatewayCall[];
@@ -59,6 +61,43 @@ function mockPatchAndSingleAgentRun(params: { calls: GatewayCall[]; runId: strin
   });
 }
 
+async function expectSpawnUsesConfiguredModel(params: {
+  config?: SessionsSpawnConfigOverride;
+  runId: string;
+  callId: string;
+  expectedModel: string;
+}) {
+  resetSubagentRegistryForTests();
+  callGatewayMock.mockReset();
+  if (params.config) {
+    setSessionsSpawnConfigOverride(params.config);
+  } else {
+    resetSessionsSpawnConfigOverride();
+  }
+  const calls: GatewayCall[] = [];
+  mockPatchAndSingleAgentRun({ calls, runId: params.runId });
+
+  const tool = await getSessionsSpawnTool({
+    agentSessionKey: "agent:research:main",
+    agentChannel: "discord",
+  });
+
+  const result = await tool.execute(params.callId, {
+    task: "do thing",
+  });
+  expect(result.details).toMatchObject({
+    status: "accepted",
+    modelApplied: true,
+  });
+
+  const patchCall = calls.find(
+    (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+  );
+  expect(patchCall?.params).toMatchObject({
+    model: params.expectedModel,
+  });
+}
+
 describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
@@ -83,7 +122,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
     expect(result.details).toMatchObject({
       status: "accepted",
-      note: "auto-announces on completion, do not poll",
+      note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
       modelApplied: true,
     });
 
@@ -163,98 +202,56 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn applies default subagent model from defaults config", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
-    });
-    const calls: GatewayCall[] = [];
-    mockPatchAndSingleAgentRun({ calls, runId: "run-default-model" });
-
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-default-model", {
-      task: "do thing",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
-
-    const patchCall = calls.find(
-      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
-    );
-    expect(patchCall?.params).toMatchObject({
-      model: "minimax/MiniMax-M2.1",
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
+      },
+      runId: "run-default-model",
+      callId: "call-default-model",
+      expectedModel: "minimax/MiniMax-M2.1",
     });
   });
 
   it("sessions_spawn falls back to runtime default model when no model config is set", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    const calls: GatewayCall[] = [];
-    mockPatchAndSingleAgentRun({ calls, runId: "run-runtime-default-model" });
-
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-runtime-default-model", {
-      task: "do thing",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
-
-    const patchCall = calls.find(
-      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
-    );
-    expect(patchCall?.params).toMatchObject({
-      model: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+    await expectSpawnUsesConfiguredModel({
+      runId: "run-runtime-default-model",
+      callId: "call-runtime-default-model",
+      expectedModel: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
     });
   });
 
   it("sessions_spawn prefers per-agent subagent model over defaults", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        defaults: { subagents: { model: "minimax/MiniMax-M2.1" } },
-        list: [{ id: "research", subagents: { model: "opencode/claude" } }],
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: { subagents: { model: "minimax/MiniMax-M2.1" } },
+          list: [{ id: "research", subagents: { model: "opencode/claude" } }],
+        },
       },
-    });
-    const calls: GatewayCall[] = [];
-    mockPatchAndSingleAgentRun({ calls, runId: "run-agent-model" });
-
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:research:main",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-agent-model", {
-      task: "do thing",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
-
-    const patchCall = calls.find(
-      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
-    );
-    expect(patchCall?.params).toMatchObject({
-      model: "opencode/claude",
+      runId: "run-agent-model",
+      callId: "call-agent-model",
+      expectedModel: "opencode/claude",
     });
   });
 
-  it("sessions_spawn skips invalid model overrides and continues", async () => {
+  it("sessions_spawn prefers target agent primary model over global default", async () => {
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: { model: { primary: "minimax/MiniMax-M2.1" } },
+          list: [{ id: "research", model: { primary: "opencode/claude" } }],
+        },
+      },
+      runId: "run-agent-primary-model",
+      callId: "call-agent-primary-model",
+      expectedModel: "opencode/claude",
+    });
+  });
+
+  it("sessions_spawn fails when model patch is rejected", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     const calls: GatewayCall[] = [];
@@ -281,13 +278,10 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       model: "bad-model",
     });
     expect(result.details).toMatchObject({
-      status: "accepted",
-      modelApplied: false,
+      status: "error",
     });
-    expect(String((result.details as { warning?: string }).warning ?? "")).toContain(
-      "invalid model",
-    );
-    expect(calls.some((call) => call.method === "agent")).toBe(true);
+    expect(String((result.details as { error?: string }).error ?? "")).toContain("invalid model");
+    expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {

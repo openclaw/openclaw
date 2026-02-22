@@ -13,6 +13,23 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   }
 }
 
+function buildAddFilePatch(targetPath: string): string {
+  return `*** Begin Patch
+*** Add File: ${targetPath}
++escaped
+*** End Patch`;
+}
+
+async function expectOutsideWriteRejected(params: {
+  dir: string;
+  patchTargetPath: string;
+  outsidePath: string;
+}) {
+  const patch = buildAddFilePatch(params.patchTargetPath);
+  await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
+  await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
+}
+
 describe("applyPatch", () => {
   it("adds a file", async () => {
     await withTempDir(async (dir) => {
@@ -79,14 +96,12 @@ describe("applyPatch", () => {
       );
       const relativeEscape = path.relative(dir, escapedPath);
 
-      const patch = `*** Begin Patch
-*** Add File: ${relativeEscape}
-+escaped
-*** End Patch`;
-
       try {
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
-        await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
+        await expectOutsideWriteRejected({
+          dir,
+          patchTargetPath: relativeEscape,
+          outsidePath: escapedPath,
+        });
       } finally {
         await fs.rm(escapedPath, { force: true });
       }
@@ -97,14 +112,12 @@ describe("applyPatch", () => {
     await withTempDir(async (dir) => {
       const escapedPath = path.join(os.tmpdir(), `openclaw-apply-patch-${Date.now()}.txt`);
 
-      const patch = `*** Begin Patch
-*** Add File: ${escapedPath}
-+escaped
-*** End Patch`;
-
       try {
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
-        await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
+        await expectOutsideWriteRejected({
+          dir,
+          patchTargetPath: escapedPath,
+          outsidePath: escapedPath,
+        });
       } finally {
         await fs.rm(escapedPath, { force: true });
       }

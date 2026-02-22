@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 
 /**
@@ -53,8 +53,9 @@ function setSnapshot(resolved: OpenClawConfig, config: OpenClawConfig) {
   mockReadConfigFileSnapshot.mockResolvedValueOnce(buildSnapshot({ resolved, config }));
 }
 
+let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+
 async function runConfigCommand(args: string[]) {
-  const { registerConfigCli } = await import("./config-cli.js");
   const program = new Command();
   program.exitOverride();
   registerConfigCli(program);
@@ -62,6 +63,10 @@ async function runConfigCommand(args: string[]) {
 }
 
 describe("config cli", () => {
+  beforeAll(async () => {
+    ({ registerConfigCli } = await import("./config-cli.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -132,6 +137,50 @@ describe("config cli", () => {
       expect(written).not.toHaveProperty("sessions.persistence");
       expect(written.gateway?.port).toBe(18789);
       expect(written.gateway?.auth).toEqual({ mode: "token" });
+    });
+  });
+
+  describe("config set parsing flags", () => {
+    it("falls back to raw string when parsing fails and strict mode is off", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "{bad"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({ mode: "{bad" });
+    });
+
+    it("throws when strict parsing is enabled via --strict-json", async () => {
+      await expect(
+        runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--strict-json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("keeps --json as a strict parsing alias", async () => {
+      await expect(
+        runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("shows --strict-json and keeps --json as a legacy alias in help", async () => {
+      const program = new Command();
+      registerConfigCli(program);
+
+      const configCommand = program.commands.find((command) => command.name() === "config");
+      const setCommand = configCommand?.commands.find((command) => command.name() === "set");
+      const helpText = setCommand?.helpInformation() ?? "";
+
+      expect(helpText).toContain("--strict-json");
+      expect(helpText).toContain("--json");
+      expect(helpText).toContain("Legacy alias for --strict-json");
     });
   });
 

@@ -12,6 +12,20 @@ export type SystemRunCommandValidation =
       details?: Record<string, unknown>;
     };
 
+export type ResolvedSystemRunCommand =
+  | {
+      ok: true;
+      argv: string[];
+      rawCommand: string | null;
+      shellCommand: string | null;
+      cmdText: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
 function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
@@ -65,8 +79,12 @@ export function extractShellCommandFromArgv(argv: string[]): string | null {
     if (idx === -1) {
       return null;
     }
-    const cmd = argv[idx + 1];
-    return typeof cmd === "string" ? cmd : null;
+    const tail = argv.slice(idx + 1).map((item) => String(item));
+    if (tail.length === 0) {
+      return null;
+    }
+    const cmd = tail.join(" ").trim();
+    return cmd.length > 0 ? cmd : null;
   }
 
   return null;
@@ -81,7 +99,7 @@ export function validateSystemRunCommandConsistency(params: {
       ? params.rawCommand.trim()
       : null;
   const shellCommand = extractShellCommandFromArgv(params.argv);
-  const inferred = shellCommand ? shellCommand.trim() : formatExecCommand(params.argv);
+  const inferred = shellCommand !== null ? shellCommand.trim() : formatExecCommand(params.argv);
 
   if (raw && raw !== inferred) {
     return {
@@ -100,7 +118,55 @@ export function validateSystemRunCommandConsistency(params: {
     // Only treat this as a shell command when argv is a recognized shell wrapper.
     // For direct argv execution, rawCommand is purely display/approval text and
     // must match the formatted argv.
-    shellCommand: shellCommand ? (raw ?? shellCommand) : null,
+    shellCommand: shellCommand !== null ? (raw ?? shellCommand) : null,
     cmdText: raw ?? shellCommand ?? inferred,
+  };
+}
+
+export function resolveSystemRunCommand(params: {
+  command?: unknown;
+  rawCommand?: unknown;
+}): ResolvedSystemRunCommand {
+  const raw =
+    typeof params.rawCommand === "string" && params.rawCommand.trim().length > 0
+      ? params.rawCommand.trim()
+      : null;
+  const command = Array.isArray(params.command) ? params.command : [];
+  if (command.length === 0) {
+    if (raw) {
+      return {
+        ok: false,
+        message: "rawCommand requires params.command",
+        details: { code: "MISSING_COMMAND" },
+      };
+    }
+    return {
+      ok: true,
+      argv: [],
+      rawCommand: null,
+      shellCommand: null,
+      cmdText: "",
+    };
+  }
+
+  const argv = command.map((v) => String(v));
+  const validation = validateSystemRunCommandConsistency({
+    argv,
+    rawCommand: raw,
+  });
+  if (!validation.ok) {
+    return {
+      ok: false,
+      message: validation.message,
+      details: validation.details ?? { code: "RAW_COMMAND_MISMATCH" },
+    };
+  }
+
+  return {
+    ok: true,
+    argv,
+    rawCommand: raw,
+    shellCommand: validation.shellCommand,
+    cmdText: validation.cmdText,
   };
 }

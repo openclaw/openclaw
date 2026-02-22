@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
@@ -15,7 +16,7 @@ describe("loader", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let tmpDir: string;
-  let originalBundledDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
@@ -28,18 +29,13 @@ describe("loader", () => {
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
-    originalBundledDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
   });
 
   afterEach(async () => {
     clearInternalHooks();
-    // Restore original env var
-    if (originalBundledDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_HOOKS_DIR = originalBundledDir;
-    }
+    envSnapshot.restore();
   });
 
   afterAll(async () => {
@@ -265,6 +261,74 @@ describe("loader", () => {
       // the call count from this context without more complex test infrastructure
       // This test mainly verifies that loading and triggering doesn't crash
       expect(getRegisteredEventKeys()).toContain("command:new");
+    });
+
+    it("rejects directory hook handlers that escape hook dir via symlink", async () => {
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const hookDir = path.join(tmpDir, "hooks", "symlink-hook");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: symlink-hook",
+          "description: symlink test",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+          "",
+          "# Symlink Hook",
+        ].join("\n"),
+        "utf-8",
+      );
+      try {
+        await fs.symlink(outsideHandlerPath, path.join(hookDir, "handler.js"));
+      } catch {
+        return;
+      }
+
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    });
+
+    it("rejects legacy handler modules that escape workspace via symlink", async () => {
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
+      try {
+        await fs.symlink(outsideHandlerPath, linkedHandlerPath);
+      } catch {
+        return;
+      }
+
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [
+              {
+                event: "command:new",
+                module: "legacy-handler.js",
+              },
+            ],
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
     });
   });
 });

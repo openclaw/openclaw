@@ -1,48 +1,20 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   installDirectiveBehaviorE2EHooks,
   loadModelCatalog,
+  makeEmbeddedTextResult,
+  makeWhatsAppDirectiveConfig,
+  mockEmbeddedTextResult,
+  replyText,
+  replyTexts,
   runEmbeddedPiAgent,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
-function makeThinkConfig(home: string) {
-  return {
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "openclaw"),
-      },
-    },
-    session: { store: path.join(home, "sessions.json") },
-  } as unknown as OpenClawConfig;
-}
-
-function makeWhatsAppConfig(home: string) {
-  return {
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "openclaw"),
-      },
-    },
-    channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: path.join(home, "sessions.json") },
-  } as unknown as OpenClawConfig;
-}
-
 async function runReplyToCurrentCase(home: string, text: string) {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
 
   const res = await getReplyFromConfig(
     {
@@ -52,7 +24,7 @@ async function runReplyToCurrentCase(home: string, text: string) {
       MessageSid: "msg-123",
     },
     {},
-    makeWhatsAppConfig(home),
+    makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
   );
 
   return Array.isArray(res) ? res[0] : res;
@@ -75,10 +47,10 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeThinkConfig(home),
+        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = replyText(res);
       expect(text).toContain("Current thinking level: low");
       expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -98,42 +70,29 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeThinkConfig(home),
+        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = replyText(res);
       expect(text).toContain("Current thinking level: off");
       expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("strips reply tags and maps reply_to_current to MessageSid", async () => {
-    await withTempHome(async (home) => {
-      const payload = await runReplyToCurrentCase(home, "hello [[reply_to_current]]");
-      expect(payload?.text).toBe("hello");
-      expect(payload?.replyToId).toBe("msg-123");
+  for (const replyTag of ["[[reply_to_current]]", "[[ reply_to_current ]]"]) {
+    it(`strips ${replyTag} and maps reply_to_current to MessageSid`, async () => {
+      await withTempHome(async (home) => {
+        const payload = await runReplyToCurrentCase(home, `hello ${replyTag}`);
+        expect(payload?.text).toBe("hello");
+        expect(payload?.replyToId).toBe("msg-123");
+      });
     });
-  });
-  it("strips reply tags with whitespace and maps reply_to_current to MessageSid", async () => {
-    await withTempHome(async (home) => {
-      const payload = await runReplyToCurrentCase(home, "hello [[ reply_to_current ]]");
-      expect(payload?.text).toBe("hello");
-      expect(payload?.replyToId).toBe("msg-123");
-    });
-  });
+  }
   it("prefers explicit reply_to id over reply_to_current", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [
-          {
-            text: "hi [[reply_to_current]] [[reply_to:abc-456]]",
-          },
-        ],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue(
+        makeEmbeddedTextResult("hi [[reply_to_current]] [[reply_to:abc-456]]"),
+      );
 
       const res = await getReplyFromConfig(
         {
@@ -143,16 +102,7 @@ describe("directive behavior", () => {
           MessageSid: "msg-123",
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
+        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
       );
 
       const payload = Array.isArray(res) ? res[0] : res;
@@ -162,13 +112,7 @@ describe("directive behavior", () => {
   });
   it("applies inline think and still runs agent content", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "done" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      mockEmbeddedTextResult("done");
 
       const res = await getReplyFromConfig(
         {
@@ -177,19 +121,10 @@ describe("directive behavior", () => {
           To: "+2000",
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
+        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
       );
 
-      const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
+      const texts = replyTexts(res);
       expect(texts).toContain("done");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });

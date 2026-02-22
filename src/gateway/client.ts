@@ -11,6 +11,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { clearDevicePairing } from "../infra/device-pairing.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -21,6 +22,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { isSecureWebSocketUrl } from "./net.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -109,6 +111,26 @@ export class GatewayClient {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
       return;
     }
+
+    // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
+    // This protects both credentials AND chat/conversation data from MITM attacks.
+    // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
+    if (!isSecureWebSocketUrl(url)) {
+      // Safe hostname extraction - avoid throwing on malformed URLs in error path
+      let displayHost = url;
+      try {
+        displayHost = new URL(url).hostname || url;
+      } catch {
+        // Use raw URL if parsing fails
+      }
+      const error = new Error(
+        `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
+          "Both credentials and chat data would be exposed to network interception. " +
+          "Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+      );
+      this.opts.onConnectError?.(error);
+      return;
+    }
     // Allow node screen snapshots and other large responses.
     const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
@@ -154,21 +176,23 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      // If closed due to device token mismatch, clear the stored token so next attempt can get a fresh one
+      // If closed due to device token mismatch, clear the stored token and pairing so next attempt can get a fresh one
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
         this.opts.deviceIdentity
       ) {
+        const deviceId = this.opts.deviceIdentity.deviceId;
         const role = this.opts.role ?? "operator";
         try {
-          clearDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role });
-          logDebug(
-            `cleared stale device-auth token for device ${this.opts.deviceIdentity.deviceId}`,
-          );
+          clearDeviceAuthToken({ deviceId, role });
+          void clearDevicePairing(deviceId).catch((err) => {
+            logDebug(`failed clearing stale device pairing for device ${deviceId}: ${String(err)}`);
+          });
+          logDebug(`cleared stale device-auth token for device ${deviceId}`);
         } catch (err) {
           logDebug(
-            `failed clearing stale device-auth token for device ${this.opts.deviceIdentity.deviceId}: ${String(err)}`,
+            `failed clearing stale device-auth token for device ${deviceId}: ${String(err)}`,
           );
         }
       }

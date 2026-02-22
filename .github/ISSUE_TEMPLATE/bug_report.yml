@@ -13,7 +13,7 @@ body:
     attributes:
       label: Summary
       description: One-sentence statement of what is broken.
-      placeholder: After upgrading to 2026.2.13, Telegram thread replies fail with "reply target not found".
+      placeholder: After upgrading to <version>, <channel> behavior regressed from <prior version>.
     validations:
       required: true
   - type: textarea
@@ -48,7 +48,7 @@ body:
     attributes:
       label: OpenClaw version
       description: Exact version/build tested.
-      placeholder: 2026.2.13
+      placeholder: <version such as 2026.2.17>
     validations:
       required: true
   - type: input
@@ -83,7 +83,7 @@ body:
         - Frequency (always/intermittent/edge case)
         - Consequence (missed messages, failed onboarding, extra cost, etc.)
       placeholder: |
-        Affected: Telegram group users on 2026.2.13
+        Affected: Telegram group users on <version>
         Severity: High (blocks replies)
         Frequency: 100% repro
         Consequence: Agents cannot respond in threads
@@ -92,4 +92,4 @@ body:
     attributes:
       label: Additional information
       description: Add any context that helps triage but does not fit above.
-      placeholder: Regression started after upgrade from 2026.2.12; temporary workaround is restarting gateway every 30m.
+      placeholder: Regression started after upgrade from <previous-version>; temporary workaround is ...

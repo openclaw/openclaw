@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
-import { resolveFinalAssistantText, resolveTuiSessionKey } from "./tui.js";
+import {
+  createBackspaceDeduper,
+  resolveFinalAssistantText,
+  resolveGatewayDisconnectState,
+  resolveTuiSessionKey,
+} from "./tui.js";
 
 describe("resolveFinalAssistantText", () => {
   it("falls back to streamed text when final text is empty", () => {
@@ -65,5 +70,53 @@ describe("resolveTuiSessionKey", () => {
         sessionMainKey: "agent:main:main",
       }),
     ).toBe("agent:ops:incident");
+  });
+});
+
+describe("resolveGatewayDisconnectState", () => {
+  it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
+    const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
+    expect(state.connectionStatus).toContain("pairing required");
+    expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
+    expect(state.pairingHint).toContain("openclaw devices list");
+  });
+
+  it("falls back to idle for generic disconnect reasons", () => {
+    const state = resolveGatewayDisconnectState("network timeout");
+    expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
+    expect(state.activityStatus).toBe("idle");
+    expect(state.pairingHint).toBeUndefined();
+  });
+});
+
+describe("createBackspaceDeduper", () => {
+  it("suppresses duplicate backspace events within the dedupe window", () => {
+    let now = 1000;
+    const dedupe = createBackspaceDeduper({
+      dedupeWindowMs: 8,
+      now: () => now,
+    });
+
+    expect(dedupe("\x7f")).toBe("\x7f");
+    now += 1;
+    expect(dedupe("\x08")).toBe("");
+  });
+
+  it("preserves backspace events outside the dedupe window", () => {
+    let now = 1000;
+    const dedupe = createBackspaceDeduper({
+      dedupeWindowMs: 8,
+      now: () => now,
+    });
+
+    expect(dedupe("\x7f")).toBe("\x7f");
+    now += 10;
+    expect(dedupe("\x7f")).toBe("\x7f");
+  });
+
+  it("never suppresses non-backspace keys", () => {
+    const dedupe = createBackspaceDeduper();
+    expect(dedupe("a")).toBe("a");
+    expect(dedupe("\x1b[A")).toBe("\x1b[A");
   });
 });

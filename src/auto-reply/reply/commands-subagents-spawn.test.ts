@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
+  SUBAGENT_SPAWN_MODES: ["run", "session"],
 }));
 
 vi.mock("../../gateway/call.js", () => ({
@@ -93,6 +94,7 @@ describe("/subagents spawn command", () => {
     const [spawnParams, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
     expect(spawnParams.task).toBe("do the thing");
     expect(spawnParams.agentId).toBe("beta");
+    expect(spawnParams.mode).toBe("run");
     expect(spawnParams.cleanup).toBe("keep");
     expect(spawnParams.expectsCompletionMessage).toBe(true);
     expect(spawnCtx.agentSessionKey).toBeDefined();
@@ -170,6 +172,21 @@ describe("/subagents spawn command", () => {
     expect(spawnCtx.agentTo).toBe("channel:12345");
   });
 
+  it("falls back to OriginatingTo for agentTo when command.to is missing", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg, {
+      OriginatingTo: "channel:manual",
+      To: "channel:fallback-from-to",
+    });
+    params.command.to = undefined;
+
+    const result = await handleSubagentsCommand(params, true);
+    expect(result).not.toBeNull();
+    expect(result?.reply?.text).toContain("Spawned subagent beta");
+
+    const [, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
+    expect(spawnCtx).toMatchObject({ agentTo: "channel:manual" });
+  });
   it("returns forbidden for unauthorized cross-agent spawn", async () => {
     spawnSubagentDirectMock.mockResolvedValue(
       forbiddenResult("agentId is not allowed for sessions_spawn (allowed: alpha)"),

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config/sessions.js";
 import {
   installDirectiveBehaviorE2EHooks,
+  makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   replyText,
   replyTexts,
@@ -11,6 +12,62 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
+
+function makeRunConfig(home: string, storePath: string) {
+  return makeWhatsAppDirectiveConfig(
+    home,
+    { model: "anthropic/claude-opus-4-5" },
+    { session: { store: storePath } },
+  );
+}
+
+async function runInFlightVerboseToggleCase(params: {
+  home: string;
+  shouldEmitBefore: boolean;
+  toggledVerboseLevel: "on" | "off";
+  seedVerboseOn?: boolean;
+}) {
+  const storePath = sessionStorePath(params.home);
+  const ctx = {
+    Body: "please do the thing",
+    From: "+1004",
+    To: "+2000",
+  };
+  const sessionKey = resolveSessionKey(
+    "per-sender",
+    { From: ctx.From, To: ctx.To, Body: ctx.Body },
+    "main",
+  );
+
+  vi.mocked(runEmbeddedPiAgent).mockImplementation(async (agentParams) => {
+    const shouldEmit = agentParams.shouldEmitToolResult;
+    expect(shouldEmit?.()).toBe(params.shouldEmitBefore);
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey] ?? {
+      sessionId: "s",
+      updatedAt: Date.now(),
+    };
+    store[sessionKey] = {
+      ...entry,
+      verboseLevel: params.toggledVerboseLevel,
+      updatedAt: Date.now(),
+    };
+    await saveSessionStore(storePath, store);
+    expect(shouldEmit?.()).toBe(!params.shouldEmitBefore);
+    return makeEmbeddedTextResult("done");
+  });
+
+  if (params.seedVerboseOn) {
+    await getReplyFromConfig(
+      { Body: "/verbose on", From: ctx.From, To: ctx.To, CommandAuthorized: true },
+      {},
+      makeRunConfig(params.home, storePath),
+    );
+  }
+
+  const res = await getReplyFromConfig(ctx, {}, makeRunConfig(params.home, storePath));
+  return { res };
+}
 
 async function runModelDirectiveAndGetText(
   home: string,
@@ -35,49 +92,11 @@ describe("directive behavior", () => {
 
   it("updates tool verbose during an in-flight run (toggle on)", async () => {
     await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
-      const ctx = { Body: "please do the thing", From: "+1004", To: "+2000" };
-      const sessionKey = resolveSessionKey(
-        "per-sender",
-        { From: ctx.From, To: ctx.To, Body: ctx.Body },
-        "main",
-      );
-
-      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
-        const shouldEmit = params.shouldEmitToolResult;
-        expect(shouldEmit?.()).toBe(false);
-        const store = loadSessionStore(storePath);
-        const entry = store[sessionKey] ?? {
-          sessionId: "s",
-          updatedAt: Date.now(),
-        };
-        store[sessionKey] = {
-          ...entry,
-          verboseLevel: "on",
-          updatedAt: Date.now(),
-        };
-        await saveSessionStore(storePath, store);
-        expect(shouldEmit?.()).toBe(true);
-        return {
-          payloads: [{ text: "done" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        };
+      const { res } = await runInFlightVerboseToggleCase({
+        home,
+        shouldEmitBefore: false,
+        toggledVerboseLevel: "on",
       });
-
-      const res = await getReplyFromConfig(
-        ctx,
-        {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            session: { store: storePath },
-          },
-        ),
-      );
 
       const texts = replyTexts(res);
       expect(texts).toContain("done");
@@ -86,65 +105,12 @@ describe("directive behavior", () => {
   });
   it("updates tool verbose during an in-flight run (toggle off)", async () => {
     await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
-      const ctx = {
-        Body: "please do the thing",
-        From: "+1004",
-        To: "+2000",
-      };
-      const sessionKey = resolveSessionKey(
-        "per-sender",
-        { From: ctx.From, To: ctx.To, Body: ctx.Body },
-        "main",
-      );
-
-      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
-        const shouldEmit = params.shouldEmitToolResult;
-        expect(shouldEmit?.()).toBe(true);
-        const store = loadSessionStore(storePath);
-        const entry = store[sessionKey] ?? {
-          sessionId: "s",
-          updatedAt: Date.now(),
-        };
-        store[sessionKey] = {
-          ...entry,
-          verboseLevel: "off",
-          updatedAt: Date.now(),
-        };
-        await saveSessionStore(storePath, store);
-        expect(shouldEmit?.()).toBe(false);
-        return {
-          payloads: [{ text: "done" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        };
+      const { res } = await runInFlightVerboseToggleCase({
+        home,
+        shouldEmitBefore: true,
+        toggledVerboseLevel: "off",
+        seedVerboseOn: true,
       });
-
-      await getReplyFromConfig(
-        { Body: "/verbose on", From: ctx.From, To: ctx.To, CommandAuthorized: true },
-        {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            session: { store: storePath },
-          },
-        ),
-      );
-
-      const res = await getReplyFromConfig(
-        ctx,
-        {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            session: { store: storePath },
-          },
-        ),
-      );
 
       const texts = replyTexts(res);
       expect(texts).toContain("done");

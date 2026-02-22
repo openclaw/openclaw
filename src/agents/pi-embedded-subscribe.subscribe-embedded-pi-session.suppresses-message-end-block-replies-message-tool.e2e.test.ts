@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 function createBlockReplyHarness(blockReplyBreak: "message_end" | "text_end") {
@@ -48,16 +52,8 @@ function emitAssistantMessageEnd(emit: (evt: unknown) => void, text: string) {
 
 function emitAssistantTextEndBlock(emit: (evt: unknown) => void, text: string) {
   emit({ type: "message_start", message: { role: "assistant" } });
-  emit({
-    type: "message_update",
-    message: { role: "assistant" },
-    assistantMessageEvent: { type: "text_delta", delta: text },
-  });
-  emit({
-    type: "message_update",
-    message: { role: "assistant" },
-    assistantMessageEvent: { type: "text_end" },
-  });
+  emitAssistantTextDelta({ emit, delta: text });
+  emitAssistantTextEnd({ emit });
 }
 
 describe("subscribeEmbeddedPiSession", () => {

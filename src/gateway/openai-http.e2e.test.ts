@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
   getFreePort,
@@ -12,10 +13,12 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+let startGatewayServer: typeof import("./server.js").startGatewayServer;
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
+  ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
   enabledServer = await startServer(enabledPort);
 });
@@ -25,7 +28,6 @@ afterAll(async () => {
 });
 
 async function startServerWithDefaultConfig(port: number) {
-  const { startGatewayServer } = await import("./server.js");
   return await startGatewayServer(port, {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
@@ -35,7 +37,6 @@ async function startServerWithDefaultConfig(port: number) {
 }
 
 async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  const { startGatewayServer } = await import("./server.js");
   return await startGatewayServer(port, {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
@@ -389,12 +390,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     try {
       {
         agentCommand.mockReset();
-        agentCommand.mockImplementationOnce((async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-          return { payloads: [{ text: "hello" }] } as never;
-        }) as never);
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["he", "llo"],
+            text: "hello",
+          })) as never);
 
         const res = await postChatCompletions(port, {
           stream: true,
@@ -422,12 +424,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockReset();
-        agentCommand.mockImplementationOnce((async (opts: unknown) => {
-          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hi" } });
-          emitAgentEvent({ runId, stream: "assistant", data: { delta: "hi" } });
-          return { payloads: [{ text: "hihi" }] } as never;
-        }) as never);
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["hi", "hi"],
+            text: "hihi",
+          })) as never);
 
         const repeatedRes = await postChatCompletions(port, {
           stream: true,

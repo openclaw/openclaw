@@ -1,66 +1,9 @@
+import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
-export type NodeListNode = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  paired?: boolean;
-  connected?: boolean;
-};
-
-type PendingRequest = {
-  requestId: string;
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
-  isRepair?: boolean;
-  ts: number;
-};
-
-type PairedNode = {
-  nodeId: string;
-  token?: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
-  permissions?: Record<string, boolean>;
-  createdAtMs?: number;
-  approvedAtMs?: number;
-};
-
-type PairingList = {
-  pending: PendingRequest[];
-  paired: PairedNode[];
-};
-
-function parseNodeList(value: unknown): NodeListNode[] {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
-}
-
-function parsePairingList(value: unknown): PairingList {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
-  const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
-  return { pending, paired };
-}
+export type { NodeListNode };
 
 async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
   try {

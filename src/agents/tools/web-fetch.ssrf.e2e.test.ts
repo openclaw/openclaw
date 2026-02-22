@@ -55,6 +55,14 @@ async function createWebFetchToolForTest(params?: {
   });
 }
 
+async function expectBlockedUrl(
+  tool: Awaited<ReturnType<typeof createWebFetchToolForTest>>,
+  url: string,
+  expectedMessage: RegExp,
+) {
+  await expect(tool?.execute?.("call", { url })).rejects.toThrow(expectedMessage);
+}
+
 describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
@@ -76,9 +84,7 @@ describe("web_fetch SSRF protection", () => {
       firecrawl: { apiKey: "firecrawl-test" },
     });
 
-    await expect(tool?.execute?.("call", { url: "http://localhost/test" })).rejects.toThrow(
-      /Blocked hostname/i,
-    );
+    await expectBlockedUrl(tool, "http://localhost/test", /Blocked hostname/i);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
   });
@@ -87,12 +93,10 @@ describe("web_fetch SSRF protection", () => {
     const fetchSpy = setMockFetch();
     const tool = await createWebFetchToolForTest();
 
-    await expect(tool?.execute?.("call", { url: "http://127.0.0.1/test" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
-    await expect(tool?.execute?.("call", { url: "http://[::ffff:127.0.0.1]/" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
+    const cases = ["http://127.0.0.1/test", "http://[::ffff:127.0.0.1]/"] as const;
+    for (const url of cases) {
+      await expectBlockedUrl(tool, url, /private|internal|blocked/i);
+    }
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
   });
@@ -108,9 +112,7 @@ describe("web_fetch SSRF protection", () => {
     const fetchSpy = setMockFetch();
     const tool = await createWebFetchToolForTest();
 
-    await expect(tool?.execute?.("call", { url: "https://private.test/resource" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
+    await expectBlockedUrl(tool, "https://private.test/resource", /private|internal|blocked/i);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -124,9 +126,7 @@ describe("web_fetch SSRF protection", () => {
       firecrawl: { apiKey: "firecrawl-test" },
     });
 
-    await expect(tool?.execute?.("call", { url: "https://example.com" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
+    await expectBlockedUrl(tool, "https://example.com", /private|internal|blocked/i);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 

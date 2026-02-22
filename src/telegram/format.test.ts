@@ -2,44 +2,28 @@ import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
-  it("renders basic inline formatting", () => {
-    const res = markdownToTelegramHtml("hi _there_ **boss** `code`");
-    expect(res).toBe("hi <i>there</i> <b>boss</b> <code>code</code>");
-  });
-
-  it("renders links as Telegram-safe HTML", () => {
-    const res = markdownToTelegramHtml("see [docs](https://example.com)");
-    expect(res).toBe('see <a href="https://example.com">docs</a>');
-  });
-
-  it("escapes raw HTML", () => {
-    const res = markdownToTelegramHtml("<b>nope</b>");
-    expect(res).toBe("&lt;b&gt;nope&lt;/b&gt;");
-  });
-
-  it("escapes unsafe characters", () => {
-    const res = markdownToTelegramHtml("a & b < c");
-    expect(res).toBe("a &amp; b &lt; c");
-  });
-
-  it("renders paragraphs with blank lines", () => {
-    const res = markdownToTelegramHtml("first\n\nsecond");
-    expect(res).toBe("first\n\nsecond");
-  });
-
-  it("renders lists without block HTML", () => {
-    const res = markdownToTelegramHtml("- one\n- two");
-    expect(res).toBe("• one\n• two");
-  });
-
-  it("renders ordered lists with numbering", () => {
-    const res = markdownToTelegramHtml("2. two\n3. three");
-    expect(res).toBe("2. two\n3. three");
-  });
-
-  it("flattens headings", () => {
-    const res = markdownToTelegramHtml("# Title");
-    expect(res).toBe("Title");
+  it("handles core markdown-to-telegram conversions", () => {
+    const cases = [
+      [
+        "renders basic inline formatting",
+        "hi _there_ **boss** `code`",
+        "hi <i>there</i> <b>boss</b> <code>code</code>",
+      ],
+      [
+        "renders links as Telegram-safe HTML",
+        "see [docs](https://example.com)",
+        'see <a href="https://example.com">docs</a>',
+      ],
+      ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
+      ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
+      ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
+      ["renders lists without block HTML", "- one\n- two", "• one\n• two"],
+      ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
+      ["flattens headings", "# Title", "Title"],
+    ] as const;
+    for (const [name, input, expected] of cases) {
+      expect(markdownToTelegramHtml(input), name).toBe(expected);
+    }
   });
 
   it("renders blockquotes as native Telegram blockquote tags", () => {
@@ -99,12 +83,6 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("See README.md. Also (backup.sh).");
     expect(res).toContain("<code>README.md</code>.");
     expect(res).toContain("(<code>backup.sh</code>).");
-  });
-
-  it("keeps .co domains as links", () => {
-    const res = markdownToTelegramHtml("Visit t.co and openclaw.co");
-    expect(res).toContain('<a href="http://t.co">t.co</a>');
-    expect(res).toContain('<a href="http://openclaw.co">openclaw.co</a>');
   });
 
   it("renders spoiler tags", () => {

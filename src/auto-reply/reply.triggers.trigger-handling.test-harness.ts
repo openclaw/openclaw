@@ -135,6 +135,18 @@ export function makeCfg(home: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+export async function loadGetReplyFromConfig() {
+  return (await import("./reply.js")).getReplyFromConfig;
+}
+
+export function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
 export function makeWhatsAppElevatedCfg(
   home: string,
   opts?: { elevatedEnabled?: boolean; requireMentionInGroups?: boolean },
@@ -217,6 +229,7 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
   const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
+  expect(prompt).toContain("Execute your Session Startup sequence now");
 }
 
 export function installTriggerHandlingE2eTestHooks() {
