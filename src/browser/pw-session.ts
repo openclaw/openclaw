@@ -315,9 +315,113 @@ function observeBrowser(browser: Browser) {
   }
 }
 
+/**
+ * Pre-connection health check: probe every page via raw CDP and close
+ * pages whose renderer doesn't respond within the timeout.
+ *
+ * Playwright's connectOverCDP() attaches to ALL pages during initialization.
+ * If any page's renderer is stuck (heavy/infinite JS), the entire connection
+ * hangs. By evicting stuck pages beforehand, connectOverCDP() succeeds.
+ */
+async function evictStuckPagesViaCdp(cdpUrl: string): Promise<void> {
+  const httpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+  const listUrl = appendCdpPath(httpBase, "/json/list");
+
+  const pages = await fetchJson<
+    Array<{
+      id?: string;
+      url?: string;
+      webSocketDebuggerUrl?: string;
+      type?: string;
+    }>
+  >(listUrl, 2000).catch(() => null);
+
+  if (!pages || pages.length === 0) {
+    return;
+  }
+
+  const pageTargets = pages.filter(
+    (p) => (p.type === "page" || !p.type) && p.id && p.webSocketDebuggerUrl,
+  );
+
+  const stuckIds: string[] = [];
+
+  await Promise.all(
+    pageTargets.map(async (target) => {
+      const wsUrl = normalizeCdpWsUrl(String(target.webSocketDebuggerUrl), httpBase);
+      const responsive = await probePageViaCdp(wsUrl, 3000).catch(() => false);
+      if (!responsive) {
+        stuckIds.push(String(target.id));
+      }
+    }),
+  );
+
+  if (stuckIds.length === 0) {
+    return;
+  }
+
+  // Close stuck pages via browser-level CDP
+  const versionUrl = appendCdpPath(httpBase, "/json/version");
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(versionUrl, 2000).catch(
+    () => null,
+  );
+
+  const browserWs = version?.webSocketDebuggerUrl
+    ? normalizeCdpWsUrl(String(version.webSocketDebuggerUrl), httpBase)
+    : null;
+
+  if (!browserWs) {
+    return;
+  }
+
+  await closeTargetsViaCdp(browserWs, stuckIds).catch(() => {});
+}
+
+/** Probe a single page by sending Runtime.evaluate("1") via its page-level WS. */
+async function probePageViaCdp(wsUrl: string, timeoutMs: number): Promise<boolean> {
+  return await withCdpSocket(
+    wsUrl,
+    async (send) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("probe timeout")), timeoutMs);
+      });
+      try {
+        await Promise.race([
+          send("Runtime.evaluate", { expression: "1", returnByValue: true }),
+          timeoutPromise,
+        ]);
+        return true;
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+    },
+    { handshakeTimeoutMs: timeoutMs },
+  );
+}
+
+/** Close targets by ID via browser-level CDP WebSocket. */
+async function closeTargetsViaCdp(browserWsUrl: string, targetIds: string[]): Promise<void> {
+  await withCdpSocket(
+    browserWsUrl,
+    async (send) => {
+      for (const id of targetIds) {
+        await send("Target.closeTarget", { targetId: id }).catch(() => {});
+      }
+    },
+    { handshakeTimeoutMs: 2000 },
+  );
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) {
+    // Even with a cached connection, evict stuck pages whose renderer is
+    // unresponsive.  Playwright Page objects for closed targets get cleaned
+    // up automatically via Target.targetDestroyed events.
+    await evictStuckPagesViaCdp(normalized).catch(() => {});
     return cached;
   }
   if (connecting) {
@@ -327,6 +431,8 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Evict stuck pages that would block connectOverCDP()
+      await evictStuckPagesViaCdp(normalized).catch(() => {});
       try {
         const timeout = 5000 + attempt * 2000;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);

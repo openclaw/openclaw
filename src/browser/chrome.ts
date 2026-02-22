@@ -46,6 +46,17 @@ function exists(filePath: string) {
   }
 }
 
+export function cleanStaleSingletonFiles(userDataDir: string) {
+  for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const filePath = path.join(userDataDir, name);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // File doesn't exist or can't be removed — fine either way.
+    }
+  }
+}
+
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -178,6 +189,7 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  cleanStaleSingletonFiles(userDataDir);
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
@@ -205,6 +217,11 @@ export async function launchOpenClawChrome(
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
       args.push("--disable-gpu");
+      // Without a GPU, Chrome falls back to SwiftShader for WebGL — pure
+      // software rendering that can block the main thread indefinitely on
+      // heavy pages (e.g. TradingView charts).  Disabling WebGL forces
+      // sites to use Canvas2D, which keeps the renderer responsive.
+      args.push("--disable-webgl");
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");
