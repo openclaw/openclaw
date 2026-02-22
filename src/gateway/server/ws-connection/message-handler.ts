@@ -824,8 +824,6 @@ export function attachGatewayWsMessageHandler(params: {
           protocol: PROTOCOL_VERSION,
           server: {
             version: resolveRuntimeServiceVersion(process.env, "dev"),
-            commit: process.env.GIT_COMMIT,
-            host: os.hostname(),
             connId,
           },
           features: { methods: gatewayMethods, events },

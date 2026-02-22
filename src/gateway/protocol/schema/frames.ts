@@ -74,8 +74,6 @@ export const HelloOkSchema = Type.Object(
     server: Type.Object(
       {
         version: NonEmptyString,
-        commit: Type.Optional(NonEmptyString),
-        host: Type.Optional(NonEmptyString),
         connId: NonEmptyString,
       },
       { additionalProperties: false },
