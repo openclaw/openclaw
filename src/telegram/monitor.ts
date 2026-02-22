@@ -167,13 +167,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
       });
-      if (opts.abortSignal && !opts.abortSignal.aborted) {
+      const abortSignal = opts.abortSignal;
+      if (abortSignal && !abortSignal.aborted) {
         await new Promise<void>((resolve) => {
           const onAbort = () => {
-            opts.abortSignal?.removeEventListener("abort", onAbort);
+            abortSignal.removeEventListener("abort", onAbort);
             resolve();
           };
-          opts.abortSignal.addEventListener("abort", onAbort, { once: true });
+          abortSignal.addEventListener("abort", onAbort, { once: true });
         });
       }
       return;
