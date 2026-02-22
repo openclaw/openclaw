@@ -1,10 +1,14 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
+import contextHooksExtension from "../pi-extensions/context-hooks.js";
+import { setContextHooksRuntime } from "../pi-extensions/context-hooks/runtime.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
@@ -57,6 +61,29 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
+function buildContextHooksFactory(params: {
+  sessionManager: SessionManager;
+  hookCtx: PluginHookAgentContext;
+  provider: string;
+  modelId: string;
+  contextWindowTokens: number;
+}): ExtensionFactory | undefined {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner) {
+    return undefined;
+  }
+
+  setContextHooksRuntime(params.sessionManager, {
+    hookRunner,
+    hookCtx: params.hookCtx,
+    modelId: params.modelId,
+    provider: params.provider,
+    contextWindowTokens: params.contextWindowTokens,
+  });
+
+  return contextHooksExtension;
+}
+
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
@@ -67,6 +94,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  hookCtx?: PluginHookAgentContext;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -87,6 +115,18 @@ export function buildEmbeddedExtensionFactories(params: {
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {
     factories.push(pruningFactory);
+  }
+  if (params.hookCtx) {
+    const contextHooksFactory = buildContextHooksFactory({
+      sessionManager: params.sessionManager,
+      hookCtx: params.hookCtx,
+      provider: params.provider,
+      modelId: params.modelId,
+      contextWindowTokens: resolveContextWindowTokens(params),
+    });
+    if (contextHooksFactory) {
+      factories.push(contextHooksFactory);
+    }
   }
   return factories;
 }
