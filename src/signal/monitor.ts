@@ -47,6 +47,46 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
 }
 
+function mergeAbortSignals(
+  a?: AbortSignal,
+  b?: AbortSignal,
+): { signal?: AbortSignal; dispose: () => void } {
+  if (!a && !b) {
+    return { signal: undefined, dispose: () => {} };
+  }
+  if (!a) {
+    return { signal: b, dispose: () => {} };
+  }
+  if (!b) {
+    return { signal: a, dispose: () => {} };
+  }
+  const controller = new AbortController();
+  const abortFrom = (source: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(source.reason);
+    }
+  };
+  if (a.aborted) {
+    abortFrom(a);
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  if (b.aborted) {
+    abortFrom(b);
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  const onAbortA = () => abortFrom(a);
+  const onAbortB = () => abortFrom(b);
+  a.addEventListener("abort", onAbortA, { once: true });
+  b.addEventListener("abort", onAbortB, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      a.removeEventListener("abort", onAbortA);
+      b.removeEventListener("abort", onAbortB);
+    },
+  };
+}
+
 function normalizeAllowList(raw?: Array<string | number>): string[] {
   return normalizeStringEntries(raw);
 }
@@ -286,6 +326,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
+  let daemonExitError: Error | undefined;
+  const daemonAbortController = new AbortController();
+  const mergedAbort = mergeAbortSignals(opts.abortSignal, daemonAbortController.signal);
   let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
 
   if (autoStart) {
@@ -303,6 +346,14 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       runtime,
     });
+    void daemonHandle.exited.then((exit) => {
+      daemonExitError = new Error(
+        `signal daemon exited (code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`,
+      );
+      if (!daemonAbortController.signal.aborted) {
+        daemonAbortController.abort(daemonExitError);
+      }
+    });
   }
 
   const onAbort = () => {
@@ -314,12 +365,15 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     if (daemonHandle) {
       await waitForSignalDaemonReady({
         baseUrl,
-        abortSignal: opts.abortSignal,
+        abortSignal: mergedAbort.signal,
         timeoutMs: startupTimeoutMs,
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,
       });
+      if (daemonExitError) {
+        throw daemonExitError;
+      }
     }
 
     const handleEvent = createSignalEventHandler({
@@ -353,7 +407,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     await runSignalSseLoop({
       baseUrl,
       account,
-      abortSignal: opts.abortSignal,
+      abortSignal: mergedAbort.signal,
       runtime,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {
@@ -361,12 +415,16 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         });
       },
     });
+    if (daemonExitError) {
+      throw daemonExitError;
+    }
   } catch (err) {
-    if (opts.abortSignal?.aborted) {
+    if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
     }
     throw err;
   } finally {
+    mergedAbort.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
     daemonHandle?.stop();
   }

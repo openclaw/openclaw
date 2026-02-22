@@ -591,4 +591,52 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });
+
+  it("updateSessionStoreEntry re-reads disk inside lock instead of using stale cache", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await createCaseDir("updateSessionStoreEntry-cache-bypass");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [mainSessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 123,
+            thinkingLevel: "low",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    // Prime the in-process cache with the original entry.
+    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
+    const originalStat = await fs.stat(storePath);
+
+    // Simulate an external writer that updates the store but preserves mtime.
+    const externalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    externalStore[mainSessionKey] = {
+      ...externalStore[mainSessionKey],
+      providerOverride: "anthropic",
+      updatedAt: 124,
+    };
+    await fs.writeFile(storePath, JSON.stringify(externalStore, null, 2), "utf-8");
+    await fs.utimes(storePath, originalStat.atime, originalStat.mtime);
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      update: async () => ({ thinkingLevel: "high" }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.providerOverride).toBe("anthropic");
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
+  });
 });

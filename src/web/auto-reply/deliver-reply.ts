@@ -50,7 +50,7 @@ export async function deliverWebReply(params: {
         lastErr = err;
         const errText = formatError(err);
         const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\\s*out|disconnect/i.test(errText);
+        const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(errText);
         if (!shouldRetry || isLast) {
           throw err;
         }

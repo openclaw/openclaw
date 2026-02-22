@@ -13,6 +13,7 @@ type SignalToolResultTestMocks = {
   streamMock: MockFn;
   signalCheckMock: MockFn;
   signalRpcRequestMock: MockFn;
+  spawnSignalDaemonMock: MockFn;
 };
 
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
@@ -24,6 +25,7 @@ const upsertPairingRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -36,6 +38,7 @@ export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
     streamMock,
     signalCheckMock,
     signalRpcRequestMock,
+    spawnSignalDaemonMock,
   };
 }
 
@@ -84,7 +87,7 @@ vi.mock("./client.js", () => ({
 }));
 
 vi.mock("./daemon.js", () => ({
-  spawnSignalDaemon: vi.fn(() => ({ stop: vi.fn() })),
+  spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
 }));
 
 vi.mock("../infra/transport-ready.js", () => ({
@@ -107,6 +110,11 @@ export function installSignalToolResultTestHooks() {
     streamMock.mockReset();
     signalCheckMock.mockReset().mockResolvedValue({});
     signalRpcRequestMock.mockReset().mockResolvedValue({});
+    spawnSignalDaemonMock.mockReset().mockReturnValue({
+      stop: vi.fn(),
+      exited: new Promise(() => {}),
+      isExited: () => false,
+    });
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
     upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
