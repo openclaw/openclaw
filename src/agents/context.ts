@@ -107,5 +107,24 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
-  return MODEL_CACHE.get(modelId);
+
+  // Try exact match first
+  let contextWindow = MODEL_CACHE.get(modelId);
+  if (contextWindow) {
+    return contextWindow;
+  }
+
+  // If modelId contains provider prefix (e.g., "google/gemini-3-pro-preview"),
+  // also try just the model ID part
+  if (modelId.includes("/")) {
+    const modelOnly = modelId.split("/").pop();
+    if (modelOnly) {
+      contextWindow = MODEL_CACHE.get(modelOnly);
+      if (contextWindow) {
+        return contextWindow;
+      }
+    }
+  }
+
+  return undefined;
 }
