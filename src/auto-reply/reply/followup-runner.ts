@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { createModelFallbackLogger, runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -127,6 +127,7 @@ export function createFollowupRunner(params: {
       let fallbackModel = queued.run.model;
       try {
         const fallbackResult = await runWithModelFallback({
+          onError: createModelFallbackLogger("followup-runner"),
           cfg: queued.run.config,
           provider: queued.run.provider,
           model: queued.run.model,

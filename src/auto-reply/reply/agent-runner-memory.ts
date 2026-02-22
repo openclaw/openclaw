@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { createModelFallbackLogger, runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -97,6 +97,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .join("\n\n");
   try {
     await runWithModelFallback({
+      onError: createModelFallbackLogger("agent-runner-memory"),
       ...resolveModelFallbackOptions(params.followupRun.run),
       run: (provider, model) => {
         const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({

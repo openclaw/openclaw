@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -291,6 +292,26 @@ export const _probeThrottleInternals = {
   PROBE_MARGIN_MS,
   resolveProbeThrottleKey,
 } as const;
+
+export function createModelFallbackLogger(label: string): ModelFallbackErrorHandler {
+  return async ({ provider, model, attempt, total, error }) => {
+    const reason = (error as { reason?: string })?.reason ?? "unknown";
+    const errMessage = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[model-fallback] ${label}: attempt ${attempt}/${total} failed for ${provider}/${model} (reason: ${reason}) — trying next candidate`,
+    );
+    const hookEvent = createInternalHookEvent("model", "fallback", label, {
+      primaryModel: `${provider}/${model}`,
+      fallbackModel: "pending",
+      reason,
+      attempt,
+      total,
+      error: errMessage,
+      label,
+    });
+    await triggerInternalHook(hookEvent);
+  };
+}
 
 export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
