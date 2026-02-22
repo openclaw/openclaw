@@ -53,7 +53,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
-  it("returns final for final from another run without clearing active stream", () => {
+  it("appends final payload from another run without clearing active stream", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-user",
@@ -69,10 +69,28 @@ describe("handleChatEvent", () => {
         content: [{ type: "text", text: "Sub-agent findings" }],
       },
     };
-    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(handleChatEvent(state, payload)).toBe(null);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual(payload.message);
+  });
+
+  it("returns final for another run when payload has no message", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
     expect(state.chatMessages).toEqual([]);
   });
 
