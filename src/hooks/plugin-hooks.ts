@@ -1,7 +1,7 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { shouldIncludeHook } from "./config.js";
+import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import type { HookEntry } from "./types.js";
 import { loadHookEntriesFromDir } from "./workspace.js";
@@ -41,9 +41,8 @@ async function loadHookHandler(
   api: OpenClawPluginApi,
 ): Promise<InternalHookHandler | null> {
   try {
-    const url = pathToFileURL(entry.hook.handlerPath).href;
-    const cacheBustedUrl = `${url}?t=${Date.now()}`;
-    const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+    const importUrl = buildImportUrl(entry.hook.handlerPath, entry.hook.source);
+    const mod = (await import(importUrl)) as Record<string, unknown>;
     const exportName = entry.metadata?.export ?? "default";
     const handler = mod[exportName];
     if (typeof handler === "function") {
