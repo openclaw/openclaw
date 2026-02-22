@@ -474,6 +474,10 @@ export function attachGatewayWsMessageHandler(params: {
           if (decision.kind === "allow") {
             return true;
           }
+          // Allow trusted-proxy auth to bypass device identity requirements
+          if (authOk && authMethod === "trusted-proxy") {
+            return true;
+          }
 
           if (decision.kind === "reject-control-ui-insecure-auth") {
             const errorMessage =
@@ -615,7 +619,9 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const skipPairing = shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk);
+        const skipPairing =
+          shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk) ||
+          (authOk && authMethod === "trusted-proxy");
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
