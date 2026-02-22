@@ -39,15 +39,22 @@ const envSnapshot = () => ({
 });
 
 const restoreEnv = (snapshot: ReturnType<typeof envSnapshot>) => {
-  process.env.PATH = snapshot.PATH;
-  process.env.SHERPA_ONNX_MODEL_DIR = snapshot.SHERPA_ONNX_MODEL_DIR;
-  process.env.WHISPER_CPP_MODEL = snapshot.WHISPER_CPP_MODEL;
-  process.env.OPENAI_API_KEY = snapshot.OPENAI_API_KEY;
-  process.env.GROQ_API_KEY = snapshot.GROQ_API_KEY;
-  process.env.DEEPGRAM_API_KEY = snapshot.DEEPGRAM_API_KEY;
-  process.env.GEMINI_API_KEY = snapshot.GEMINI_API_KEY;
-  process.env.OPENCLAW_AGENT_DIR = snapshot.OPENCLAW_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = snapshot.PI_CODING_AGENT_DIR;
+  const restoreEnvVar = (key: string, value: string | undefined) => {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restoreEnvVar("PATH", snapshot.PATH);
+  restoreEnvVar("SHERPA_ONNX_MODEL_DIR", snapshot.SHERPA_ONNX_MODEL_DIR);
+  restoreEnvVar("WHISPER_CPP_MODEL", snapshot.WHISPER_CPP_MODEL);
+  restoreEnvVar("OPENAI_API_KEY", snapshot.OPENAI_API_KEY);
+  restoreEnvVar("GROQ_API_KEY", snapshot.GROQ_API_KEY);
+  restoreEnvVar("DEEPGRAM_API_KEY", snapshot.DEEPGRAM_API_KEY);
+  restoreEnvVar("GEMINI_API_KEY", snapshot.GEMINI_API_KEY);
+  restoreEnvVar("OPENCLAW_AGENT_DIR", snapshot.OPENCLAW_AGENT_DIR);
+  restoreEnvVar("PI_CODING_AGENT_DIR", snapshot.PI_CODING_AGENT_DIR);
 };
 
 const withEnvSnapshot = async <T>(run: () => Promise<T>): Promise<T> => {
