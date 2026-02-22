@@ -14,6 +14,7 @@ import {
   uninstallLegacyGatewayServices,
   writeConfigFile,
 } from "./doctor.e2e-harness.js";
+import "./doctor.fast-path-mocks.js";
 
 const DOCTOR_MIGRATION_TIMEOUT_MS = 20_000;
 
