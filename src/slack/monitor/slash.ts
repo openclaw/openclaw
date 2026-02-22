@@ -734,21 +734,19 @@ export async function registerSlackMonitorSlashCommands(params: {
   }
 
   const registerArgOptions = () => {
-    const optionsHandler = (
-      ctx.app as unknown as {
-        options?: (
-          actionId: string,
-          handler: (args: {
-            ack: (payload: { options: unknown[] }) => Promise<void>;
-            body: unknown;
-          }) => Promise<void>,
-        ) => void;
-      }
-    ).options;
-    if (typeof optionsHandler !== "function") {
+    const appWithOptions = ctx.app as unknown as {
+      options?: (
+        actionId: string,
+        handler: (args: {
+          ack: (payload: { options: unknown[] }) => Promise<void>;
+          body: unknown;
+        }) => Promise<void>,
+      ) => void;
+    };
+    if (typeof appWithOptions.options !== "function") {
       return;
     }
-    optionsHandler(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
+    appWithOptions.options(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
       const typedBody = body as {
         value?: string;
         user?: { id?: string };
