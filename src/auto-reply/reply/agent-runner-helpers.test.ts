@@ -80,7 +80,7 @@ describe("agent runner helpers", () => {
     });
     expect(fallbackOn()).toBe(true);
 
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.loadSessionStoreMock.mockClear();
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:main:main": { verboseLevel: "weird" },
     });

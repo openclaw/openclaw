@@ -93,7 +93,7 @@ describe("block streaming", () => {
     piEmbeddedMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);
     piEmbeddedMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
     piEmbeddedMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
-    piEmbeddedMock.runEmbeddedPiAgent.mockReset();
+    piEmbeddedMock.runEmbeddedPiAgent.mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([
       { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
       { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
