@@ -43,6 +43,26 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
 // Message Hook Events
 // ============================================================================
 
+/** Pre-processing filter hook context — runs before model work, allows vetoing. */
+export type InboundMessageHookContext = {
+  bodyForCommands: string;
+  senderId: string;
+  channel: string;
+  chatType?: string;
+  messageId?: string;
+  cfg?: OpenClawConfig;
+  /** Set to true by handlers to signal "drop this message" */
+  skip?: boolean;
+  /** Human-readable reason when skip=true (e.g., "message-filter:otp") */
+  skipReason?: string;
+};
+
+export type InboundMessageHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "inbound";
+  context: InboundMessageHookContext;
+};
+
 export type MessageReceivedHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from: string;
@@ -253,6 +273,17 @@ export function isGatewayStartupEvent(event: InternalHookEvent): event is Gatewa
   }
   const context = event.context as GatewayStartupHookContext | null;
   return Boolean(context && typeof context === "object");
+}
+
+export function isInboundMessageEvent(event: InternalHookEvent): event is InboundMessageHookEvent {
+  if (event.type !== "message" || event.action !== "inbound") {
+    return false;
+  }
+  const context = event.context as Partial<InboundMessageHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.bodyForCommands === "string" && typeof context.senderId === "string";
 }
 
 export function isMessageReceivedEvent(

@@ -2,6 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import type { InboundMessageHookContext } from "../../hooks/internal-hooks.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -143,6 +144,38 @@ export async function dispatchReplyFromConfig(params: {
 
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
+  // Internal message filter hook (runs after dedupe, before model work)
+  const filterBody =
+    typeof ctx.BodyForCommands === "string"
+      ? ctx.BodyForCommands
+      : typeof ctx.CommandBody === "string"
+        ? ctx.CommandBody
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+  const filterContext: InboundMessageHookContext = {
+    bodyForCommands: filterBody,
+    senderId: ctx.SenderE164 ?? ctx.SenderId ?? ctx.From ?? "",
+    channel,
+    chatType: ctx.ChatType,
+    messageId,
+    cfg,
+  };
+  const filterEvent = createInternalHookEvent(
+    "message",
+    "inbound",
+    sessionKey ?? "",
+    filterContext as unknown as Record<string, unknown>,
+  );
+  await triggerInternalHook(filterEvent);
+
+  if (filterContext.skip === true) {
+    recordProcessed("skipped", { reason: filterContext.skipReason ?? "message-filter" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
