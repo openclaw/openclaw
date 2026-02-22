@@ -988,17 +988,81 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).not.toContain("1k io");
   });
 
-  it("omits subagent status line when none exist", async () => {
+  it.each([
+    {
+      name: "omits subagent status line when none exist",
+      seedRuns: () => undefined,
+      verboseLevel: "on" as const,
+      expectedText: [] as string[],
+      unexpectedText: ["Subagents:"],
+    },
+    {
+      name: "includes subagent count in /status when active",
+      seedRuns: () => {
+        addSubagentRunForTests({
+          runId: "run-1",
+          childSessionKey: "agent:main:subagent:abc",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "do thing",
+          cleanup: "keep",
+          createdAt: 1000,
+          startedAt: 1000,
+        });
+      },
+      verboseLevel: "off" as const,
+      expectedText: ["🤖 Subagents: 1 active"],
+      unexpectedText: [] as string[],
+    },
+    {
+      name: "includes subagent details in /status when verbose",
+      seedRuns: () => {
+        addSubagentRunForTests({
+          runId: "run-1",
+          childSessionKey: "agent:main:subagent:abc",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "do thing",
+          cleanup: "keep",
+          createdAt: 1000,
+          startedAt: 1000,
+        });
+        addSubagentRunForTests({
+          runId: "run-2",
+          childSessionKey: "agent:main:subagent:def",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "finished task",
+          cleanup: "keep",
+          createdAt: 900,
+          startedAt: 900,
+          endedAt: 1200,
+          outcome: { status: "ok" },
+        });
+      },
+      verboseLevel: "on" as const,
+      expectedText: ["🤖 Subagents: 1 active", "· 1 done"],
+      unexpectedText: [] as string[],
+    },
+  ])("$name", async ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
+    seedRuns();
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
     } as OpenClawConfig;
     const params = buildParams("/status", cfg);
-    params.resolvedVerboseLevel = "on";
+    if (verboseLevel === "on") {
+      params.resolvedVerboseLevel = "on";
+    }
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).not.toContain("Subagents:");
+    for (const expected of expectedText) {
+      expect(result.reply?.text).toContain(expected);
+    }
+    for (const blocked of unexpectedText) {
+      expect(result.reply?.text).not.toContain(blocked);
+    }
   });
 
   it("returns help/usage for invalid or incomplete subagents commands", async () => {
@@ -1016,64 +1080,6 @@ describe("handleCommands subagents", () => {
       expect(result.shouldContinue).toBe(false);
       expect(result.reply?.text).toContain(testCase.expectedText);
     }
-  });
-
-  it("includes subagent count in /status when active", async () => {
-    addSubagentRunForTests({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      cleanup: "keep",
-      createdAt: 1000,
-      startedAt: 1000,
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const params = buildParams("/status", cfg);
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("🤖 Subagents: 1 active");
-  });
-
-  it("includes subagent details in /status when verbose", async () => {
-    addSubagentRunForTests({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      cleanup: "keep",
-      createdAt: 1000,
-      startedAt: 1000,
-    });
-    addSubagentRunForTests({
-      runId: "run-2",
-      childSessionKey: "agent:main:subagent:def",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "finished task",
-      cleanup: "keep",
-      createdAt: 900,
-      startedAt: 900,
-      endedAt: 1200,
-      outcome: { status: "ok" },
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const params = buildParams("/status", cfg);
-    params.resolvedVerboseLevel = "on";
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("🤖 Subagents: 1 active");
-    expect(result.reply?.text).toContain("· 1 done");
   });
 
   it("returns info for a subagent", async () => {
