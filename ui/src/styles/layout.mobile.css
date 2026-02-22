@@ -127,6 +127,74 @@
     display: none;
   }
 
+  /* Hide the entire content-header on mobile chat — controls are in topbar */
+  .content--chat .content-header {
+    display: none;
+  }
+
+  /* Show the mobile gear toggle (lives in topbar now) */
+  .chat-mobile-controls-wrapper {
+    display: flex;
+    position: relative;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-mobile-toggle {
+    display: flex;
+  }
+
+  /* The dropdown panel — anchored below the gear in topbar */
+  .chat-mobile-controls-wrapper .chat-controls-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 100;
+    background: var(--card, #161b22);
+    border: 1px solid var(--border, #30363d);
+    border-radius: 10px;
+    padding: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    flex-direction: column;
+    gap: 4px;
+    min-width: 220px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown.open {
+    display: flex;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
+    min-width: unset;
+    max-width: unset;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+    width: 100%;
+    font-size: 14px;
+    padding: 10px 12px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+    padding: 4px 0;
+    justify-content: center;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {
+    min-width: 44px;
+    height: 44px;
+  }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;

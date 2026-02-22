@@ -3,7 +3,12 @@ import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import {
+  renderChatControls,
+  renderChatMobileToggle,
+  renderTab,
+  renderThemeToggle,
+} from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -96,6 +101,7 @@ export function renderApp(state: AppViewState) {
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
@@ -134,6 +140,7 @@ export function renderApp(state: AppViewState) {
           </div>
         </div>
         <div class="topbar-status">
+          ${isChat ? renderChatMobileToggle(state) : nothing}
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
             <span>${t("common.health")}</span>
@@ -821,6 +828,7 @@ export function renderApp(state: AppViewState) {
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
+                showToolCalls,
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,

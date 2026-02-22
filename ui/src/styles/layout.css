@@ -619,3 +619,16 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Mobile chat controls — hidden on desktop, shown in layout.mobile.css */
+.chat-mobile-controls-wrapper {
+  display: none;
+}
+
+.chat-controls-mobile-toggle {
+  display: none;
+}
+
+.chat-controls-dropdown {
+  display: none;
+}
