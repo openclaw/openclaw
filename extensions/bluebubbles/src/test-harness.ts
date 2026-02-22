@@ -1,6 +1,31 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 
+export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
+  enabled: true as const,
+  disabled: false as const,
+  unknown: null as const,
+};
+
+type BlueBubblesPrivateApiStatusMock = {
+  mockReturnValue: (value: boolean | null) => unknown;
+  mockReturnValueOnce: (value: boolean | null) => unknown;
+};
+
+export function mockBlueBubblesPrivateApiStatus(
+  mock: Pick<BlueBubblesPrivateApiStatusMock, "mockReturnValue">,
+  value: boolean | null,
+) {
+  mock.mockReturnValue(value);
+}
+
+export function mockBlueBubblesPrivateApiStatusOnce(
+  mock: Pick<BlueBubblesPrivateApiStatusMock, "mockReturnValueOnce">,
+  value: boolean | null,
+) {
+  mock.mockReturnValueOnce(value);
+}
+
 export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
@@ -26,7 +51,9 @@ type BlueBubblesProbeMockModule = {
 
 export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
   return {
-    getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
+    getCachedBlueBubblesPrivateApiStatus: vi
+      .fn()
+      .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown),
   };
 }
 
@@ -41,7 +68,7 @@ export function installBlueBubblesFetchTestHooks(params: {
     vi.stubGlobal("fetch", params.mockFetch);
     params.mockFetch.mockReset();
     params.privateApiStatusMock.mockReset();
-    params.privateApiStatusMock.mockReturnValue(null);
+    params.privateApiStatusMock.mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown);
   });
 
   afterEach(() => {
