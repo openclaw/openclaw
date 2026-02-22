@@ -31,7 +31,7 @@ function requireGatewayTool(agentSessionKey?: string) {
 function expectConfigMutationCall(params: {
   callGatewayTool: {
     mock: {
-      calls: Array<[string, unknown, Record<string, unknown>]>;
+      calls: Array<readonly unknown[]>;
     };
   };
   action: "config.apply" | "config.patch";

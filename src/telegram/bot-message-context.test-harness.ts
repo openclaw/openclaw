@@ -1,5 +1,9 @@
 import { vi } from "vitest";
-import { buildTelegramMessageContext } from "./bot-message-context.js";
+import {
+  buildTelegramMessageContext,
+  type BuildTelegramMessageContextParams,
+  type TelegramMediaRef,
+} from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -9,15 +13,12 @@ export const baseTelegramMessageContextConfig = {
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
-  allMedia?: Array<Record<string, unknown>>;
-  options?: Record<string, unknown>;
+  allMedia?: TelegramMediaRef[];
+  options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
-  resolveGroupActivation?: () => boolean | undefined;
-  resolveGroupRequireMention?: () => boolean;
-  resolveTelegramGroupConfig?: () => {
-    groupConfig?: { requireMention?: boolean };
-    topicConfig?: unknown;
-  };
+  resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
+  resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
+  resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
 };
 
 export async function buildTelegramMessageContextForTest(
