@@ -265,6 +265,28 @@ function createAnthropicBetaHeadersWrapper(
 }
 
 /**
+ * Check if a Bedrock model ID belongs to Anthropic (Claude).
+ */
+function isAnthropicBedrockModel(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  return id.includes("anthropic.claude") || id.includes("anthropic/claude");
+}
+
+/**
+ * Create a streamFn wrapper that disables prompt caching for non-Anthropic Bedrock models.
+ * The upstream pi-ai bedrock provider injects cachePoint blocks by default, but
+ * non-Anthropic models (Nova, Mistral, etc.) reject them as extraneous keys.
+ */
+function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      cacheRetention: "none",
+    });
+}
+
+/**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers.
  * These headers allow OpenClaw to appear on OpenRouter's leaderboard.
  */
@@ -366,6 +388,14 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
+  }
+
+  // Disable prompt caching for non-Anthropic Bedrock models.
+  // The upstream pi-ai bedrock provider injects cachePoint blocks by default, but
+  // non-Anthropic models (Nova, Mistral, etc.) reject them as extraneous keys.
+  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
+    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
+    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
