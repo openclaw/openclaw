@@ -46,7 +46,7 @@ export type PluginManifestRegistry = {
 
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
-const DEFAULT_MANIFEST_CACHE_MS = 200;
+const DEFAULT_MANIFEST_CACHE_MS = 5000;
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
