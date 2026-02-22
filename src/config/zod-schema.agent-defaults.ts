@@ -104,6 +104,10 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        notifyOnStart: z.boolean().optional(),
+        notifyOnStartText: z.string().optional(),
+        idleTriggerMinutes: z.number().int().positive().optional(),
+        idleTriggerPercent: z.number().min(0.1).max(0.95).optional(),
       })
       .strict()
       .optional(),
