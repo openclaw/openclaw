@@ -155,7 +155,7 @@ function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): bo
   return prefixes.some((prefix) => normalized.startsWith(prefix));
 }
 
-export function extractHookToken(req: IncomingMessage): string | undefined {
+export function extractHookToken(req: IncomingMessage, url?: URL): string | undefined {
   const auth =
     typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
   if (auth.toLowerCase().startsWith("bearer ")) {
@@ -170,6 +170,14 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
       : "";
   if (headerToken) {
     return headerToken;
+  }
+  // Support query parameter token for webhook providers that don't support custom headers.
+  // This is a fallback for services like OpenPhone/QUO that only support URL-based auth.
+  if (url?.searchParams?.has("token")) {
+    const queryToken = url.searchParams.get("token");
+    if (queryToken) {
+      return queryToken;
+    }
   }
   return undefined;
 }

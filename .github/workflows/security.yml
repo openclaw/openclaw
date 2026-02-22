@@ -1,0 +1,22 @@
+name: Security Scans
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 6am
+
+jobs:
+  trivy:
+    uses: cfdude/.github/.github/workflows/security-trivy.yml@main
+    permissions:
+      contents: read
+      security-events: write
+
+  semgrep:
+    uses: cfdude/.github/.github/workflows/security-semgrep.yml@main
+    permissions:
+      contents: read
+      security-events: write
