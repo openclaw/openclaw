@@ -59,8 +59,8 @@ describe("resolveDiscordMessageChannelId", () => {
 
 describe("resolveForwardedMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   it("downloads forwarded attachments", async () => {
@@ -92,6 +92,7 @@ describe("resolveForwardedMediaList", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith({
       url: attachment.url,
       filePathHint: attachment.filename,
+      maxBytes: 512,
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -132,6 +133,7 @@ describe("resolveForwardedMediaList", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith({
       url: "https://media.discordapp.net/stickers/sticker-1.png",
       filePathHint: "wave.png",
+      maxBytes: 512,
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -168,8 +170,8 @@ describe("resolveForwardedMediaList", () => {
 
 describe("resolveMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   it("downloads stickers", async () => {
@@ -198,6 +200,7 @@ describe("resolveMediaList", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith({
       url: "https://media.discordapp.net/stickers/sticker-2.png",
       filePathHint: "hello.png",
+      maxBytes: 512,
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);

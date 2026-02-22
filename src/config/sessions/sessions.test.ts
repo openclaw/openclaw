@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
@@ -18,12 +19,34 @@ import { resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
+function useTempSessionsFixture(prefix: string) {
+  let tempDir = "";
+  let storePath = "";
+  let sessionsDir = "";
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    storePath = path.join(sessionsDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  return {
+    storePath: () => storePath,
+    sessionsDir: () => sessionsDir,
+  };
+}
+
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
-    expect(() => validateSessionId("../etc/passwd")).toThrow(/Invalid session ID/);
-    expect(() => validateSessionId("a/b")).toThrow(/Invalid session ID/);
-    expect(() => validateSessionId("a\\b")).toThrow(/Invalid session ID/);
-    expect(() => validateSessionId("/abs")).toThrow(/Invalid session ID/);
+    const unsafeSessionIds = ["../etc/passwd", "a/b", "a\\b", "/abs"];
+    for (const sessionId of unsafeSessionIds) {
+      expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
+    }
   });
 
   it("resolves transcript path inside an explicit sessions dir", () => {
@@ -147,20 +170,7 @@ describe("session store lock (Promise chain mutex)", () => {
 });
 
 describe("appendAssistantMessageToSessionTranscript", () => {
-  let tempDir: string;
-  let storePath: string;
-  let sessionsDir: string;
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-test-"));
-    sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    storePath = path.join(sessionsDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
+  const fixture = useTempSessionsFixture("transcript-test-");
 
   it("creates transcript file and appends message for valid session", async () => {
     const sessionId = "test-session-id";
@@ -172,12 +182,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         channel: "discord",
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from delivery mirror!",
-      storePath,
+      storePath: fixture.storePath(),
     });
 
     expect(result.ok).toBe(true);
@@ -201,5 +211,62 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
+  });
+});
+
+describe("resolveAndPersistSessionFile", () => {
+  const fixture = useTempSessionsFixture("session-file-test-");
+
+  it("persists fallback topic transcript paths for sessions without sessionFile", async () => {
+    const sessionId = "topic-session-id";
+    const sessionKey = "agent:main:telegram:group:123:topic:456";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+      sessionId,
+      fixture.sessionsDir(),
+      456,
+    );
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: sessionStore[sessionKey],
+      fallbackSessionFile,
+    });
+
+    expect(result.sessionFile).toBe(fallbackSessionFile);
+
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+  });
+
+  it("creates and persists entry when session is not yet present", async () => {
+    const sessionId = "new-session-id";
+    const sessionKey = "agent:main:telegram:group:123";
+    fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      fallbackSessionFile,
+    });
+
+    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionEntry.sessionId).toBe(sessionId);
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
 });

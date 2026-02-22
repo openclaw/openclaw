@@ -24,6 +24,23 @@ function normalizeDirectiveWhitespace(text: string): string {
     .trim();
 }
 
+type StripInlineDirectiveTagsResult = {
+  text: string;
+  changed: boolean;
+};
+
+export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
+  if (!text) {
+    return { text, changed: false };
+  }
+  const withoutAudio = text.replace(AUDIO_TAG_RE, "");
+  const stripped = withoutAudio.replace(REPLY_TAG_RE, "");
+  return {
+    text: stripped,
+    changed: stripped !== text,
+  };
+}
+
 export function parseInlineDirectives(
   text?: string,
   options: InlineDirectiveParseOptions = {},

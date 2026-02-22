@@ -51,7 +51,7 @@ export const FIELD_HELP: Record<string, string> = {
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.allowCommands":
-    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
+    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
@@ -236,6 +236,13 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
   "memory.citations": 'Default citation behavior ("auto", "on", or "off").',
   "memory.qmd.command": "Path to the qmd binary (default: resolves from PATH).",
+  "memory.qmd.mcporter":
+    "Optional: route QMD searches through mcporter (MCP runtime) instead of spawning `qmd` per query. Intended to avoid per-search cold starts when QMD models are large.",
+  "memory.qmd.mcporter.enabled": "Enable mcporter-backed QMD searches (default: false).",
+  "memory.qmd.mcporter.serverName":
+    "mcporter server name to call (default: qmd). Server should run `qmd mcp` with lifecycle keep-alive.",
+  "memory.qmd.mcporter.startDaemon":
+    "Start `mcporter daemon start` automatically when enabled (default: true).",
   "memory.qmd.includeDefaultMemory":
     "Whether to automatically index MEMORY.md + memory/**/*.md (default: true).",
   "memory.qmd.paths":
@@ -345,6 +352,10 @@ export const FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
     "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
+  "session.threadBindings.enabled":
+    "Global master switch for thread-bound session routing features. Channel/provider keys (for example channels.discord.threadBindings.enabled) override this default. Default: true.",
+  "session.threadBindings.ttlHours":
+    "Default auto-unfocus TTL in hours for thread-bound sessions across providers/channels. Set 0 to disable (default: 24). Provider keys (for example channels.discord.threadBindings.ttlHours) override this.",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":
@@ -375,8 +386,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
+  "channels.slack.streaming":
+    'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.slack.nativeStreaming":
+    "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
   "channels.slack.streamMode":
-    "Live stream preview mode for Slack replies (replace | status_final | append).",
+    "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
@@ -399,13 +414,15 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    "Enable Telegram live stream preview via message edits (default: false; legacy streamMode auto-maps here).",
+    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.discord.streaming":
+    'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
-    "Live stream preview mode for Discord replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessage.",
+    "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
   "channels.discord.draftChunk.minChars":
-    'Minimum chars before emitting a Discord stream preview update when channels.discord.streamMode="block" (default: 200).',
+    'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
   "channels.discord.draftChunk.maxChars":
-    'Target max size for a Discord stream preview chunk when channels.discord.streamMode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+    'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
   "channels.discord.draftChunk.breakPreference":
     "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
@@ -439,6 +456,12 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
+  "channels.discord.threadBindings.enabled":
+    "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+  "channels.discord.threadBindings.ttlHours":
+    "Auto-unfocus TTL in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable (default: 24). Overrides session.threadBindings.ttlHours when set.",
+  "channels.discord.threadBindings.spawnSubagentSessions":
+    "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":

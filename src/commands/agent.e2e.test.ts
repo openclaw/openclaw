@@ -1,19 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import "../cron/isolated-agent.mocks.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -283,6 +274,72 @@ describe("agentCommand", () => {
         { sessionId?: string }
       >;
       expect(saved["agent:main:subagent:abc"]?.sessionId).toBe("sess-main");
+    });
+  });
+
+  it("persists resolved sessionFile for existing session keys", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:abc": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:abc",
+        },
+        runtime,
+      );
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { sessionId?: string; sessionFile?: string }
+      >;
+      const entry = saved["agent:main:subagent:abc"];
+      expect(entry?.sessionId).toBe("sess-main");
+      expect(entry?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}sess-main.jsonl`,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionFile).toBe(entry?.sessionFile);
+    });
+  });
+
+  it("preserves topic transcript suffix when persisting missing sessionFile", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:telegram:group:123:topic:456": {
+          sessionId: "sess-topic",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:telegram:group:123:topic:456",
+        },
+        runtime,
+      );
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { sessionId?: string; sessionFile?: string }
+      >;
+      const entry = saved["agent:main:telegram:group:123:topic:456"];
+      expect(entry?.sessionId).toBe("sess-topic");
+      expect(entry?.sessionFile).toContain("sess-topic-topic-456.jsonl");
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionFile).toBe(entry?.sessionFile);
     });
   });
 
