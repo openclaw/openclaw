@@ -254,7 +254,7 @@ export async function uninstallSystemdService({
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
-  action: "stop" | "restart";
+  action: "stop" | "restart" | "start";
   label: string;
 }) {
   await assertSystemdAvailable();
@@ -276,6 +276,18 @@ export async function stopSystemdService({
     env,
     action: "stop",
     label: "Stopped systemd service",
+  });
+}
+
+export async function startSystemdService({
+  stdout,
+  env,
+}: GatewayServiceControlArgs): Promise<void> {
+  await runSystemdServiceAction({
+    stdout,
+    env,
+    action: "start",
+    label: "Started systemd service",
   });
 }
 

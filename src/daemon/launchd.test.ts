@@ -4,14 +4,17 @@ import {
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   resolveLaunchAgentPlistPath,
+  startLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   bootstrapError: "",
+  printError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
 }));
@@ -34,6 +37,9 @@ vi.mock("./exec-file.js", () => ({
     state.launchctlCalls.push(call);
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
+    }
+    if (call[0] === "print" && state.printError) {
+      return { stdout: "", stderr: state.printError, code: 1 };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
@@ -72,6 +78,7 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.bootstrapError = "";
+  state.printError = "";
   state.dirs.clear();
   state.files.clear();
   vi.clearAllMocks();
@@ -127,6 +134,57 @@ describe("launchd bootstrap repair", () => {
 
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
+  });
+});
+
+describe("launchd runtime detection", () => {
+  it("treats missing service as installed when plist exists", async () => {
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "<plist />");
+    state.dirs.add("/Users/test/Library/LaunchAgents");
+    state.printError = 'Could not find service "ai.openclaw.gateway" in domain for user gui: 501';
+
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.missingUnit).toBe(false);
+    expect(runtime.status).toBe("stopped");
+  });
+
+  it("treats missing service as uninstalled when plist is missing", async () => {
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    state.printError = 'Could not find service "ai.openclaw.gateway" in domain for user gui: 501';
+
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.missingUnit).toBe(true);
+  });
+});
+
+describe("launchd start", () => {
+  it("bootstraps and kickstarts when plist exists", async () => {
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "<plist />");
+    state.dirs.add("/Users/test/Library/LaunchAgents");
+
+    await startLaunchAgent({ env, stdout: new PassThrough() });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    expect(state.launchctlCalls).toContainEqual(["enable", `${domain}/ai.openclaw.gateway`]);
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
+    expect(state.launchctlCalls).toContainEqual([
+      "kickstart",
+      "-k",
+      `${domain}/ai.openclaw.gateway`,
+    ]);
   });
 });
 

@@ -179,10 +179,11 @@ export async function readLaunchAgentRuntime(
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
+    const plistExists = await launchAgentPlistExists(env);
     return {
-      status: "unknown",
+      status: plistExists ? "stopped" : "unknown",
       detail: (res.stderr || res.stdout).trim() || undefined,
-      missingUnit: true,
+      missingUnit: !plistExists,
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
@@ -339,6 +340,46 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+}
+
+function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
+  const detail = (res.stderr || res.stdout).toLowerCase();
+  return detail.includes("already loaded") || detail.includes("in progress");
+}
+
+export async function startLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: resolvedEnv });
+  const plistPath = resolveLaunchAgentPlistPath(resolvedEnv);
+  try {
+    await fs.access(plistPath);
+  } catch {
+    throw new Error(`LaunchAgent plist not found at ${plistPath}`);
+  }
+
+  await execLaunchctl(["enable", `${domain}/${label}`]);
+  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  if (boot.code !== 0 && !isLaunchctlAlreadyLoaded(boot)) {
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      throw new Error(
+        [
+          `launchctl bootstrap failed: ${detail}`,
+          `LaunchAgent start requires a logged-in macOS GUI session for this user (${domain}).`,
+          "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
+          "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway install --force`.",
+          "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
+        ].join("\n"),
+      );
+    }
+    throw new Error(`launchctl bootstrap failed: ${detail}`);
+  }
+  const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (kick.code !== 0) {
+    throw new Error(`launchctl kickstart failed: ${kick.stderr || kick.stdout}`.trim());
+  }
+  stdout.write(`${formatLine("Started LaunchAgent", `${domain}/${label}`)}\n`);
 }
 
 export async function installLaunchAgent({

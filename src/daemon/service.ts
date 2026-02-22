@@ -3,6 +3,7 @@ import {
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
+  startLaunchAgent,
   restartLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -12,6 +13,7 @@ import {
   isScheduledTaskInstalled,
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
+  startScheduledTask,
   restartScheduledTask,
   stopScheduledTask,
   uninstallScheduledTask,
@@ -30,6 +32,7 @@ import {
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
   readSystemdServiceRuntime,
+  startSystemdService,
   restartSystemdService,
   stopSystemdService,
   uninstallSystemdService,
@@ -57,6 +60,7 @@ export type GatewayService = {
   notLoadedText: string;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start: (args: GatewayServiceControlArgs) => Promise<void>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<void>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
@@ -72,6 +76,7 @@ export function resolveGatewayService(): GatewayService {
       notLoadedText: "not loaded",
       install: ignoreInstallResult(installLaunchAgent),
       uninstall: uninstallLaunchAgent,
+      start: startLaunchAgent,
       stop: stopLaunchAgent,
       restart: restartLaunchAgent,
       isLoaded: isLaunchAgentLoaded,
@@ -87,6 +92,7 @@ export function resolveGatewayService(): GatewayService {
       notLoadedText: "disabled",
       install: ignoreInstallResult(installSystemdService),
       uninstall: uninstallSystemdService,
+      start: startSystemdService,
       stop: stopSystemdService,
       restart: restartSystemdService,
       isLoaded: isSystemdServiceEnabled,
@@ -102,6 +108,7 @@ export function resolveGatewayService(): GatewayService {
       notLoadedText: "missing",
       install: ignoreInstallResult(installScheduledTask),
       uninstall: uninstallScheduledTask,
+      start: startScheduledTask,
       stop: stopScheduledTask,
       restart: restartScheduledTask,
       isLoaded: isScheduledTaskInstalled,
