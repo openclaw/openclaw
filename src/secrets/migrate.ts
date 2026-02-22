@@ -5,17 +5,17 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import {
-  createConfigIO,
-  resolveStateDir,
-  type OpenClawConfig,
-  type SecretRef,
-} from "../config/config.js";
-import { runExec } from "../process/exec.js";
+import { createConfigIO, resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import {
+  encodeJsonPointerToken,
+  readJsonPointer as readJsonPointerRaw,
+  setJsonPointer,
+} from "./json-pointer.js";
+import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
+import { decryptSopsJsonFile, encryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "./sops.js";
 
-const DEFAULT_SOPS_TIMEOUT_MS = 5_000;
-const MAX_SOPS_OUTPUT_BYTES = 10 * 1024 * 1024;
 const DEFAULT_SECRETS_FILE_PATH = "~/.openclaw/secrets.enc.json";
 const BACKUP_DIRNAME = "secrets-migrate";
 const BACKUP_MANIFEST_FILENAME = "manifest.json";
@@ -104,20 +104,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSecretRef(value: unknown): value is SecretRef {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (Object.keys(value).length !== 2) {
-    return false;
-  }
-  return (
-    (value.source === "env" || value.source === "file") &&
-    typeof value.id === "string" &&
-    value.id.trim().length > 0
-  );
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -129,67 +115,8 @@ function normalizeSopsTimeoutMs(value: unknown): number {
   return DEFAULT_SOPS_TIMEOUT_MS;
 }
 
-function decodeJsonPointerToken(token: string): string {
-  return token.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
-function encodeJsonPointerToken(token: string): string {
-  return token.replace(/~/g, "~0").replace(/\//g, "~1");
-}
-
 function readJsonPointer(root: unknown, pointer: string): unknown {
-  if (!pointer.startsWith("/")) {
-    return undefined;
-  }
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => decodeJsonPointerToken(token));
-
-  let current: unknown = root;
-  for (const token of tokens) {
-    if (Array.isArray(current)) {
-      const index = Number.parseInt(token, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
-        return undefined;
-      }
-      current = current[index];
-      continue;
-    }
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    if (!Object.hasOwn(current, token)) {
-      return undefined;
-    }
-    current = current[token];
-  }
-  return current;
-}
-
-function setJsonPointer(root: Record<string, unknown>, pointer: string, value: unknown): void {
-  if (!pointer.startsWith("/")) {
-    throw new Error(`Invalid JSON pointer "${pointer}".`);
-  }
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => decodeJsonPointerToken(token));
-
-  let current: Record<string, unknown> = root;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    const isLast = index === tokens.length - 1;
-    if (isLast) {
-      current[token] = value;
-      return;
-    }
-    const child = current[token];
-    if (!isRecord(child)) {
-      current[token] = {};
-    }
-    current = current[token] as Record<string, unknown>;
-  }
+  return readJsonPointerRaw(root, pointer, { onMissing: "undefined" });
 }
 
 function formatBackupId(now: Date): string {
@@ -216,11 +143,12 @@ function parseEnvValue(raw: string): string {
 function scrubEnvRaw(
   raw: string,
   migratedValues: Set<string>,
+  allowedEnvKeys: Set<string>,
 ): {
   nextRaw: string;
   removed: number;
 } {
-  if (migratedValues.size === 0) {
+  if (migratedValues.size === 0 || allowedEnvKeys.size === 0) {
     return { nextRaw: raw, removed: 0 };
   }
   const lines = raw.split(/\r?\n/);
@@ -229,6 +157,11 @@ function scrubEnvRaw(
   for (const line of lines) {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!match) {
+      nextLines.push(line);
+      continue;
+    }
+    const envKey = match[1] ?? "";
+    if (!allowedEnvKeys.has(envKey)) {
       nextLines.push(line);
       continue;
     }
@@ -298,35 +231,16 @@ async function decryptSopsJson(
   if (!fs.existsSync(pathname)) {
     return {};
   }
-  try {
-    const { stdout } = await runExec("sops", ["--decrypt", "--output-type", "json", pathname], {
-      timeoutMs,
-      maxBuffer: MAX_SOPS_OUTPUT_BYTES,
-    });
-    const parsed = JSON.parse(stdout) as unknown;
-    if (!isRecord(parsed)) {
-      throw new Error("decrypted payload is not a JSON object");
-    }
-    return parsed;
-  } catch (err) {
-    const error = err as NodeJS.ErrnoException & { message?: string };
-    if (error.code === "ENOENT") {
-      throw new Error(
-        "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
-        {
-          cause: err,
-        },
-      );
-    }
-    if (typeof error.message === "string" && error.message.toLowerCase().includes("timed out")) {
-      throw new Error(`sops decrypt timed out after ${timeoutMs}ms for ${pathname}.`, {
-        cause: err,
-      });
-    }
-    throw new Error(`sops decrypt failed for ${pathname}: ${String(error.message ?? err)}`, {
-      cause: err,
-    });
+  const parsed = await decryptSopsJsonFile({
+    path: pathname,
+    timeoutMs,
+    missingBinaryMessage:
+      "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
+  });
+  if (!isRecord(parsed)) {
+    throw new Error("sops decrypt failed: decrypted payload is not a JSON object");
   }
+  return parsed;
 }
 
 async function encryptSopsJson(params: {
@@ -334,64 +248,13 @@ async function encryptSopsJson(params: {
   timeoutMs: number;
   payload: Record<string, unknown>;
 }): Promise<void> {
-  ensureDirForFile(params.pathname);
-  const tmpPlain = path.join(
-    path.dirname(params.pathname),
-    `${path.basename(params.pathname)}.${process.pid}.${crypto.randomUUID()}.plain.tmp`,
-  );
-  const tmpEncrypted = path.join(
-    path.dirname(params.pathname),
-    `${path.basename(params.pathname)}.${process.pid}.${crypto.randomUUID()}.enc.tmp`,
-  );
-
-  fs.writeFileSync(tmpPlain, `${JSON.stringify(params.payload, null, 2)}\n`, "utf8");
-  fs.chmodSync(tmpPlain, 0o600);
-
-  try {
-    await runExec(
-      "sops",
-      [
-        "--encrypt",
-        "--input-type",
-        "json",
-        "--output-type",
-        "json",
-        "--output",
-        tmpEncrypted,
-        tmpPlain,
-      ],
-      {
-        timeoutMs: params.timeoutMs,
-        maxBuffer: MAX_SOPS_OUTPUT_BYTES,
-      },
-    );
-    fs.renameSync(tmpEncrypted, params.pathname);
-    fs.chmodSync(params.pathname, 0o600);
-  } catch (err) {
-    const error = err as NodeJS.ErrnoException & { message?: string };
-    if (error.code === "ENOENT") {
-      throw new Error(
-        "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
-        {
-          cause: err,
-        },
-      );
-    }
-    if (typeof error.message === "string" && error.message.toLowerCase().includes("timed out")) {
-      throw new Error(
-        `sops encrypt timed out after ${params.timeoutMs}ms for ${params.pathname}.`,
-        {
-          cause: err,
-        },
-      );
-    }
-    throw new Error(`sops encrypt failed for ${params.pathname}: ${String(error.message ?? err)}`, {
-      cause: err,
-    });
-  } finally {
-    fs.rmSync(tmpPlain, { force: true });
-    fs.rmSync(tmpEncrypted, { force: true });
-  }
+  await encryptSopsJsonFile({
+    path: params.pathname,
+    payload: params.payload,
+    timeoutMs: params.timeoutMs,
+    missingBinaryMessage:
+      "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
+  });
 }
 
 function migrateModelProviderSecrets(params: {
@@ -845,7 +708,7 @@ async function buildMigrationPlan(params: {
     const envPath = path.join(resolveConfigDir(params.env, os.homedir), ".env");
     if (fs.existsSync(envPath)) {
       const rawEnv = fs.readFileSync(envPath, "utf8");
-      const scrubbed = scrubEnvRaw(rawEnv, migratedValues);
+      const scrubbed = scrubEnvRaw(rawEnv, migratedValues, new Set(listKnownSecretEnvVarNames()));
       if (scrubbed.removed > 0 && scrubbed.nextRaw !== rawEnv) {
         counters.envEntriesRemoved = scrubbed.removed;
         envChange = {
