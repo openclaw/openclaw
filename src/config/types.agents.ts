@@ -1,6 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
-import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type {
   SandboxBrowserSettings,
@@ -82,4 +82,6 @@ export type AgentBinding = {
     /** Discord role IDs used for role-based routing. */
     roles?: string[];
   };
+  /** Override DM scope for this binding. */
+  overrideDmScope?: DmScope;
 };

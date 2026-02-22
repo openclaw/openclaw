@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { DmScope } from "../config/types.base.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -89,8 +90,10 @@ export function buildAgentSessionKey(params: {
   accountId?: string | null;
   peer?: RoutePeer | null;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
   identityLinks?: Record<string, string[]>;
+  /** Per-binding DM scope override. */
+  overrideDmScope?: DmScope;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
@@ -103,6 +106,7 @@ export function buildAgentSessionKey(params: {
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
+    overrideDmScope: params.overrideDmScope,
   });
 }
 
@@ -302,7 +306,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
 
-  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
+  const choose = (
+    agentId: string,
+    matchedBy: ResolvedAgentRoute["matchedBy"],
+    overrideDmScope?: DmScope,
+  ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
@@ -311,6 +319,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       peer,
       dmScope,
       identityLinks,
+      overrideDmScope,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,
@@ -427,7 +436,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       if (shouldLogDebug) {
         logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
       }
-      return choose(matched.binding.agentId, tier.matchedBy);
+      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.overrideDmScope);
     }
   }
 

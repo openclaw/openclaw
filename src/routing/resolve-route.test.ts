@@ -523,6 +523,140 @@ describe("backward compatibility: peer.kind dm → direct", () => {
   });
 });
 
+describe("overrideDmScope binding override", () => {
+  test("telegram group with overrideDmScope: main collapses to main session key", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group", id: "-100123" },
+          },
+          overrideDmScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-100123" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("discord guild with overrideDmScope: main collapses to main session key", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            guildId: "123456",
+          },
+          overrideDmScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "c1" },
+      guildId: "123456",
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.matchedBy).toBe("binding.guild");
+  });
+
+  test("whatsapp group with overrideDmScope: main collapses to main session key", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "whatsapp",
+            peer: { kind: "group", id: "120363012345@g.us" },
+          },
+          overrideDmScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      peer: { kind: "group", id: "120363012345@g.us" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("slack channel with overrideDmScope: main collapses to main session key", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "C123456" },
+          },
+          overrideDmScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      peer: { kind: "channel", id: "C123456" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("no overrideDmScope keeps default isolated session key", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group", id: "-100123" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-100123" },
+    });
+    expect(route.sessionKey).toBe("agent:main:telegram:group:-100123");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("overrideDmScope: main on non-matching binding does not affect default route", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group", id: "-999" },
+          },
+          overrideDmScope: "main",
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-100123" },
+    });
+    expect(route.sessionKey).toBe("agent:main:telegram:group:-100123");
+    expect(route.matchedBy).toBe("default");
+  });
+});
+
 describe("role-based agent routing", () => {
   type DiscordBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 

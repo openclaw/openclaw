@@ -17,6 +17,7 @@ export const BindingsSchema = z
       .object({
         agentId: z.string(),
         comment: z.string().optional(),
+        overrideDmScope: z.enum(["main", "isolated"]).optional(),
         match: z
           .object({
             channel: z.string(),
