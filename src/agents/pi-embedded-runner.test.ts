@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { SessionManager as PiSessionManager } from "@mariozechner/pi-coding-agent";
 import "./test-helpers/fast-coding-tools.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
@@ -115,6 +116,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 });
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
+let SessionManager: PiSessionManager;
 let tempRoot: string | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -124,6 +126,7 @@ let runCounter = 0;
 beforeAll(async () => {
   vi.useRealTimers();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
+  ({ SessionManager } = await import("@mariozechner/pi-coding-agent"));
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-"));
   agentDir = path.join(tempRoot, "agent");
   workspaceDir = path.join(tempRoot, "workspace");
@@ -171,7 +174,6 @@ const testSessionKey = "agent:test:embedded";
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const runWithOrphanedSingleUserMessage = async (text: string) => {
-  const { SessionManager } = await import("@mariozechner/pi-coding-agent");
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
@@ -297,7 +299,6 @@ describe("runEmbeddedPiAgent", () => {
     "appends new user + assistant after existing transcript entries",
     { timeout: 90_000 },
     async () => {
-      const { SessionManager } = await import("@mariozechner/pi-coding-agent");
       const sessionFile = nextSessionFile();
 
       const sessionManager = SessionManager.open(sessionFile);
