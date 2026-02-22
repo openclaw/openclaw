@@ -1,8 +1,10 @@
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
@@ -14,6 +16,29 @@ type UpdateCheckState = {
   lastNotifiedTag?: string;
   lastAvailableVersion?: string;
   lastAvailableTag?: string;
+  autoInstallId?: string;
+  autoFirstSeenVersion?: string;
+  autoFirstSeenTag?: string;
+  autoFirstSeenAt?: string;
+  autoLastAttemptVersion?: string;
+  autoLastAttemptAt?: string;
+  autoLastSuccessVersion?: string;
+  autoLastSuccessAt?: string;
+};
+
+type AutoUpdatePolicy = {
+  enabled: boolean;
+  stableDelayHours: number;
+  stableJitterHours: number;
+  betaCheckIntervalHours: number;
+};
+
+type AutoUpdateRunResult = {
+  ok: boolean;
+  code: number | null;
+  stdout?: string;
+  stderr?: string;
+  reason?: string;
 };
 
 export type UpdateAvailable = {
@@ -34,6 +59,11 @@ export function resetUpdateAvailableStateForTest(): void {
 
 const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
+const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
+const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
+const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
@@ -43,6 +73,44 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
     return true;
   }
   return false;
+}
+
+function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdatePolicy {
+  const auto = cfg.update?.auto;
+  const stableDelayHours =
+    typeof auto?.stableDelayHours === "number" && Number.isFinite(auto.stableDelayHours)
+      ? Math.max(0, auto.stableDelayHours)
+      : AUTO_STABLE_DELAY_HOURS_DEFAULT;
+  const stableJitterHours =
+    typeof auto?.stableJitterHours === "number" && Number.isFinite(auto.stableJitterHours)
+      ? Math.max(0, auto.stableJitterHours)
+      : AUTO_STABLE_JITTER_HOURS_DEFAULT;
+  const betaCheckIntervalHours =
+    typeof auto?.betaCheckIntervalHours === "number" && Number.isFinite(auto.betaCheckIntervalHours)
+      ? Math.max(0.25, auto.betaCheckIntervalHours)
+      : AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT;
+
+  return {
+    enabled: Boolean(auto?.enabled),
+    stableDelayHours,
+    stableJitterHours,
+    betaCheckIntervalHours,
+  };
+}
+
+function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
+  const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const auto = resolveAutoUpdatePolicy(cfg);
+  if (!auto.enabled) {
+    return UPDATE_CHECK_INTERVAL_MS;
+  }
+  if (channel === "beta") {
+    return Math.max(ONE_HOUR_MS / 4, Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS));
+  }
+  if (channel === "stable") {
+    return ONE_HOUR_MS;
+  }
+  return UPDATE_CHECK_INTERVAL_MS;
 }
 
 async function readState(statePath: string): Promise<UpdateCheckState> {
@@ -102,12 +170,110 @@ function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailab
   };
 }
 
+function resolveStableJitterMs(params: {
+  installId: string;
+  version: string;
+  tag: string;
+  jitterWindowMs: number;
+}): number {
+  if (params.jitterWindowMs <= 0) {
+    return 0;
+  }
+  const hash = createHash("sha256")
+    .update(`${params.installId}:${params.version}:${params.tag}`)
+    .digest();
+  const bucket = hash.readUInt32BE(0);
+  return bucket % (Math.floor(params.jitterWindowMs) + 1);
+}
+
+function resolveStableAutoApplyAtMs(params: {
+  state: UpdateCheckState;
+  nextState: UpdateCheckState;
+  nowMs: number;
+  version: string;
+  tag: string;
+  stableDelayHours: number;
+  stableJitterHours: number;
+}): number {
+  if (!params.nextState.autoInstallId) {
+    params.nextState.autoInstallId = params.state.autoInstallId?.trim() || randomUUID();
+  }
+  const installId = params.nextState.autoInstallId;
+  const matchesExisting =
+    params.state.autoFirstSeenVersion === params.version &&
+    params.state.autoFirstSeenTag === params.tag;
+
+  if (!matchesExisting) {
+    params.nextState.autoFirstSeenVersion = params.version;
+    params.nextState.autoFirstSeenTag = params.tag;
+    params.nextState.autoFirstSeenAt = new Date(params.nowMs).toISOString();
+  } else {
+    params.nextState.autoFirstSeenVersion = params.state.autoFirstSeenVersion;
+    params.nextState.autoFirstSeenTag = params.state.autoFirstSeenTag;
+    params.nextState.autoFirstSeenAt = params.state.autoFirstSeenAt;
+  }
+
+  const firstSeenMs = params.nextState.autoFirstSeenAt
+    ? Date.parse(params.nextState.autoFirstSeenAt)
+    : params.nowMs;
+  const baseDelayMs = Math.max(0, params.stableDelayHours) * ONE_HOUR_MS;
+  const jitterWindowMs = Math.max(0, params.stableJitterHours) * ONE_HOUR_MS;
+  const jitterMs = resolveStableJitterMs({
+    installId,
+    version: params.version,
+    tag: params.tag,
+    jitterWindowMs,
+  });
+
+  return firstSeenMs + baseDelayMs + jitterMs;
+}
+
+async function runAutoUpdateCommand(params: {
+  channel: "stable" | "beta";
+  timeoutMs: number;
+}): Promise<AutoUpdateRunResult> {
+  try {
+    const res = await runCommandWithTimeout(
+      ["openclaw", "update", "--yes", "--channel", params.channel, "--json"],
+      {
+        timeoutMs: params.timeoutMs,
+        env: {
+          OPENCLAW_AUTO_UPDATE: "1",
+        },
+      },
+    );
+    return {
+      ok: res.code === 0,
+      code: res.code,
+      stdout: res.stdout,
+      stderr: res.stderr,
+      reason: res.code === 0 ? undefined : "non-zero-exit",
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: null,
+      reason: String(err),
+    };
+  }
+}
+
+function clearAutoState(nextState: UpdateCheckState): void {
+  delete nextState.autoFirstSeenVersion;
+  delete nextState.autoFirstSeenTag;
+  delete nextState.autoFirstSeenAt;
+}
+
 export async function runGatewayUpdateCheck(params: {
   cfg: ReturnType<typeof loadConfig>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   allowInTests?: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+  runAutoUpdate?: (params: {
+    channel: "stable" | "beta";
+    timeoutMs: number;
+  }) => Promise<AutoUpdateRunResult>;
 }): Promise<void> {
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
     return;
@@ -128,8 +294,9 @@ export async function runGatewayUpdateCheck(params: {
     next: persistedAvailable,
     onUpdateAvailableChange: params.onUpdateAvailableChange,
   });
+  const checkIntervalMs = resolveCheckIntervalMs(params.cfg);
   if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
-    if (now - lastCheckedAt < UPDATE_CHECK_INTERVAL_MS) {
+    if (now - lastCheckedAt < checkIntervalMs) {
       return;
     }
   }
@@ -154,6 +321,7 @@ export async function runGatewayUpdateCheck(params: {
   if (status.installKind !== "package") {
     delete nextState.lastAvailableVersion;
     delete nextState.lastAvailableTag;
+    clearAutoState(nextState);
     setUpdateAvailableCache({
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -192,9 +360,76 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;
     }
+
+    const auto = resolveAutoUpdatePolicy(params.cfg);
+    if (auto.enabled && (channel === "stable" || channel === "beta")) {
+      const runAuto = params.runAutoUpdate ?? runAutoUpdateCommand;
+      const attemptIntervalMs =
+        channel === "beta"
+          ? Math.max(ONE_HOUR_MS / 4, Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS))
+          : ONE_HOUR_MS;
+      const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
+      const recentAttemptForSameVersion =
+        state.autoLastAttemptVersion === resolved.version &&
+        lastAttemptAt != null &&
+        Number.isFinite(lastAttemptAt) &&
+        now - lastAttemptAt < attemptIntervalMs;
+
+      let dueNow = channel === "beta";
+      let applyAfterMs: number | null = null;
+      if (channel === "stable") {
+        applyAfterMs = resolveStableAutoApplyAtMs({
+          state,
+          nextState,
+          nowMs: now,
+          version: resolved.version,
+          tag,
+          stableDelayHours: auto.stableDelayHours,
+          stableJitterHours: auto.stableJitterHours,
+        });
+        dueNow = now >= applyAfterMs;
+      }
+
+      if (!dueNow) {
+        params.log.info("auto-update deferred (stable rollout window active)", {
+          version: resolved.version,
+          tag,
+          applyAfter: applyAfterMs ? new Date(applyAfterMs).toISOString() : undefined,
+        });
+      } else if (recentAttemptForSameVersion) {
+        params.log.info("auto-update deferred (recent attempt exists)", {
+          version: resolved.version,
+          tag,
+        });
+      } else {
+        nextState.autoLastAttemptVersion = resolved.version;
+        nextState.autoLastAttemptAt = new Date(now).toISOString();
+        const outcome = await runAuto({
+          channel,
+          timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
+        });
+        if (outcome.ok) {
+          nextState.autoLastSuccessVersion = resolved.version;
+          nextState.autoLastSuccessAt = new Date(now).toISOString();
+          params.log.info("auto-update applied", {
+            channel,
+            version: resolved.version,
+            tag,
+          });
+        } else {
+          params.log.info("auto-update attempt failed", {
+            channel,
+            version: resolved.version,
+            tag,
+            reason: outcome.reason ?? `exit:${outcome.code}`,
+          });
+        }
+      }
+    }
   } else {
     delete nextState.lastAvailableVersion;
     delete nextState.lastAvailableTag;
+    clearAutoState(nextState);
     setUpdateAvailableCache({
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -209,6 +444,38 @@ export function scheduleGatewayUpdateCheck(params: {
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
-}): void {
-  void runGatewayUpdateCheck(params).catch(() => {});
+}): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+
+  const tick = async () => {
+    if (stopped || running) {
+      return;
+    }
+    running = true;
+    try {
+      await runGatewayUpdateCheck(params);
+    } catch {
+      // Intentionally ignored: update checks should never crash the gateway loop.
+    } finally {
+      running = false;
+    }
+    if (stopped) {
+      return;
+    }
+    const intervalMs = resolveCheckIntervalMs(params.cfg);
+    timer = setTimeout(() => {
+      void tick();
+    }, intervalMs);
+  };
+
+  void tick();
+  return () => {
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
 }
