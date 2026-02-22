@@ -67,7 +67,7 @@ export const ModelProviderSchema = z
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
   })
-  .strict();
+  .catchall(z.unknown());
 
 export const BedrockDiscoverySchema = z
   .object({
