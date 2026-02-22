@@ -15,12 +15,12 @@ describe("session hook runner methods", () => {
 
     await runner.runSessionStart(
       { sessionId: "abc-123", resumedFrom: "old-session" },
-      { sessionId: "abc-123", agentId: "main" },
+      { sessionId: "abc-123", agentId: "main", sessionKey: "telegram:12345" },
     );
 
     expect(handler).toHaveBeenCalledWith(
       { sessionId: "abc-123", resumedFrom: "old-session" },
-      { sessionId: "abc-123", agentId: "main" },
+      { sessionId: "abc-123", agentId: "main", sessionKey: "telegram:12345" },
     );
   });
 
@@ -31,12 +31,12 @@ describe("session hook runner methods", () => {
 
     await runner.runSessionEnd(
       { sessionId: "abc-123", messageCount: 42 },
-      { sessionId: "abc-123", agentId: "main" },
+      { sessionId: "abc-123", agentId: "main", sessionKey: "telegram:12345" },
     );
 
     expect(handler).toHaveBeenCalledWith(
       { sessionId: "abc-123", messageCount: 42 },
-      { sessionId: "abc-123", agentId: "main" },
+      { sessionId: "abc-123", agentId: "main", sessionKey: "telegram:12345" },
     );
   });
 
