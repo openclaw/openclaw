@@ -63,7 +63,43 @@ export type GatewayService = {
   readRuntime: (env: Record<string, string | undefined>) => Promise<GatewayServiceRuntime>;
 };
 
+
+function isAndroidTermux(): boolean {
+  return (
+    process.env.OPENCLAW_PLATFORM === "android-termux" ||
+    process.env.TERMUX_VERSION !== undefined ||
+    process.platform === "android"
+  );
+}
+
+function resolveAndroidService(): GatewayService {
+  const noop = (op: string) => async () => {
+    process.stdout.write(
+      `[android-termux] Service '${op}' skipped — use tmux to manage the gateway.\n`
+    );
+  };
+  return {
+    label: "tmux (android-termux)",
+    loadedText: "running",
+    notLoadedText: "not running",
+    install: noop("install"),
+    uninstall: noop("uninstall"),
+    stop: noop("stop"),
+    restart: noop("restart"),
+    isLoaded: async () => false,
+    readCommand: async () => null,
+    readRuntime: async () => ({
+      status: "unknown",
+      detail: "Service management not available on android-termux. Use tmux.",
+    }),
+  };
+}
+
 export function resolveGatewayService(): GatewayService {
+  if (isAndroidTermux()) {
+    return resolveAndroidService();
+  }
+
   if (process.platform === "darwin") {
     return {
       label: "LaunchAgent",
