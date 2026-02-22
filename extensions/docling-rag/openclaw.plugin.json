@@ -1,0 +1,31 @@
+{
+  "id": "docling-rag",
+  "name": "Docling RAG",
+  "description": "Document processing and RAG via Docling. Ingest PDFs, Word, Excel; search and answer from your documents.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "doclingPath": { "type": "string" },
+      "dbPath": { "type": "string" },
+      "embedding": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["openai"] },
+          "model": { "type": "string" },
+          "apiKey": { "type": "string" }
+        }
+      },
+      "chunkSize": { "type": "number" },
+      "chunkOverlap": { "type": "number" }
+    }
+  },
+  "uiHints": {
+    "enabled": { "label": "Enabled" },
+    "doclingPath": { "label": "Docling Path", "help": "Path to docling CLI or empty for auto-detect" },
+    "dbPath": { "label": "Database Path" },
+    "embedding.apiKey": { "label": "OpenAI API Key", "sensitive": true },
+    "embedding.model": { "label": "Embedding Model" }
+  }
+}
