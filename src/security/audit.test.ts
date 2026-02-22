@@ -767,6 +767,59 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("system.runx");
   });
 
+  it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "loopback gateway",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            nodes: { allowCommands: ["camera.snap", "screen.record"] },
+          },
+        },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "lan-exposed gateway",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            nodes: { allowCommands: ["camera.snap", "screen.record"] },
+          },
+        },
+        expectedSeverity: "critical",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      const finding = res.findings.find(
+        (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
+      );
+      expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+      expect(finding?.detail, testCase.name).toContain("camera.snap");
+      expect(finding?.detail, testCase.name).toContain("screen.record");
+    }
+  });
+
+  it("does not flag dangerous allowCommands entries when denied again", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: ["camera.snap", "screen.record"],
+          denyCommands: ["camera.snap", "screen.record"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+  });
+
   it("flags agent profile overrides when global tools.profile is minimal", async () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -2148,6 +2201,63 @@ description: test skill
         }),
       ]),
     );
+  });
+
+  it("flags open groupPolicy when runtime/filesystem tools are exposed without guards", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: { elevated: { enabled: false } },
+    };
+
+    const res = await audit(cfg);
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "security.exposure.open_groups_with_runtime_or_fs",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("does not flag runtime/filesystem exposure for open groups when sandbox mode is all", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: {
+        elevated: { enabled: false },
+        profile: "coding",
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all" },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expect(
+      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
+    ).toBe(false);
+  });
+
+  it("does not flag runtime/filesystem exposure for open groups when runtime is denied and fs is workspace-only", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: {
+        elevated: { enabled: false },
+        profile: "coding",
+        deny: ["group:runtime"],
+        fs: { workspaceOnly: true },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expect(
+      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
+    ).toBe(false);
   });
 
   describe("maybeProbeGateway auth selection", () => {

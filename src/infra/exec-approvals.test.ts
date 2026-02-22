@@ -18,6 +18,8 @@ import {
   normalizeSafeBins,
   requiresExecApproval,
   resolveCommandResolution,
+  resolveCommandResolutionFromArgv,
+  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
   resolveExecApprovalsPath,
@@ -51,6 +53,16 @@ type ShellParserParityFixture = {
   cases: ShellParserParityFixtureCase[];
 };
 
+type WrapperResolutionParityFixtureCase = {
+  id: string;
+  argv: string[];
+  expectedRawExecutable: string | null;
+};
+
+type WrapperResolutionParityFixture = {
+  cases: WrapperResolutionParityFixtureCase[];
+};
+
 function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
   const fixturePath = path.join(
     process.cwd(),
@@ -59,6 +71,19 @@ function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
     "exec-allowlist-shell-parser-parity.json",
   );
   const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ShellParserParityFixture;
+  return fixture.cases;
+}
+
+function loadWrapperResolutionParityFixtureCases(): WrapperResolutionParityFixtureCase[] {
+  const fixturePath = path.join(
+    process.cwd(),
+    "test",
+    "fixtures",
+    "exec-wrapper-resolution-parity.json",
+  );
+  const fixture = JSON.parse(
+    fs.readFileSync(fixturePath, "utf8"),
+  ) as WrapperResolutionParityFixture;
   return fixture.cases;
 }
 
@@ -240,6 +265,30 @@ describe("exec approvals command resolution", () => {
       }
     }
   });
+
+  it("unwraps env wrapper argv to resolve the effective executable", () => {
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const exeName = process.platform === "win32" ? "rg.exe" : "rg";
+    const exe = path.join(binDir, exeName);
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+
+    const resolution = resolveCommandResolutionFromArgv(
+      ["/usr/bin/env", "FOO=bar", "rg", "-n", "needle"],
+      undefined,
+      makePathEnv(binDir),
+    );
+    expect(resolution?.resolvedPath).toBe(exe);
+    expect(resolution?.executableName).toBe(exeName);
+  });
+
+  it("unwraps env wrapper with shell inner executable", () => {
+    const resolution = resolveCommandResolutionFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"]);
+    expect(resolution?.rawExecutable).toBe("bash");
+    expect(resolution?.executableName.toLowerCase()).toContain("bash");
+  });
 });
 
 describe("exec approvals shell parsing", () => {
@@ -417,6 +466,17 @@ describe("exec approvals shell parser parity fixture", () => {
       } else {
         expect(res.segments).toHaveLength(0);
       }
+    });
+  }
+});
+
+describe("exec approvals wrapper resolution parity fixture", () => {
+  const fixtures = loadWrapperResolutionParityFixtureCases();
+
+  for (const fixture of fixtures) {
+    it(`matches wrapper fixture: ${fixture.id}`, () => {
+      const resolution = resolveCommandResolutionFromArgv(fixture.argv);
+      expect(resolution?.rawExecutable ?? null).toBe(fixture.expectedRawExecutable);
     });
   }
 });
@@ -1212,5 +1272,124 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
         expectNoSpreadStringArtifacts(entries ?? []);
       }
     }
+  });
+});
+
+describe("resolveAllowAlwaysPatterns", () => {
+  function makeExecutable(dir: string, name: string): string {
+    const fileName = process.platform === "win32" ? `${name}.exe` : name;
+    const exe = path.join(dir, fileName);
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+    return exe;
+  }
+
+  it("returns direct executable paths for non-shell segments", () => {
+    const exe = path.join("/tmp", "openclaw-tool");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: exe,
+          argv: [exe],
+          resolution: { rawExecutable: exe, resolvedPath: exe, executableName: "openclaw-tool" },
+        },
+      ],
+    });
+    expect(patterns).toEqual([exe]);
+  });
+
+  it("unwraps shell wrappers and persists the inner executable instead", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const whoami = makeExecutable(dir, "whoami");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/bin/zsh -lc 'whoami'",
+          argv: ["/bin/zsh", "-lc", "whoami"],
+          resolution: {
+            rawExecutable: "/bin/zsh",
+            resolvedPath: "/bin/zsh",
+            executableName: "zsh",
+          },
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([whoami]);
+    expect(patterns).not.toContain("/bin/zsh");
+  });
+
+  it("extracts all inner binaries from shell chains and deduplicates", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const whoami = makeExecutable(dir, "whoami");
+    const ls = makeExecutable(dir, "ls");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/bin/zsh -lc 'whoami && ls && whoami'",
+          argv: ["/bin/zsh", "-lc", "whoami && ls && whoami"],
+          resolution: {
+            rawExecutable: "/bin/zsh",
+            resolvedPath: "/bin/zsh",
+            executableName: "zsh",
+          },
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(new Set(patterns)).toEqual(new Set([whoami, ls]));
+  });
+
+  it("does not persist broad shell binaries when no inner command can be derived", () => {
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/bin/zsh -s",
+          argv: ["/bin/zsh", "-s"],
+          resolution: {
+            rawExecutable: "/bin/zsh",
+            resolvedPath: "/bin/zsh",
+            executableName: "zsh",
+          },
+        },
+      ],
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([]);
+  });
+
+  it("detects shell wrappers even when unresolved executableName is a full path", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const whoami = makeExecutable(dir, "whoami");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/usr/local/bin/zsh -lc whoami",
+          argv: ["/usr/local/bin/zsh", "-lc", "whoami"],
+          resolution: {
+            rawExecutable: "/usr/local/bin/zsh",
+            resolvedPath: undefined,
+            executableName: "/usr/local/bin/zsh",
+          },
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([whoami]);
   });
 });

@@ -26,6 +26,17 @@ describe("node-host sanitizeEnv", () => {
     });
   });
 
+  it("blocks dangerous override-only env keys", () => {
+    withEnv({ HOME: "/Users/trusted", ZDOTDIR: "/Users/trusted/.zdot" }, () => {
+      const env = sanitizeEnv({
+        HOME: "/tmp/evil-home",
+        ZDOTDIR: "/tmp/evil-zdotdir",
+      });
+      expect(env.HOME).toBe("/Users/trusted");
+      expect(env.ZDOTDIR).toBe("/Users/trusted/.zdot");
+    });
+  });
+
   it("drops dangerous inherited env keys even without overrides", () => {
     withEnv({ PATH: "/usr/bin:/bin", BASH_ENV: "/tmp/pwn.sh" }, () => {
       const env = sanitizeEnv(undefined);

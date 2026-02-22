@@ -106,10 +106,10 @@ beforeEach(() => {
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
-  dispatchInboundMessage.mockReset();
-  recordInboundSession.mockReset();
-  readSessionUpdatedAt.mockReset();
-  resolveStorePath.mockReset();
+  dispatchInboundMessage.mockClear();
+  recordInboundSession.mockClear();
+  readSessionUpdatedAt.mockClear();
+  resolveStorePath.mockClear();
   dispatchInboundMessage.mockResolvedValue({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
@@ -359,18 +359,48 @@ describe("processDiscordMessage session routing", () => {
 });
 
 describe("processDiscordMessage draft streaming", () => {
-  it("finalizes via preview edit when final fits one chunk", async () => {
+  async function runSingleChunkFinalScenario(discordConfig: Record<string, unknown>) {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
     const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig,
     });
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
+  }
+
+  function createMockDraftStream() {
+    return {
+      update: vi.fn<(text: string) => void>(() => {}),
+      flush: vi.fn(async () => {}),
+      messageId: vi.fn(() => "preview-1"),
+      clear: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(() => {}),
+    };
+  }
+
+  async function createBlockModeContext() {
+    return await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        channels: {
+          discord: {
+            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
+          },
+        },
+      },
+      discordConfig: { streamMode: "block" },
+    });
+  }
+
+  it("finalizes via preview edit when final fits one chunk", async () => {
+    await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 5 });
 
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -382,17 +412,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("accepts streaming=true alias for partial preview mode", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createBaseContext({
-      discordConfig: { streaming: true, maxLinesPerMessage: 5 },
-    });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
 
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -421,14 +441,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("streams block previews using draft chunking", async () => {
-    const draftStream = {
-      update: vi.fn<(text: string) => void>(() => {}),
-      flush: vi.fn(async () => {}),
-      messageId: vi.fn(() => "preview-1"),
-      clear: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      forceNewMessage: vi.fn(() => {}),
-    };
+    const draftStream = createMockDraftStream();
     createDiscordDraftStream.mockReturnValueOnce(draftStream);
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -436,18 +449,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      cfg: {
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-        channels: {
-          discord: {
-            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
-          },
-        },
-      },
-      discordConfig: { streamMode: "block" },
-    });
+    const ctx = await createBlockModeContext();
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
@@ -457,14 +459,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("forces new preview messages on assistant boundaries in block mode", async () => {
-    const draftStream = {
-      update: vi.fn<(text: string) => void>(() => {}),
-      flush: vi.fn(async () => {}),
-      messageId: vi.fn(() => "preview-1"),
-      clear: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      forceNewMessage: vi.fn(() => {}),
-    };
+    const draftStream = createMockDraftStream();
     createDiscordDraftStream.mockReturnValueOnce(draftStream);
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -473,18 +468,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      cfg: {
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-        channels: {
-          discord: {
-            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
-          },
-        },
-      },
-      discordConfig: { streamMode: "block" },
-    });
+    const ctx = await createBlockModeContext();
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);

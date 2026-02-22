@@ -58,6 +58,22 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
   return res;
 }
 
+async function expectChatCompletionsDisabled(
+  start: (port: number) => Promise<{ close: (opts?: { reason?: string }) => Promise<void> }>,
+) {
+  const port = await getFreePort();
+  const server = await start(port);
+  try {
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(404);
+  } finally {
+    await server.close({ reason: "test done" });
+  }
+}
+
 function parseSseDataLines(text: string): string[] {
   return text
     .split("\n")
@@ -68,41 +84,18 @@ function parseSseDataLines(text: string): string[] {
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
-    {
-      const port = await getFreePort();
-      const server = await startServerWithDefaultConfig(port);
-      try {
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(404);
-      } finally {
-        await server.close({ reason: "test done" });
-      }
-    }
-
-    {
-      const port = await getFreePort();
-      const server = await startServer(port, {
+    await expectChatCompletionsDisabled(startServerWithDefaultConfig);
+    await expectChatCompletionsDisabled((port) =>
+      startServer(port, {
         openAiChatCompletionsEnabled: false,
-      });
-      try {
-        const res = await postChatCompletions(port, {
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(404);
-      } finally {
-        await server.close({ reason: "test done" });
-      }
-    }
+      }),
+    );
   });
 
   it("handles request validation and routing", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({ payloads } as never);
     };
     const expectAgentSessionKeyMatch = async (request: {
@@ -120,6 +113,28 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
       await res.text();
     };
+    const expectMessageContext = (
+      message: string,
+      expected: { history: string[]; current: string[] },
+    ) => {
+      expect(message).toContain(HISTORY_CONTEXT_MARKER);
+      for (const line of expected.history) {
+        expect(message).toContain(line);
+      }
+      expect(message).toContain(CURRENT_MESSAGE_MARKER);
+      for (const line of expected.current) {
+        expect(message).toContain(line);
+      }
+    };
+    const getFirstAgentCall = () =>
+      (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | {
+            sessionKey?: string;
+            message?: string;
+            extraSystemPrompt?: string;
+          }
+        | undefined;
+    const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
 
     try {
       {
@@ -239,13 +254,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        const message = (opts as { message?: string } | undefined)?.message ?? "";
-        expect(message).toContain(HISTORY_CONTEXT_MARKER);
-        expect(message).toContain("User: Hello, who are you?");
-        expect(message).toContain("Assistant: I am Claude.");
-        expect(message).toContain(CURRENT_MESSAGE_MARKER);
-        expect(message).toContain("User: What did I just ask you?");
+        const message = getFirstAgentMessage();
+        expectMessageContext(message, {
+          history: ["User: Hello, who are you?", "Assistant: I am Claude."],
+          current: ["User: What did I just ask you?"],
+        });
         await res.text();
       }
 
@@ -260,8 +273,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        const message = (opts as { message?: string } | undefined)?.message ?? "";
+        const message = getFirstAgentMessage();
         expect(message).not.toContain(HISTORY_CONTEXT_MARKER);
         expect(message).not.toContain(CURRENT_MESSAGE_MARKER);
         expect(message).toBe("Hello");
@@ -279,9 +291,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        const extraSystemPrompt =
-          (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+        const extraSystemPrompt = getFirstAgentCall()?.extraSystemPrompt ?? "";
         expect(extraSystemPrompt).toBe("You are a helpful assistant.");
         await res.text();
       }
@@ -299,13 +309,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        const message = (opts as { message?: string } | undefined)?.message ?? "";
-        expect(message).toContain(HISTORY_CONTEXT_MARKER);
-        expect(message).toContain("User: What's the weather?");
-        expect(message).toContain("Assistant: Checking the weather.");
-        expect(message).toContain(CURRENT_MESSAGE_MARKER);
-        expect(message).toContain("Tool: Sunny, 70F.");
+        const message = getFirstAgentMessage();
+        expectMessageContext(message, {
+          history: ["User: What's the weather?", "Assistant: Checking the weather."],
+          current: ["Tool: Sunny, 70F."],
+        });
         await res.text();
       }
 
@@ -389,7 +397,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     const port = enabledPort;
     try {
       {
-        agentCommand.mockReset();
+        agentCommand.mockClear();
         agentCommand.mockImplementationOnce((async (opts: unknown) =>
           buildAssistantDeltaResult({
             opts,
@@ -423,7 +431,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockReset();
+        agentCommand.mockClear();
         agentCommand.mockImplementationOnce((async (opts: unknown) =>
           buildAssistantDeltaResult({
             opts,
@@ -452,7 +460,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockReset();
+        agentCommand.mockClear();
         agentCommand.mockResolvedValueOnce({
           payloads: [{ text: "hello" }],
         } as never);

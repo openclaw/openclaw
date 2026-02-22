@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveSessionStore } from "../../config/sessions.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   debugMention,
   isBotMentionedFromTargets,
@@ -28,15 +28,6 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
     sendMedia: async () => {},
     ...overrides,
   }) as WebInboundMsg;
-
-async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
 
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
