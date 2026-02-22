@@ -6,6 +6,7 @@ import { formatDaemonRuntimeShort } from "./status.format.js";
 type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
+  loaded: boolean | null;
   loadedText: string;
   runtimeShort: string | null;
 };
@@ -23,11 +24,12 @@ async function buildDaemonStatusSummary(
     const installed = command != null;
     const loadedText = loaded ? service.loadedText : service.notLoadedText;
     const runtimeShort = formatDaemonRuntimeShort(runtime);
-    return { label: service.label, installed, loadedText, runtimeShort };
+    return { label: service.label, installed, loaded, loadedText, runtimeShort };
   } catch {
     return {
       label: fallbackLabel,
       installed: null,
+      loaded: null,
       loadedText: "unknown",
       runtimeShort: null,
     };
