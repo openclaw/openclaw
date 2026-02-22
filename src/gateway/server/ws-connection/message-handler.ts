@@ -494,7 +494,7 @@ export function attachGatewayWsMessageHandler(params: {
 
           if (isControlUi && !controlUiAuthPolicy.allowBypass) {
             const errorMessage =
-              "control ui requires device identity (use HTTPS or localhost secure context)";
+              "control ui requires device identity (use HTTPS or localhost, or a reverse proxy — allowInsecureAuth no longer enables token-only HTTP access)";
             markHandshakeFailure("control-ui-insecure-auth", {
               insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
