@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -139,11 +140,11 @@ export function renderAgents(props: AgentsProps) {
       <section class="card agents-sidebar">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Agents</div>
-            <div class="card-sub">${agents.length} configured.</div>
+            <div class="card-title">${t("agents.title")}</div>
+            <div class="card-sub">${t("agents.configuredCount", { count: String(agents.length) })}</div>
           </div>
           <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${props.loading ? t("common.loading") : t("common.refresh")}
           </button>
         </div>
         ${
@@ -170,7 +171,7 @@ export function renderAgents(props: AgentsProps) {
           ${
             filteredAgents.length === 0
               ? html`
-                  <div class="muted">${sidebarFilter ? "No matching agents." : "No agents found."}</div>
+                  <div class="muted">${t("agents.noAgents")}</div>
                 `
               : filteredAgents.map((agent) => {
                   const badge = agentBadgeText(agent.id, defaultId);
@@ -201,8 +202,8 @@ export function renderAgents(props: AgentsProps) {
           !selectedAgent
             ? html`
                 <div class="card">
-                  <div class="card-title">Select an agent</div>
-                  <div class="card-sub">Pick an agent to inspect its workspace and tools.</div>
+                  <div class="card-title">${t("agents.selectAgent")}</div>
+                  <div class="card-sub">${t("agents.selectAgentSub")}</div>
                 </div>
               `
             : html`
@@ -347,7 +348,7 @@ function renderAgentHeader(
 ) {
   const badge = agentBadgeText(agent.id, defaultId);
   const displayName = normalizeAgentLabel(agent);
-  const subtitle = agent.identity?.theme?.trim() || "Agent workspace and routing.";
+  const subtitle = agent.identity?.theme?.trim() || t("agents.defaultSub");
   const emoji = resolveAgentEmoji(agent, agentIdentity);
   const hue = agentAvatarHue(agent.id);
   const isDefault = Boolean(defaultId && agent.id === defaultId);
@@ -412,12 +413,12 @@ function renderAgentTabs(
   counts: Record<string, number | null>,
 ) {
   const tabs: Array<{ id: AgentsPanel; label: string }> = [
-    { id: "overview", label: "Overview" },
-    { id: "files", label: "Files" },
-    { id: "tools", label: "Tools" },
-    { id: "skills", label: "Skills" },
-    { id: "channels", label: "Channels" },
-    { id: "cron", label: "Cron Jobs" },
+    { id: "overview", label: t("agents.panelOverview") },
+    { id: "files", label: t("agents.panelFiles") },
+    { id: "tools", label: t("agents.panelTools") },
+    { id: "skills", label: t("agents.panelSkills") },
+    { id: "channels", label: t("agents.panelChannels") },
+    { id: "cron", label: t("agents.panelCron") },
   ];
   return html`
     <div class="agent-tabs">

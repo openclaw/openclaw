@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
+import { t } from "../../i18n/index.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -610,13 +611,10 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
-    : "Connect to the gateway to start chatting...";
+      ? t("chat.placeholderAttachments")
+      : t("chat.placeholderConnected")
+    : t("chat.placeholderDisconnected");
 
-  // We need a requestUpdate shim since we're in functional mode:
-  // the host Lit component will re-render on state change anyway,
-  // so we trigger by calling onDraftChange with current value.
   const requestUpdate = () => {
     props.onDraftChange(props.draft);
   };
@@ -637,7 +635,7 @@ export function renderChat(props: ChatProps) {
       ${
         props.loading
           ? html`
-              <div class="muted">Loading chat...</div>
+              <div class="muted">${t("chat.loadingChat")}</div>
             `
           : nothing
       }

@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { ConfigUiHints } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
@@ -108,13 +109,13 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const normalized = analysis.schema;
   if (!normalized) {
     return html`
-      <div class="callout danger">Schema unavailable. Use Raw.</div>
+      <div class="callout danger">${t("channels.schemaUnavailable")}</div>
     `;
   }
   const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
   if (!node) {
     return html`
-      <div class="callout danger">Channel config schema unavailable.</div>
+      <div class="callout danger">${t("channels.channelSchemaUnavailable")}</div>
     `;
   }
   const configValue = props.configValue ?? {};
@@ -144,7 +145,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
       ${
         props.configSchemaLoading
           ? html`
-              <div class="muted">Loading config schema…</div>
+              <div class="muted">${t("channels.loadingConfigSchema")}</div>
             `
           : renderChannelConfigForm({
               channelId,
@@ -161,14 +162,14 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
           ?disabled=${disabled || !props.configFormDirty}
           @click=${() => props.onConfigSave()}
         >
-          ${props.configSaving ? "Saving…" : "Save"}
+          ${props.configSaving ? t("common.saving") : t("common.save")}
         </button>
         <button
           class="btn"
           ?disabled=${disabled}
           @click=${() => props.onConfigReload()}
         >
-          Reload
+          ${t("common.reload")}
         </button>
       </div>
     </div>

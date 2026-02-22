@@ -5,6 +5,7 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { NostrProfile as NostrProfileType } from "../types.ts";
 
 // ============================================================================
@@ -166,8 +167,8 @@ export function renderNostrProfileForm(params: {
   return html`
     <div class="nostr-profile-form" style="padding: 16px; background: var(--bg-secondary); border-radius: 8px; margin-top: 12px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <div style="font-weight: 600; font-size: 16px;">Edit Profile</div>
-        <div style="font-size: 12px; color: var(--text-muted);">Account: ${accountId}</div>
+        <div style="font-weight: 600; font-size: 16px;">${t("channels.nostrEditProfile")}</div>
+        <div style="font-size: 12px; color: var(--text-muted);">${t("channels.nostrAccount", { id: accountId })}</div>
       </div>
 
       ${
@@ -184,57 +185,57 @@ export function renderNostrProfileForm(params: {
 
       ${renderPicturePreview()}
 
-      ${renderField("name", "Username", {
-        placeholder: "satoshi",
+      ${renderField("name", t("channels.nostrUsername"), {
+        placeholder: t("channels.nostrUsernamePlaceholder"),
         maxLength: 256,
-        help: "Short username (e.g., satoshi)",
+        help: t("channels.nostrUsernameHelp"),
       })}
 
-      ${renderField("displayName", "Display Name", {
-        placeholder: "Satoshi Nakamoto",
+      ${renderField("displayName", t("channels.nostrDisplayName"), {
+        placeholder: t("channels.nostrDisplayNamePlaceholder"),
         maxLength: 256,
-        help: "Your full display name",
+        help: t("channels.nostrDisplayNameHelp"),
       })}
 
-      ${renderField("about", "Bio", {
+      ${renderField("about", t("channels.nostrBio"), {
         type: "textarea",
-        placeholder: "Tell people about yourself...",
+        placeholder: t("channels.nostrBioPlaceholder"),
         maxLength: 2000,
-        help: "A brief bio or description",
+        help: t("channels.nostrBioHelp"),
       })}
 
-      ${renderField("picture", "Avatar URL", {
+      ${renderField("picture", t("channels.nostrAvatarUrl"), {
         type: "url",
-        placeholder: "https://example.com/avatar.jpg",
-        help: "HTTPS URL to your profile picture",
+        placeholder: t("channels.nostrAvatarUrlPlaceholder"),
+        help: t("channels.nostrAvatarUrlHelp"),
       })}
 
       ${
         state.showAdvanced
           ? html`
             <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
-              <div style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);">Advanced</div>
+              <div style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);">${t("channels.nostrAdvanced")}</div>
 
-              ${renderField("banner", "Banner URL", {
+              ${renderField("banner", t("channels.nostrBannerUrl"), {
                 type: "url",
-                placeholder: "https://example.com/banner.jpg",
-                help: "HTTPS URL to a banner image",
+                placeholder: t("channels.nostrBannerUrlPlaceholder"),
+                help: t("channels.nostrBannerUrlHelp"),
               })}
 
-              ${renderField("website", "Website", {
+              ${renderField("website", t("channels.nostrWebsite"), {
                 type: "url",
-                placeholder: "https://example.com",
-                help: "Your personal website",
+                placeholder: t("channels.nostrWebsitePlaceholder"),
+                help: t("channels.nostrWebsiteHelp"),
               })}
 
-              ${renderField("nip05", "NIP-05 Identifier", {
-                placeholder: "you@example.com",
-                help: "Verifiable identifier (e.g., you@domain.com)",
+              ${renderField("nip05", t("channels.nostrNip05"), {
+                placeholder: t("channels.nostrNip05Placeholder"),
+                help: t("channels.nostrNip05Help"),
               })}
 
-              ${renderField("lud16", "Lightning Address", {
-                placeholder: "you@getalby.com",
-                help: "Lightning address for tips (LUD-16)",
+              ${renderField("lud16", t("channels.nostrLightning"), {
+                placeholder: t("channels.nostrLightningPlaceholder"),
+                help: t("channels.nostrLightningHelp"),
               })}
             </div>
           `
@@ -247,7 +248,7 @@ export function renderNostrProfileForm(params: {
           @click=${callbacks.onSave}
           ?disabled=${state.saving || !isDirty}
         >
-          ${state.saving ? "Saving..." : "Save"}
+          ${state.saving ? t("common.saving") : t("channels.nostrSavePublish")}
         </button>
 
         <button
@@ -255,14 +256,14 @@ export function renderNostrProfileForm(params: {
           @click=${callbacks.onImport}
           ?disabled=${state.importing || state.saving}
         >
-          ${state.importing ? "Importing..." : "Import from Relays"}
+          ${state.importing ? t("channels.nostrImporting") : t("channels.nostrImportRelays")}
         </button>
 
         <button
           class="btn"
           @click=${callbacks.onToggleAdvanced}
         >
-          ${state.showAdvanced ? "Hide Advanced" : "Show Advanced"}
+          ${state.showAdvanced ? t("channels.nostrHideAdvanced") : t("channels.nostrShowAdvanced")}
         </button>
 
         <button
@@ -270,7 +271,7 @@ export function renderNostrProfileForm(params: {
           @click=${callbacks.onCancel}
           ?disabled=${state.saving}
         >
-          Cancel
+          ${t("channels.nostrCancel")}
         </button>
       </div>
 
@@ -278,7 +279,7 @@ export function renderNostrProfileForm(params: {
         isDirty
           ? html`
               <div style="font-size: 12px; color: var(--warning-color); margin-top: 8px">
-                You have unsaved changes
+                ${t("channels.nostrUnsavedChanges")}
               </div>
             `
           : nothing
