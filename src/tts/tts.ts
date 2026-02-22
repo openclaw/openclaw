@@ -114,6 +114,7 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+    speed: number;
   };
   edge: {
     enabled: boolean;
@@ -160,6 +161,7 @@ export type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+    speed?: number;
   };
   elevenlabs?: {
     voiceId?: string;
@@ -289,6 +291,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       apiKey: raw.openai?.apiKey,
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+      speed: typeof raw.openai?.speed === "number" ? raw.openai.speed : 1,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -661,12 +664,14 @@ export async function textToSpeech(params: {
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
+        const openaiSpeedOverride = params.overrides?.openai?.speed;
         audioBuffer = await openaiTTS({
           text: params.text,
           apiKey,
           model: openaiModelOverride ?? config.openai.model,
           voice: openaiVoiceOverride ?? config.openai.voice,
           responseFormat: output.openai,
+          speed: openaiSpeedOverride ?? config.openai.speed,
           timeoutMs: config.timeoutMs,
         });
       }
@@ -766,6 +771,7 @@ export async function textToSpeechTelephony(params: {
         model: config.openai.model,
         voice: config.openai.voice,
         responseFormat: output.format,
+        speed: config.openai.speed,
         timeoutMs: config.timeoutMs,
       });
 
