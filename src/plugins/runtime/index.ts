@@ -94,6 +94,7 @@ import { buildTemplateMessageFromPayload } from "../../line/template-messages.js
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { isVoiceCompatibleAudio } from "../../media/audio.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
@@ -243,6 +244,7 @@ export function createPluginRuntime(): PluginRuntime {
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
+    stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
     logging: createRuntimeLogging(),

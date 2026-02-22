@@ -17,6 +17,8 @@ type UpsertChannelPairingRequest =
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
+type TranscribeAudioFile =
+  typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
@@ -197,6 +199,9 @@ export type PluginRuntime = {
   };
   tts: {
     textToSpeechTelephony: TextToSpeechTelephony;
+  };
+  stt: {
+    transcribeAudioFile: TranscribeAudioFile;
   };
   tools: {
     createMemoryGetTool: CreateMemoryGetTool;
