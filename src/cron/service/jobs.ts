@@ -355,6 +355,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     schedule,
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
+    sessionReuse: typeof input.sessionReuse === "boolean" ? input.sessionReuse : undefined,
     payload: input.payload,
     delivery: input.delivery,
     state: {
@@ -403,6 +404,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;
+  }
+  if (typeof patch.sessionReuse === "boolean") {
+    job.sessionReuse = patch.sessionReuse;
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);

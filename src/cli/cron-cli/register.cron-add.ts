@@ -72,6 +72,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
+      .option(
+        "--session-reuse",
+        "Reuse the same isolated cron session across runs (default: fresh session per run)",
+        false,
+      )
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
@@ -202,6 +207,7 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget !== "main" && sessionTarget !== "isolated") {
             throw new Error("--session must be main or isolated");
           }
+          const sessionReuse = Boolean(opts.sessionReuse);
 
           if (opts.deleteAfterRun && opts.keepAfterRun) {
             throw new Error("Choose --delete-after-run or --keep-after-run, not both");
@@ -249,6 +255,7 @@ export function registerCronAddCommand(cron: Command) {
             schedule,
             sessionTarget,
             wakeMode,
+            sessionReuse: sessionReuse ? true : undefined,
             payload,
             delivery: deliveryMode
               ? {

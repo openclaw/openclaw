@@ -338,6 +338,24 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("sessionReuse" in base) {
+    const sessionReuse = base.sessionReuse;
+    if (typeof sessionReuse === "boolean") {
+      next.sessionReuse = sessionReuse;
+    } else if (typeof sessionReuse === "string") {
+      const trimmed = sessionReuse.trim().toLowerCase();
+      if (trimmed === "true") {
+        next.sessionReuse = true;
+      } else if (trimmed === "false") {
+        next.sessionReuse = false;
+      } else {
+        delete next.sessionReuse;
+      }
+    } else {
+      delete next.sessionReuse;
+    }
+  }
+
   if ("sessionTarget" in base) {
     const normalized = normalizeSessionTarget(base.sessionTarget);
     if (normalized) {

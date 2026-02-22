@@ -23,6 +23,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   cronTz: "",
   sessionTarget: "isolated",
   wakeMode: "now",
+  sessionReuse: false,
   payloadKind: "agentTurn",
   payloadText: "",
   deliveryMode: "announce",

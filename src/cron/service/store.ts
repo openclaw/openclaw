@@ -279,6 +279,27 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    if ("sessionReuse" in raw) {
+      if (typeof raw.sessionReuse === "boolean") {
+        // keep as-is
+      } else if (typeof raw.sessionReuse === "string") {
+        const lowered = raw.sessionReuse.trim().toLowerCase();
+        if (lowered === "true") {
+          raw.sessionReuse = true;
+          mutated = true;
+        } else if (lowered === "false") {
+          raw.sessionReuse = false;
+          mutated = true;
+        } else {
+          delete raw.sessionReuse;
+          mutated = true;
+        }
+      } else {
+        delete raw.sessionReuse;
+        mutated = true;
+      }
+    }
+
     const payload = raw.payload;
     if (
       (!payload || typeof payload !== "object" || Array.isArray(payload)) &&
