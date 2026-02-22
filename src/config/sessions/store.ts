@@ -806,7 +806,8 @@ export async function updateSessionStoreEntry(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
   return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
+    // Always re-read inside the lock to avoid clobbering concurrent writers.
+    const store = loadSessionStore(storePath, { skipCache: true });
     const existing = store[sessionKey];
     if (!existing) {
       return null;
@@ -868,7 +869,8 @@ export async function updateLastRoute(params: {
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
+    // Always re-read inside the lock to avoid clobbering concurrent writers.
+    const store = loadSessionStore(storePath, { skipCache: true });
     const existing = store[sessionKey];
     const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
