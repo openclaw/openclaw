@@ -46,17 +46,44 @@ class FakeProvider implements VoiceCallProvider {
   }
 }
 
+let storeSeq = 0;
+
+function createTestStorePath(): string {
+  storeSeq += 1;
+  return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
+}
+
+function createManagerHarness(
+  configOverrides: Record<string, unknown> = {},
+  provider = new FakeProvider(),
+): {
+  manager: CallManager;
+  provider: FakeProvider;
+} {
+  const config = VoiceCallConfigSchema.parse({
+    enabled: true,
+    provider: "plivo",
+    fromNumber: "+15550000000",
+    ...configOverrides,
+  });
+  const manager = new CallManager(config, createTestStorePath());
+  manager.initialize(provider, "https://example.com/voice/webhook");
+  return { manager, provider };
+}
+
+function markCallAnswered(manager: CallManager, callId: string, eventId: string): void {
+  manager.processEvent({
+    id: eventId,
+    type: "call.answered",
+    callId,
+    providerCallId: "request-uuid",
+    timestamp: Date.now(),
+  });
+}
+
 describe("CallManager", () => {
   it("upgrades providerCallId mapping when provider ID changes", async () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
-    });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const manager = new CallManager(config, storePath);
-    manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
+    const { manager } = createManagerHarness();
 
     const { callId, success, error } = await manager.initiateCall("+15550000001");
     expect(success).toBe(true);
@@ -81,16 +108,7 @@ describe("CallManager", () => {
   });
 
   it("speaks initial message on answered for notify mode (non-Twilio)", async () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
-    });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
+    const { manager, provider } = createManagerHarness();
 
     const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
       message: "Hello there",
@@ -113,18 +131,10 @@ describe("CallManager", () => {
   });
 
   it("rejects inbound calls with missing caller ID when allowlist enabled", () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
       id: "evt-allowlist-missing",
@@ -142,18 +152,10 @@ describe("CallManager", () => {
   });
 
   it("rejects inbound calls with anonymous caller ID when allowlist enabled", () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
       id: "evt-allowlist-anon",
@@ -172,18 +174,10 @@ describe("CallManager", () => {
   });
 
   it("rejects inbound calls that only match allowlist suffixes", () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
       id: "evt-allowlist-suffix",
@@ -202,17 +196,9 @@ describe("CallManager", () => {
   });
 
   it("rejects duplicate inbound events with a single hangup call", () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       inboundPolicy: "disabled",
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
       id: "evt-reject-init",
@@ -242,17 +228,10 @@ describe("CallManager", () => {
   });
 
   it("accepts inbound calls that exactly match the allowlist", () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager } = createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const manager = new CallManager(config, storePath);
-    manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
 
     manager.processEvent({
       id: "evt-allowlist-exact",
@@ -269,28 +248,14 @@ describe("CallManager", () => {
   });
 
   it("completes a closed-loop turn without live audio", async () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     const started = await manager.initiateCall("+15550000003");
     expect(started.success).toBe(true);
 
-    manager.processEvent({
-      id: "evt-closed-loop-answered",
-      type: "call.answered",
-      callId: started.callId,
-      providerCallId: "request-uuid",
-      timestamp: Date.now(),
-    });
+    markCallAnswered(manager, started.callId, "evt-closed-loop-answered");
 
     const turnPromise = manager.continueCall(started.callId, "How can I help?");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -323,28 +288,14 @@ describe("CallManager", () => {
   });
 
   it("rejects overlapping continueCall requests for the same call", async () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     const started = await manager.initiateCall("+15550000004");
     expect(started.success).toBe(true);
 
-    manager.processEvent({
-      id: "evt-overlap-answered",
-      type: "call.answered",
-      callId: started.callId,
-      providerCallId: "request-uuid",
-      timestamp: Date.now(),
-    });
+    markCallAnswered(manager, started.callId, "evt-overlap-answered");
 
     const first = manager.continueCall(started.callId, "First prompt");
     const second = await manager.continueCall(started.callId, "Second prompt");
@@ -369,28 +320,14 @@ describe("CallManager", () => {
   });
 
   it("tracks latency metadata across multiple closed-loop turns", async () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     const started = await manager.initiateCall("+15550000005");
     expect(started.success).toBe(true);
 
-    manager.processEvent({
-      id: "evt-multi-answered",
-      type: "call.answered",
-      callId: started.callId,
-      providerCallId: "request-uuid",
-      timestamp: Date.now(),
-    });
+    markCallAnswered(manager, started.callId, "evt-multi-answered");
 
     const firstTurn = manager.continueCall(started.callId, "First question");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -436,28 +373,14 @@ describe("CallManager", () => {
   });
 
   it("handles repeated closed-loop turns without waiter churn", async () => {
-    const config = VoiceCallConfigSchema.parse({
-      enabled: true,
-      provider: "plivo",
-      fromNumber: "+15550000000",
+    const { manager, provider } = createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
-
-    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
-    const provider = new FakeProvider();
-    const manager = new CallManager(config, storePath);
-    manager.initialize(provider, "https://example.com/voice/webhook");
 
     const started = await manager.initiateCall("+15550000006");
     expect(started.success).toBe(true);
 
-    manager.processEvent({
-      id: "evt-loop-answered",
-      type: "call.answered",
-      callId: started.callId,
-      providerCallId: "request-uuid",
-      timestamp: Date.now(),
-    });
+    markCallAnswered(manager, started.callId, "evt-loop-answered");
 
     for (let i = 1; i <= 5; i++) {
       const turnPromise = manager.continueCall(started.callId, `Prompt ${i}`);
