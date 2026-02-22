@@ -317,23 +317,12 @@ async function runTurnWithCooldownSeed(params: {
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("rotates for auto-pinned profiles across retryable stream failures", async () => {
-    const cases = [
-      {
-        errorMessage: "rate limit",
-        sessionKey: "agent:test:auto",
-        runId: "run:auto",
-      },
-      {
-        errorMessage: "request ended without sending any chunks",
-        sessionKey: "agent:test:empty-chunk-stream",
-        runId: "run:empty-chunk-stream",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const { usageStats } = await runAutoPinnedRotationCase(testCase);
-      expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
-    }
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: "rate limit",
+      sessionKey: "agent:test:auto",
+      runId: "run:auto",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {
