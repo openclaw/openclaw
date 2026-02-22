@@ -564,7 +564,16 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
-    const cases = [
+    const cases: Array<{
+      name: string;
+      storePrefix: string;
+      allowFrom: string[];
+      body: string;
+      senderName: string | undefined;
+      senderE164: string;
+      senderId: string | undefined;
+      expectedIsNewSession: boolean;
+    }> = [
       {
         name: "authorized sender",
         storePrefix: "openclaw-group-reset-",
@@ -615,7 +624,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
         senderId: "123@lid",
         expectedIsNewSession: false,
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const storePath = await createStorePath(testCase.storePrefix);

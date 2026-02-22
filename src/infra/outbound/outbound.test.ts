@@ -780,7 +780,10 @@ describe("resolveOutboundSessionRoute", () => {
 
 describe("normalizeOutboundPayloadsForJson", () => {
   it("normalizes payloads for JSON output", () => {
-    const cases = [
+    const cases: Array<{
+      input: Parameters<typeof normalizeOutboundPayloadsForJson>[0];
+      expected: ReturnType<typeof normalizeOutboundPayloadsForJson>;
+    }> = [
       {
         input: [
           { text: "hi" },
@@ -818,7 +821,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
           },
         ],
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(normalizeOutboundPayloadsForJson(testCase.input)).toEqual(testCase.expected);
@@ -836,7 +839,11 @@ describe("normalizeOutboundPayloads", () => {
 
 describe("formatOutboundPayloadLog", () => {
   it("formats text+media and media-only logs", () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      input: Parameters<typeof formatOutboundPayloadLog>[0];
+      expected: string;
+    }> = [
       {
         name: "text with media lines",
         input: {
@@ -853,7 +860,7 @@ describe("formatOutboundPayloadLog", () => {
         },
         expected: "MEDIA:https://x.test/a.png",
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       expect(formatOutboundPayloadLog(testCase.input), testCase.name).toBe(testCase.expected);

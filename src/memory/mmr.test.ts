@@ -40,24 +40,40 @@ describe("tokenize", () => {
 
 describe("jaccardSimilarity", () => {
   it("computes expected scores for overlap edge cases", () => {
-    const cases = [
-      {
-        name: "identical sets",
-        left: new Set(["a", "b", "c"]),
-        right: new Set(["a", "b", "c"]),
-        expected: 1,
-      },
-      { name: "disjoint sets", left: new Set(["a", "b"]), right: new Set(["c", "d"]), expected: 0 },
-      { name: "two empty sets", left: new Set(), right: new Set(), expected: 1 },
-      { name: "left non-empty right empty", left: new Set(["a"]), right: new Set(), expected: 0 },
-      { name: "left empty right non-empty", left: new Set(), right: new Set(["a"]), expected: 0 },
-      {
-        name: "partial overlap",
-        left: new Set(["a", "b", "c"]),
-        right: new Set(["b", "c", "d"]),
-        expected: 0.5,
-      },
-    ] as const;
+    const cases: Array<{ name: string; left: Set<string>; right: Set<string>; expected: number }> =
+      [
+        {
+          name: "identical sets",
+          left: new Set(["a", "b", "c"]),
+          right: new Set(["a", "b", "c"]),
+          expected: 1,
+        },
+        {
+          name: "disjoint sets",
+          left: new Set(["a", "b"]),
+          right: new Set(["c", "d"]),
+          expected: 0,
+        },
+        { name: "two empty sets", left: new Set<string>(), right: new Set<string>(), expected: 1 },
+        {
+          name: "left non-empty right empty",
+          left: new Set(["a"]),
+          right: new Set<string>(),
+          expected: 0,
+        },
+        {
+          name: "left empty right non-empty",
+          left: new Set<string>(),
+          right: new Set(["a"]),
+          expected: 0,
+        },
+        {
+          name: "partial overlap",
+          left: new Set(["a", "b", "c"]),
+          right: new Set(["b", "c", "d"]),
+          expected: 0.5,
+        },
+      ];
 
     for (const testCase of cases) {
       expect(jaccardSimilarity(testCase.left, testCase.right), testCase.name).toBe(

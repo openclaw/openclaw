@@ -140,7 +140,11 @@ describe("buildModelsKeyboard", () => {
   });
 
   it("renders pagination controls for first, middle, and last pages", () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      params: { currentPage: number; models: string[] };
+      expectedPagination: string[];
+    }> = [
       {
         name: "first page",
         params: { currentPage: 1, models: ["model1", "model2"] },
@@ -162,7 +166,7 @@ describe("buildModelsKeyboard", () => {
         },
         expectedPagination: ["◀ Prev", "3/3"],
       },
-    ] as const;
+    ];
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
         provider: "anthropic",

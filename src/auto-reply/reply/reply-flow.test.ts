@@ -408,7 +408,14 @@ describe("parseLineDirectives", () => {
 
   describe("media_player", () => {
     it("parses media_player directives across full/minimal/paused variants", () => {
-      const cases = [
+      const cases: Array<{
+        name: string;
+        text: string;
+        expectedAltText?: string;
+        expectedText?: string;
+        expectFooter: boolean;
+        expectBodyContents?: boolean;
+      }> = [
         {
           name: "all fields",
           text: "Now playing:\n[[media_player: Bohemian Rhapsody | Queen | Speaker | https://example.com/album.jpg | playing]]",
@@ -431,7 +438,7 @@ describe("parseLineDirectives", () => {
           expectFooter: false,
           expectBodyContents: true,
         },
-      ] as const;
+      ];
 
       for (const testCase of cases) {
         const result = parseLineDirectives({ text: testCase.text });

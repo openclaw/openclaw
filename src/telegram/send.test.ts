@@ -535,7 +535,12 @@ describe("sendMessageTelegram", () => {
 
   it("applies reply markup and thread options to split video-note sends", async () => {
     const chatId = "123";
-    const cases = [
+    const cases: Array<{
+      text: string;
+      options: Partial<NonNullable<Parameters<typeof sendMessageTelegram>[2]>>;
+      expectedVideoNote: Record<string, unknown>;
+      expectedMessage: Record<string, unknown>;
+    }> = [
       {
         text: "Check this out",
         options: {
@@ -560,7 +565,7 @@ describe("sendMessageTelegram", () => {
           reply_to_message_id: 999,
         },
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const sendVideoNote = vi.fn().mockResolvedValue({
