@@ -20,7 +20,7 @@ function stripNullBytes(s: string): string {
   return s.replace(/\0/g, "");
 }
 
-export { resolveAgentIdFromSessionKey };
+export { normalizeAgentId, resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 

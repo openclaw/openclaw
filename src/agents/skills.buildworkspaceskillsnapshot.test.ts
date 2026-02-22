@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
@@ -297,17 +298,17 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
   it("applies skillFilter to restrict skills to the allowlist", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-    await _writeSkill({
+    await writeSkill({
       dir: path.join(workspaceDir, "skills", "alpha"),
       name: "alpha",
       description: "Alpha skill",
     });
-    await _writeSkill({
+    await writeSkill({
       dir: path.join(workspaceDir, "skills", "bravo"),
       name: "bravo",
       description: "Bravo skill",
     });
-    await _writeSkill({
+    await writeSkill({
       dir: path.join(workspaceDir, "skills", "charlie"),
       name: "charlie",
       description: "Charlie skill",
@@ -325,7 +326,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
   it("returns empty snapshot when skillFilter is an empty array", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-    await _writeSkill({
+    await writeSkill({
       dir: path.join(workspaceDir, "skills", "alpha"),
       name: "alpha",
       description: "Alpha skill",
