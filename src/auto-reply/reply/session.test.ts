@@ -1138,6 +1138,35 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
+  it("persists totalTokens from promptTokens when usage is unavailable", async () => {
+    const storePath = await createStorePath("openclaw-usage-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        inputTokens: 1_234,
+        outputTokens: 456,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: undefined,
+      promptTokens: 39_000,
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(39_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBe(1_234);
+    expect(stored[sessionKey].outputTokens).toBe(456);
+  });
+
   it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
