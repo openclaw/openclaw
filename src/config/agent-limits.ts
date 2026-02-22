@@ -39,7 +39,7 @@ function stripPeerPrefix(peerId: string | undefined): string | undefined {
   if (!peerId) {
     return undefined;
   }
-  const idx = peerId.lastIndexOf(":");
+  const idx = peerId.indexOf(":");
   return idx >= 0 ? peerId.slice(idx + 1) : peerId;
 }
 
