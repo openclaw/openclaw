@@ -34,6 +34,7 @@ function makeState(
       color: "#FF4500",
       headless: true,
       noSandbox: false,
+      gpuEnabled: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },
       defaultProfile: profile,

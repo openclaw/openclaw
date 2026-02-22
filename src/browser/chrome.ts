@@ -204,7 +204,17 @@ export async function launchOpenClawChrome(
     if (resolved.headless) {
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
-      args.push("--disable-gpu");
+      // GPU acceleration in headless mode (requires GPU devices available)
+      if (resolved.gpuEnabled) {
+        args.push("--enable-gpu");
+        // Optional: use ANGLE with Vulkan backend for better headless GPU support
+        args.push("--use-angle=vulkan");
+        args.push("--enable-features=Vulkan");
+      } else {
+        args.push("--disable-gpu");
+      }
+    } else if (resolved.gpuEnabled) {
+      log.warn("gpuEnabled is set but headless mode is disabled — GPU flags will not be applied");
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");
