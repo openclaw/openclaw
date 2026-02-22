@@ -90,6 +90,7 @@ export async function runGatewayLoop(params: {
                 ? `spawned pid ${respawn.pid ?? "unknown"}`
                 : "supervisor restart";
             gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+            await lock?.release();
             cleanupSignals();
             params.runtime.exit(0);
           } else {
@@ -104,6 +105,7 @@ export async function runGatewayLoop(params: {
             restartResolver?.();
           }
         } else {
+          await lock?.release();
           cleanupSignals();
           params.runtime.exit(0);
         }
