@@ -205,14 +205,12 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
-  // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available.
+  // Prefer provider-level auth heuristics when cfg and authStore are available.
+  // Fall back to registry-level availability keys otherwise.
   const available =
-    availableKeys !== undefined
-      ? availableKeys.has(modelKey(model.provider, model.id))
-      : cfg && authStore
-        ? hasAuthForProvider(model.provider, cfg, authStore)
-        : false;
+    cfg && authStore
+      ? hasAuthForProvider(model.provider, cfg, authStore)
+      : (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

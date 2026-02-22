@@ -11,6 +11,7 @@ import {
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsAuthStatusCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
@@ -309,6 +310,7 @@ export function registerModelsCli(program: Command) {
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--set-default", "Apply the provider's default model recommendation", false)
+    .option("--add", "Add an additional account without replacing existing profiles", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsAuthLoginCommand(
@@ -316,6 +318,28 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
             setDefault: Boolean(opts.setDefault),
+            add: Boolean(opts.add),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("status")
+    .description("Show auth account status for a provider")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsAuthStatusCommand(
+          {
+            provider: opts.provider as string,
+            agent,
+            json: Boolean(opts.json),
           },
           defaultRuntime,
         );
