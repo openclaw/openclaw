@@ -90,12 +90,19 @@ export async function resolveSandboxedMediaSource(params: {
       throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
     }
   }
-  const resolved = await assertSandboxPath({
+  const resolved = path.resolve(resolveSandboxInputPath(candidate, params.sandboxRoot));
+  const tmpDir = path.resolve(os.tmpdir());
+  const candidateIsAbsolute = path.isAbsolute(expandPath(candidate));
+  if (candidateIsAbsolute && isPathInside(tmpDir, resolved)) {
+    await assertNoSymlinkEscape(path.relative(tmpDir, resolved), tmpDir);
+    return resolved;
+  }
+  const sandboxResult = await assertSandboxPath({
     filePath: candidate,
     cwd: params.sandboxRoot,
     root: params.sandboxRoot,
   });
-  return resolved.resolved;
+  return sandboxResult.resolved;
 }
 
 async function assertNoSymlinkEscape(

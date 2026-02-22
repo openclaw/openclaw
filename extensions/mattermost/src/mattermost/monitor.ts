@@ -380,7 +380,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
     const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
     const storeAllowFrom = normalizeAllowList(
-      await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+      dmPolicy === "allowlist"
+        ? []
+        : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
     );
     const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
     const effectiveGroupAllowFrom = Array.from(
@@ -867,7 +869,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (dmPolicy !== "open") {
         const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
         const storeAllowFrom = normalizeAllowList(
-          await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+          dmPolicy === "allowlist"
+            ? []
+            : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
         );
         const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
         const allowed = isSenderAllowed({
@@ -890,10 +894,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return;
       }
       if (groupPolicy === "allowlist") {
+        const dmPolicyForStore = account.config.dmPolicy ?? "pairing";
         const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
         const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
         const storeAllowFrom = normalizeAllowList(
-          await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+          dmPolicyForStore === "allowlist"
+            ? []
+            : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
         );
         const effectiveGroupAllowFrom = Array.from(
           new Set([

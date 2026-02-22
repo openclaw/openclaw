@@ -21,10 +21,10 @@ import type { SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
-    expect(() => validateSessionId("../etc/passwd")).toThrow(/Invalid session ID/);
-    expect(() => validateSessionId("a/b")).toThrow(/Invalid session ID/);
-    expect(() => validateSessionId("a\\b")).toThrow(/Invalid session ID/);
-    expect(() => validateSessionId("/abs")).toThrow(/Invalid session ID/);
+    const unsafeSessionIds = ["../etc/passwd", "a/b", "a\\b", "/abs"];
+    for (const sessionId of unsafeSessionIds) {
+      expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
+    }
   });
 
   it("resolves transcript path inside an explicit sessions dir", () => {

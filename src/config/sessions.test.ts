@@ -37,39 +37,44 @@ describe("sessions", () => {
   const withStateDir = <T>(stateDir: string, fn: () => T): T =>
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, fn);
 
-  it("returns normalized per-sender key", () => {
-    expect(deriveSessionKey("per-sender", { From: "whatsapp:+1555" })).toBe("+1555");
-  });
+  const deriveSessionKeyCases = [
+    {
+      name: "returns normalized per-sender key",
+      scope: "per-sender" as const,
+      ctx: { From: "whatsapp:+1555" },
+      expected: "+1555",
+    },
+    {
+      name: "falls back to unknown when sender missing",
+      scope: "per-sender" as const,
+      ctx: {},
+      expected: "unknown",
+    },
+    {
+      name: "global scope returns global",
+      scope: "global" as const,
+      ctx: { From: "+1" },
+      expected: "global",
+    },
+    {
+      name: "keeps group chats distinct",
+      scope: "per-sender" as const,
+      ctx: { From: "12345-678@g.us" },
+      expected: "whatsapp:group:12345-678@g.us",
+    },
+    {
+      name: "prefixes group keys with provider when available",
+      scope: "per-sender" as const,
+      ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
+      expected: "whatsapp:group:12345-678@g.us",
+    },
+  ] as const;
 
-  it("falls back to unknown when sender missing", () => {
-    expect(deriveSessionKey("per-sender", {})).toBe("unknown");
-  });
-
-  it("global scope returns global", () => {
-    expect(deriveSessionKey("global", { From: "+1" })).toBe("global");
-  });
-
-  it("keeps group chats distinct", () => {
-    expect(deriveSessionKey("per-sender", { From: "12345-678@g.us" })).toBe(
-      "whatsapp:group:12345-678@g.us",
-    );
-  });
-
-  it("prefixes group keys with provider when available", () => {
-    expect(
-      deriveSessionKey("per-sender", {
-        From: "12345-678@g.us",
-        ChatType: "group",
-        Provider: "whatsapp",
-      }),
-    ).toBe("whatsapp:group:12345-678@g.us");
-  });
-
-  it("keeps explicit provider when provided in group key", () => {
-    expect(
-      resolveSessionKey("per-sender", { From: "discord:group:12345", ChatType: "group" }, "main"),
-    ).toBe("agent:main:discord:group:12345");
-  });
+  for (const testCase of deriveSessionKeyCases) {
+    it(testCase.name, () => {
+      expect(deriveSessionKey(testCase.scope, testCase.ctx)).toBe(testCase.expected);
+    });
+  }
 
   it("builds discord display name with guild+channel slugs", () => {
     expect(
@@ -83,35 +88,65 @@ describe("sessions", () => {
     ).toBe("discord:friends-of-openclaw#general");
   });
 
-  it("collapses direct chats to main by default", () => {
-    expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe("agent:main:main");
-  });
+  const resolveSessionKeyCases = [
+    {
+      name: "keeps explicit provider when provided in group key",
+      scope: "per-sender" as const,
+      ctx: { From: "discord:group:12345", ChatType: "group" },
+      mainKey: "main",
+      expected: "agent:main:discord:group:12345",
+    },
+    {
+      name: "collapses direct chats to main by default",
+      scope: "per-sender" as const,
+      ctx: { From: "+1555" },
+      mainKey: undefined,
+      expected: "agent:main:main",
+    },
+    {
+      name: "collapses direct chats to main even when sender missing",
+      scope: "per-sender" as const,
+      ctx: {},
+      mainKey: undefined,
+      expected: "agent:main:main",
+    },
+    {
+      name: "maps direct chats to main key when provided",
+      scope: "per-sender" as const,
+      ctx: { From: "whatsapp:+1555" },
+      mainKey: "main",
+      expected: "agent:main:main",
+    },
+    {
+      name: "uses custom main key when provided",
+      scope: "per-sender" as const,
+      ctx: { From: "+1555" },
+      mainKey: "primary",
+      expected: "agent:main:primary",
+    },
+    {
+      name: "keeps global scope untouched",
+      scope: "global" as const,
+      ctx: { From: "+1555" },
+      mainKey: undefined,
+      expected: "global",
+    },
+    {
+      name: "leaves groups untouched even with main key",
+      scope: "per-sender" as const,
+      ctx: { From: "12345-678@g.us" },
+      mainKey: "main",
+      expected: "agent:main:whatsapp:group:12345-678@g.us",
+    },
+  ] as const;
 
-  it("collapses direct chats to main even when sender missing", () => {
-    expect(resolveSessionKey("per-sender", {})).toBe("agent:main:main");
-  });
-
-  it("maps direct chats to main key when provided", () => {
-    expect(resolveSessionKey("per-sender", { From: "whatsapp:+1555" }, "main")).toBe(
-      "agent:main:main",
-    );
-  });
-
-  it("uses custom main key when provided", () => {
-    expect(resolveSessionKey("per-sender", { From: "+1555" }, "primary")).toBe(
-      "agent:main:primary",
-    );
-  });
-
-  it("keeps global scope untouched", () => {
-    expect(resolveSessionKey("global", { From: "+1555" })).toBe("global");
-  });
-
-  it("leaves groups untouched even with main key", () => {
-    expect(resolveSessionKey("per-sender", { From: "12345-678@g.us" }, "main")).toBe(
-      "agent:main:whatsapp:group:12345-678@g.us",
-    );
-  });
+  for (const testCase of resolveSessionKeyCases) {
+    it(testCase.name, () => {
+      expect(resolveSessionKey(testCase.scope, testCase.ctx, testCase.mainKey)).toBe(
+        testCase.expected,
+      );
+    });
+  }
 
   it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";

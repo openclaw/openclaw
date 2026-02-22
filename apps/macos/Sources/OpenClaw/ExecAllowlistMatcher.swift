@@ -5,17 +5,14 @@ enum ExecAllowlistMatcher {
         guard let resolution, !entries.isEmpty else { return nil }
         let rawExecutable = resolution.rawExecutable
         let resolvedPath = resolution.resolvedPath
-        let executableName = resolution.executableName
 
         for entry in entries {
-            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-            if pattern.isEmpty { continue }
-            let hasPath = pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
-            if hasPath {
+            switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
+            case .valid(let pattern):
                 let target = resolvedPath ?? rawExecutable
                 if self.matches(pattern: pattern, target: target) { return entry }
-            } else if self.matches(pattern: pattern, target: executableName) {
-                return entry
+            case .invalid:
+                continue
             }
         }
         return nil

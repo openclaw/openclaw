@@ -9,7 +9,9 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../infra/outbound/channel-selection.js", () => ({
-  resolveMessageChannelSelection: vi.fn().mockResolvedValue({ channel: "telegram" }),
+  resolveMessageChannelSelection: vi
+    .fn()
+    .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
 }));
 
 vi.mock("../../pairing/pairing-store.js", () => ({
@@ -47,6 +49,16 @@ function setMainSessionEntry(entry?: SessionStore[string]) {
   vi.mocked(loadSessionStore).mockReturnValue(store);
 }
 
+function setWhatsAppAllowFrom(allowFrom: string[]) {
+  vi.mocked(resolveWhatsAppAccount).mockReturnValue({
+    allowFrom,
+  } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
+}
+
+function setStoredWhatsAppAllowFrom(allowFrom: string[]) {
+  vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(allowFrom);
+}
+
 async function resolveForAgent(params: {
   cfg: OpenClawConfig;
   target?: { channel?: "last" | "telegram"; to?: string };
@@ -67,10 +79,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastTo: "+15550000099",
     });
-    vi.mocked(resolveWhatsAppAccount).mockReturnValue({
-      allowFrom: [],
-    } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
-    vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(["+15550000001"]);
+    setWhatsAppAllowFrom([]);
+    setStoredWhatsAppAllowFrom(["+15550000001"]);
 
     const cfg = makeCfg({ bindings: [] });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, { channel: "last", to: undefined });
@@ -86,10 +96,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastTo: "+15550000099",
     });
-    vi.mocked(resolveWhatsAppAccount).mockReturnValue({
-      allowFrom: [],
-    } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
-    vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(["+15550000001"]);
+    setWhatsAppAllowFrom([]);
+    setStoredWhatsAppAllowFrom(["+15550000001"]);
 
     const cfg = makeCfg({ bindings: [] });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
@@ -225,5 +233,48 @@ describe("resolveDeliveryTarget", () => {
     });
     expect(result.channel).toBe(DEFAULT_CHAT_CHANNEL);
     expect(result.to).toBeUndefined();
+  });
+
+  it("uses sessionKey thread entry before main session entry", async () => {
+    vi.mocked(loadSessionStore).mockReturnValue({
+      "agent:test:main": {
+        sessionId: "main-session",
+        updatedAt: 1000,
+        lastChannel: "telegram",
+        lastTo: "main-chat",
+      },
+      "agent:test:thread:42": {
+        sessionId: "thread-session",
+        updatedAt: 2000,
+        lastChannel: "telegram",
+        lastTo: "thread-chat",
+      },
+    } as SessionStore);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:test:thread:42",
+      to: undefined,
+    });
+
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBe("thread-chat");
+  });
+
+  it("uses channel selection result when no previous session target exists", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockResolvedValueOnce({
+      channel: "telegram",
+      configured: ["telegram"],
+    });
+
+    const result = await resolveForAgent({
+      cfg: makeCfg({ bindings: [] }),
+      target: { channel: "last", to: undefined },
+    });
+
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBeUndefined();
+    expect(result.mode).toBe("implicit");
   });
 });

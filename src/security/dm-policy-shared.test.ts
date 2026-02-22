@@ -53,6 +53,28 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["owner", "owner2"]);
   });
 
+  it("excludes storeAllowFrom when dmPolicy is allowlist", () => {
+    const lists = resolveEffectiveAllowFromLists({
+      allowFrom: ["+1111"],
+      groupAllowFrom: ["group:abc"],
+      storeAllowFrom: ["+2222", "+3333"],
+      dmPolicy: "allowlist",
+    });
+    expect(lists.effectiveAllowFrom).toEqual(["+1111"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
+  });
+
+  it("includes storeAllowFrom when dmPolicy is pairing", () => {
+    const lists = resolveEffectiveAllowFromLists({
+      allowFrom: ["+1111"],
+      groupAllowFrom: [],
+      storeAllowFrom: ["+2222"],
+      dmPolicy: "pairing",
+    });
+    expect(lists.effectiveAllowFrom).toEqual(["+1111", "+2222"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual(["+1111", "+2222"]);
+  });
+
   const channels = [
     "bluebubbles",
     "imessage",

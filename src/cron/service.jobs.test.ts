@@ -32,6 +32,13 @@ describe("applyJobPatch", () => {
     payload: { kind: "systemEvent", text: "ping" },
   });
 
+  const createMainSystemEventJob = (id: string, delivery: CronJob["delivery"]): CronJob => {
+    return createIsolatedAgentTurnJob(id, delivery, {
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+  };
+
   it("clears delivery when switching to main session", () => {
     const job = createIsolatedAgentTurnJob("job-1", {
       mode: "announce",
@@ -109,50 +116,36 @@ describe("applyJobPatch", () => {
   });
 
   it("rejects webhook delivery without a valid http(s) target URL", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-webhook-invalid",
-      name: "job-webhook-invalid",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "ping" },
-      delivery: { mode: "webhook" },
-      state: {},
-    };
+    const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
+    const cases = [
+      { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
+      {
+        name: "blank webhook target",
+        patch: { delivery: { mode: "webhook", to: "" } } satisfies CronJobPatch,
+      },
+      {
+        name: "non-http protocol",
+        patch: {
+          delivery: { mode: "webhook", to: "ftp://example.invalid" },
+        } satisfies CronJobPatch,
+      },
+      {
+        name: "invalid URL",
+        patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+      },
+    ] as const;
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-    );
-    expect(() => applyJobPatch(job, { delivery: { mode: "webhook", to: "" } })).toThrow(
-      "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-    );
-    expect(() =>
-      applyJobPatch(job, { delivery: { mode: "webhook", to: "ftp://example.invalid" } }),
-    ).toThrow("cron webhook delivery requires delivery.to to be a valid http(s) URL");
-    expect(() => applyJobPatch(job, { delivery: { mode: "webhook", to: "not-a-url" } })).toThrow(
-      "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-    );
+    for (const testCase of cases) {
+      const job = createMainSystemEventJob("job-webhook-invalid", { mode: "webhook" });
+      expect(() => applyJobPatch(job, testCase.patch), testCase.name).toThrow(expectedError);
+    }
   });
 
   it("trims webhook delivery target URLs", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-webhook-trim",
-      name: "job-webhook-trim",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "ping" },
-      delivery: { mode: "webhook", to: "https://example.invalid/original" },
-      state: {},
-    };
+    const job = createMainSystemEventJob("job-webhook-trim", {
+      mode: "webhook",
+      to: "https://example.invalid/original",
+    });
 
     expect(() =>
       applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),

@@ -90,6 +90,31 @@ enum ExecApprovalDecision: String, Codable, Sendable {
     case deny
 }
 
+enum ExecAllowlistPatternValidationReason: String, Codable, Sendable, Equatable {
+    case empty
+    case missingPathComponent
+
+    var message: String {
+        switch self {
+        case .empty:
+            "Pattern cannot be empty."
+        case .missingPathComponent:
+            "Path patterns only. Include '/', '~', or '\\\\'."
+        }
+    }
+}
+
+enum ExecAllowlistPatternValidation: Sendable, Equatable {
+    case valid(String)
+    case invalid(ExecAllowlistPatternValidationReason)
+}
+
+struct ExecAllowlistRejectedEntry: Sendable, Equatable {
+    let id: UUID
+    let pattern: String
+    let reason: ExecAllowlistPatternValidationReason
+}
+
 struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
     var id: UUID
     var pattern: String
@@ -222,13 +247,25 @@ enum ExecApprovalsStore {
             }
             agents.removeValue(forKey: "default")
         }
+        if !agents.isEmpty {
+            var normalizedAgents: [String: ExecApprovalsAgent] = [:]
+            normalizedAgents.reserveCapacity(agents.count)
+            for (key, var agent) in agents {
+                if let allowlist = agent.allowlist {
+                    let normalized = self.normalizeAllowlistEntries(allowlist, dropInvalid: false).entries
+                    agent.allowlist = normalized.isEmpty ? nil : normalized
+                }
+                normalizedAgents[key] = agent
+            }
+            agents = normalizedAgents
+        }
         return ExecApprovalsFile(
             version: 1,
             socket: ExecApprovalsSocketConfig(
                 path: socketPath.isEmpty ? nil : socketPath,
                 token: token.isEmpty ? nil : token),
             defaults: file.defaults,
-            agents: agents)
+            agents: agents.isEmpty ? nil : agents)
     }
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
@@ -306,7 +343,12 @@ enum ExecApprovalsStore {
     }
 
     static func ensureFile() -> ExecApprovalsFile {
-        var file = self.loadFile()
+        let url = self.fileURL()
+        let existed = FileManager().fileExists(atPath: url.path)
+        let loaded = self.loadFile()
+        let loadedHash = self.hashFile(loaded)
+
+        var file = self.normalizeIncoming(loaded)
         if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
         let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if path.isEmpty {
@@ -317,7 +359,9 @@ enum ExecApprovalsStore {
             file.socket?.token = self.generateToken()
         }
         if file.agents == nil { file.agents = [:] }
-        self.saveFile(file)
+        if !existed || loadedHash != self.hashFile(file) {
+            self.saveFile(file)
+        }
         return file
     }
 
@@ -339,16 +383,9 @@ enum ExecApprovalsStore {
                 ?? resolvedDefaults.askFallback,
             autoAllowSkills: agentEntry.autoAllowSkills ?? wildcardEntry.autoAllowSkills
                 ?? resolvedDefaults.autoAllowSkills)
-        let allowlist = ((wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []))
-            .map { entry in
-                ExecAllowlistEntry(
-                    id: entry.id,
-                    pattern: entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines),
-                    lastUsedAt: entry.lastUsedAt,
-                    lastUsedCommand: entry.lastUsedCommand,
-                    lastResolvedPath: entry.lastResolvedPath)
-            }
-            .filter { !$0.pattern.isEmpty }
+        let allowlist = self.normalizeAllowlistEntries(
+            (wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []),
+            dropInvalid: true).entries
         let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
         let token = file.socket?.token ?? ""
         return ExecApprovalsResolved(
@@ -398,20 +435,30 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func addAllowlistEntry(agentId: String?, pattern: String) {
-        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+    @discardableResult
+    static func addAllowlistEntry(agentId: String?, pattern: String) -> ExecAllowlistPatternValidationReason? {
+        let normalizedPattern: String
+        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
+        case .valid(let validPattern):
+            normalizedPattern = validPattern
+        case .invalid(let reason):
+            return reason
+        }
+
         self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
             var allowlist = entry.allowlist ?? []
-            if allowlist.contains(where: { $0.pattern == trimmed }) { return }
-            allowlist.append(ExecAllowlistEntry(pattern: trimmed, lastUsedAt: Date().timeIntervalSince1970 * 1000))
+            if allowlist.contains(where: { $0.pattern == normalizedPattern }) { return }
+            allowlist.append(ExecAllowlistEntry(
+                pattern: normalizedPattern,
+                lastUsedAt: Date().timeIntervalSince1970 * 1000))
             entry.allowlist = allowlist
             agents[key] = entry
             file.agents = agents
         }
+        return nil
     }
 
     static func recordAllowlistUse(
@@ -439,25 +486,21 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func updateAllowlist(agentId: String?, allowlist: [ExecAllowlistEntry]) {
+    @discardableResult
+    static func updateAllowlist(agentId: String?, allowlist: [ExecAllowlistEntry]) -> [ExecAllowlistRejectedEntry] {
+        var rejected: [ExecAllowlistRejectedEntry] = []
         self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
-            let cleaned = allowlist
-                .map { item in
-                    ExecAllowlistEntry(
-                        id: item.id,
-                        pattern: item.pattern.trimmingCharacters(in: .whitespacesAndNewlines),
-                        lastUsedAt: item.lastUsedAt,
-                        lastUsedCommand: item.lastUsedCommand,
-                        lastResolvedPath: item.lastResolvedPath)
-                }
-                .filter { !$0.pattern.isEmpty }
+            let normalized = self.normalizeAllowlistEntries(allowlist, dropInvalid: true)
+            rejected = normalized.rejected
+            let cleaned = normalized.entries
             entry.allowlist = cleaned
             agents[key] = entry
             file.agents = agents
         }
+        return rejected
     }
 
     static func updateAgentSettings(agentId: String?, mutate: (inout ExecApprovalsAgent) -> Void) {
@@ -500,6 +543,14 @@ enum ExecApprovalsStore {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    private static func hashFile(_ file: ExecApprovalsFile) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(file)) ?? Data()
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func expandPath(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == "~" {
@@ -519,14 +570,101 @@ enum ExecApprovalsStore {
     }
 
     private static func normalizedPattern(_ pattern: String?) -> String? {
-        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed.lowercased()
+        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
+        case .valid(let normalized):
+            return normalized.lowercased()
+        case .invalid(.empty):
+            return nil
+        case .invalid:
+            let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed.lowercased()
+        }
+    }
+
+    private static func migrateLegacyPattern(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntry {
+        let trimmedPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedResolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedResolved = trimmedResolved.isEmpty ? nil : trimmedResolved
+
+        switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
+        case .valid(let pattern):
+            return ExecAllowlistEntry(
+                id: entry.id,
+                pattern: pattern,
+                lastUsedAt: entry.lastUsedAt,
+                lastUsedCommand: entry.lastUsedCommand,
+                lastResolvedPath: normalizedResolved)
+        case .invalid:
+            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
+            case .valid(let migratedPattern):
+                return ExecAllowlistEntry(
+                    id: entry.id,
+                    pattern: migratedPattern,
+                    lastUsedAt: entry.lastUsedAt,
+                    lastUsedCommand: entry.lastUsedCommand,
+                    lastResolvedPath: normalizedResolved)
+            case .invalid:
+                return ExecAllowlistEntry(
+                    id: entry.id,
+                    pattern: trimmedPattern,
+                    lastUsedAt: entry.lastUsedAt,
+                    lastUsedCommand: entry.lastUsedCommand,
+                    lastResolvedPath: normalizedResolved)
+            }
+        }
+    }
+
+    private static func normalizeAllowlistEntries(
+        _ entries: [ExecAllowlistEntry],
+        dropInvalid: Bool) -> (entries: [ExecAllowlistEntry], rejected: [ExecAllowlistRejectedEntry])
+    {
+        var normalized: [ExecAllowlistEntry] = []
+        normalized.reserveCapacity(entries.count)
+        var rejected: [ExecAllowlistRejectedEntry] = []
+
+        for entry in entries {
+            let migrated = self.migrateLegacyPattern(entry)
+            let trimmedPattern = migrated.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedResolvedPath = migrated.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let normalizedResolvedPath = trimmedResolvedPath.isEmpty ? nil : trimmedResolvedPath
+
+            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
+            case .valid(let pattern):
+                normalized.append(
+                    ExecAllowlistEntry(
+                        id: migrated.id,
+                        pattern: pattern,
+                        lastUsedAt: migrated.lastUsedAt,
+                        lastUsedCommand: migrated.lastUsedCommand,
+                        lastResolvedPath: normalizedResolvedPath))
+            case .invalid(let reason):
+                if dropInvalid {
+                    rejected.append(
+                        ExecAllowlistRejectedEntry(
+                            id: migrated.id,
+                            pattern: trimmedPattern,
+                            reason: reason))
+                } else if reason != .empty {
+                    normalized.append(
+                        ExecAllowlistEntry(
+                            id: migrated.id,
+                            pattern: trimmedPattern,
+                            lastUsedAt: migrated.lastUsedAt,
+                            lastUsedCommand: migrated.lastUsedCommand,
+                            lastResolvedPath: normalizedResolvedPath))
+                }
+            }
+        }
+
+        return (normalized, rejected)
     }
 
     private static func mergeAgents(
         current: ExecApprovalsAgent,
         legacy: ExecApprovalsAgent) -> ExecApprovalsAgent
     {
+        let currentAllowlist = self.normalizeAllowlistEntries(current.allowlist ?? [], dropInvalid: false).entries
+        let legacyAllowlist = self.normalizeAllowlistEntries(legacy.allowlist ?? [], dropInvalid: false).entries
         var seen = Set<String>()
         var allowlist: [ExecAllowlistEntry] = []
         func append(_ entry: ExecAllowlistEntry) {
@@ -536,10 +674,10 @@ enum ExecApprovalsStore {
             seen.insert(key)
             allowlist.append(entry)
         }
-        for entry in current.allowlist ?? [] {
+        for entry in currentAllowlist {
             append(entry)
         }
-        for entry in legacy.allowlist ?? [] {
+        for entry in legacyAllowlist {
             append(entry)
         }
 
@@ -553,6 +691,22 @@ enum ExecApprovalsStore {
 }
 
 enum ExecApprovalHelpers {
+    static func validateAllowlistPattern(_ pattern: String?) -> ExecAllowlistPatternValidation {
+        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return .invalid(.empty) }
+        guard self.containsPathComponent(trimmed) else { return .invalid(.missingPathComponent) }
+        return .valid(trimmed)
+    }
+
+    static func isPathPattern(_ pattern: String?) -> Bool {
+        switch self.validateAllowlistPattern(pattern) {
+        case .valid:
+            true
+        case .invalid:
+            false
+        }
+    }
+
     static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return nil }
@@ -573,6 +727,10 @@ enum ExecApprovalHelpers {
     static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {
         let pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? command.first ?? ""
         return pattern.isEmpty ? nil : pattern
+    }
+
+    private static func containsPathComponent(_ pattern: String) -> Bool {
+        pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
     }
 }
 

@@ -236,6 +236,13 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
   "memory.citations": 'Default citation behavior ("auto", "on", or "off").',
   "memory.qmd.command": "Path to the qmd binary (default: resolves from PATH).",
+  "memory.qmd.mcporter":
+    "Optional: route QMD searches through mcporter (MCP runtime) instead of spawning `qmd` per query. Intended to avoid per-search cold starts when QMD models are large.",
+  "memory.qmd.mcporter.enabled": "Enable mcporter-backed QMD searches (default: false).",
+  "memory.qmd.mcporter.serverName":
+    "mcporter server name to call (default: qmd). Server should run `qmd mcp` with lifecycle keep-alive.",
+  "memory.qmd.mcporter.startDaemon":
+    "Start `mcporter daemon start` automatically when enabled (default: true).",
   "memory.qmd.includeDefaultMemory":
     "Whether to automatically index MEMORY.md + memory/**/*.md (default: true).",
   "memory.qmd.paths":
