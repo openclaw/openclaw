@@ -86,6 +86,23 @@ export function resolveImageModelConfigForTool(params: {
   // Even when the primary model supports images, we keep the tool available
   // because images are auto-injected into prompts (see attempt.ts detectAndLoadPromptImages).
   // The tool description is adjusted via modelHasVision to discourage redundant usage.
+
+  const mediaImageModels = params.cfg?.tools?.media?.image?.models;
+
+  if (Array.isArray(mediaImageModels) && mediaImageModels.length > 0) {
+    const refs = mediaImageModels
+      .filter((m) => !m?.type || m.type === "provider")
+      .map((m) => (m?.provider && m?.model ? `${m.provider}/${m.model}` : null))
+      .filter((v): v is string => Boolean(v));
+
+    if (refs.length > 0) {
+      return {
+        primary: refs[0],
+        ...(refs.length > 1 ? { fallbacks: refs.slice(1) } : {}),
+      };
+    }
+  }
+
   const explicit = coerceImageModelConfig(params.cfg);
   if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
     return explicit;
