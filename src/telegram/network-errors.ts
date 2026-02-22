@@ -146,5 +146,22 @@ export function isRecoverableTelegramNetworkError(
     }
   }
 
+  // For send context: message matching is disabled on the full candidate list to
+  // avoid false-positive retries on Telegram API errors ("Bad Request: …"). But
+  // when an HttpError wraps a genuine network failure (e.g. TypeError("fetch
+  // failed")), the inner error is safe to match by message. Re-check only the
+  // inner errors of HttpError nodes. (#22376)
+  if (!allowMessageMatch && err && typeof err === "object" && getErrorName(err) === "HttpError") {
+    const innerError = (err as { error?: unknown }).error;
+    if (innerError) {
+      for (const candidate of collectErrorCandidates(innerError)) {
+        const message = formatErrorMessage(candidate).toLowerCase();
+        if (message && RECOVERABLE_MESSAGE_SNIPPETS.some((s) => message.includes(s))) {
+          return true;
+        }
+      }
+    }
+  }
+
   return false;
 }
