@@ -372,6 +372,13 @@
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* Ensure chat toolbar toggles have a clearly visible active state. */
+.chat-controls .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
 /* Light theme icon button overrides */
 :root[data-theme="light"] .btn--icon {
   background: #ffffff;
@@ -384,6 +391,13 @@
   background: #ffffff;
   border-color: var(--border-strong);
   color: var(--text);
+}
+
+:root[data-theme="light"] .chat-controls .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
 }
 
 .btn--icon svg {
