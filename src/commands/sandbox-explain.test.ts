@@ -10,6 +10,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+const { sandboxExplainCommand } = await import("./sandbox-explain.js");
+
 describe("sandbox explain command", () => {
   it("prints JSON shape + fix-it keys", async () => {
     mockCfg = {
@@ -24,8 +26,6 @@ describe("sandbox explain command", () => {
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };
-
-    const { sandboxExplainCommand } = await import("./sandbox-explain.js");
 
     const logs: string[] = [];
     await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
