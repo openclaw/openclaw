@@ -19,8 +19,6 @@ export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
 
 export const CHANNEL_IDS = [...CHAT_CHANNEL_ORDER] as const;
 
-export const DEFAULT_CHAT_CHANNEL: ChatChannelId = "whatsapp";
-
 export type ChatChannelMeta = ChannelMeta;
 
 const WEBSITE_URL = "https://openclaw.ai";

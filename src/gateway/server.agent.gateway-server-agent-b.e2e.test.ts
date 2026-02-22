@@ -154,7 +154,7 @@ describe("gateway server agent", () => {
     setRegistry(emptyRegistry);
   });
 
-  test("agent falls back when last-channel plugin is unavailable", async () => {
+  test("agent errors when deliver=true and last-channel plugin is unavailable", async () => {
     const registry = createRegistry([
       {
         pluginId: "msteams",
@@ -175,9 +175,10 @@ describe("gateway server agent", () => {
       deliver: true,
       idempotencyKey: "idem-agent-last-msteams",
     });
-    expect(res.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "whatsapp", deliver: true });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toContain("Channel is required");
+    expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
   test("agent accepts channel aliases (imsg/teams)", async () => {
@@ -233,7 +234,7 @@ describe("gateway server agent", () => {
     expect(res.error?.code).toBe("INVALID_REQUEST");
   });
 
-  test("agent ignores webchat last-channel for routing", async () => {
+  test("agent errors when deliver=true and last channel is webchat", async () => {
     testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
@@ -247,9 +248,10 @@ describe("gateway server agent", () => {
       deliver: true,
       idempotencyKey: "idem-agent-webchat",
     });
-    expect(res.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "whatsapp", deliver: true });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
+    expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {

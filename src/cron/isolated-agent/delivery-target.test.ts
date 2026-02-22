@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions.js", () => ({
@@ -223,16 +222,30 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("thread-2");
   });
 
-  it("falls back to default channel when selection probe fails", async () => {
+  it("uses single configured channel when neither explicit nor session channel exists", async () => {
     setMainSessionEntry(undefined);
-    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(new Error("no selection"));
 
     const result = await resolveForAgent({
       cfg: makeCfg({ bindings: [] }),
       target: { channel: "last", to: undefined },
     });
-    expect(result.channel).toBe(DEFAULT_CHAT_CHANNEL);
+    expect(result.channel).toBe("telegram");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("returns an error when channel selection is ambiguous", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+    );
+
+    const result = await resolveForAgent({
+      cfg: makeCfg({ bindings: [] }),
+      target: { channel: "last", to: undefined },
+    });
+    expect(result.channel).toBeUndefined();
     expect(result.to).toBeUndefined();
+    expect(result.error?.message).toContain("Channel is required");
   });
 
   it("uses sessionKey thread entry before main session entry", async () => {
@@ -261,11 +274,12 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBe("thread-chat");
   });
 
-  it("uses channel selection result when no previous session target exists", async () => {
-    setMainSessionEntry(undefined);
-    vi.mocked(resolveMessageChannelSelection).mockResolvedValueOnce({
-      channel: "telegram",
-      configured: ["telegram"],
+  it("uses main session channel when channel=last and session route exists", async () => {
+    setMainSessionEntry({
+      sessionId: "sess-4",
+      updatedAt: 1000,
+      lastChannel: "telegram",
+      lastTo: "987654",
     });
 
     const result = await resolveForAgent({
@@ -274,7 +288,7 @@ describe("resolveDeliveryTarget", () => {
     });
 
     expect(result.channel).toBe("telegram");
-    expect(result.to).toBeUndefined();
-    expect(result.mode).toBe("implicit");
+    expect(result.to).toBe("987654");
+    expect(result.error).toBeUndefined();
   });
 });
