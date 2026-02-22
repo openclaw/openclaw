@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/feishu-media",
+  "version": "2026.2.21",
+  "description": "Feishu native STT, Whisper integration, and media payload utilities for openclaw",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "openclaw": ">= 2026.1.26"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}

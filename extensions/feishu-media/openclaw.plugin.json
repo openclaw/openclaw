@@ -1,0 +1,36 @@
+{
+  "id": "feishu-media",
+  "name": "Feishu Media & STT",
+  "description": "Audio speech-to-text (Feishu native + Whisper) and media payload utilities for feishu channel messages",
+  "kind": "channel",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "sttEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable audio speech-to-text recognition"
+      },
+      "sttProvider": {
+        "type": "string",
+        "enum": ["feishu", "whisper", "auto"],
+        "default": "auto",
+        "description": "STT provider: feishu (native API), whisper (external service or local CLI), auto (try whisper first then feishu)"
+      },
+      "whisperUrl": {
+        "type": "string",
+        "description": "Optional Whisper HTTP service URL. Falls back to OPENCLAW_WHISPER_URL env var or local CLI"
+      },
+      "whisperScript": {
+        "type": "string",
+        "description": "Path to local whisper_stt.py script. Falls back to OPENCLAW_WHISPER_SCRIPT env var"
+      },
+      "sttTimeoutMs": {
+        "type": "number",
+        "default": 30000,
+        "description": "Timeout for STT HTTP requests in milliseconds"
+      }
+    },
+    "additionalProperties": false
+  }
+}

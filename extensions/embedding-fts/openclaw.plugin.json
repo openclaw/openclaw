@@ -1,0 +1,49 @@
+{
+  "id": "embedding-fts",
+  "kind": "memory",
+  "name": "Embedding & FTS",
+  "description": "Unified embedding system with FTS5 fallback, dim-mismatch protection and 429 retry-with-backoff",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Set to true to activate this plugin. Disabled by default."
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["auto", "openai", "gemini", "local", "voyage", "transformer", "none"],
+        "default": "auto",
+        "description": "Embedding provider (auto = cascading fallback)"
+      },
+      "fallback": {
+        "type": "string",
+        "enum": ["openai", "gemini", "local", "voyage", "transformer", "none"],
+        "default": "none",
+        "description": "Fallback provider when primary fails"
+      },
+      "model": {
+        "type": "string",
+        "default": "",
+        "description": "Embedding model id (defaults to provider default)"
+      },
+      "fts5ExtensionPath": {
+        "type": "string",
+        "default": "",
+        "description": "Custom path to the FTS5 loadable extension (auto-detected if empty)"
+      },
+      "retryBaseDelayMs": {
+        "type": "number",
+        "default": 2000,
+        "description": "Base delay in ms for 429 retry-with-backoff"
+      },
+      "retryMaxAttempts": {
+        "type": "number",
+        "default": 3,
+        "description": "Maximum retry attempts on 429/rate-limit"
+      }
+    }
+  }
+}
