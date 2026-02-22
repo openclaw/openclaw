@@ -3,6 +3,14 @@ export type ExtractMode = "markdown" | "text";
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
 const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
 
+// Maximum HTML size (in chars) fed to the regex-based htmlToMarkdown fallback.
+// htmlToMarkdown uses several non-greedy [\s\S]*? patterns that can exhibit
+// catastrophic backtracking on large or malformed HTML. Capping the input here
+// prevents web_fetch from hanging indefinitely on ~1 MB+ pages.
+// We deliberately cap *before* stripping scripts/styles so the limit applies
+// to the raw page size rather than to estimated content density.
+const HTML_TO_MARKDOWN_MAX_CHARS = 500_000;
+
 let readabilityDepsPromise:
   | Promise<{
       Readability: typeof import("@mozilla/readability").Readability;
@@ -56,9 +64,14 @@ function normalizeWhitespace(value: string): string {
 }
 
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
+  // Cap input size to avoid catastrophic backtracking in [\s\S]*? patterns on
+  // large or malformed HTML. The title match runs on the raw input first so
+  // the <title> tag (typically in <head>) is captured before truncation.
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
-  let text = html
+  // Truncate to the cap *before* the expensive regex passes.
+  let text = html.length > HTML_TO_MARKDOWN_MAX_CHARS ? html.slice(0, HTML_TO_MARKDOWN_MAX_CHARS) : html;
+  text = text
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, "");

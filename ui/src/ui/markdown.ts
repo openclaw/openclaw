@@ -2,6 +2,10 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
 
+// Keep global defaults for any un-parameterized marked.parse() calls.
+// Note: in marked v7+ passing any options object to marked.parse() creates an
+// isolated context that does NOT inherit global setOptions values, so we must
+// also forward gfm/breaks explicitly in every marked.parse() call below.
 marked.setOptions({
   gfm: true,
   breaks: true,
@@ -117,6 +121,11 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   const rendered = marked.parse(`${truncated.text}${suffix}`, {
     renderer: htmlEscapeRenderer,
+    // Explicitly forward these options so they are not lost when marked
+    // creates an isolated options context from the options object argument
+    // (marked v7+ behaviour; setOptions() values are not inherited).
+    gfm: true,
+    breaks: true,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
