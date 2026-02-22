@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 test("exec falls back when PTY spawn fails", async () => {
-  const tool = createExecTool({ allowBackground: false });
+  const tool = createExecTool({ allowBackground: false, security: "full", ask: "off" });
   const result = await tool.execute("toolcall", {
     command: "printf ok",
     pty: true,
