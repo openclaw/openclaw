@@ -37,6 +37,7 @@ See [Venice AI](/providers/venice).
 
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [GitHub Copilot](/providers/github-copilot)
 - [Qwen (OAuth)](/providers/qwen)
 - [OpenRouter](/providers/openrouter)
 - [LiteLLM (unified gateway)](/providers/litellm)
