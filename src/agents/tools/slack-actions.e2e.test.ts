@@ -9,10 +9,12 @@ const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackPins = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackReactions = vi.fn(async (..._args: unknown[]) => ({}));
 const pinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const publishSlackHomeTab = vi.fn(async (..._args: unknown[]) => ({}));
 const reactSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
+const resetSlackHomeTab = vi.fn((..._args: unknown[]) => undefined);
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
@@ -27,12 +29,16 @@ vi.mock("../../slack/actions.js", () => ({
   listSlackReactions: (...args: Parameters<typeof listSlackReactions>) =>
     listSlackReactions(...args),
   pinSlackMessage: (...args: Parameters<typeof pinSlackMessage>) => pinSlackMessage(...args),
+  publishSlackHomeTab: (...args: Parameters<typeof publishSlackHomeTab>) =>
+    publishSlackHomeTab(...args),
   reactSlackMessage: (...args: Parameters<typeof reactSlackMessage>) => reactSlackMessage(...args),
   readSlackMessages: (...args: Parameters<typeof readSlackMessages>) => readSlackMessages(...args),
   removeOwnSlackReactions: (...args: Parameters<typeof removeOwnSlackReactions>) =>
     removeOwnSlackReactions(...args),
   removeSlackReaction: (...args: Parameters<typeof removeSlackReaction>) =>
     removeSlackReaction(...args),
+  resetSlackHomeTab: (...args: Parameters<typeof resetSlackHomeTab>) =>
+    resetSlackHomeTab(...args),
   sendSlackMessage: (...args: Parameters<typeof sendSlackMessage>) => sendSlackMessage(...args),
   unpinSlackMessage: (...args: Parameters<typeof unpinSlackMessage>) => unpinSlackMessage(...args),
 }));
@@ -581,5 +587,60 @@ describe("handleSlackAction", () => {
     const emojiKeys = Object.keys(payload.emojis.emoji);
     expect(emojiKeys).toHaveLength(2);
     expect(emojiKeys.every((k) => k in emojiMap)).toBe(true);
+  });
+
+  it("updateHomeTab calls publishSlackHomeTab with userId and blocks", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "Hi" } }];
+    publishSlackHomeTab.mockClear();
+    const result = await handleSlackAction(
+      { action: "updateHomeTab", userId: "U123", blocks },
+      cfg,
+    );
+    expect(publishSlackHomeTab).toHaveBeenCalledWith("U123", blocks);
+    expect(result.details).toEqual({ ok: true });
+  });
+
+  it("updateHomeTab throws when blocks is missing", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction({ action: "updateHomeTab", userId: "U123" }, cfg),
+    ).rejects.toThrow("blocks (array) is required");
+  });
+
+  it("updateHomeTab throws when userId is missing", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(handleSlackAction({ action: "updateHomeTab", blocks: [] }, cfg)).rejects.toThrow();
+  });
+
+  it("updateHomeTab respects homeTab action gate", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "tok", actions: { homeTab: false } } },
+    } as OpenClawConfig;
+    await expect(
+      handleSlackAction({ action: "updateHomeTab", userId: "U123", blocks: [] }, cfg),
+    ).rejects.toThrow("disabled");
+  });
+
+  it("resetHomeTab clears custom view for user", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    resetSlackHomeTab.mockClear();
+    const result = await handleSlackAction({ action: "resetHomeTab", userId: "U123" }, cfg);
+    expect(resetSlackHomeTab).toHaveBeenCalledWith("U123", expect.any(Object));
+    expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("resetHomeTab throws when userId is missing", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(handleSlackAction({ action: "resetHomeTab" }, cfg)).rejects.toThrow();
+  });
+
+  it("resetHomeTab respects homeTab action gate", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "tok", actions: { homeTab: false } } },
+    } as OpenClawConfig;
+    await expect(
+      handleSlackAction({ action: "resetHomeTab", userId: "U123" }, cfg),
+    ).rejects.toThrow("disabled");
   });
 });
