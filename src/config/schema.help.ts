@@ -487,4 +487,6 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+  "models.providers.*.headers":
+    "Extra headers sent on outgoing provider requests. Supports {{sessionKey}} template for per-conversation identifiers (reverse proxy sticky routing).",
 };
