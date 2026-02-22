@@ -63,6 +63,25 @@ const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
+const TRANSIENT_STATUS_PATTERNS: RegExp[] = [
+  /^\s*(?:running|checking|verifying|testing|attempting|executing|restarting|syncing|deploying|validating|loading|processing)\b/i,
+  /^\s*(?:正在|检查中|验证中|测试中|尝试中|执行中|重启中|同步中|部署中|加载中|处理中)/,
+];
+
+function isLikelyTransientStatusText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 120) {
+    return false;
+  }
+  if (/\.{3}$|…$/.test(trimmed)) {
+    return true;
+  }
+  if (/[。！？.!?]$/.test(trimmed)) {
+    return false;
+  }
+  return TRANSIENT_STATUS_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
 function hasUnbackedReminderCommitment(text: string): boolean {
   const normalized = text.toLowerCase();
   if (!normalized.trim()) {
@@ -426,6 +445,8 @@ export async function runReplyAgent(params: {
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
+    const turnUsage = runResult.meta?.agentMeta?.turnUsage;
+    const usageForResponse = turnUsage ?? usage ?? runResult.meta?.agentMeta?.lastCallUsage;
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
@@ -533,19 +554,19 @@ export async function runReplyAgent(params: {
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
+    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usageForResponse)) {
+      const input = usageForResponse.input ?? 0;
+      const output = usageForResponse.output ?? 0;
+      const cacheRead = usageForResponse.cacheRead ?? 0;
+      const cacheWrite = usageForResponse.cacheWrite ?? 0;
       const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const totalTokens = usageForResponse.total ?? promptTokens + output;
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
         config: cfg,
       });
-      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const costUsd = estimateUsageCost({ usage: usageForResponse, cost: costConfig });
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey,
@@ -575,7 +596,7 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
-    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usageForResponse)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
       const costConfig = showCost
@@ -586,7 +607,7 @@ export async function runReplyAgent(params: {
           })
         : undefined;
       let formatted = formatResponseUsageLine({
-        usage,
+        usage: usageForResponse,
         showCost,
         costConfig,
       });
@@ -695,7 +716,16 @@ export async function runReplyAgent(params: {
     if (verboseNotices.length > 0) {
       finalPayloads = [...verboseNotices, ...finalPayloads];
     }
-    if (responseUsageLine) {
+    // Show usage for normal final replies (even short ones), but suppress it for
+    // transient operational status blurbs like "Running..." / "Checking...".
+    const shouldAppendUsageLine = guardedReplyPayloads.some((payload) => {
+      const text = payload.text?.trim();
+      if (!text) {
+        return false;
+      }
+      return !isLikelyTransientStatusText(text);
+    });
+    if (responseUsageLine && shouldAppendUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
