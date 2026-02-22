@@ -321,10 +321,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: baseText ?? text,
+    BodyForAgent: text,
     InboundHistory: inboundHistory,
-    RawBody: baseText,
-    CommandBody: baseText,
+    RawBody: text,
+    CommandBody: text,
     From: effectiveFrom,
     To: effectiveTo,
     SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
