@@ -225,9 +225,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     collectWarnings: ({ cfg, accountId }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
       const feishuCfg = account.config;
-      const defaultGroupPolicy = (
-        cfg.channels as Record<string, { groupPolicy?: string }> | undefined
-      )?.defaults?.groupPolicy;
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const { groupPolicy } = resolveRuntimeGroupPolicy({
         providerConfigPresent: cfg.channels?.feishu !== undefined,
         groupPolicy: feishuCfg?.groupPolicy,
