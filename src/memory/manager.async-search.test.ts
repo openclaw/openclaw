@@ -42,7 +42,7 @@ describe("memory search async sync", () => {
     }) as OpenClawConfig;
 
   beforeEach(async () => {
-    embedBatch.mockReset();
+    embedBatch.mockClear();
     embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
     indexPath = path.join(workspaceDir, "index.sqlite");

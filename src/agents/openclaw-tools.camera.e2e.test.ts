@@ -39,7 +39,7 @@ function mockNodeList(commands?: string[]) {
 }
 
 beforeEach(() => {
-  callGateway.mockReset();
+  callGateway.mockClear();
 });
 
 describe("nodes camera_snap", () => {
