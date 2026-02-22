@@ -1,8 +1,9 @@
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
+  beginQueueDrain,
   clearQueueSummaryState,
-  drainCollectItemIfNeeded,
+  drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
@@ -16,14 +17,13 @@ export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
-  const queue = FOLLOWUP_QUEUES.get(key);
-  if (!queue || queue.draining) {
+  const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
+  if (!queue) {
     return;
   }
-  queue.draining = true;
   void (async () => {
     try {
-      let forceIndividualCollect = false;
+      const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
@@ -50,12 +50,9 @@ export function scheduleFollowupDrain(
             };
           });
 
-          const collectDrainResult = await drainCollectItemIfNeeded({
-            forceIndividualCollect,
+          const collectDrainResult = await drainCollectQueueStep({
+            collectState,
             isCrossChannel,
-            setForceIndividualCollect: (next) => {
-              forceIndividualCollect = next;
-            },
             items: queue.items,
             run: runFollowup,
           });
