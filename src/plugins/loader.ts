@@ -624,12 +624,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     try {
       const result = register(api);
       if (result && typeof result.then === "function") {
+        record.status = "error";
+        record.error = "plugin register() must be synchronous; async registration is not supported";
         registry.diagnostics.push({
-          level: "warn",
+          level: "error",
           pluginId: record.id,
           source: record.source,
-          message: "plugin register returned a promise; async registration is ignored",
+          message:
+            "plugin register() returned a promise; async registration is not supported — use synchronous calls only",
         });
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
