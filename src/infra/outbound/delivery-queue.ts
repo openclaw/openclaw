@@ -128,7 +128,18 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
-  const entry: QueuedDelivery = JSON.parse(raw);
+  let entry: QueuedDelivery;
+  try {
+    entry = JSON.parse(raw) as QueuedDelivery;
+  } catch {
+    // Corrupt queue file — move to failed/ to prevent infinite retries.
+    try {
+      await moveToFailed(id, stateDir);
+    } catch {
+      // File already deleted or inaccessible — no further action needed.
+    }
+    return;
+  }
   entry.retryCount += 1;
   entry.lastError = error;
   const tmp = `${filePath}.${process.pid}.tmp`;
