@@ -100,7 +100,7 @@ export const usageStylesPart2 = `
     color: var(--text);
   }
   .chart-toggle .toggle-btn.active {
-    background: var(--accent);
+    background: #ff4d4d;
     color: white;
   }
   .chart-toggle.small .toggle-btn {
@@ -157,14 +157,14 @@ export const usageStylesPart2 = `
   .daily-bar {
     width: 100%;
     max-width: var(--bar-max-width, 32px);
-    background: var(--accent);
+    background: #ff4d4d;
     border-radius: 3px 3px 0 0;
     min-height: 2px;
     transition: all 0.15s;
     overflow: hidden;
   }
   .daily-bar-wrapper:hover .daily-bar {
-    background: var(--accent-strong);
+    background: #cc3d3d;
   }
   .daily-bar-label {
     position: absolute;
@@ -282,7 +282,7 @@ export const usageStylesPart2 = `
     background: #06b6d4;
   }
   .legend-dot.system {
-    background: var(--accent);
+    background: #ff4d4d;
   }
   .legend-dot.skills {
     background: #8b5cf6;
@@ -360,7 +360,7 @@ export const usageStylesPart2 = `
   }
   .session-bar-fill {
     height: 100%;
-    background: color-mix(in srgb, var(--accent) 70%, transparent);
+    background: rgba(255, 77, 77, 0.7);
     border-radius: 4px;
     transition: width 0.3s ease;
   }
@@ -431,27 +431,27 @@ export const usageStylesPart2 = `
     fill: var(--muted);
   }
   .timeseries-svg .ts-area {
-    fill: var(--accent);
+    fill: #ff4d4d;
     fill-opacity: 0.1;
   }
   .timeseries-svg .ts-line {
     fill: none;
-    stroke: var(--accent);
+    stroke: #ff4d4d;
     stroke-width: 2;
   }
   .timeseries-svg .ts-dot {
-    fill: var(--accent);
+    fill: #ff4d4d;
     transition: r 0.15s, fill 0.15s;
   }
   .timeseries-svg .ts-dot:hover {
     r: 5;
   }
   .timeseries-svg .ts-bar {
-    fill: var(--accent);
+    fill: #ff4d4d;
     transition: fill 0.15s;
   }
   .timeseries-svg .ts-bar:hover {
-    fill: var(--accent-strong);
+    fill: #cc3d3d;
   }
   .timeseries-svg .ts-bar.output { fill: #ef4444; }
   .timeseries-svg .ts-bar.input { fill: #f59e0b; }
@@ -582,7 +582,7 @@ export const usageStylesPart2 = `
     transition: width 0.3s ease;
   }
   .context-segment.system {
-    background: var(--accent);
+    background: #ff4d4d;
   }
   .context-segment.skills {
     background: #8b5cf6;
