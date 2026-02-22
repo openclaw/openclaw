@@ -4,6 +4,7 @@ import {
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
+import { retryHttpAsync } from "../infra/retry-http.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
@@ -73,11 +74,15 @@ export async function createGeminiEmbeddingProvider(
       ...authHeaders.headers,
       ...client.headers,
     };
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    const res = await retryHttpAsync(
+      () =>
+        fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        }),
+      { label: "gemini-embeddings" },
+    );
     if (!res.ok) {
       const payload = await res.text();
       throw new Error(`gemini embeddings failed: ${res.status} ${payload}`);

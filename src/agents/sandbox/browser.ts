@@ -6,6 +6,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "../../browser/constants.js";
+import { retryHttpAsync } from "../../infra/retry-http.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
@@ -48,7 +49,9 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
       const ctrl = new AbortController();
       const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
       try {
-        const res = await fetch(url, { signal: ctrl.signal });
+        const res = await retryHttpAsync(() => fetch(url, { signal: ctrl.signal }), {
+          label: "sandbox-cdp-wait",
+        });
         if (res.ok) {
           return true;
         }

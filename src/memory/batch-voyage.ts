@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
+import { retryHttpAsync } from "../infra/retry-http.js";
 import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
@@ -80,9 +81,13 @@ async function fetchVoyageBatchStatus(params: {
   batchId: string;
 }): Promise<VoyageBatchStatus> {
   const baseUrl = normalizeBatchBaseUrl(params.client);
-  const res = await fetch(`${baseUrl}/batches/${params.batchId}`, {
-    headers: buildBatchHeaders(params.client, { json: true }),
-  });
+  const res = await retryHttpAsync(
+    () =>
+      fetch(`${baseUrl}/batches/${params.batchId}`, {
+        headers: buildBatchHeaders(params.client, { json: true }),
+      }),
+    { label: "voyage-batch-status" },
+  );
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`voyage batch status failed: ${res.status} ${text}`);
@@ -96,9 +101,13 @@ async function readVoyageBatchError(params: {
 }): Promise<string | undefined> {
   try {
     const baseUrl = normalizeBatchBaseUrl(params.client);
-    const res = await fetch(`${baseUrl}/files/${params.errorFileId}/content`, {
-      headers: buildBatchHeaders(params.client, { json: true }),
-    });
+    const res = await retryHttpAsync(
+      () =>
+        fetch(`${baseUrl}/files/${params.errorFileId}/content`, {
+          headers: buildBatchHeaders(params.client, { json: true }),
+        }),
+      { label: "voyage-batch-error-file" },
+    );
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`voyage batch error file content failed: ${res.status} ${text}`);
@@ -228,9 +237,13 @@ export async function runVoyageEmbeddingBatches(params: {
       }
 
       const baseUrl = normalizeBatchBaseUrl(params.client);
-      const contentRes = await fetch(`${baseUrl}/files/${completed.outputFileId}/content`, {
-        headers: buildBatchHeaders(params.client, { json: true }),
-      });
+      const contentRes = await retryHttpAsync(
+        () =>
+          fetch(`${baseUrl}/files/${completed.outputFileId}/content`, {
+            headers: buildBatchHeaders(params.client, { json: true }),
+          }),
+        { label: "voyage-batch-output-file" },
+      );
       if (!contentRes.ok) {
         const text = await contentRes.text();
         throw new Error(`voyage batch file content failed: ${contentRes.status} ${text}`);

@@ -1,5 +1,6 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "../../infra/net/hostname.js";
+import { retryHttpAsync } from "../../infra/retry-http.js";
 import type { FetchLike } from "../../media/fetch.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -61,11 +62,18 @@ function createSlackMediaFetch(token: string): FetchLike {
       includeAuth = false;
       const parsed = assertSlackFileUrl(url);
       headers.set("Authorization", `Bearer ${token}`);
-      return fetch(parsed.href, { ...rest, headers, redirect: "manual" });
+      return await retryHttpAsync(
+        () => fetch(parsed.href, { ...rest, headers, redirect: "manual" }),
+        {
+          label: "slack-media-fetch-auth",
+        },
+      );
     }
 
     headers.delete("Authorization");
-    return fetch(url, { ...rest, headers, redirect: "manual" });
+    return await retryHttpAsync(() => fetch(url, { ...rest, headers, redirect: "manual" }), {
+      label: "slack-media-fetch",
+    });
   };
 }
 
@@ -79,10 +87,14 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   const parsed = assertSlackFileUrl(url);
 
   // Initial request with auth and manual redirect handling
-  const initialRes = await fetch(parsed.href, {
-    headers: { Authorization: `Bearer ${token}` },
-    redirect: "manual",
-  });
+  const initialRes = await retryHttpAsync(
+    () =>
+      fetch(parsed.href, {
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: "manual",
+      }),
+    { label: "slack-auth-initial" },
+  );
 
   // If not a redirect, return the response directly
   if (initialRes.status < 300 || initialRes.status >= 400) {
@@ -105,7 +117,9 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
 
   // Follow the redirect without the Authorization header
   // (Slack's CDN URLs are pre-signed and don't need it)
-  return fetch(resolvedUrl.toString(), { redirect: "follow" });
+  return await retryHttpAsync(() => fetch(resolvedUrl.toString(), { redirect: "follow" }), {
+    label: "slack-auth-redirect",
+  });
 }
 
 /**

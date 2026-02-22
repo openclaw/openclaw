@@ -6,6 +6,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { extractArchive } from "../infra/archive.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { retryHttpAsync } from "../infra/retry-http.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -216,12 +217,16 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
 async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
-  const response = await fetch(apiUrl, {
-    headers: {
-      "User-Agent": "openclaw",
-      Accept: "application/vnd.github+json",
-    },
-  });
+  const response = await retryHttpAsync(
+    () =>
+      fetch(apiUrl, {
+        headers: {
+          "User-Agent": "openclaw",
+          Accept: "application/vnd.github+json",
+        },
+      }),
+    { label: "signal-cli-release-fetch" },
+  );
 
   if (!response.ok) {
     return {
