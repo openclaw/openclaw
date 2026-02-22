@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -42,7 +43,6 @@ import {
   validateAgentsUpdateParams,
 } from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -60,6 +60,8 @@ const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+const MEMORY_DIR_NAME = "memory";
+const MEMORY_FILE_RELATIVE_RE = /^memory\/[A-Za-z0-9._-]+\.md$/;
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
@@ -84,7 +86,7 @@ function resolveAgentWorkspaceFileOrRespondError(
   const name = (
     typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
   ).trim();
-  if (!ALLOWED_FILE_NAMES.has(name)) {
+  if (!ALLOWED_FILE_NAMES.has(name) && !isAllowedMemoryRelativePath(name)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
   }
@@ -110,6 +112,69 @@ async function statFile(filePath: string): Promise<FileMeta | null> {
   } catch {
     return null;
   }
+}
+
+function isAllowedMemoryRelativePath(name: string): boolean {
+  if (!MEMORY_FILE_RELATIVE_RE.test(name)) {
+    return false;
+  }
+  const normalized = path.posix.normalize(name);
+  return normalized === name;
+}
+
+async function listMemoryFiles(
+  workspaceDir: string,
+): Promise<
+  Array<{ name: string; path: string; missing: boolean; size?: number; updatedAtMs?: number }>
+> {
+  const memoryDir = path.join(workspaceDir, MEMORY_DIR_NAME);
+  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  try {
+    entries = await fs.readdir(memoryDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: Array<{
+    name: string;
+    path: string;
+    missing: boolean;
+    size?: number;
+    updatedAtMs?: number;
+  }> = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const entryName = typeof entry.name === "string" ? entry.name : "";
+    if (!entryName) {
+      continue;
+    }
+    if (!entryName.endsWith(".md")) {
+      continue;
+    }
+    if (!/^[A-Za-z0-9._-]+\.md$/.test(entryName)) {
+      continue;
+    }
+    const relativeName = [MEMORY_DIR_NAME, entryName].join("/");
+    if (!isAllowedMemoryRelativePath(relativeName)) {
+      continue;
+    }
+    const filePath = path.join(memoryDir, entryName);
+    const meta = await statFile(filePath);
+    if (!meta) {
+      continue;
+    }
+    files.push({
+      name: relativeName,
+      path: filePath,
+      missing: false,
+      size: meta.size,
+      updatedAtMs: meta.updatedAtMs,
+    });
+  }
+
+  return files.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
@@ -165,6 +230,8 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       files.push({ name: DEFAULT_MEMORY_FILENAME, path: primaryMemoryPath, missing: true });
     }
   }
+
+  files.push(...(await listMemoryFiles(workspaceDir)));
 
   return files;
 }
