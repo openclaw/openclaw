@@ -20,6 +20,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "unpin",
   "list-pins",
   "permissions",
+  "resolveUser",
   "thread-create",
   "thread-list",
   "thread-reply",

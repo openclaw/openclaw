@@ -205,6 +205,18 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "resolveUser") {
+    const query = readStringParam(params, "query", { required: true });
+    return await handleDiscordAction(
+      {
+        action: "resolveUser",
+        accountId: accountId ?? undefined,
+        query,
+      },
+      cfg,
+    );
+  }
+
   if (action === "thread-create") {
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
