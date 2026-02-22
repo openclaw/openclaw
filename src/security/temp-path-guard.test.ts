@@ -338,7 +338,7 @@ describe("temp path guard", () => {
           continue;
         }
         const source = await fs.readFile(file, "utf8");
-        if (hasDynamicTmpdirJoin(source, relativePath)) {
+        if (hasDynamicTmpdirJoin(source)) {
           offenders.push(relativePath);
         }
       }

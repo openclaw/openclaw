@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
-import type { OpenClawConfig, loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import { resolveGatewayProbeAuth } from "./probe-auth.js";
