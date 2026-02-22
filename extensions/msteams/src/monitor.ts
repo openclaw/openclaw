@@ -313,12 +313,25 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
-  if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
-    });
-  }
+  // Keep the provider running until the abort signal fires.
+  // The channel manager interprets a resolved/rejected promise as "provider exited"
+  // and triggers auto-restart with exponential backoff — which causes EADDRINUSE
+  // because the previous server is still bound to the port (openclaw#22169).
+  //
+  // Webhook-based providers must hold the promise pending until shutdown, matching
+  // the contract used by other webhook providers (e.g. BlueBubbles).
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      void shutdown().then(resolve);
+    };
+
+    if (opts.abortSignal?.aborted) {
+      stop();
+      return;
+    }
+
+    opts.abortSignal?.addEventListener("abort", stop, { once: true });
+  });
 
   return { app: expressApp, shutdown };
 }
