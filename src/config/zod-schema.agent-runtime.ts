@@ -21,10 +21,10 @@ export const HeartbeatSchema = z
       })
       .strict()
       .optional(),
-    model: z.string().optional(),
+    model: AgentModelSchema.optional(),
     session: z.string().optional(),
     includeReasoning: z.boolean().optional(),
-    target: z.string().optional(),
+    target: z.union([z.literal("last"), z.literal("none"), z.string()]).optional(),
     to: z.string().optional(),
     accountId: z.string().optional(),
     prompt: z.string().optional(),

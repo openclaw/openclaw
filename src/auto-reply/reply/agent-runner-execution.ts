@@ -169,8 +169,11 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      const fallbackOptions = resolveModelFallbackOptions(params.followupRun.run);
       const fallbackResult = await runWithModelFallback({
-        ...resolveModelFallbackOptions(params.followupRun.run),
+        ...fallbackOptions,
+        fallbacksOverride:
+          params.opts?.heartbeatFallbacksOverride ?? fallbackOptions.fallbacksOverride,
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.

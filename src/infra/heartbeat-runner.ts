@@ -34,7 +34,7 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { AgentDefaultsConfig, AgentModelListConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -91,7 +91,7 @@ export type HeartbeatSummary = {
   everyMs: number | null;
   prompt: string;
   target: string;
-  model?: string;
+  model?: string | AgentModelListConfig;
   ackMaxChars: number;
 };
 
@@ -717,12 +717,45 @@ export async function runHeartbeatOnce(opts: {
       agentId,
     });
 
-    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    let runCfg = cfg;
+    const heartbeatModel = heartbeat?.model;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
-    const replyOpts = heartbeatModelOverride
-      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
-      : { isHeartbeat: true, suppressToolErrorWarnings };
-    const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    let replyOpts: {
+      isHeartbeat: true;
+      heartbeatModelOverride?: string;
+      suppressToolErrorWarnings: boolean;
+    } = { isHeartbeat: true, suppressToolErrorWarnings };
+
+    if (typeof heartbeatModel === "string") {
+      // Simple string model: pass as override
+      const heartbeatModelOverride = heartbeatModel.trim() || undefined;
+      if (heartbeatModelOverride) {
+        replyOpts = { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings };
+      }
+    } else if (heartbeatModel && typeof heartbeatModel === "object") {
+      // Complex primary/fallbacks: synthesize config so fallback logic works end-to-end
+      const filteredList = (cfg.agents?.list ?? []).filter(
+        (a) => normalizeAgentId(a.id) !== normalizeAgentId(agentId),
+      );
+
+      runCfg = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          list: filteredList,
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: heartbeatModel,
+            heartbeat: {
+              ...cfg.agents?.defaults?.heartbeat,
+              model: undefined,
+            },
+          },
+        },
+      };
+    }
+
+    const replyResult = await getReplyFromConfig(ctx, replyOpts, runCfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
