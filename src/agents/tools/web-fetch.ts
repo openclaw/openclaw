@@ -43,6 +43,7 @@ const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const MARKDOWN_FETCH_USER_AGENT = "OpenClaw/1.0 (AI Agent)";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
@@ -523,6 +524,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
+    const effectiveUserAgent =
+      params.extractMode === "markdown" && params.userAgent === DEFAULT_FETCH_USER_AGENT
+        ? MARKDOWN_FETCH_USER_AGENT
+        : params.userAgent;
+
     const result = await fetchWithSsrFGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
@@ -530,7 +536,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
+          "User-Agent": effectiveUserAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
