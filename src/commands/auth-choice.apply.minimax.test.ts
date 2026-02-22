@@ -44,7 +44,7 @@ describe("applyAuthChoiceMiniMax", () => {
 
   async function readAuthProfiles(agentDir: string) {
     return await readAuthProfilesForAgent<{
-      profiles?: Record<string, { key?: string }>;
+      profiles?: Record<string, { key?: string; keyRef?: { source: string; id: string } }>;
     }>(agentDir);
   }
 
@@ -154,7 +154,10 @@ describe("applyAuthChoiceMiniMax", () => {
     expect(confirm).toHaveBeenCalled();
 
     const parsed = await readAuthProfiles(agentDir);
-    expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe("mm-env-token");
+    expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toEqual({
+      source: "env",
+      id: "MINIMAX_API_KEY",
+    });
   });
 
   it("uses minimax-api-lightning default model", async () => {
