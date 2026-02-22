@@ -9,9 +9,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { isLoopbackAddress } from "../gateway/net.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
@@ -340,7 +343,7 @@ function collectGatewayConfigFindings(
 
   if (allowRealIpFallback) {
     const hasNonLoopbackTrustedProxy = trustedProxies.some(
-      (proxy) => !isLoopbackOnlyTrustedProxyEntry(proxy),
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
     );
     const exposed =
       bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
@@ -508,13 +511,15 @@ function collectGatewayConfigFindings(
   return findings;
 }
 
-function isLoopbackOnlyTrustedProxyEntry(entry: string): boolean {
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
   const candidate = entry.trim();
   if (!candidate) {
     return false;
   }
   if (!candidate.includes("/")) {
-    return isLoopbackAddress(candidate);
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
   }
 
   const [rawIp, rawPrefix] = candidate.split("/", 2);
@@ -527,11 +532,7 @@ function isLoopbackOnlyTrustedProxyEntry(entry: string): boolean {
     return false;
   }
   if (ipVersion === 4) {
-    if (prefix < 8 || prefix > 32) {
-      return false;
-    }
-    const firstOctet = Number.parseInt(rawIp.trim().split(".")[0] ?? "", 10);
-    return firstOctet === 127;
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
   }
   if (ipVersion === 6) {
     return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
@@ -695,6 +696,65 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         "With sandbox mode off, exec runs directly on the gateway host.",
       remediation:
         'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+    });
+  }
+
+  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    return Array.from(
+      new Set(
+        entries
+          .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+          .filter((entry) => entry.length > 0),
+      ),
+    ).toSorted();
+  };
+  const interpreterHits: string[] = [];
+  const globalExec = cfg.tools?.exec;
+  const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
+  if (globalSafeBins.length > 0) {
+    const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length > 0) {
+      interpreterHits.push(`- tools.exec.safeBins: ${interpreters.join(", ")}`);
+    }
+  }
+
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const agentExec = entry.tools?.exec;
+    const agentSafeBins = normalizeConfiguredSafeBins(agentExec?.safeBins);
+    if (agentSafeBins.length === 0) {
+      continue;
+    }
+    const merged =
+      resolveMergedSafeBinProfileFixtures({
+        global: globalExec,
+        local: agentExec,
+      }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length === 0) {
+      continue;
+    }
+    interpreterHits.push(
+      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+    );
+  }
+
+  if (interpreterHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bins_interpreter_unprofiled",
+      severity: "warn",
+      title: "safeBins includes interpreter/runtime binaries without explicit profiles",
+      detail:
+        `Detected interpreter-like safeBins entries missing explicit profiles:\n${interpreterHits.join("\n")}\n` +
+        "These entries can turn safeBins into a broad execution surface when used with permissive argv profiles.",
+      remediation:
+        "Remove interpreter/runtime bins from safeBins (prefer allowlist entries) or define hardened tools.exec.safeBinProfiles.<bin> rules.",
     });
   }
 

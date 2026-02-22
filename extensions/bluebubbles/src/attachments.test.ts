@@ -4,7 +4,12 @@ import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
-import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
+import {
+  BLUE_BUBBLES_PRIVATE_API_STATUS,
+  installBlueBubblesFetchTestHooks,
+  mockBlueBubblesPrivateApiStatus,
+  mockBlueBubblesPrivateApiStatusOnce,
+} from "./test-harness.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
@@ -278,7 +283,10 @@ describe("sendBlueBubblesAttachment", () => {
     fetchRemoteMediaMock.mockClear();
     setBlueBubblesRuntime(runtimeStub);
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
+    mockBlueBubblesPrivateApiStatus(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.unknown,
+    );
   });
 
   afterEach(() => {
@@ -381,7 +389,10 @@ describe("sendBlueBubblesAttachment", () => {
   });
 
   it("downgrades attachment reply threading when private API is disabled", async () => {
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+    mockBlueBubblesPrivateApiStatusOnce(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+    );
     mockFetch.mockResolvedValueOnce({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ messageId: "msg-4" })),
@@ -399,6 +410,34 @@ describe("sendBlueBubblesAttachment", () => {
     const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
     const bodyText = decodeBody(body);
     expect(bodyText).not.toContain('name="method"');
+    expect(bodyText).not.toContain('name="selectedMessageGuid"');
+    expect(bodyText).not.toContain('name="partIndex"');
+  });
+
+  it("warns and downgrades attachment reply threading when private API status is unknown", async () => {
+    const runtimeLog = vi.fn();
+    setBlueBubblesRuntime({
+      ...runtimeStub,
+      log: runtimeLog,
+    } as unknown as PluginRuntime);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-5" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      replyToMessageGuid: "reply-guid-unknown",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    expect(runtimeLog).toHaveBeenCalledTimes(1);
+    expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
     expect(bodyText).not.toContain('name="selectedMessageGuid"');
     expect(bodyText).not.toContain('name="partIndex"');
   });

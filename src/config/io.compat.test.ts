@@ -77,4 +77,60 @@ describe("config io paths", () => {
       expect(io.loadConfig().gateway?.port).toBe(20003);
     });
   });
+
+  it("normalizes safeBinProfiles at config load time", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            tools: {
+              exec: {
+                safeBinProfiles: {
+                  " MyFilter ": {
+                    allowedValueFlags: ["--limit", " --limit ", ""],
+                  },
+                },
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "ops",
+                  tools: {
+                    exec: {
+                      safeBinProfiles: {
+                        " Custom ": {
+                          deniedFlags: ["-f", " -f ", ""],
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      const io = createIoForHome(home);
+      expect(io.configPath).toBe(configPath);
+      const cfg = io.loadConfig();
+      expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
+        myfilter: {
+          allowedValueFlags: ["--limit"],
+        },
+      });
+      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+        custom: {
+          deniedFlags: ["-f"],
+        },
+      });
+    });
+  });
 });

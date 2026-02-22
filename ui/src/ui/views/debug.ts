@@ -1,12 +1,13 @@
 import { html, nothing } from "lit";
 import type { EventLogEntry } from "../app-events.ts";
 import { formatEventPayload } from "../presenter.ts";
+import type { HealthSummary, ModelCatalogEntry } from "../types.ts";
 
 export type DebugProps = {
   loading: boolean;
   status: Record<string, unknown> | null;
-  health: Record<string, unknown> | null;
-  models: unknown[];
+  health: HealthSummary | null;
+  models: ModelCatalogEntry[];
   heartbeat: unknown;
   eventLog: EventLogEntry[];
   callMethod: string;
@@ -119,26 +120,49 @@ export function renderDebug(props: DebugProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Event Log</div>
-      <div class="card-sub">Latest gateway events.</div>
+      <div class="row" style="justify-content: space-between; align-items: baseline;">
+        <div>
+          <div class="card-title">Event Log</div>
+          <div class="card-sub">Latest gateway events.</div>
+        </div>
+        ${
+          props.eventLog.length > 0
+            ? html`<button
+                class="btn btn-sm"
+                @click=${(e: Event) => {
+                  const section = (e.target as HTMLElement).closest("section")!;
+                  const details = section.querySelectorAll<HTMLDetailsElement>(
+                    "details.debug-event-entry",
+                  );
+                  const allOpen = Array.from(details).every((d) => d.open);
+                  details.forEach((d) => (d.open = !allOpen));
+                }}
+              >${"Expand All / Collapse All"}</button>`
+            : nothing
+        }
+      </div>
       ${
         props.eventLog.length === 0
           ? html`
               <div class="muted" style="margin-top: 12px">No events yet.</div>
             `
           : html`
-            <div class="list" style="margin-top: 12px;">
+            <div class="debug-event-log-scroll">
               ${props.eventLog.map(
                 (evt) => html`
-                  <div class="list-item">
-                    <div class="list-main">
-                      <div class="list-title">${evt.event}</div>
-                      <div class="list-sub">${new Date(evt.ts).toLocaleTimeString()}</div>
-                    </div>
-                    <div class="list-meta">
-                      <pre class="code-block">${formatEventPayload(evt.payload)}</pre>
-                    </div>
-                  </div>
+                  <details class="debug-event-entry">
+                    <summary class="debug-event-summary">
+                      <span class="debug-event-name">${evt.event}</span>
+                      <span class="debug-event-ts muted">${new Date(evt.ts).toLocaleTimeString()}</span>
+                    </summary>
+                    ${
+                      evt.payload
+                        ? html`<pre class="code-block debug-event-payload">${formatEventPayload(evt.payload)}</pre>`
+                        : html`
+                            <div class="muted" style="padding: 8px 0 4px">No payload.</div>
+                          `
+                    }
+                  </details>
                 `,
               )}
             </div>

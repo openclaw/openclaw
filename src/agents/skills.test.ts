@@ -380,24 +380,26 @@ describe("applySkillEnvOverrides", () => {
       metadata: '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]}}}',
     });
 
+    const config = {
+      skills: {
+        entries: {
+          "snapshot-env-skill": {
+            env: {
+              OPENAI_API_KEY: "snap-secret",
+            },
+          },
+        },
+      },
+    };
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config,
     });
 
     withClearedEnv(["OPENAI_API_KEY"], () => {
       const restore = applySkillEnvOverridesFromSnapshot({
         snapshot,
-        config: {
-          skills: {
-            entries: {
-              "snapshot-env-skill": {
-                env: {
-                  OPENAI_API_KEY: "snap-secret",
-                },
-              },
-            },
-          },
-        },
+        config,
       });
 
       try {

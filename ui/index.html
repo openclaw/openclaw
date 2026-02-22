@@ -8,6 +8,18 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <script>
+      (function () {
+        var VALID = ["dark", "light", "openknot", "fieldmanual", "openai", "clawdash"];
+        try {
+          var s = JSON.parse(localStorage.getItem("openclaw.control.settings.v1") || "{}");
+          var t = s && s.theme;
+          if (t && VALID.indexOf(t) !== -1) {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <openclaw-app></openclaw-app>

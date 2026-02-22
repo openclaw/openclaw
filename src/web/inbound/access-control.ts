@@ -1,4 +1,9 @@
 import { loadConfig } from "../../config/config.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -16,6 +21,21 @@ export type InboundAccessControlResult = {
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
+
+function resolveWhatsAppRuntimeGroupPolicy(params: {
+  providerConfigPresent: boolean;
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  defaultGroupPolicy?: "open" | "allowlist" | "disabled";
+}): {
+  groupPolicy: "open" | "allowlist" | "disabled";
+  providerMissingFallbackApplied: boolean;
+} {
+  return resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.groupPolicy,
+    defaultGroupPolicy: params.defaultGroupPolicy,
+  });
+}
 
 export async function checkInboundAccessControl(params: {
   accountId: string;
@@ -81,8 +101,18 @@ export async function checkInboundAccessControl(params: {
   // - "open": groups bypass allowFrom, only mention-gating applies
   // - "disabled": block all group messages entirely
   // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } = resolveWhatsAppRuntimeGroupPolicy({
+    providerConfigPresent: cfg.channels?.whatsapp !== undefined,
+    groupPolicy: account.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "whatsapp",
+    accountId: account.accountId,
+    log: (message) => logVerbose(message),
+  });
   if (params.group && groupPolicy === "disabled") {
     logVerbose("Blocked group message (groupPolicy: disabled)");
     return {
@@ -191,3 +221,7 @@ export async function checkInboundAccessControl(params: {
     resolvedAccountId: account.accountId,
   };
 }
+
+export const __testing = {
+  resolveWhatsAppRuntimeGroupPolicy,
+};

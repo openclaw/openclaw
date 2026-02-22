@@ -1,7 +1,7 @@
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
@@ -11,7 +11,13 @@ import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { fetchTelegramChatId } from "../../telegram/api.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
+import {
+  addWildcardAllowFrom,
+  mergeAllowFromEntries,
+  resolveAccountIdForConfigure,
+  resolveOnboardingAccountId,
+  splitOnboardingEntries,
+} from "./helpers.js";
 
 const channel = "telegram" as const;
 
@@ -89,12 +95,6 @@ async function promptTelegramAllowFrom(params: {
     return await fetchTelegramChatId({ token, chatId: username });
   };
 
-  const parseInput = (value: string) =>
-    value
-      .split(/[\n,;]+/g)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-
   let resolvedIds: string[] = [];
   while (resolvedIds.length === 0) {
     const entry = await prompter.text({
@@ -103,7 +103,7 @@ async function promptTelegramAllowFrom(params: {
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
-    const parts = parseInput(String(entry));
+    const parts = splitOnboardingEntries(String(entry));
     const results = await Promise.all(parts.map((part) => resolveTelegramUserId(part)));
     const unresolved = parts.filter((_, idx) => !results[idx]);
     if (unresolved.length > 0) {
@@ -159,10 +159,10 @@ async function promptTelegramAllowFromForAccount(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const accountId =
-    params.accountId && normalizeAccountId(params.accountId)
-      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
-      : resolveDefaultTelegramAccountId(params.cfg);
+  const accountId = resolveOnboardingAccountId({
+    accountId: params.accountId,
+    defaultAccountId: resolveDefaultTelegramAccountId(params.cfg),
+  });
   return promptTelegramAllowFrom({
     cfg: params.cfg,
     prompter: params.prompter,
@@ -201,21 +201,16 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    const telegramOverride = accountOverrides.telegram?.trim();
     const defaultTelegramAccountId = resolveDefaultTelegramAccountId(cfg);
-    let telegramAccountId = telegramOverride
-      ? normalizeAccountId(telegramOverride)
-      : defaultTelegramAccountId;
-    if (shouldPromptAccountIds && !telegramOverride) {
-      telegramAccountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Telegram",
-        currentId: telegramAccountId,
-        listAccountIds: listTelegramAccountIds,
-        defaultAccountId: defaultTelegramAccountId,
-      });
-    }
+    const telegramAccountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Telegram",
+      accountOverride: accountOverrides.telegram,
+      shouldPromptAccountIds,
+      listAccountIds: listTelegramAccountIds,
+      defaultAccountId: defaultTelegramAccountId,
+    });
 
     let next = cfg;
     const resolvedAccount = resolveTelegramAccount({

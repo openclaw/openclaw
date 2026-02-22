@@ -16,7 +16,10 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
+  warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
@@ -242,6 +245,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.mattermost !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "mattermost",
+    accountId: account.accountId,
+    log: (message) => logVerboseMessage(message),
+  });
 
   const fetchWithAuth: FetchLike = (input, init) => {
     const headers = new Headers(init?.headers);
@@ -375,8 +391,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderId;
     const rawText = post.message?.trim() || "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-    const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
     const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
     const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
     const storeAllowFrom = normalizeAllowList(
@@ -887,8 +901,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
       }
     } else if (kind) {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy === "disabled") {
         logVerboseMessage(`mattermost: drop reaction (groupPolicy=disabled channel=${channelId})`);
         return;
