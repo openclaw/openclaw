@@ -53,6 +53,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualPort: StateFlow<Int> = runtime.manualPort
   val manualTls: StateFlow<Boolean> = runtime.manualTls
   val gatewayToken: StateFlow<String> = runtime.gatewayToken
+  val elevenLabsApiKey: StateFlow<String> = runtime.elevenLabsApiKey
+  val elevenLabsVoiceId: StateFlow<String> = runtime.elevenLabsVoiceId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
@@ -108,6 +110,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setGatewayToken(value: String) {
     runtime.setGatewayToken(value)
+  }
+
+  fun setElevenLabsApiKey(value: String) {
+    runtime.setElevenLabsApiKey(value)
+  }
+
+  fun setElevenLabsVoiceId(value: String) {
+    runtime.setElevenLabsVoiceId(value)
+  }
+
+  fun testVoice() {
+    runtime.testVoice()
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
