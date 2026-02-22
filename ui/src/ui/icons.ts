@@ -334,6 +334,31 @@ export const icons = {
       />
     </svg>
   `,
+  lobster: html`
+    <svg viewBox="0 0 120 120" fill="none">
+      <defs>
+        <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#ff4d4d" />
+          <stop offset="100%" stop-color="#991b1b" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
+        fill="url(#lob-g)"
+      />
+      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#lob-g)" />
+      <path
+        d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
+        fill="url(#lob-g)"
+      />
+      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
+      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
+      <circle cx="45" cy="35" r="6" fill="#050810" />
+      <circle cx="75" cy="35" r="6" fill="#050810" />
+      <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
+      <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
+    </svg>
+  `,
   refresh: html`
     <svg viewBox="0 0 24 24">
       <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
@@ -367,6 +392,21 @@ export const icons = {
         d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"
       />
       <path d="m2 2 20 20" />
+    </svg>
+  `,
+  moreHorizontal: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="6" cy="12" r="1.5" />
+      <circle cx="18" cy="12" r="1.5" />
+    </svg>
+  `,
+  arrowUpDown: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m21 16-4 4-4-4" />
+      <path d="M17 20V4" />
+      <path d="m3 8 4-4 4 4" />
+      <path d="M7 4v16" />
     </svg>
   `,
 } as const;

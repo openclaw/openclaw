@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -13,9 +13,13 @@ import type { AgentsPanel } from "./agents.ts";
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];
+  basePath: string;
   defaultId: string | null;
   configForm: Record<string, unknown> | null;
   agentFilesList: AgentsFilesListResult | null;
+  agentIdentity: AgentIdentityResult | null;
+  agentIdentityLoading: boolean;
+  agentIdentityError: string | null;
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
@@ -77,11 +81,12 @@ export function renderAgentOverview(params: {
     }
   };
 
-  const fallbackSummary = fallbackChips.length > 0 ? `${fallbackChips.length} configured` : "none";
-
   return html`
     <section class="card">
-      <div class="agents-overview-grid">
+      <div class="card-title">Overview</div>
+      <div class="card-sub">Workspace paths and identity metadata.</div>
+
+      <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
           <div class="label">Workspace</div>
           <div>
@@ -101,25 +106,23 @@ export function renderAgentOverview(params: {
           <div class="label">Skills Filter</div>
           <div>${skillFilter ? `${skillCount} selected` : "all skills"}</div>
         </div>
-        <div class="agent-kv">
-          <div class="label">Fallbacks</div>
-          <div class="mono">${fallbackSummary}</div>
-        </div>
       </div>
 
       ${
         configDirty
           ? html`
-              <div class="callout warn" style="margin-top: 12px">You have unsaved config changes.</div>
+              <div class="callout warn" style="margin-top: 16px">You have unsaved config changes.</div>
             `
           : nothing
       }
 
-      <div class="agent-model-select">
-        <div class="row" style="gap: 12px; flex-wrap: wrap; align-items: flex-end;">
-          <label class="field" style="min-width: 240px; flex: 1;">
+      <div class="agent-model-select" style="margin-top: 20px;">
+        <div class="label">Model Selection</div>
+        <div class="agent-model-fields">
+          <label class="field">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
+              .value=${effectivePrimary ?? ""}
               ?disabled=${disabled}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
@@ -136,7 +139,7 @@ export function renderAgentOverview(params: {
               ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
             </select>
           </label>
-          <div class="field" style="min-width: 240px; flex: 1;">
+          <div class="field">
             <span>Fallbacks</span>
             <div class="agent-chip-input" @click=${(e: Event) => {
               const container = e.currentTarget as HTMLElement;
@@ -173,18 +176,19 @@ export function renderAgentOverview(params: {
               />
             </div>
           </div>
-          <div class="agent-model-actions">
-            <button class="btn btn--sm" ?disabled=${configLoading} @click=${onConfigReload}>
-              Reload Config
-            </button>
-            <button
-              class="btn btn--sm primary"
-              ?disabled=${configSaving || !configDirty}
-              @click=${onConfigSave}
-            >
-              ${configSaving ? "Saving…" : "Save"}
-            </button>
-          </div>
+        </div>
+        <div class="agent-model-actions">
+          <button type="button" class="btn btn--sm" ?disabled=${configLoading} @click=${onConfigReload}>
+            Reload Config
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm primary"
+            ?disabled=${configSaving || !configDirty}
+            @click=${onConfigSave}
+          >
+            ${configSaving ? "Saving…" : "Save"}
+          </button>
         </div>
       </div>
     </section>
