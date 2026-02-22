@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnthropicServerToolId, PTCConfig } from "../../config/types.tools.js";
 import { log } from "./logger.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
@@ -289,6 +290,149 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
  *
  * @see https://docs.z.ai/api-reference#streaming
  */
+/** Derive display name from Anthropic server tool type (e.g. web_search_20260209 -> web_search). */
+function serverToolTypeToName(type: AnthropicServerToolId): string {
+  if (type.startsWith("web_search_")) {
+    return "web_search";
+  }
+  if (type.startsWith("web_fetch_")) {
+    return "web_fetch";
+  }
+  if (type.startsWith("code_execution_")) {
+    return "code_execution";
+  }
+  return type;
+}
+
+/**
+ * Create a streamFn wrapper that injects Anthropic server tool definitions into the request.
+ * Server tools run on Anthropic infrastructure; no client execution. Issue #23353.
+ */
+function createAnthropicServerToolsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serverTools: AnthropicServerToolId[],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  const defs = serverTools.map((type) => ({
+    type,
+    name: serverToolTypeToName(type),
+  }));
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object" && defs.length > 0) {
+          const p = payload as Record<string, unknown>;
+          const existing = Array.isArray(p.tools) ? p.tools : [];
+          p.tools = [...existing, ...defs];
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+function resolveAnthropicServerTools(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): AnthropicServerToolId[] | undefined {
+  if (provider !== "anthropic") {
+    return undefined;
+  }
+  const arr = cfg?.tools?.serverTools;
+  if (!Array.isArray(arr) || arr.length === 0) {
+    return undefined;
+  }
+  return arr.filter(
+    (t): t is AnthropicServerToolId =>
+      typeof t === "string" && /^(web_search_|web_fetch_|code_execution_)\d{8}$/.test(t),
+  );
+}
+
+/**
+ * Resolve PTC config from the global tools config.
+ * Returns undefined when PTC is disabled or the provider is not Anthropic.
+ */
+function resolvePTCConfig(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): PTCConfig | undefined {
+  if (provider !== "anthropic") {
+    return undefined;
+  }
+  const ptc = cfg?.tools?.ptc;
+  if (!ptc?.enabled) {
+    return undefined;
+  }
+  return ptc;
+}
+
+/**
+ * Create a streamFn wrapper that enables Programmatic Tool Calling (PTC).
+ *
+ * Injects:
+ * 1. code_execution tool definition (e.g. { type: "code_execution_20260120", name: "code_execution" })
+ * 2. allowed_callers on eligible custom tools so the model can call them from code execution
+ *
+ * TODO: Container reuse — extract `container.id` from response metadata and inject into
+ * subsequent requests for sandbox persistence (~4.5 min lifetime). Requires wrapping the
+ * returned AsyncIterable to intercept response chunks.
+ */
+function createPTCWrapper(baseStreamFn: StreamFn | undefined, ptcConfig: PTCConfig): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  const version = ptcConfig.version ?? "code_execution_20260120";
+  const allowedTools = ptcConfig.tools?.length ? new Set(ptcConfig.tools) : null;
+  const codeExecDef = { type: version, name: "code_execution" };
+
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as Record<string, unknown>;
+
+          // 1. Inject code_execution tool definition
+          const existingTools = Array.isArray(p.tools) ? p.tools : [];
+          const hasCodeExec = existingTools.some(
+            (t: unknown) =>
+              typeof t === "object" &&
+              t !== null &&
+              typeof (t as Record<string, unknown>).type === "string" &&
+              ((t as Record<string, unknown>).type as string).startsWith("code_execution_"),
+          );
+          if (!hasCodeExec) {
+            p.tools = [...existingTools, codeExecDef];
+          }
+
+          // 2. Add allowed_callers to eligible custom tools
+          if (Array.isArray(p.tools)) {
+            p.tools = p.tools.map((tool: unknown) => {
+              if (!tool || typeof tool !== "object") {
+                return tool;
+              }
+              const t = tool as Record<string, unknown>;
+              // Skip server tools (they have a "type" but no "input_schema")
+              if (t.type && !t.input_schema) {
+                return tool;
+              }
+              // Check if this tool should be PTC-enabled
+              const name = t.name as string | undefined;
+              if (allowedTools && name && !allowedTools.has(name)) {
+                return tool;
+              }
+              // Add allowed_callers
+              return { ...t, allowed_callers: [version] };
+            });
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function createZaiToolStreamWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -356,6 +500,20 @@ export function applyExtraParamsToAgent(
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+  }
+
+  const serverTools = resolveAnthropicServerTools(cfg, provider);
+  if (serverTools?.length) {
+    log.debug(
+      `injecting Anthropic server tools for ${provider}/${modelId}: ${serverTools.join(", ")}`,
+    );
+    agent.streamFn = createAnthropicServerToolsWrapper(agent.streamFn, serverTools);
+  }
+
+  const ptcConfig = resolvePTCConfig(cfg, provider);
+  if (ptcConfig) {
+    log.debug(`enabling PTC for ${provider}/${modelId}`);
+    agent.streamFn = createPTCWrapper(agent.streamFn, ptcConfig);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.

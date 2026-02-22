@@ -639,8 +639,27 @@ export const AgentEntrySchema = z
   })
   .strict();
 
+const AnthropicServerToolIdSchema = z.enum([
+  "web_search_20260209",
+  "web_search_20250305",
+  "web_fetch_20260209",
+  "code_execution_20260209",
+  "code_execution_20260120",
+]);
+
+const PTCSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    tools: z.array(z.string()).optional(),
+    version: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsSchema = z
   .object({
+    serverTools: z.array(AnthropicServerToolIdSchema).optional(),
+    ptc: PTCSchema,
     profile: ToolProfileSchema,
     allow: z.array(z.string()).optional(),
     alsoAllow: z.array(z.string()).optional(),

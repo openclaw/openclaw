@@ -65,8 +65,17 @@ export function createOpenClawTools(options?: {
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
   senderIsOwner?: boolean;
+  /** Model provider; when "anthropic" and tools.serverTools includes web_search_* / web_fetch_*, client tools are skipped. Issue #23353. */
+  modelProvider?: string;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
+  const serverTools = options?.config?.tools?.serverTools ?? [];
+  const useServerWebSearch =
+    options?.modelProvider === "anthropic" &&
+    serverTools.some((t) => typeof t === "string" && t.startsWith("web_search_"));
+  const useServerWebFetch =
+    options?.modelProvider === "anthropic" &&
+    serverTools.some((t) => typeof t === "string" && t.startsWith("web_fetch_"));
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
@@ -79,14 +88,18 @@ export function createOpenClawTools(options?: {
         modelHasVision: options?.modelHasVision,
       })
     : null;
-  const webSearchTool = createWebSearchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-  });
-  const webFetchTool = createWebFetchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-  });
+  const webSearchTool =
+    !useServerWebSearch &&
+    createWebSearchTool({
+      config: options?.config,
+      sandboxed: options?.sandboxed,
+    });
+  const webFetchTool =
+    !useServerWebFetch &&
+    createWebFetchTool({
+      config: options?.config,
+      sandboxed: options?.sandboxed,
+    });
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({

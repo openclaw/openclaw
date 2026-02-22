@@ -379,7 +379,42 @@ export type MemorySearchConfig = {
   };
 };
 
+/**
+ * Anthropic server-side tool identifiers (run on Anthropic infrastructure).
+ * Example: web_search_20260209, web_fetch_20260209, code_execution_20260209.
+ * When set, client-side equivalents (web_search, web_fetch) are skipped for Anthropic. Issue #23353.
+ */
+export type AnthropicServerToolId =
+  | "web_search_20260209"
+  | "web_search_20250305"
+  | "web_fetch_20260209"
+  | "code_execution_20260209"
+  | "code_execution_20260120";
+
+/**
+ * Programmatic Tool Calling (PTC) configuration.
+ * When enabled for Anthropic models, injects `code_execution_20260120` and sets
+ * `allowed_callers` on eligible custom tools so the model can call them from
+ * within a sandboxed Python script. Only stdout enters the context window.
+ */
+export type PTCConfig = {
+  /** Enable PTC for Anthropic models. Default: false. */
+  enabled?: boolean;
+  /** Restrict which tools are programmatically callable. Omit to PTC-enable all tools. */
+  tools?: string[];
+  /** Code execution tool version. Default: "code_execution_20260120". */
+  version?: string;
+};
+
 export type ToolsConfig = {
+  /**
+   * Anthropic server-side tools to enable. When provider is Anthropic, these are passed
+   * in the API request; client-side web_search/web_fetch are skipped when covered.
+   * Issue #23353.
+   */
+  serverTools?: AnthropicServerToolId[];
+  /** Programmatic Tool Calling — tools callable from Anthropic code execution. */
+  ptc?: PTCConfig;
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];
