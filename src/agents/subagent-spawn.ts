@@ -70,9 +70,16 @@ export function splitModelRef(ref?: string) {
   if (!trimmed) {
     return { provider: undefined, model: undefined };
   }
-  const [provider, model] = trimmed.split("/", 2);
-  if (model) {
-    return { provider, model };
+  // Use indexOf so that multi-segment model IDs like "huggingface/mistralai/Mistral-7B"
+  // split into provider="huggingface" and model="mistralai/Mistral-7B".
+  // String.split("/", 2) truncates at the second token, losing everything after the second slash.
+  const slash = trimmed.indexOf("/");
+  if (slash !== -1) {
+    const provider = trimmed.slice(0, slash);
+    const model = trimmed.slice(slash + 1);
+    if (provider && model) {
+      return { provider, model };
+    }
   }
   return { provider: undefined, model: trimmed };
 }
