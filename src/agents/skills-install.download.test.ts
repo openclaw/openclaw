@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
@@ -52,6 +53,25 @@ const STRIP_COMPONENTS_ZIP_BUFFER_PROMISE = createZipBuffer([
 const ZIP_SLIP_BUFFER_PROMISE = createZipBuffer([
   { name: "../outside-write/pwned.txt", contents: "pwnd" },
 ]);
+
+async function createTarGzTraversalBuffer(): Promise<Buffer> {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-tar-slip-"));
+  const insideDir = path.join(fixtureRoot, "inside");
+  const outsideWriteDir = path.join(fixtureRoot, "outside-write");
+  const outsideWritePath = path.join(outsideWriteDir, "pwned.txt");
+  const archivePath = path.join(fixtureRoot, "evil.tgz");
+  try {
+    await fs.mkdir(insideDir, { recursive: true });
+    await fs.mkdir(outsideWriteDir, { recursive: true });
+    await fs.writeFile(outsideWritePath, "pwnd", "utf-8");
+    await tar.c({ cwd: insideDir, file: archivePath, gzip: true }, ["../outside-write/pwned.txt"]);
+    return await fs.readFile(archivePath);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+const TAR_GZ_TRAVERSAL_BUFFER_PROMISE = createTarGzTraversalBuffer();
 
 function mockArchiveResponse(buffer: Uint8Array): void {
   fetchWithSsrFGuardMock.mockResolvedValue({
@@ -143,20 +163,20 @@ async function writeTarBz2Skill(params: {
   });
 }
 
-describe("installSkill download extraction safety", () => {
-  beforeEach(() => {
-    runCommandWithTimeoutMock.mockClear();
-    scanDirectoryWithSummaryMock.mockClear();
-    fetchWithSsrFGuardMock.mockClear();
-    scanDirectoryWithSummaryMock.mockResolvedValue({
-      scannedFiles: 0,
-      critical: 0,
-      warn: 0,
-      info: 0,
-      findings: [],
-    });
+beforeEach(() => {
+  runCommandWithTimeoutMock.mockClear();
+  scanDirectoryWithSummaryMock.mockClear();
+  fetchWithSsrFGuardMock.mockClear();
+  scanDirectoryWithSummaryMock.mockResolvedValue({
+    scannedFiles: 0,
+    critical: 0,
+    warn: 0,
+    info: 0,
+    findings: [],
   });
+});
 
+describe("installSkill download extraction safety", () => {
   it("rejects zip slip traversal", async () => {
     await withTempWorkspace(async ({ workspaceDir, stateDir }) => {
       const targetDir = path.join(stateDir, "tools", "zip-slip", "target");
@@ -185,22 +205,9 @@ describe("installSkill download extraction safety", () => {
   it("rejects tar.gz traversal", async () => {
     await withTempWorkspace(async ({ workspaceDir, stateDir }) => {
       const targetDir = path.join(stateDir, "tools", "tar-slip", "target");
-      const insideDir = path.join(workspaceDir, "inside");
-      const outsideWriteDir = path.join(workspaceDir, "outside-write");
-      const outsideWritePath = path.join(outsideWriteDir, "pwned.txt");
-      const archivePath = path.join(workspaceDir, "evil.tgz");
+      const outsideWritePath = path.join(workspaceDir, "outside-write", "pwned.txt");
       const url = "https://example.invalid/evil";
-
-      await fs.mkdir(insideDir, { recursive: true });
-      await fs.mkdir(outsideWriteDir, { recursive: true });
-      await fs.writeFile(outsideWritePath, "pwnd", "utf-8");
-
-      await tar.c({ cwd: insideDir, file: archivePath, gzip: true }, [
-        "../outside-write/pwned.txt",
-      ]);
-      await fs.rm(outsideWriteDir, { recursive: true, force: true });
-
-      const buffer = await fs.readFile(archivePath);
+      const buffer = await TAR_GZ_TRAVERSAL_BUFFER_PROMISE;
       mockArchiveResponse(new Uint8Array(buffer));
 
       await writeDownloadSkill({
@@ -304,19 +311,6 @@ describe("installSkill download extraction safety", () => {
 });
 
 describe("installSkill download extraction safety (tar.bz2)", () => {
-  beforeEach(() => {
-    runCommandWithTimeoutMock.mockClear();
-    scanDirectoryWithSummaryMock.mockClear();
-    fetchWithSsrFGuardMock.mockClear();
-    scanDirectoryWithSummaryMock.mockResolvedValue({
-      scannedFiles: 0,
-      critical: 0,
-      warn: 0,
-      info: 0,
-      findings: [],
-    });
-  });
-
   it("rejects tar.bz2 traversal before extraction", async () => {
     await withTempWorkspace(async ({ workspaceDir, stateDir }) => {
       const url = "https://example.invalid/evil.tbz2";
