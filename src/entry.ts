@@ -7,10 +7,13 @@ import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import { applyProxyFromEnv } from "./proxy-setup.js";
 
 process.title = "openclaw";
 installProcessWarningFilter();
 normalizeEnv();
+
+applyProxyFromEnv();
 
 if (process.argv.includes("--no-color")) {
   process.env.NO_COLOR = "1";
