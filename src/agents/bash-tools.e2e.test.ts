@@ -12,9 +12,9 @@ const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
-const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 20" : "sleep 0.02";
-const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 90" : "sleep 0.09";
-const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 700" : "sleep 0.7";
+const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 15" : "sleep 0.015";
+const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 70" : "sleep 0.07";
+const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 500" : "sleep 0.5";
 const POLL_INTERVAL_MS = 15;
 const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
 const createTestExecTool = (
@@ -223,7 +223,7 @@ describe("exec tool backgrounding", () => {
   });
 
   it("defaults process log to a bounded tail when no window is provided", async () => {
-    const lines = Array.from({ length: 220 }, (_value, index) => `line-${index + 1}`);
+    const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
@@ -232,11 +232,11 @@ describe("exec tool backgrounding", () => {
     });
     const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
     const firstLine = textBlock.split("\n")[0]?.trim();
-    expect(textBlock).toContain("showing last 200 of 220 lines");
-    expect(firstLine).toBe("line-21");
-    expect(textBlock).toContain("line-21");
-    expect(textBlock).toContain("line-220");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(220);
+    expect(textBlock).toContain("showing last 200 of 201 lines");
+    expect(firstLine).toBe("line-2");
+    expect(textBlock).toContain("line-2");
+    expect(textBlock).toContain("line-201");
+    expect((log.details as { totalLines?: number }).totalLines).toBe(201);
   });
 
   it("supports line offsets for log slices", async () => {
@@ -258,7 +258,7 @@ describe("exec tool backgrounding", () => {
   });
 
   it("keeps offset-only log requests unbounded by default tail mode", async () => {
-    const lines = Array.from({ length: 220 }, (_value, index) => `line-${index + 1}`);
+    const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
@@ -270,9 +270,9 @@ describe("exec tool backgrounding", () => {
     const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
     const renderedLines = textBlock.split("\n");
     expect(renderedLines[0]?.trim()).toBe("line-31");
-    expect(renderedLines[renderedLines.length - 1]?.trim()).toBe("line-220");
+    expect(renderedLines[renderedLines.length - 1]?.trim()).toBe("line-201");
     expect(textBlock).not.toContain("showing last 200");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(220);
+    expect((log.details as { totalLines?: number }).totalLines).toBe(201);
   });
 
   it("scopes process sessions by scopeKey", async () => {
