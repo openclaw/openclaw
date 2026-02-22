@@ -375,12 +375,12 @@ describe("resolveMaxConcurrentPerConversation (per-channel cascade)", () => {
 
   it("flat provider: uses provider-level value", () => {
     const cfg = {
-      channels: { whatsapp: { maxConcurrentPerConversation: 2 } },
+      channels: { matrix: { maxConcurrentPerConversation: 2 } },
     };
     expect(
       resolveMaxConcurrentPerConversation({
         cfg,
-        channel: "whatsapp",
+        channel: "matrix",
         peerId: "user:abc",
       }),
     ).toBe(2);
