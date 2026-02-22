@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
 async function writePluginFixture(params: {
@@ -175,6 +176,53 @@ describe("config plugin validation", () => {
         path: "agents.defaults.heartbeat.target",
         message: "unknown heartbeat target: not-a-channel",
       });
+    }
+  });
+
+  it("downgrades unknown plugin to warning when it matches a configured channel key", async () => {
+    const home = await createCaseHome();
+    // Point bundled plugins dir to an empty directory so feishu is NOT
+    // discovered automatically — simulates a deployment where the
+    // extensions directory is missing or incomplete.
+    const emptyPluginsDir = path.join(home, "empty-extensions");
+    await fs.mkdir(emptyPluginsDir, { recursive: true });
+    const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyPluginsDir;
+    clearPluginManifestRegistryCache();
+    try {
+      const res = validateInHome(home, {
+        agents: { list: [{ id: "pi" }] },
+        channels: { feishu: { appId: "x", appSecret: "y" } },
+        plugins: {
+          enabled: false,
+          entries: { feishu: { enabled: true } },
+          allow: ["feishu"],
+          slots: { memory: "none" },
+        },
+      });
+      // Should NOT be a hard error — the channel key makes it a known channel plugin
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.warnings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: "plugins.entries.feishu",
+              message: expect.stringContaining("may be a bundled plugin"),
+            }),
+            expect.objectContaining({
+              path: "plugins.allow",
+              message: expect.stringContaining("may be a bundled plugin"),
+            }),
+          ]),
+        );
+      }
+    } finally {
+      if (prevBundledDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+      }
+      clearPluginManifestRegistryCache();
     }
   });
 });
