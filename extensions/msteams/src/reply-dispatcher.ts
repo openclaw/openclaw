@@ -64,8 +64,11 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
+  const typingRef = buildConversationReference(params.conversationRef);
   const sendTypingIndicator = async () => {
-    await params.context.sendActivity({ type: "typing" });
+    await params.adapter.continueConversation(params.appId, typingRef, async (ctx) => {
+      await ctx.sendActivity({ type: "typing" });
+    });
   };
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
