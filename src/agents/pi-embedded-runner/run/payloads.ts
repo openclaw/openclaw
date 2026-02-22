@@ -294,7 +294,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  return replyItems
+  const payloads = replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -314,4 +314,13 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
+  if (
+    payloads.length === 0 &&
+    params.toolMetas.length > 0 &&
+    !params.lastToolError &&
+    !lastAssistantErrored
+  ) {
+    return [{ text: "✅ Done." }];
+  }
+  return payloads;
 }
