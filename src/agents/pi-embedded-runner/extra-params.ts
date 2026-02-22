@@ -95,18 +95,43 @@ function createStreamFnWithExtraParams(
     streamParams.cacheRetention = cacheRetention;
   }
 
-  if (Object.keys(streamParams).length === 0) {
+  // Extract OpenRouter provider routing preferences from extraParams.provider.
+  // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
+  // params.provider in the API request body (openai-completions.js L359-362).
+  // pi-ai's OpenRouterRouting type only declares { only?, order? }, but at
+  // runtime the full object is forwarded — enabling allow_fallbacks,
+  // data_collection, ignore, sort, quantizations, etc.
+  const providerRouting =
+    provider === "openrouter" &&
+    extraParams.provider != null &&
+    typeof extraParams.provider === "object"
+      ? (extraParams.provider as Record<string, unknown>)
+      : undefined;
+
+  if (Object.keys(streamParams).length === 0 && !providerRouting) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  if (providerRouting) {
+    log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
+  }
 
   const underlying = baseStreamFn ?? streamSimple;
-  const wrappedStreamFn: StreamFn = (model, context, options) =>
-    underlying(model, context, {
+  const wrappedStreamFn: StreamFn = (model, context, options) => {
+    // When provider routing is configured, inject it into model.compat so
+    // pi-ai picks it up via model.compat.openRouterRouting.
+    const effectiveModel = providerRouting
+      ? ({
+          ...model,
+          compat: { ...model.compat, openRouterRouting: providerRouting },
+        } as unknown as typeof model)
+      : model;
+    return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,
     });
+  };
 
   return wrappedStreamFn;
 }
