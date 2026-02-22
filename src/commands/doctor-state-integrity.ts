@@ -78,6 +78,37 @@ function addUserRwx(mode: number): number {
   return perms | 0o700;
 }
 
+function listFilesRecursive(root: string): string[] {
+  const files: string[] = [];
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const nextPath = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        stack.push(nextPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(nextPath);
+      }
+    }
+  }
+  return files;
+}
+
 function countJsonlLines(filePath: string): number {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
@@ -297,6 +328,83 @@ export async function noteStateIntegrity(
       warnings.push(
         `- Failed to read config permissions (${displayConfigPath ?? configPath}): ${String(err)}`,
       );
+    }
+  }
+
+  if (stateDirExists && process.platform !== "win32") {
+    const extraTargets: Array<{ path: string; mode: number; label: string }> = [];
+
+    const dotenvPath = path.join(stateDir, ".env");
+    if (existsFile(dotenvPath)) {
+      extraTargets.push({
+        path: dotenvPath,
+        mode: 0o600,
+        label: `dotenv file (${shortenHomePath(dotenvPath)})`,
+      });
+    }
+
+    const logsDir = path.join(stateDir, "logs");
+    if (existsDir(logsDir)) {
+      extraTargets.push({
+        path: logsDir,
+        mode: 0o700,
+        label: `logs dir (${shortenHomePath(logsDir)})`,
+      });
+      for (const filePath of listFilesRecursive(logsDir)) {
+        extraTargets.push({
+          path: filePath,
+          mode: 0o600,
+          label: `log file (${shortenHomePath(filePath)})`,
+        });
+      }
+    }
+
+    const agentsDir = path.join(stateDir, "agents");
+    if (existsDir(agentsDir)) {
+      for (const filePath of listFilesRecursive(agentsDir)) {
+        if (!filePath.endsWith(".jsonl")) {
+          continue;
+        }
+        extraTargets.push({
+          path: filePath,
+          mode: 0o600,
+          label: `session transcript (${shortenHomePath(filePath)})`,
+        });
+      }
+    }
+
+    const insecureTargets: Array<{ path: string; mode: number; label: string }> = [];
+    for (const target of extraTargets) {
+      try {
+        const stat = fs.statSync(target.path);
+        if ((stat.mode & 0o777) !== target.mode) {
+          insecureTargets.push(target);
+        }
+      } catch (err) {
+        warnings.push(`- Failed to read permissions for ${target.label}: ${String(err)}`);
+      }
+    }
+
+    if (insecureTargets.length > 0) {
+      for (const target of insecureTargets) {
+        warnings.push(
+          `- ${target.label} permissions are too open. Recommend chmod ${target.mode.toString(8)}.`,
+        );
+      }
+      const tighten = await prompter.confirmSkipInNonInteractive({
+        message: "Tighten sensitive dotenv/log/transcript permissions now?",
+        initialValue: true,
+      });
+      if (tighten) {
+        for (const target of insecureTargets) {
+          try {
+            fs.chmodSync(target.path, target.mode);
+            changes.push(`- Tightened ${target.label} to ${target.mode.toString(8)}`);
+          } catch (err) {
+            warnings.push(`- Failed to tighten ${target.label}: ${String(err)}`);
+          }
+        }
+      }
     }
   }
 

@@ -11,6 +11,16 @@ vi.mock("../terminal/note.js", () => ({
   note: vi.fn(),
 }));
 
+const isWindows = process.platform === "win32";
+
+function expectPerms(actual: number, expected: number) {
+  if (isWindows) {
+    expect([expected, 0o666, 0o777]).toContain(actual);
+    return;
+  }
+  expect(actual).toBe(expected);
+}
+
 type EnvSnapshot = {
   HOME?: string;
   OPENCLAW_HOME?: string;
@@ -123,5 +133,43 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+  });
+
+  it("tightens config, dotenv, logs, and transcript permissions during repair", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR!;
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n", "utf-8");
+    fs.chmodSync(stateDir, 0o755);
+    fs.chmodSync(configPath, 0o644);
+
+    const dotenvPath = path.join(stateDir, ".env");
+    fs.writeFileSync(dotenvPath, "OPENCLAW_GATEWAY_TOKEN=test-token\n", "utf-8");
+    fs.chmodSync(dotenvPath, 0o644);
+
+    const logsDir = path.join(stateDir, "logs");
+    fs.mkdirSync(logsDir, { recursive: true, mode: 0o755 });
+    fs.chmodSync(logsDir, 0o755);
+    const logPath = path.join(logsDir, "gateway.log");
+    fs.writeFileSync(logPath, "log\n", "utf-8");
+    fs.chmodSync(logPath, 0o644);
+
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "session-1.jsonl");
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+    fs.chmodSync(transcriptPath, 0o644);
+
+    await noteStateIntegrity(
+      {},
+      { confirmSkipInNonInteractive: vi.fn(async () => true) },
+      configPath,
+    );
+
+    expectPerms(fs.statSync(stateDir).mode & 0o777, 0o700);
+    expectPerms(fs.statSync(configPath).mode & 0o777, 0o600);
+    expectPerms(fs.statSync(dotenvPath).mode & 0o777, 0o600);
+    expectPerms(fs.statSync(logsDir).mode & 0o777, 0o700);
+    expectPerms(fs.statSync(logPath).mode & 0o777, 0o600);
+    expectPerms(fs.statSync(transcriptPath).mode & 0o777, 0o600);
   });
 });
