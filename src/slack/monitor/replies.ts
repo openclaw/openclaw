@@ -72,12 +72,19 @@ export function resolveSlackThreadTs(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied: boolean;
+  isThreadReply?: boolean;
 }): string | undefined {
+  const isThreadReply =
+    params.isThreadReply ??
+    (typeof params.incomingThreadTs === "string" &&
+      params.incomingThreadTs.length > 0 &&
+      params.incomingThreadTs !== params.messageTs);
   const planner = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasReplied,
+    isThreadReply,
   });
   return planner.use();
 }
