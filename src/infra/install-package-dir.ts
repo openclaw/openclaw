@@ -62,7 +62,9 @@ export async function installPackageDir(params: {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   let backupDir: string | null = null;
   if (params.mode === "update" && (await fileExists(params.targetDir))) {
-    backupDir = `${params.targetDir}.backup-${Date.now()}`;
+    const backupRoot = path.join(path.dirname(params.targetDir), ".openclaw-install-backups");
+    backupDir = path.join(backupRoot, `${path.basename(params.targetDir)}-${Date.now()}`);
+    await fs.mkdir(backupRoot, { recursive: true });
     await fs.rename(params.targetDir, backupDir);
   }
 
