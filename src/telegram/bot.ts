@@ -35,6 +35,9 @@ import {
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import {
+  createUpdateOffsetWatermark,
+} from "./update-offset-watermark.js";
+import {
   buildTelegramGroupPeerId,
   resolveTelegramForumThreadId,
   resolveTelegramStreamMode,
@@ -155,8 +158,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
-  let lastUpdateId =
+  const initialOffset =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
+
+  // Use contiguous watermark tracker to prevent out-of-order completion
+  // from advancing the offset past still-in-flight updates.
+  const offsetWatermark = createUpdateOffsetWatermark(initialOffset, (offset) => {
+    void opts.updateOffset?.onUpdateId?.(offset);
+  });
+
+  // Kept for shouldSkipUpdate compatibility
+  let lastUpdateId = initialOffset;
 
   const recordUpdateId = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
@@ -166,8 +178,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     if (lastUpdateId !== null && updateId <= lastUpdateId) {
       return;
     }
-    lastUpdateId = updateId;
-    void opts.updateOffset?.onUpdateId?.(updateId);
+    offsetWatermark.markCompleted(updateId);
+    const newOffset = offsetWatermark.getCurrentOffset();
+    if (newOffset !== null && (lastUpdateId === null || newOffset > lastUpdateId)) {
+      lastUpdateId = newOffset;
+    }
   };
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
@@ -221,6 +236,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       } catch (err) {
         rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
       }
+    }
+    const updateId = resolveTelegramUpdateId(ctx);
+    if (typeof updateId === "number") {
+      offsetWatermark.markStarted(updateId);
     }
     await next();
     recordUpdateId(ctx);
