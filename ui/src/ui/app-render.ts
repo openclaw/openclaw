@@ -64,7 +64,6 @@ import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
-import { renderBottomTabs } from "./views/bottom-tabs.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
@@ -1211,10 +1210,7 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
-      ${renderBottomTabs({
-        activeTab: state.tab,
-        onTabChange: (tab) => state.setTab(tab),
-      })}
+      ${nothing}
     </div>
   `;
 }

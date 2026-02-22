@@ -156,6 +156,7 @@
     border-color var(--duration-normal) var(--ease-out),
     box-shadow var(--duration-normal) var(--ease-out);
   box-shadow: inset 0 1px 0 var(--card-highlight);
+  text-align: center;
 }
 
 .stat:hover {
@@ -553,6 +554,47 @@
 .field.checkbox {
   grid-template-columns: auto 1fr;
   align-items: center;
+}
+
+.field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.field-inline span {
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.field-inline input:not([type="checkbox"]) {
+  border: 1px solid color-mix(in srgb, var(--input) 92%, transparent);
+  background: color-mix(in srgb, var(--card) 96%, var(--bg));
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.field-inline input:not([type="checkbox"]):focus-visible {
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+  background: var(--card);
+}
+
+.field-inline.checkbox {
+  cursor: pointer;
+  user-select: none;
+}
+
+.field-inline.checkbox input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .config-form .field.checkbox {
@@ -2788,6 +2830,17 @@
 }
 
 /* ===========================================
+   Overview Section Dividers
+   =========================================== */
+
+.ov-section-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 22px 0;
+  opacity: 0.5;
+}
+
+/* ===========================================
    Overview Dashboard Cards
    =========================================== */
 
@@ -2798,92 +2851,73 @@
   margin-top: 18px;
 }
 
-.ov-stat-card {
+.ov-card {
   --ov-accent: var(--muted);
+  all: unset;
   display: grid;
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-  border-top: 2px solid var(--ov-accent);
-  position: relative;
-}
-
-.ov-stat-card.clickable {
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  border-left: 3px solid var(--ov-accent);
+  background: var(--card);
   cursor: pointer;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
   transition:
-    border-color 0.15s ease,
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+  animation: rise 0.35s var(--ease-out) backwards;
 }
 
-.ov-stat-card.clickable:hover {
-  border-color: var(--accent);
+.ov-card:hover {
+  border-color: var(--border-strong);
+  border-left-color: var(--ov-accent);
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--card-highlight);
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
 
-.ov-stat-card[data-kind="cost"] {
+.ov-card:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  border-left-color: var(--ov-accent);
+  box-shadow: var(--focus-ring);
+}
+
+.ov-card[data-kind="cost"] {
   --ov-accent: var(--kn-bioluminescence);
 }
 
-.ov-stat-card[data-kind="sessions"] {
+.ov-card[data-kind="sessions"] {
   --ov-accent: var(--kn-silver);
 }
 
-.ov-stat-card[data-kind="skills"] {
+.ov-card[data-kind="skills"] {
   --ov-accent: var(--kn-claw-ember);
 }
 
-.ov-stat-card[data-kind="cron"] {
+.ov-card[data-kind="cron"] {
   --ov-accent: var(--vscode-accent);
 }
 
-.ov-stat-card__inner {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 14px 16px;
-}
-
-.ov-stat-card__icon {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  color: var(--ov-accent);
-  opacity: 0.8;
-  margin-top: 1px;
-}
-
-.ov-stat-card__icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.ov-stat-card__body {
-  min-width: 0;
-  text-align: center;
-}
-
-.ov-stat-card__body .stat-label {
+.ov-card__label {
   font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
-  margin-bottom: 6px;
-  font-weight: 600;
 }
 
-.ov-stat-card__body .stat-value {
-  font-size: 22px;
+.ov-card__value {
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
 }
 
-.ov-stat-card__body .muted {
+.ov-card__hint {
   font-size: 12px;
-  margin-top: 6px;
+  color: var(--muted);
   line-height: 1.4;
 }
 
@@ -2896,35 +2930,50 @@
 
 /* Recent sessions */
 
-.ov-recent-sessions {
+.ov-recent {
   margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
+  animation: rise 0.35s var(--ease-out) backwards;
 }
 
-.ov-session-list {
-  margin-top: 10px;
+.ov-recent__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  margin: 0 0 8px;
 }
 
-.ov-session-row {
-  display: flex;
-  align-items: center;
+.ov-recent__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ov-recent__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   font-size: 13px;
-  transition: opacity 0.1s ease;
 }
 
-.ov-session-row:last-child {
+.ov-recent__row:last-child {
   border-bottom: none;
   padding-bottom: 0;
 }
 
-.ov-session-row:first-child {
+.ov-recent__row:first-child {
   padding-top: 0;
 }
 
-.ov-session-key {
-  flex: 1;
+.ov-recent__key {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2932,14 +2981,21 @@
   font-weight: 500;
 }
 
-.ov-session-key .blur-digits {
+.ov-recent__key .blur-digits {
   filter: blur(5px);
   transition: filter 200ms ease-out;
   user-select: none;
 }
 
-.ov-session-row:hover .blur-digits {
+.ov-recent__row:hover .blur-digits {
   filter: none;
+}
+
+.ov-recent__model,
+.ov-recent__time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* ===========================================
@@ -3202,6 +3258,14 @@
 
   .ov-cards {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .ov-recent__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ov-recent__model {
+    display: none;
   }
 }
 

@@ -323,6 +323,8 @@ export function renderOverview(props: OverviewProps) {
         : nothing
     }
 
+    <div class="ov-section-divider"></div>
+
     ${renderOverviewCards({
       usageResult: props.usageResult,
       sessionsResult: props.sessionsResult,
@@ -335,6 +337,8 @@ export function renderOverview(props: OverviewProps) {
     })}
 
     ${renderOverviewAttention({ items: props.attentionItems })}
+
+    <div class="ov-section-divider"></div>
 
     <div class="ov-bottom-grid" style="margin-top: 18px;">
       ${renderOverviewEventLog({

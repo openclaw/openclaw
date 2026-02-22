@@ -208,20 +208,22 @@ export function renderSessions(props: SessionsProps) {
         : nothing
     }
     <section class="card" style=${props.actionsOpenKey ? "position: relative; z-index: 41;" : ""}>
-      <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+      <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
         <div>
           <div class="card-title">Sessions</div>
-          <div class="card-sub">Active session keys and per-session overrides.</div>
+          <div class="card-sub">${props.result ? `Store: ${props.result.path}` : "Active session keys and per-session overrides."}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
-      <div class="filters" style="margin-bottom: 16px;">
-        <label class="field">
-          <span>Active within (minutes)</span>
+      <div class="filters" style="margin-bottom: 12px;">
+        <label class="field-inline">
+          <span>Active</span>
           <input
+            style="width: 72px;"
+            placeholder="min"
             .value=${props.activeMinutes}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -232,9 +234,10 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
-        <label class="field">
+        <label class="field-inline">
           <span>Limit</span>
           <input
+            style="width: 64px;"
             .value=${props.limit}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -245,8 +248,7 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
-        <label class="field checkbox">
-          <span>Include global</span>
+        <label class="field-inline checkbox">
           <input
             type="checkbox"
             .checked=${props.includeGlobal}
@@ -258,9 +260,9 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: props.includeUnknown,
               })}
           />
+          <span>Global</span>
         </label>
-        <label class="field checkbox">
-          <span>Include unknown</span>
+        <label class="field-inline checkbox">
           <input
             type="checkbox"
             .checked=${props.includeUnknown}
@@ -272,23 +274,19 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: (e.target as HTMLInputElement).checked,
               })}
           />
+          <span>Unknown</span>
         </label>
       </div>
 
       ${
         props.error
-          ? html`<div class="callout danger" style="margin-bottom: 16px;">${props.error}</div>`
+          ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
           : nothing
       }
-
-      <div class="muted" style="margin-bottom: 16px;">
-        ${props.result ? `Store: ${props.result.path}` : ""}
-      </div>
 
       <div class="data-table-wrapper">
         <div class="data-table-toolbar">
           <div class="data-table-search">
-            <span class="data-table-search__icon">${icons.search}</span>
             <input
               type="text"
               placeholder="Filter by key, label, kind…"

@@ -385,6 +385,17 @@
   border-left: 0;
 }
 
+.sidebar--collapsed .nav-item--active::before {
+  background:
+    radial-gradient(ellipse 120% 28px at 50% -2px,
+      color-mix(in srgb, var(--accent) 38%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 14%, transparent) 40%,
+      transparent 100%),
+    radial-gradient(ellipse 60% 100% at -4px 50%,
+      color-mix(in srgb, var(--accent) 28%, transparent) 0%,
+      transparent 70%);
+}
+
 .sidebar--collapsed .sidebar-footer {
   display: flex;
   flex-direction: column;
@@ -620,6 +631,7 @@
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
+  overflow: hidden;
   color: var(--muted);
   cursor: pointer;
   text-decoration: none;
@@ -690,6 +702,26 @@
   background: color-mix(in srgb, var(--accent-subtle) 70%, var(--secondary));
   border-color: color-mix(in srgb, var(--accent) 34%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.nav-item--active::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 28px 120% at -2px 50%,
+      color-mix(in srgb, var(--accent) 38%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 14%, transparent) 40%,
+      transparent 100%);
+  opacity: 0;
+  animation: nav-glow-in 0.4s ease-out 0.05s forwards;
+  pointer-events: none;
+}
+
+@keyframes nav-glow-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 
 .nav-item--active .nav-item__icon {
@@ -938,7 +970,7 @@
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 12px;
   align-items: center;
 }
 
