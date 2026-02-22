@@ -71,6 +71,14 @@ describe("imessage targets", () => {
     expect(ok).toBe(true);
   });
 
+  it("denies when allowFrom is empty", () => {
+    const ok = isAllowedIMessageSender({
+      allowFrom: [],
+      sender: "+1555",
+    });
+    expect(ok).toBe(false);
+  });
+
   it("formats chat targets", () => {
     expect(formatIMessageChatTarget(42)).toBe("chat_id:42");
     expect(formatIMessageChatTarget(undefined)).toBe("");
@@ -79,7 +87,7 @@ describe("imessage targets", () => {
 
 describe("createIMessageRpcClient", () => {
   beforeEach(() => {
-    spawnMock.mockReset();
+    spawnMock.mockClear();
     vi.stubEnv("VITEST", "true");
   });
 

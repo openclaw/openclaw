@@ -57,6 +57,7 @@ OpenClaw security guidance assumes:
 - The host where OpenClaw runs is within a trusted OS/admin boundary.
 - Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
 - A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
+- Authenticated Gateway callers are treated as trusted operators. Session identifiers (for example `sessionKey`) are routing controls, not per-user authorization boundaries.
 
 ## Plugin Trust Boundary
 

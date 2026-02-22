@@ -17,16 +17,16 @@ vi.mock("../../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 
+beforeEach(() => {
+  callGatewayMock.mockReset();
+  setRegistry(emptyRegistry);
+});
+
+afterEach(() => {
+  setRegistry(emptyRegistry);
+});
+
 describe("sendMessage channel normalization", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-    setRegistry(emptyRegistry);
-  });
-
-  afterEach(() => {
-    setRegistry(emptyRegistry);
-  });
-
   it("normalizes Teams alias", async () => {
     const sendMSTeams = vi.fn(async () => ({
       messageId: "m1",
@@ -81,15 +81,6 @@ describe("sendMessage channel normalization", () => {
 });
 
 describe("sendMessage replyToId threading", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-    setRegistry(emptyRegistry);
-  });
-
-  afterEach(() => {
-    setRegistry(emptyRegistry);
-  });
-
   const setupMattermostCapture = () => {
     const capturedCtx: Record<string, unknown>[] = [];
     const plugin = createMattermostLikePlugin({
@@ -133,15 +124,6 @@ describe("sendMessage replyToId threading", () => {
 });
 
 describe("sendPoll channel normalization", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-    setRegistry(emptyRegistry);
-  });
-
-  afterEach(() => {
-    setRegistry(emptyRegistry);
-  });
-
   it("normalizes Teams alias for polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
     setRegistry(
@@ -174,15 +156,6 @@ describe("sendPoll channel normalization", () => {
 });
 
 describe("gateway url override hardening", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-    setRegistry(emptyRegistry);
-  });
-
-  afterEach(() => {
-    setRegistry(emptyRegistry);
-  });
-
   it("drops gateway url overrides in backend mode (SSRF hardening)", async () => {
     setRegistry(
       createTestRegistry([

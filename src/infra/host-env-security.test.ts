@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { isDangerousHostEnvVarName, sanitizeHostExecEnv } from "./host-env-security.js";
+import {
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+  sanitizeHostExecEnv,
+} from "./host-env-security.js";
 
 describe("isDangerousHostEnvVarName", () => {
   it("matches dangerous keys and prefixes case-insensitively", () => {
     expect(isDangerousHostEnvVarName("BASH_ENV")).toBe(true);
     expect(isDangerousHostEnvVarName("bash_env")).toBe(true);
+    expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
     expect(isDangerousHostEnvVarName("ld_preload")).toBe(true);
     expect(isDangerousHostEnvVarName("BASH_FUNC_echo%%")).toBe(true);
@@ -47,5 +52,31 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/home");
+  });
+
+  it("drops non-portable env key names", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        " BAD KEY": "x",
+        "NOT-PORTABLE": "x",
+        GOOD_KEY: "ok",
+      },
+    });
+
+    expect(env.GOOD_KEY).toBe("ok");
+    expect(env[" BAD KEY"]).toBeUndefined();
+    expect(env["NOT-PORTABLE"]).toBeUndefined();
+  });
+});
+
+describe("normalizeEnvVarKey", () => {
+  it("normalizes and validates keys", () => {
+    expect(normalizeEnvVarKey(" OPENROUTER_API_KEY ")).toBe("OPENROUTER_API_KEY");
+    expect(normalizeEnvVarKey("NOT-PORTABLE", { portable: true })).toBeNull();
+    expect(normalizeEnvVarKey(" BASH_FUNC_echo%% ")).toBe("BASH_FUNC_echo%%");
+    expect(normalizeEnvVarKey("   ")).toBeNull();
   });
 });

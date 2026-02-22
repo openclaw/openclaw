@@ -89,11 +89,11 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 describe("block streaming", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    piEmbeddedMock.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
-    piEmbeddedMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
-    piEmbeddedMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
-    piEmbeddedMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
-    piEmbeddedMock.runEmbeddedPiAgent.mockReset();
+    piEmbeddedMock.abortEmbeddedPiRun.mockClear().mockReturnValue(false);
+    piEmbeddedMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);
+    piEmbeddedMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
+    piEmbeddedMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
+    piEmbeddedMock.runEmbeddedPiAgent.mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([
       { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
       { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },

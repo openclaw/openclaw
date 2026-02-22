@@ -39,9 +39,9 @@ describe("createPtyAdapter", () => {
   });
 
   beforeEach(() => {
-    spawnMock.mockReset();
-    ptyKillMock.mockReset();
-    killProcessTreeMock.mockReset();
+    spawnMock.mockClear();
+    ptyKillMock.mockClear();
+    killProcessTreeMock.mockClear();
     vi.useRealTimers();
   });
 
