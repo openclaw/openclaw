@@ -134,9 +134,11 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
+  // Await the flush to ensure block replies are delivered before tool-initiated sends
+  // (e.g., message tool sending a file), preventing out-of-order delivery on Telegram.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
-    void ctx.params.onBlockReplyFlush();
+    await ctx.params.onBlockReplyFlush();
   }
 
   const rawToolName = String(evt.toolName);
