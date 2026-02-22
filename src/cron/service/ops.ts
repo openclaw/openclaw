@@ -200,15 +200,31 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
+/**
+ * Threshold in ms for treating a runningAtMs timestamp as stale.
+ * Matches the STUCK_RUN_MS threshold in jobs.ts (2 hours).
+ */
+const STALE_RUNNING_AT_MS_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+
 export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
-    if (typeof job.state.runningAtMs === "number") {
-      return { ok: true, ran: false, reason: "already-running" as const };
-    }
     const now = state.deps.nowMs();
+    // Check for stale runningAtMs - allow manual trigger if the timestamp is old
+    if (typeof job.state.runningAtMs === "number") {
+      const stale = now - job.state.runningAtMs > STALE_RUNNING_AT_MS_THRESHOLD_MS;
+      if (stale) {
+        state.deps.log.warn(
+          { jobId: job.id, runningAtMs: job.state.runningAtMs },
+          "cron: clearing stale running marker for manual trigger",
+        );
+        job.state.runningAtMs = undefined;
+      } else {
+        return { ok: true, ran: false, reason: "already-running" as const };
+      }
+    }
     const due = isJobDue(job, now, { forced: mode === "force" });
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
