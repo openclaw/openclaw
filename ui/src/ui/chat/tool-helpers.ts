@@ -35,3 +35,16 @@ export function getTruncatedPreview(text: string): string {
   }
   return lines.length < allLines.length ? preview + "…" : preview;
 }
+
+/**
+ * Format output length for display (e.g., "1.2 KB", "340 chars")
+ */
+export function formatOutputLength(length: number): string {
+  if (length >= 1024 * 1024) {
+    return `${(length / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (length >= 1024) {
+    return `${(length / 1024).toFixed(1)} KB`;
+  }
+  return `${length} chars`;
+}
