@@ -36,6 +36,10 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
+// Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
+// for incremental text display with a "Thinking..." placeholder
+const StreamingModeSchema = z.boolean().optional();
+
 const BlockStreamingCoalesceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -123,6 +127,7 @@ export const FeishuAccountConfigSchema = z
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
     webhookPath: z.string().optional(),
+    webhookHost: z.string().optional(),
     webhookPort: z.number().int().positive().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
@@ -142,6 +147,7 @@ export const FeishuAccountConfigSchema = z
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema,
+    streaming: StreamingModeSchema, // Enable streaming card mode (default: true)
     tools: FeishuToolsConfigSchema,
   })
   .strict();
@@ -157,6 +163,7 @@ export const FeishuConfigSchema = z
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
     webhookPath: z.string().optional().default("/feishu/events"),
+    webhookHost: z.string().optional(),
     webhookPort: z.number().int().positive().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
@@ -177,6 +184,7 @@ export const FeishuConfigSchema = z
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema, // raw = plain text (default), card = interactive card with markdown
+    streaming: StreamingModeSchema, // Enable streaming card mode (default: true)
     tools: FeishuToolsConfigSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
@@ -185,6 +193,38 @@ export const FeishuConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    const defaultConnectionMode = value.connectionMode ?? "websocket";
+    const defaultVerificationToken = value.verificationToken?.trim();
+    if (defaultConnectionMode === "webhook" && !defaultVerificationToken) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["verificationToken"],
+        message:
+          'channels.feishu.connectionMode="webhook" requires channels.feishu.verificationToken',
+      });
+    }
+
+    for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+      if (!account) {
+        continue;
+      }
+      const accountConnectionMode = account.connectionMode ?? defaultConnectionMode;
+      if (accountConnectionMode !== "webhook") {
+        continue;
+      }
+      const accountVerificationToken =
+        account.verificationToken?.trim() || defaultVerificationToken;
+      if (!accountVerificationToken) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["accounts", accountId, "verificationToken"],
+          message:
+            `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
+            "a verificationToken (account-level or top-level)",
+        });
+      }
+    }
+
     if (value.dmPolicy === "open") {
       const allowFrom = value.allowFrom ?? [];
       const hasWildcard = allowFrom.some((entry) => String(entry).trim() === "*");

@@ -24,6 +24,7 @@ export function isBinaryThinkingProvider(provider?: string | null): boolean {
 export const XHIGH_MODEL_REFS = [
   "openai/gpt-5.2",
   "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.3-codex-spark",
   "openai-codex/gpt-5.2-codex",
   "openai-codex/gpt-5.1-codex",
   "github-copilot/gpt-5.2-codex",
@@ -122,8 +123,9 @@ export function formatXHighModelHint(): string {
   return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
 }
 
-// Normalize verbose flags used to toggle agent verbosity.
-export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+type OnOffFullLevel = "off" | "on" | "full";
+
+function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -140,22 +142,14 @@ export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undef
   return undefined;
 }
 
+// Normalize verbose flags used to toggle agent verbosity.
+export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+  return normalizeOnOffFullLevel(raw);
+}
+
 // Normalize system notice flags used to toggle system notifications.
 export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "all", "everything"].includes(key)) {
-    return "full";
-  }
-  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
+  return normalizeOnOffFullLevel(raw);
 }
 
 // Normalize response-usage display modes used to toggle per-response usage footers.

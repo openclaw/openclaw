@@ -1,9 +1,11 @@
+import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -12,6 +14,7 @@ import { listDeliverableMessageChannels } from "../utils/message-channel.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: {
   skillsPrompt?: string;
@@ -69,7 +72,31 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
   if (!ownerLine || isMinimal) {
     return [];
   }
-  return ["## User Identity", ownerLine, ""];
+  return ["## Authorized Senders", ownerLine, ""];
+}
+
+function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
+  const hasSecret = ownerDisplaySecret?.trim();
+  const digest = hasSecret
+    ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
+    : createHash("sha256").update(ownerId).digest("hex");
+  return digest.slice(0, 12);
+}
+
+function buildOwnerIdentityLine(
+  ownerNumbers: string[],
+  ownerDisplay: OwnerIdDisplay,
+  ownerDisplaySecret?: string,
+) {
+  const normalized = ownerNumbers.map((value) => value.trim()).filter(Boolean);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  const displayOwnerNumbers =
+    ownerDisplay === "hash"
+      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
+      : normalized;
+  return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
@@ -86,6 +113,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
     "- [[reply_to_current]] replies to the triggering message.",
     "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
@@ -109,6 +137,9 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
+    "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
+    "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
+    `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -119,7 +150,7 @@ function buildMessagingSection(params: {
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
-            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
               ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
@@ -167,6 +198,8 @@ export function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: OwnerIdDisplay;
+  ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
   toolSummaries?: Record<string, string>;
@@ -199,6 +232,7 @@ export function buildAgentSystemPrompt(params: {
   sandboxInfo?: {
     enabled: boolean;
     workspaceDir?: string;
+    containerWorkspaceDir?: string;
     workspaceAccess?: "none" | "ro" | "rw";
     agentWorkspaceMount?: string;
     browserBridgeUrl?: string;
@@ -240,6 +274,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
+    subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
@@ -267,6 +302,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_list",
     "sessions_history",
     "sessions_send",
+    "subagents",
     "session_status",
     "image",
   ];
@@ -314,11 +350,12 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const ownerNumbers = (params.ownerNumbers ?? []).map((value) => value.trim()).filter(Boolean);
-  const ownerLine =
-    ownerNumbers.length > 0
-      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
-      : undefined;
+  const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
+  const ownerLine = buildOwnerIdentityLine(
+    params.ownerNumbers ?? [],
+    ownerDisplay,
+    params.ownerDisplaySecret,
+  );
   const reasoningHint = params.reasoningTagHint
     ? [
         "ALL internal reasoning MUST be inside <think>...</think>.",
@@ -348,6 +385,19 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
+  const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
+  const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
+    ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
+    : "";
+  const displayWorkspaceDir =
+    params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
+      ? sanitizedSandboxContainerWorkspace
+      : sanitizedWorkspaceDir;
+  const workspaceGuidance =
+    params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
+      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
+      : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
     "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
@@ -400,10 +450,13 @@ export function buildAgentSystemPrompt(params: {
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
+          "- subagents: list/steer/kill sub-agent runs",
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
-    "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
+    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+    "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
@@ -450,8 +503,8 @@ export function buildAgentSystemPrompt(params: {
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
-    `Your working directory is: ${params.workspaceDir}`,
-    "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
+    `Your working directory is: ${displayWorkspaceDir}`,
+    workspaceGuidance,
     ...workspaceNotes,
     "",
     ...docsSection,
@@ -461,19 +514,22 @@ export function buildAgentSystemPrompt(params: {
           "You are running in a sandboxed runtime (tools execute in Docker).",
           "Some tools may be unavailable due to sandbox policy.",
           "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
+          params.sandboxInfo.containerWorkspaceDir
+            ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
+            : "",
           params.sandboxInfo.workspaceDir
-            ? `Sandbox workspace: ${params.sandboxInfo.workspaceDir}`
+            ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
             : "",
           params.sandboxInfo.workspaceAccess
             ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
                 params.sandboxInfo.agentWorkspaceMount
-                  ? ` (mounted at ${params.sandboxInfo.agentWorkspaceMount})`
+                  ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
                   : ""
               }`
             : "",
           params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
           params.sandboxInfo.browserNoVncUrl
-            ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
+            ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
             : "",
           params.sandboxInfo.hostBrowserAllowed === true
             ? "Host browser control: allowed."

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { HookMessageChannel } from "./hooks.js";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -102,7 +102,10 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
-export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
+export function resolveHookMappings(
+  hooks?: HooksConfig,
+  opts?: { configDir?: string },
+): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -129,10 +132,13 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
     return [];
   }
 
-  const configDir = path.dirname(CONFIG_PATH);
-  const transformsDir = hooks?.transformsDir
-    ? resolvePath(configDir, hooks.transformsDir)
-    : configDir;
+  const configDir = path.resolve(opts?.configDir ?? path.dirname(CONFIG_PATH));
+  const transformsRootDir = path.join(configDir, "hooks", "transforms");
+  const transformsDir = resolveOptionalContainedPath(
+    transformsRootDir,
+    hooks?.transformsDir,
+    "Hook transformsDir",
+  );
 
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
 }
@@ -187,7 +193,7 @@ function normalizeHookMapping(
   const wakeMode = mapping.wakeMode ?? "now";
   const transform = mapping.transform
     ? {
-        modulePath: resolvePath(transformsDir, mapping.transform.module),
+        modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
         exportName: mapping.transform.export?.trim() || undefined,
       }
     : undefined;
@@ -319,14 +325,15 @@ function validateAction(action: HookAction): HookMappingResult {
 }
 
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
-  const cached = transformCache.get(transform.modulePath);
+  const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
+  const cached = transformCache.get(cacheKey);
   if (cached) {
     return cached;
   }
   const url = pathToFileURL(transform.modulePath).href;
   const mod = (await import(url)) as Record<string, unknown>;
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(transform.modulePath, fn);
+  transformCache.set(cacheKey, fn);
   return fn;
 }
 
@@ -340,12 +347,35 @@ function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): 
 
 function resolvePath(baseDir: string, target: string): string {
   if (!target) {
-    return baseDir;
+    return path.resolve(baseDir);
   }
-  if (path.isAbsolute(target)) {
-    return target;
+  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
+}
+
+function resolveContainedPath(baseDir: string, target: string, label: string): string {
+  const base = path.resolve(baseDir);
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    throw new Error(`${label} module path is required`);
   }
-  return path.join(baseDir, target);
+  const resolved = resolvePath(base, trimmed);
+  const relative = path.relative(base, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} module path must be within ${base}: ${target}`);
+  }
+  return resolved;
+}
+
+function resolveOptionalContainedPath(
+  baseDir: string,
+  target: string | undefined,
+  label: string,
+): string {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return path.resolve(baseDir);
+  }
+  return resolveContainedPath(baseDir, trimmed, label);
 }
 
 function normalizeMatchPath(raw?: string): string | undefined {
@@ -408,6 +438,11 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
+// Block traversal into prototype-chain properties on attacker-controlled
+// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
+// for config path traversal.
+const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -434,6 +469,9 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       }
       current = current[part] as unknown;
       continue;
+    }
+    if (BLOCKED_PATH_KEYS.has(part)) {
+      return undefined;
     }
     if (typeof current !== "object") {
       return undefined;

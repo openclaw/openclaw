@@ -1,11 +1,12 @@
-import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
-import { formatCliCommand } from "../../cli/command-format.js";
+import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
+import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import type { MsgContext } from "../templating.js";
+export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
 function normalizeAllowToken(value?: string) {
   if (!value) {
@@ -15,17 +16,7 @@ function normalizeAllowToken(value?: string) {
 }
 
 function slugAllowToken(value?: string) {
-  if (!value) {
-    return "";
-  }
-  let text = value.trim().toLowerCase();
-  if (!text) {
-    return "";
-  }
-  text = text.replace(/^[@#]+/, "");
-  text = text.replace(/[\s_]+/g, "-");
-  text = text.replace(/[^a-z0-9-]+/g, "-");
-  return text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  return normalizeAtHashSlug(value);
 }
 
 const SENDER_PREFIXES = [
@@ -201,33 +192,4 @@ export function resolveElevatedPermissions(params: {
     });
   }
   return { enabled, allowed: globalAllowed && agentAllowed, failures };
-}
-
-export function formatElevatedUnavailableMessage(params: {
-  runtimeSandboxed: boolean;
-  failures: Array<{ gate: string; key: string }>;
-  sessionKey?: string;
-}): string {
-  const lines: string[] = [];
-  lines.push(
-    `elevated is not available right now (runtime=${params.runtimeSandboxed ? "sandboxed" : "direct"}).`,
-  );
-  if (params.failures.length > 0) {
-    lines.push(`Failing gates: ${params.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
-  } else {
-    lines.push(
-      "Failing gates: enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",
-    );
-  }
-  lines.push("Fix-it keys:");
-  lines.push("- tools.elevated.enabled");
-  lines.push("- tools.elevated.allowFrom.<provider>");
-  lines.push("- agents.list[].tools.elevated.enabled");
-  lines.push("- agents.list[].tools.elevated.allowFrom.<provider>");
-  if (params.sessionKey) {
-    lines.push(
-      `See: ${formatCliCommand(`openclaw sandbox explain --session ${params.sessionKey}`)}`,
-    );
-  }
-  return lines.join("\n");
 }

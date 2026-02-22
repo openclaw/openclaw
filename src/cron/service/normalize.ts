@@ -1,6 +1,6 @@
-import type { CronPayload } from "../types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import type { CronPayload } from "../types.js";
 
 export function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") {
@@ -37,6 +37,14 @@ export function normalizeOptionalAgentId(raw: unknown) {
     return undefined;
   }
   return normalizeAgentId(trimmed);
+}
+
+export function normalizeOptionalSessionKey(raw: unknown) {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed || undefined;
 }
 
 export function inferLegacyName(job: {

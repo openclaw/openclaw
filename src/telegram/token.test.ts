@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveTelegramToken } from "./token.js";
+import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 function withTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-token-"));
@@ -85,5 +87,20 @@ describe("resolveTelegramToken", () => {
     const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
     expect(res.token).toBe("acct-token");
     expect(res.source).toBe("config");
+  });
+});
+
+describe("telegram update offset store", () => {
+  it("persists and reloads the last update id", async () => {
+    await withStateDirEnv("openclaw-telegram-", async () => {
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
+
+      await writeTelegramUpdateOffset({
+        accountId: "primary",
+        updateId: 421,
+      });
+
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
+    });
   });
 });

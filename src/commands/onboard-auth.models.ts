@@ -1,8 +1,9 @@
-import type { ModelDefinitionConfig } from "../config/types.js";
 import { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+import type { ModelDefinitionConfig } from "../config/types.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+export const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
@@ -41,12 +42,12 @@ export function resolveZaiBaseUrl(endpoint?: string): string {
   }
 }
 
-// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+// Pricing per 1M tokens (USD) — https://platform.minimaxi.com/document/Price
 export const MINIMAX_API_COST = {
-  input: 15,
-  output: 60,
-  cacheRead: 2,
-  cacheWrite: 10,
+  input: 0.3,
+  output: 1.2,
+  cacheRead: 0.03,
+  cacheWrite: 0.12,
 };
 export const MINIMAX_HOSTED_COST = {
   input: 0,
@@ -80,6 +81,8 @@ const MINIMAX_MODEL_CATALOG = {
     name: "MiniMax M2.1 Lightning",
     reasoning: false,
   },
+  "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },
+  "MiniMax-M2.5-Lightning": { name: "MiniMax M2.5 Lightning", reasoning: true },
 } as const;
 
 type MinimaxCatalogId = keyof typeof MINIMAX_MODEL_CATALOG;

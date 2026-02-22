@@ -41,6 +41,9 @@ Notes:
 - Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
   the gateway host (no container) and **does not require approvals**. To require approvals, run with
   `host=gateway` and configure exec approvals (or enable sandboxing).
+- Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
+  effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
+  that file.
 
 ## Config
 
@@ -50,8 +53,8 @@ Notes:
 - `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
-- `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
-- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
+- `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
+- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
 
 Example:
 
@@ -75,8 +78,8 @@ Example:
   OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
   `tools.exec.pathPrepend` applies here too.
 - `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are
-  rejected for host execution. Headless node hosts accept `PATH` only when it prepends the node host
-  PATH (no replacement). macOS nodes drop `PATH` overrides entirely.
+  rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node,
+  configure the node host service environment (systemd/launchd) or install tools in standard locations.
 
 Per-agent node binding (use the agent list index in config):
 
@@ -120,7 +123,8 @@ running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` noti
 Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
 `security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
-allowlist mode.
+allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
+Redirections remain unsupported.
 
 ## Examples
 
@@ -166,7 +170,7 @@ Enable it explicitly:
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+      applyPatch: { enabled: true, workspaceOnly: true, allowModels: ["gpt-5.2"] },
     },
   },
 }
@@ -177,3 +181,4 @@ Notes:
 - Only available for OpenAI/OpenAI Codex models.
 - Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.
+- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.

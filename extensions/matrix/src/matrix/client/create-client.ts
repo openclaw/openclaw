@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { IStorageProvider, ICryptoStorageProvider } from "@vector-im/matrix-bot-sdk";
 import {
   LogService,
@@ -5,7 +6,6 @@ import {
   SimpleFsStorageProvider,
   RustSdkCryptoStorageProvider,
 } from "@vector-im/matrix-bot-sdk";
-import fs from "node:fs";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,

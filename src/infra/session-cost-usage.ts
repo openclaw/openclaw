@@ -2,149 +2,56 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeUsage } from "../agents/usage.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import type {
+  CostBreakdown,
+  CostUsageTotals,
+  CostUsageSummary,
+  DiscoveredSession,
+  ParsedTranscriptEntry,
+  ParsedUsageEntry,
+  SessionCostSummary,
+  SessionDailyLatency,
+  SessionDailyMessageCounts,
+  SessionDailyModelUsage,
+  SessionDailyUsage,
+  SessionLatencyStats,
+  SessionLogEntry,
+  SessionMessageCounts,
+  SessionModelUsage,
+  SessionToolUsage,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./session-cost-usage.types.js";
 
-type CostBreakdown = {
-  total?: number;
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
-
-type ParsedUsageEntry = {
-  usage: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  timestamp?: Date;
-};
-
-type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
-  role?: "user" | "assistant";
-  timestamp?: Date;
-  durationMs?: number;
-  usage?: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  stopReason?: string;
-  toolNames: string[];
-  toolResultCounts: { total: number; errors: number };
-};
-
-export type CostUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  totalCost: number;
-  // Cost breakdown by token type (from actual API data when available)
-  inputCost: number;
-  outputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  missingCostEntries: number;
-};
-
-export type CostUsageDailyEntry = CostUsageTotals & {
-  date: string;
-};
-
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: CostUsageTotals;
-};
-
-export type SessionDailyUsage = {
-  date: string; // YYYY-MM-DD
-  tokens: number;
-  cost: number;
-};
-
-export type SessionDailyMessageCounts = {
-  date: string; // YYYY-MM-DD
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
-};
-
-export type SessionLatencyStats = {
-  count: number;
-  avgMs: number;
-  p95Ms: number;
-  minMs: number;
-  maxMs: number;
-};
-
-export type SessionDailyLatency = SessionLatencyStats & {
-  date: string; // YYYY-MM-DD
-};
-
-export type SessionDailyModelUsage = {
-  date: string; // YYYY-MM-DD
-  provider?: string;
-  model?: string;
-  tokens: number;
-  cost: number;
-  count: number;
-};
-
-export type SessionMessageCounts = {
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
-};
-
-export type SessionToolUsage = {
-  totalCalls: number;
-  uniqueTools: number;
-  tools: Array<{ name: string; count: number }>;
-};
-
-export type SessionModelUsage = {
-  provider?: string;
-  model?: string;
-  count: number;
-  totals: CostUsageTotals;
-};
-
-export type SessionCostSummary = CostUsageTotals & {
-  sessionId?: string;
-  sessionFile?: string;
-  firstActivity?: number;
-  lastActivity?: number;
-  durationMs?: number;
-  activityDates?: string[]; // YYYY-MM-DD dates when session had activity
-  dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
-  dailyMessageCounts?: SessionDailyMessageCounts[];
-  dailyLatency?: SessionDailyLatency[];
-  dailyModelUsage?: SessionDailyModelUsage[];
-  messageCounts?: SessionMessageCounts;
-  toolUsage?: SessionToolUsage;
-  modelUsage?: SessionModelUsage[];
-  latency?: SessionLatencyStats;
-};
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  CostUsageTotals,
+  DiscoveredSession,
+  SessionCostSummary,
+  SessionDailyLatency,
+  SessionDailyMessageCounts,
+  SessionDailyModelUsage,
+  SessionDailyUsage,
+  SessionLatencyStats,
+  SessionLogEntry,
+  SessionMessageCounts,
+  SessionModelUsage,
+  SessionToolUsage,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./session-cost-usage.types.js";
 
 const emptyTotals = (): CostUsageTotals => ({
   input: 0,
@@ -307,39 +214,52 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
+  const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
+  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (!parsed || typeof parsed !== "object") {
+          continue;
+        }
+        yield parsed as Record<string, unknown>;
+      } catch {
+        // Ignore malformed lines
+      }
+    }
+  } finally {
+    rl.close();
+    fileStream.destroy();
+  }
+}
+
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
-  const fileStream = fs.createReadStream(params.filePath, { encoding: "utf-8" });
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) {
+  for await (const parsed of readJsonlRecords(params.filePath)) {
+    const entry = parseTranscriptEntry(parsed);
+    if (!entry) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const entry = parseTranscriptEntry(parsed);
-      if (!entry) {
-        continue;
-      }
 
-      if (entry.usage && entry.costTotal === undefined) {
-        const cost = resolveModelCostConfig({
-          provider: entry.provider,
-          model: entry.model,
-          config: params.config,
-        });
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-      }
-
-      params.onEntry(entry);
-    } catch {
-      // Ignore malformed lines
+    if (entry.usage && entry.costTotal === undefined) {
+      const cost = resolveModelCostConfig({
+        provider: entry.provider,
+        model: entry.model,
+        config: params.config,
+      });
+      entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
     }
+
+    params.onEntry(entry);
   }
 }
 
@@ -458,13 +378,6 @@ export async function loadCostUsageSummary(params?: {
   };
 }
 
-export type DiscoveredSession = {
-  sessionId: string;
-  sessionFile: string;
-  mtime: number;
-  firstUserMessage?: string;
-};
-
 /**
  * Scan all transcript files to discover sessions not in the session store.
  * Returns basic metadata for each discovered session.
@@ -502,16 +415,8 @@ export async function discoverAllSessions(params?: {
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
     try {
-      const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-      for await (const line of rl) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
+      for await (const parsed of readJsonlRecords(filePath)) {
         try {
-          const parsed = JSON.parse(trimmed) as Record<string, unknown>;
           const message = parsed.message as Record<string, unknown> | undefined;
           if (message?.role === "user") {
             const content = message.content;
@@ -538,8 +443,6 @@ export async function discoverAllSessions(params?: {
           // Skip malformed lines
         }
       }
-      rl.close();
-      fileStream.destroy();
     } catch {
       // Ignore read errors
     }
@@ -561,12 +464,17 @@ export async function loadSessionCostSummary(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   startMs?: number;
   endMs?: number;
 }): Promise<SessionCostSummary | null> {
   const sessionFile =
     params.sessionFile ??
-    (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -829,33 +737,21 @@ export async function loadSessionCostSummary(params: {
   };
 }
 
-export type SessionUsageTimePoint = {
-  timestamp: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
-  cumulativeTokens: number;
-  cumulativeCost: number;
-};
-
-export type SessionUsageTimeSeries = {
-  sessionId?: string;
-  points: SessionUsageTimePoint[];
-};
-
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
   const sessionFile =
     params.sessionFile ??
-    (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -905,12 +801,44 @@ export async function loadSessionUsageTimeSeries(params: {
   if (sortedPoints.length > maxPoints) {
     const step = Math.ceil(sortedPoints.length / maxPoints);
     const downsampled: SessionUsageTimePoint[] = [];
+    let downsampledCumulativeTokens = 0;
+    let downsampledCumulativeCost = 0;
     for (let i = 0; i < sortedPoints.length; i += step) {
-      downsampled.push(sortedPoints[i]);
-    }
-    // Always include the last point
-    if (downsampled[downsampled.length - 1] !== sortedPoints[sortedPoints.length - 1]) {
-      downsampled.push(sortedPoints[sortedPoints.length - 1]);
+      const bucket = sortedPoints.slice(i, i + step);
+      const bucketLast = bucket[bucket.length - 1];
+      if (!bucketLast) {
+        continue;
+      }
+
+      let bucketInput = 0;
+      let bucketOutput = 0;
+      let bucketCacheRead = 0;
+      let bucketCacheWrite = 0;
+      let bucketTotalTokens = 0;
+      let bucketCost = 0;
+      for (const point of bucket) {
+        bucketInput += point.input;
+        bucketOutput += point.output;
+        bucketCacheRead += point.cacheRead;
+        bucketCacheWrite += point.cacheWrite;
+        bucketTotalTokens += point.totalTokens;
+        bucketCost += point.cost;
+      }
+
+      downsampledCumulativeTokens += bucketTotalTokens;
+      downsampledCumulativeCost += bucketCost;
+
+      downsampled.push({
+        timestamp: bucketLast.timestamp,
+        input: bucketInput,
+        output: bucketOutput,
+        cacheRead: bucketCacheRead,
+        cacheWrite: bucketCacheWrite,
+        totalTokens: bucketTotalTokens,
+        cost: bucketCost,
+        cumulativeTokens: downsampledCumulativeTokens,
+        cumulativeCost: downsampledCumulativeCost,
+      });
     }
     return { sessionId: params.sessionId, points: downsampled };
   }
@@ -918,24 +846,21 @@ export async function loadSessionUsageTimeSeries(params: {
   return { sessionId: params.sessionId, points: sortedPoints };
 }
 
-export type SessionLogEntry = {
-  timestamp: number;
-  role: "user" | "assistant" | "tool" | "toolResult";
-  content: string;
-  tokens?: number;
-  cost?: number;
-};
-
 export async function loadSessionLogs(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
   const sessionFile =
     params.sessionFile ??
-    (params.sessionId ? resolveSessionFilePath(params.sessionId, params.sessionEntry) : undefined);
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -943,16 +868,8 @@ export async function loadSessionLogs(params: {
   const logs: SessionLogEntry[] = [];
   const limit = params.limit ?? 50;
 
-  const fileStream = fs.createReadStream(sessionFile, { encoding: "utf-8" });
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
+  for await (const parsed of readJsonlRecords(sessionFile)) {
     try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {
         continue;
@@ -1023,6 +940,13 @@ export async function loadSessionLogs(params: {
       }
 
       let content = contentParts.join("\n").trim();
+      if (!content) {
+        continue;
+      }
+      content = stripInboundMetadata(content);
+      if (role === "user") {
+        content = stripMessageIdHints(stripEnvelope(content)).trim();
+      }
       if (!content) {
         continue;
       }

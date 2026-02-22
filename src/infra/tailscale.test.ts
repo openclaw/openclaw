@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -12,7 +13,15 @@ const {
 const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
 describe("tailscale helpers", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY"]);
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
+  });
+
   afterEach(() => {
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 
@@ -65,7 +74,6 @@ describe("tailscale helpers", () => {
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
     // 1. First attempt fails
     // 2. Second attempt (sudo) succeeds
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("permission denied"))
@@ -89,7 +97,6 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi.fn().mockResolvedValue({ stdout: "" });
 
     await enableTailscaleServe(3000, exec as never);
@@ -103,7 +110,6 @@ describe("tailscale helpers", () => {
   });
 
   it("disableTailscaleServe uses fallback", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("permission denied"))
@@ -125,7 +131,6 @@ describe("tailscale helpers", () => {
     // 1. status (success)
     // 2. enable (fails)
     // 3. enable sudo (success)
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi
       .fn()
       .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
@@ -166,7 +171,6 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
 
     await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
@@ -175,7 +179,6 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe rethrows original error if sudo fails", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const originalError = Object.assign(new Error("permission denied"), {
       stderr: "permission denied",
     });

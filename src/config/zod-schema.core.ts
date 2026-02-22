@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const ModelApiSchema = z.union([
   z.literal("openai-completions"),
@@ -8,6 +10,7 @@ export const ModelApiSchema = z.union([
   z.literal("google-generative-ai"),
   z.literal("github-copilot"),
   z.literal("bedrock-converse-stream"),
+  z.literal("ollama"),
 ]);
 
 export const ModelCompatSchema = z
@@ -15,9 +18,16 @@ export const ModelCompatSchema = z
     supportsStore: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
+    supportsUsageInStreaming: z.boolean().optional(),
+    supportsStrictMode: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
+    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    requiresToolResultName: z.boolean().optional(),
+    requiresAssistantAfterToolResult: z.boolean().optional(),
+    requiresThinkingAsText: z.boolean().optional(),
+    requiresMistralToolIds: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -48,7 +58,7 @@ export const ModelDefinitionSchema = z
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
-    apiKey: z.string().optional(),
+    apiKey: z.string().optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
@@ -180,7 +190,7 @@ export const TtsConfigSchema = z
       .optional(),
     elevenlabs: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         voiceId: z.string().optional(),
         modelId: z.string().optional(),
@@ -202,7 +212,7 @@ export const TtsConfigSchema = z
       .optional(),
     openai: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
         voice: z.string().optional(),
       })
@@ -238,6 +248,16 @@ export const HumanDelaySchema = z
   })
   .strict();
 
+const CliBackendWatchdogModeSchema = z
+  .object({
+    noOutputTimeoutMs: z.number().int().min(1000).optional(),
+    noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
+    minMs: z.number().int().min(1000).optional(),
+    maxMs: z.number().int().min(1000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const CliBackendSchema = z
   .object({
     command: z.string(),
@@ -265,6 +285,18 @@ export const CliBackendSchema = z
     imageArg: z.string().optional(),
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
     serialize: z.boolean().optional(),
+    reliability: z
+      .object({
+        watchdog: z
+          .object({
+            fresh: CliBackendWatchdogModeSchema,
+            resume: CliBackendWatchdogModeSchema,
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -367,37 +399,7 @@ export const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
-export const MediaUnderstandingScopeSchema = z
-  .object({
-    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-    rules: z
-      .array(
-        z
-          .object({
-            action: z.union([z.literal("allow"), z.literal("deny")]),
-            match: z
-              .object({
-                channel: z.string().optional(),
-                chatType: z
-                  .union([
-                    z.literal("direct"),
-                    z.literal("group"),
-                    z.literal("channel"),
-                    /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-                    z.literal("dm"),
-                  ])
-                  .optional(),
-                keyPrefix: z.string().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict()
-  .optional();
+export const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
 export const MediaUnderstandingCapabilitiesSchema = z
   .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))

@@ -1,4 +1,3 @@
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -22,6 +21,7 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
+import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize/signal.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
@@ -47,7 +47,8 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
@@ -126,7 +127,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           }),
       });
     }
-    const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
+    const signalToRaw = entry.isGroup
+      ? `group:${entry.groupId}`
+      : `signal:${entry.senderRecipient}`;
+    const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
         ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
@@ -352,7 +356,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
-    const messageText = (dataMessage?.message ?? "").trim();
+
+    // Replace ￼ (object replacement character) with @uuid or @phone from mentions
+    // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
+    const rawMessage = dataMessage?.message ?? "";
+    const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const messageText = normalizedMessage.trim();
+
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
@@ -431,7 +441,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    const storeAllowFrom = await readChannelAllowFromStore("signal").catch(() => []);
+    const storeAllowFrom =
+      deps.dmPolicy === "allowlist"
+        ? []
+        : await readChannelAllowFromStore("signal").catch(() => []);
     const effectiveDmAllow = [...deps.allowFrom, ...storeAllowFrom];
     const effectiveGroupAllow = [...deps.groupAllowFrom, ...storeAllowFrom];
     const dmAllowed =

@@ -1,16 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type {
-  SandboxBrowserConfig,
-  SandboxConfig,
-  SandboxDockerConfig,
-  SandboxPruneConfig,
-  SandboxScope,
-} from "./types.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
   DEFAULT_SANDBOX_BROWSER_IMAGE,
+  DEFAULT_SANDBOX_BROWSER_NETWORK,
   DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
   DEFAULT_SANDBOX_BROWSER_PREFIX,
   DEFAULT_SANDBOX_BROWSER_VNC_PORT,
@@ -22,6 +16,29 @@ import {
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+import type {
+  SandboxBrowserConfig,
+  SandboxConfig,
+  SandboxDockerConfig,
+  SandboxPruneConfig,
+  SandboxScope,
+} from "./types.js";
+
+export function resolveSandboxBrowserDockerCreateConfig(params: {
+  docker: SandboxDockerConfig;
+  browser: SandboxBrowserConfig;
+}): SandboxDockerConfig {
+  const browserNetwork = params.browser.network.trim();
+  const base: SandboxDockerConfig = {
+    ...params.docker,
+    // Browser container needs network access for Chrome, downloads, etc.
+    network: browserNetwork || DEFAULT_SANDBOX_BROWSER_NETWORK,
+    // For hashing and consistency, treat browser image as the docker image even though we
+    // pass it separately as the final `docker create` argument.
+    image: params.browser.image,
+  };
+  return params.browser.binds !== undefined ? { ...base, binds: params.browser.binds } : base;
+}
 
 export function resolveSandboxScope(params: {
   scope?: SandboxScope;
@@ -88,6 +105,9 @@ export function resolveSandboxBrowserConfig(params: {
 }): SandboxBrowserConfig {
   const agentBrowser = params.scope === "shared" ? undefined : params.agentBrowser;
   const globalBrowser = params.globalBrowser;
+  const binds = [...(globalBrowser?.binds ?? []), ...(agentBrowser?.binds ?? [])];
+  // Treat `binds: []` as an explicit override, so it can disable `docker.binds` for the browser container.
+  const bindsConfigured = globalBrowser?.binds !== undefined || agentBrowser?.binds !== undefined;
   return {
     enabled: agentBrowser?.enabled ?? globalBrowser?.enabled ?? false,
     image: agentBrowser?.image ?? globalBrowser?.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE,
@@ -95,7 +115,9 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.containerPrefix ??
       globalBrowser?.containerPrefix ??
       DEFAULT_SANDBOX_BROWSER_PREFIX,
+    network: agentBrowser?.network ?? globalBrowser?.network ?? DEFAULT_SANDBOX_BROWSER_NETWORK,
     cdpPort: agentBrowser?.cdpPort ?? globalBrowser?.cdpPort ?? DEFAULT_SANDBOX_BROWSER_CDP_PORT,
+    cdpSourceRange: agentBrowser?.cdpSourceRange ?? globalBrowser?.cdpSourceRange,
     vncPort: agentBrowser?.vncPort ?? globalBrowser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
     noVncPort:
       agentBrowser?.noVncPort ?? globalBrowser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
@@ -107,6 +129,7 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.autoStartTimeoutMs ??
       globalBrowser?.autoStartTimeoutMs ??
       DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
+    binds: bindsConfigured ? binds : undefined,
   };
 }
 

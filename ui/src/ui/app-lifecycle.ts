@@ -1,4 +1,3 @@
-import type { Tab } from "./navigation.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -17,10 +16,15 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
   basePath: string;
   tab: Tab;
+  assistantName: string;
+  assistantAvatar: string | null;
+  assistantAgentId: string | null;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
   chatLoading: boolean;
@@ -36,6 +40,7 @@ type LifecycleHost = {
 
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
+  void loadControlUiBootstrapConfig(host);
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);

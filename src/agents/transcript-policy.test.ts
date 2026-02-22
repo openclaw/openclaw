@@ -37,5 +37,6 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "openai",
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
   });
 });

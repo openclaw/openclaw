@@ -1,5 +1,5 @@
-import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
 export type SessionResetMode = "daily" | "idle";

@@ -1,6 +1,6 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
   CHUTES_AUTHORIZE_ENDPOINT,
@@ -8,11 +8,40 @@ import {
   generateChutesPkce,
   parseOAuthCallbackInput,
 } from "../agents/chutes-oauth.js";
+import { isLoopbackHost } from "../gateway/net.js";
 
 type OAuthPrompt = {
   message: string;
   placeholder?: string;
 };
+
+function parseManualOAuthInput(
+  input: string,
+  expectedState: string,
+): { code: string; state: string } {
+  const trimmed = String(input ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Missing OAuth redirect URL or authorization code.");
+  }
+
+  // Support pasting either:
+  // - Full redirect URL (preferred; validates state)
+  // - Raw authorization code (legacy/manual copy flows)
+  const looksLikeRedirect =
+    /^https?:\/\//i.test(trimmed) || trimmed.includes("://") || trimmed.includes("?");
+  if (!looksLikeRedirect) {
+    return { code: trimmed, state: expectedState };
+  }
+
+  const parsed = parseOAuthCallbackInput(trimmed, expectedState);
+  if ("error" in parsed) {
+    throw new Error(parsed.error);
+  }
+  if (parsed.state !== expectedState) {
+    throw new Error("Invalid OAuth state");
+  }
+  return parsed;
+}
 
 function buildAuthorizeUrl(params: {
   clientId: string;
@@ -44,6 +73,11 @@ async function waitForLocalCallback(params: {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${params.redirectUri})`);
   }
   const hostname = redirectUrl.hostname || "127.0.0.1";
+  if (!isLoopbackHost(hostname)) {
+    throw new Error(
+      `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
+    );
+  }
   const port = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;
   const expectedPath = redirectUrl.pathname || "/";
 
@@ -153,14 +187,7 @@ export async function loginChutes(params: {
       message: "Paste the redirect URL (or authorization code)",
       placeholder: `${params.app.redirectUri}?code=...&state=...`,
     });
-    const parsed = parseOAuthCallbackInput(String(input), state);
-    if ("error" in parsed) {
-      throw new Error(parsed.error);
-    }
-    if (parsed.state !== state) {
-      throw new Error("Invalid OAuth state");
-    }
-    codeAndState = parsed;
+    codeAndState = parseManualOAuthInput(input, state);
   } else {
     const callback = waitForLocalCallback({
       redirectUri: params.app.redirectUri,
@@ -173,14 +200,7 @@ export async function loginChutes(params: {
         message: "Paste the redirect URL (or authorization code)",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       });
-      const parsed = parseOAuthCallbackInput(String(input), state);
-      if ("error" in parsed) {
-        throw new Error(parsed.error);
-      }
-      if (parsed.state !== state) {
-        throw new Error("Invalid OAuth state");
-      }
-      return parsed;
+      return parseManualOAuthInput(input, state);
     });
 
     await params.onAuth({ url });

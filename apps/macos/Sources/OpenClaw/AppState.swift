@@ -422,11 +422,10 @@ final class AppState {
         let trimmedUser = parsed.user?.trimmingCharacters(in: .whitespacesAndNewlines)
         let user = (trimmedUser?.isEmpty ?? true) ? nil : trimmedUser
         let port = parsed.port
-        let assembled: String
-        if let user {
-            assembled = port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
+        let assembled: String = if let user {
+            port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
         } else {
-            assembled = port == 22 ? host : "\(host):\(port)"
+            port == 22 ? host : "\(host):\(port)"
         }
         if assembled != self.remoteTarget {
             self.remoteTarget = assembled
@@ -481,8 +480,7 @@ final class AppState {
                             remote.removeValue(forKey: "url")
                             remoteChanged = true
                         }
-                    } else {
-                        let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) ?? trimmedUrl
+                    } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
                         if (remote["url"] as? String) != normalizedUrl {
                             remote["url"] = normalizedUrl
                             remoteChanged = true
@@ -698,7 +696,9 @@ extension AppState {
 @MainActor
 enum AppStateStore {
     static let shared = AppState()
-    static var isPausedFlag: Bool { UserDefaults.standard.bool(forKey: pauseDefaultsKey) }
+    static var isPausedFlag: Bool {
+        UserDefaults.standard.bool(forKey: pauseDefaultsKey)
+    }
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {
