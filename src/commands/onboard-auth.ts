@@ -31,6 +31,7 @@ export {
   applyVercelAiGatewayProviderConfig,
   applyXaiConfig,
   applyXaiProviderConfig,
+  applyXaiResponsesApiConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
