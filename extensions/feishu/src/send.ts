@@ -13,6 +13,7 @@ export type FeishuMessageInfo = {
   chatId: string;
   senderId?: string;
   senderOpenId?: string;
+  senderType?: string;
   content: string;
   contentType: string;
   createTime?: number;
@@ -82,6 +83,7 @@ export async function getMessageFeishu(params: {
       chatId: item.chat_id ?? "",
       senderId: item.sender?.id,
       senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
+      senderType: item.sender?.sender_type,
       content,
       contentType: item.msg_type ?? "text",
       createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
