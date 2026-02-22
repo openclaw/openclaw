@@ -62,6 +62,24 @@ type OpenResponsesHttpOptions = {
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
 
+const XML_ESCAPE_MAP: Record<string, string> = {
+  "<": "&lt;",
+  ">": "&gt;",
+  "&": "&amp;",
+  '"': "&quot;",
+  "'": "&apos;",
+};
+
+/** @internal exported for testing */
+export function xmlEscapeAttr(value: string): string {
+  return value.replace(/[<>&"']/g, (char) => XML_ESCAPE_MAP[char] ?? char);
+}
+
+/** @internal exported for testing – neutralise `</file>` and `<file` inside file body text */
+export function escapeFileBlockContent(value: string): string {
+  return value.replace(/<\s*\/\s*file\s*>/gi, "&lt;/file&gt;").replace(/<\s*file\b/gi, "&lt;file");
+}
+
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -441,10 +459,12 @@ export async function handleOpenResponsesHttpRequest(
                 limits: limits.files,
               });
               if (file.text?.trim()) {
-                fileContexts.push(`<file name="${file.filename}">\n${file.text}\n</file>`);
+                fileContexts.push(
+                  `<file name="${xmlEscapeAttr(file.filename)}">\n${escapeFileBlockContent(file.text)}\n</file>`,
+                );
               } else if (file.images && file.images.length > 0) {
                 fileContexts.push(
-                  `<file name="${file.filename}">[PDF content rendered to images]</file>`,
+                  `<file name="${xmlEscapeAttr(file.filename)}">[PDF content rendered to images]</file>`,
                 );
               }
               if (file.images && file.images.length > 0) {
