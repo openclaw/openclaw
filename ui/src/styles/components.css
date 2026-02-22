@@ -1767,6 +1767,7 @@
 .agents-main {
   display: grid;
   gap: 16px;
+  align-self: start;
 }
 
 .agent-list {
