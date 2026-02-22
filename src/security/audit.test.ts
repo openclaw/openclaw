@@ -767,6 +767,59 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("system.runx");
   });
 
+  it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "loopback gateway",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            nodes: { allowCommands: ["camera.snap", "screen.record"] },
+          },
+        },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "lan-exposed gateway",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            nodes: { allowCommands: ["camera.snap", "screen.record"] },
+          },
+        },
+        expectedSeverity: "critical",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      const finding = res.findings.find(
+        (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
+      );
+      expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+      expect(finding?.detail, testCase.name).toContain("camera.snap");
+      expect(finding?.detail, testCase.name).toContain("screen.record");
+    }
+  });
+
+  it("does not flag dangerous allowCommands entries when denied again", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: ["camera.snap", "screen.record"],
+          denyCommands: ["camera.snap", "screen.record"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+  });
+
   it("flags agent profile overrides when global tools.profile is minimal", async () => {
     const cfg: OpenClawConfig = {
       tools: {
