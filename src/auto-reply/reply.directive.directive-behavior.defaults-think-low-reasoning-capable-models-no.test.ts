@@ -1,5 +1,6 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it, vi } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
 import {
   installDirectiveBehaviorE2EHooks,
   loadModelCatalog,
@@ -9,6 +10,7 @@ import {
   replyText,
   replyTexts,
   runEmbeddedPiAgent,
+  sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
@@ -77,6 +79,70 @@ describe("directive behavior", () => {
       expect(text).toContain("Current thinking level: off");
       expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("persists /reasoning off on discord even when model defaults reasoning on", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+      mockEmbeddedTextResult("done");
+      vi.mocked(loadModelCatalog).mockResolvedValue([
+        {
+          id: "x-ai/grok-4.1-fast",
+          name: "Grok 4.1 Fast",
+          provider: "openrouter",
+          reasoning: true,
+        },
+      ]);
+
+      const config = makeWhatsAppDirectiveConfig(
+        home,
+        {
+          model: "openrouter/x-ai/grok-4.1-fast",
+        },
+        {
+          channels: {
+            discord: { allowFrom: ["*"] },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const offRes = await getReplyFromConfig(
+        {
+          Body: "/reasoning off",
+          From: "discord:user:1004",
+          To: "channel:general",
+          Provider: "discord",
+          Surface: "discord",
+          CommandSource: "text",
+          CommandAuthorized: true,
+        },
+        {},
+        config,
+      );
+      expect(replyText(offRes)).toContain("Reasoning visibility disabled.");
+
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.reasoningLevel).toBe("off");
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "discord:user:1004",
+          To: "channel:general",
+          Provider: "discord",
+          Surface: "discord",
+          CommandSource: "text",
+          CommandAuthorized: true,
+        },
+        {},
+        config,
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.reasoningLevel).toBe("off");
     });
   });
   for (const replyTag of ["[[reply_to_current]]", "[[ reply_to_current ]]"]) {
