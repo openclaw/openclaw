@@ -42,6 +42,16 @@ export function pickGatewayPort(beacon: GatewayBonjourBeacon): number {
   return port > 0 ? port : 18789;
 }
 
+export function buildGatewayWsUrl(beacon: GatewayBonjourBeacon): string | null {
+  const host = pickBeaconHost(beacon);
+  if (!host) {
+    return null;
+  }
+  const port = pickGatewayPort(beacon);
+  const scheme = beacon.gatewayTls ? "wss" : "ws";
+  return `${scheme}://${host}:${port}`;
+}
+
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   const out: GatewayBonjourBeacon[] = [];
   const seen = new Set<string>();
@@ -72,9 +82,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   const domain = colorize(rich, theme.muted, domainRaw);
 
   const host = pickBeaconHost(beacon);
-  const gatewayPort = pickGatewayPort(beacon);
-  const scheme = beacon.gatewayTls ? "wss" : "ws";
-  const wsUrl = host ? `${scheme}://${host}:${gatewayPort}` : null;
+  const wsUrl = buildGatewayWsUrl(beacon);
 
   const lines = [`- ${title} ${domain}`];
 
