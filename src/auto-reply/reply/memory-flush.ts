@@ -61,6 +61,7 @@ export type MemoryFlushSettings = {
   prompt: string;
   systemPrompt: string;
   reserveTokensFloor: number;
+  runDuringHeartbeats: boolean;
 };
 
 const normalizeNonNegativeInt = (value: unknown): number | null => {
@@ -84,6 +85,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const runDuringHeartbeats = defaults?.runDuringHeartbeats ?? false;
 
   return {
     enabled,
@@ -91,6 +93,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
     prompt: ensureNoReplyHint(prompt),
     systemPrompt: ensureNoReplyHint(systemPrompt),
     reserveTokensFloor,
+    runDuringHeartbeats,
   };
 }
 
