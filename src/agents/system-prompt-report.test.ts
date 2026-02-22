@@ -93,4 +93,23 @@ describe("buildSystemPromptReport", () => {
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(0);
     expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
   });
+
+  it("ignores malformed injected file paths and still matches valid entries", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [
+        { path: 123 as unknown as string, content: "bad" },
+        { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+      ],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
 });
