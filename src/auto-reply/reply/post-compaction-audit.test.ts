@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import { describe, it, expect, vi } from "vitest";
 import {
   auditPostCompactionReads,
   extractReadPaths,
@@ -109,42 +110,52 @@ describe("extractReadPaths", () => {
 describe("auditPostCompactionReads", () => {
   const workspaceDir = "/Users/test/workspace";
 
-  it("passes when all required files are read", () => {
-    const readPaths = ["WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
+  it("passes when all required files are read (with custom list)", () => {
+    // Use custom required reads to avoid fs.existsSync dependency for basic test
+    const readPaths = ["custom.md", "memory/2026-02-16.md"];
+    const customRequired: Array<string | RegExp> = [/memory\/\d{4}-\d{2}-\d{2}\.md/];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
   });
 
-  it("fails when no files are read", () => {
+  it("fails when no files are read (regex pattern)", () => {
     const result = auditPostCompactionReads([], workspaceDir);
 
     expect(result.passed).toBe(false);
-    expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
+    // Default required reads now only contain the memory regex pattern
     expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
   });
 
-  it("reports only missing files", () => {
-    const readPaths = ["WORKFLOW_AUTO.md"];
+  it("does not require WORKFLOW_AUTO.md by default", () => {
+    // WORKFLOW_AUTO.md was removed from DEFAULT_REQUIRED_READS (#22674)
+    const readPaths = ["memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
-    expect(result.passed).toBe(false);
+    expect(result.passed).toBe(true);
     expect(result.missingPatterns).not.toContain("WORKFLOW_AUTO.md");
-    expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
+  });
+
+  it("skips string entries that do not exist on disk", () => {
+    const existsSyncSpy = vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+      return String(p).endsWith("exists.md");
+    });
+
+    const readPaths: string[] = [];
+    const customRequired = ["exists.md", "missing.md"];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
+
+    // Only exists.md should be enforced — missing.md should be skipped
+    expect(result.passed).toBe(false);
+    expect(result.missingPatterns).toEqual(["exists.md"]);
+    expect(result.missingPatterns).not.toContain("missing.md");
+
+    existsSyncSpy.mockRestore();
   });
 
   it("matches RegExp patterns against relative paths", () => {
     const readPaths = ["memory/2026-02-16.md"];
-    const result = auditPostCompactionReads(readPaths, workspaceDir);
-
-    expect(result.passed).toBe(false);
-    expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
-    expect(result.missingPatterns.length).toBe(1);
-  });
-
-  it("normalizes relative paths when matching", () => {
-    const readPaths = ["./WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
     expect(result.passed).toBe(true);
@@ -152,23 +163,38 @@ describe("auditPostCompactionReads", () => {
   });
 
   it("normalizes absolute paths when matching", () => {
-    const readPaths = [
-      "/Users/test/workspace/WORKFLOW_AUTO.md",
-      "/Users/test/workspace/memory/2026-02-16.md",
-    ];
+    const readPaths = ["/Users/test/workspace/memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
   });
 
-  it("accepts custom required reads list", () => {
+  it("accepts custom required reads list with existing files", () => {
+    const existsSyncSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+
     const readPaths = ["custom.md"];
     const customRequired = ["custom.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
 
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
+
+    existsSyncSpy.mockRestore();
+  });
+
+  it("passes when all string required-reads are absent from disk", () => {
+    const existsSyncSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+    // Only string entries, all missing from disk → nothing to enforce → passes
+    const readPaths: string[] = [];
+    const customRequired = ["WORKFLOW_AUTO.md", "NONEXISTENT.md"];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
+
+    expect(result.passed).toBe(true);
+    expect(result.missingPatterns).toEqual([]);
+
+    existsSyncSpy.mockRestore();
   });
 });
 

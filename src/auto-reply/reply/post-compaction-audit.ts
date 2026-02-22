@@ -1,25 +1,54 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Default required files — constants, extensible to config later
+// Default required files — constants, extensible to config later.
+// Only files that actually exist in the workspace are required.
+// WORKFLOW_AUTO.md was removed as a hardcoded default because most
+// workspaces don't use it, causing perpetual missing-file warnings
+// after compaction (see #22674).
 const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
-  "WORKFLOW_AUTO.md",
   /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
 ];
 
 /**
+ * Resolve the effective required-reads list by filtering out string entries
+ * that don't exist on disk. RegExp entries are kept as-is (they match
+ * against what the agent actually read, not what exists on disk).
+ */
+function resolveEffectiveRequiredReads(
+  requiredReads: Array<string | RegExp>,
+  workspaceDir: string,
+): Array<string | RegExp> {
+  return requiredReads.filter((entry) => {
+    if (typeof entry === "string") {
+      const resolved = path.resolve(workspaceDir, entry);
+      return fs.existsSync(resolved);
+    }
+    // RegExp entries are always kept — they match against read paths.
+    return true;
+  });
+}
+
+/**
  * Audit whether agent read required startup files after compaction.
  * Returns list of missing file patterns.
+ *
+ * String entries in requiredReads are only enforced when the file exists
+ * in the workspace. This prevents perpetual warnings for files that the
+ * user never created (e.g. WORKFLOW_AUTO.md). RegExp entries always apply
+ * but only flag "missing" if matching files were not read — not if they
+ * don't exist.
  */
 export function auditPostCompactionReads(
   readFilePaths: string[],
   workspaceDir: string,
   requiredReads: Array<string | RegExp> = DEFAULT_REQUIRED_READS,
 ): { passed: boolean; missingPatterns: string[] } {
+  const effective = resolveEffectiveRequiredReads(requiredReads, workspaceDir);
   const normalizedReads = readFilePaths.map((p) => path.resolve(workspaceDir, p));
   const missingPatterns: string[] = [];
 
-  for (const required of requiredReads) {
+  for (const required of effective) {
     if (typeof required === "string") {
       const requiredResolved = path.resolve(workspaceDir, required);
       const found = normalizedReads.some((r) => r === requiredResolved);
