@@ -8,11 +8,10 @@ import {
 } from "./exec-safe-bin-trust.js";
 
 describe("exec safe bin trust", () => {
-  it("builds trusted dirs from defaults and injected PATH", () => {
+  it("builds trusted dirs from defaults and explicit extra dirs", () => {
     const dirs = buildTrustedSafeBinDirs({
-      pathEnv: "/custom/bin:/alt/bin:/custom/bin",
-      delimiter: ":",
       baseDirs: ["/usr/bin"],
+      extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
     });
 
     expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
@@ -21,19 +20,16 @@ describe("exec safe bin trust", () => {
     expect(dirs.size).toBe(3);
   });
 
-  it("memoizes trusted dirs per PATH snapshot", () => {
+  it("memoizes trusted dirs per explicit trusted-dir snapshot", () => {
     const a = getTrustedSafeBinDirs({
-      pathEnv: "/first/bin",
-      delimiter: ":",
+      extraDirs: ["/first/bin"],
       refresh: true,
     });
     const b = getTrustedSafeBinDirs({
-      pathEnv: "/first/bin",
-      delimiter: ":",
+      extraDirs: ["/first/bin"],
     });
     const c = getTrustedSafeBinDirs({
-      pathEnv: "/second/bin",
-      delimiter: ":",
+      extraDirs: ["/second/bin"],
     });
 
     expect(a).toBe(b);
@@ -56,14 +52,12 @@ describe("exec safe bin trust", () => {
     ).toBe(false);
   });
 
-  it("uses startup PATH snapshot when pathEnv is omitted", () => {
+  it("does not trust PATH entries by default", () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
-    const initial = getTrustedSafeBinDirs({ refresh: true });
 
     withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
       const refreshed = getTrustedSafeBinDirs({ refresh: true });
       expect(refreshed.has(path.resolve(injected))).toBe(false);
-      expect([...refreshed].toSorted()).toEqual([...initial].toSorted());
     });
   });
 });

@@ -70,4 +70,18 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.unprofiledSafeBins).toEqual(["python3"]);
     expect(policy.unprofiledInterpreterSafeBins).toEqual(["python3"]);
   });
+
+  it("merges explicit safe-bin trusted dirs from global and local config", () => {
+    const policy = resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBinTrustedDirs: [" /custom/bin ", "/custom/bin"],
+      },
+      local: {
+        safeBinTrustedDirs: ["/agent/bin"],
+      },
+    });
+
+    expect(policy.trustedSafeBinDirs.has("/custom/bin")).toBe(true);
+    expect(policy.trustedSafeBinDirs.has("/agent/bin")).toBe(true);
+  });
 });
