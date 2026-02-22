@@ -110,6 +110,51 @@ describe("Google Chat webhook routing", () => {
     }
   });
 
+  it("deduplicates registrations for the same account on restart (fixes #20222)", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
+
+    const core = {} as PluginRuntime;
+    const config = {} as OpenClawConfig;
+
+    const unregisterA1 = registerGoogleChatWebhookTarget({
+      account: baseAccount("A"),
+      config,
+      runtime: {},
+      core,
+      path: "/googlechat",
+      statusSink: vi.fn(),
+      mediaMaxMb: 5,
+    });
+
+    // Re-register without calling unregisterA1 — simulates a health-monitor restart.
+    const unregisterA2 = registerGoogleChatWebhookTarget({
+      account: baseAccount("A"),
+      config,
+      runtime: {},
+      core,
+      path: "/googlechat",
+      statusSink: vi.fn(),
+      mediaMaxMb: 5,
+    });
+
+    try {
+      const res = createMockServerResponse();
+      const handled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          payload: { type: "ADDED_TO_SPACE", space: { name: "spaces/AAA" } },
+        }),
+        res,
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+    } finally {
+      unregisterA1();
+      unregisterA2();
+    }
+  });
+
   it("routes to the single verified target when earlier targets fail verification", async () => {
     vi.mocked(verifyGoogleChatRequest)
       .mockResolvedValueOnce({ ok: false, reason: "invalid" })

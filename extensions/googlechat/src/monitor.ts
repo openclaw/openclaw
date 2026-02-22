@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createReplyPrefixOptions,
+  normalizeWebhookPath,
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
@@ -96,6 +97,15 @@ function warnDeprecatedUsersEmailEntries(
 }
 
 export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
+  // Evict any stale registration for this account to prevent restart-induced duplicates.
+  const key = normalizeWebhookPath(target.path);
+  const existing = webhookTargets.get(key) ?? [];
+  const deduplicated = existing.filter((t) => t.account.accountId !== target.account.accountId);
+  if (deduplicated.length > 0) {
+    webhookTargets.set(key, deduplicated);
+  } else {
+    webhookTargets.delete(key);
+  }
   return registerWebhookTarget(webhookTargets, target).unregister;
 }
 
