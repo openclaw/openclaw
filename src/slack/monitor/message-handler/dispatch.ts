@@ -184,6 +184,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
+      replyToMode: ctx.replyToMode,
     });
     replyPlan.markSent();
   };
@@ -301,6 +302,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         runtime,
         textLimit: ctx.textLimit,
         replyThreadTs,
+        replyToMode: ctx.replyToMode,
       });
       replyPlan.markSent();
     },

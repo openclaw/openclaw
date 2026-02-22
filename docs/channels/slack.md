@@ -241,7 +241,7 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
-Note: `replyToMode="off"` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+Note: When `replyToMode` is set to `"off"`, all reply threading is disabled, including explicit `[[reply_to_*]]` inline directive tags. To allow directive-driven threading, use `replyToMode="all"`.
 
 ## Media, chunking, and delivery
 

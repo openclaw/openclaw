@@ -442,31 +442,23 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "111.222" });
   });
 
-  it("forces thread replies when replyToId is set", async () => {
+  it("ignores replyToId when replyToMode is off", async () => {
     replyMock.mockResolvedValue({ text: "forced reply", replyToId: "555" });
-    slackTestState.config = {
-      messages: {
-        responsePrefix: "PFX",
-        ackReaction: "👀",
-        ackReactionScope: "group-mentions",
-      },
-      channels: {
-        slack: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          dm: { enabled: true },
-          replyToMode: "off",
-        },
-      },
-    };
-
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        ts: "789",
-      }),
-    });
+    setDirectMessageReplyMode("off");
+    await runDirectMessageEvent("789");
 
     expect(sendMock).toHaveBeenCalledTimes(1);
+    // replyToId from inline directives should be ignored when replyToMode is off
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: undefined });
+  });
+
+  it("forces thread replies when replyToId is set and replyToMode is all", async () => {
+    replyMock.mockResolvedValue({ text: "forced reply", replyToId: "555" });
+    setDirectMessageReplyMode("all");
+    await runDirectMessageEvent("789");
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    // replyToId should be used when replyToMode allows threading
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "555" });
   });
 

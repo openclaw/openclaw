@@ -4,6 +4,7 @@ import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-refere
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { ReplyToMode } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
@@ -16,9 +17,13 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
+  replyToMode?: ReplyToMode;
 }) {
   for (const payload of params.replies) {
-    const threadTs = payload.replyToId ?? params.replyThreadTs;
+    // When replyToMode is "off", ignore inline directive replyToId (e.g. [[reply_to_current]])
+    // so replies stay in the channel root unless there is another threading reason.
+    const directiveReplyId = params.replyToMode === "off" ? undefined : payload.replyToId;
+    const threadTs = directiveReplyId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
