@@ -33,6 +33,58 @@ export async function runGatewayLoop(params: {
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGUSR1", onSigusr1);
   };
+  const exitProcess = (code: number) => {
+    cleanupSignals();
+    params.runtime.exit(code);
+  };
+  const releaseLockIfHeld = async (): Promise<boolean> => {
+    if (!lock) {
+      return false;
+    }
+    await lock.release();
+    lock = null;
+    return true;
+  };
+  const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
+    try {
+      lock = await acquireGatewayLock();
+      return true;
+    } catch (err) {
+      gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
+      exitProcess(1);
+      return false;
+    }
+  };
+  const handleRestartAfterServerClose = async () => {
+    const hadLock = await releaseLockIfHeld();
+    // Release the lock BEFORE spawning so the child can acquire it immediately.
+    const respawn = restartGatewayProcessWithFreshPid();
+    if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+      const modeLabel =
+        respawn.mode === "spawned"
+          ? `spawned pid ${respawn.pid ?? "unknown"}`
+          : "supervisor restart";
+      gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      exitProcess(0);
+      return;
+    }
+    if (respawn.mode === "failed") {
+      gatewayLog.warn(
+        `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+      );
+    } else {
+      gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
+    }
+    if (hadLock && !(await reacquireLockForInProcessRestart())) {
+      return;
+    }
+    shuttingDown = false;
+    restartResolver?.();
+  };
+  const handleStopAfterServerClose = async () => {
+    await releaseLockIfHeld();
+    exitProcess(0);
+  };
 
   const DRAIN_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -50,8 +102,7 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      cleanupSignals();
-      params.runtime.exit(0);
+      exitProcess(0);
     }, forceExitMs);
 
     void (async () => {
@@ -83,54 +134,9 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
-          const hadLock = lock != null;
-          // Release the lock BEFORE spawning so the child can acquire it immediately.
-          if (lock) {
-            await lock.release();
-            lock = null;
-          }
-          const respawn = restartGatewayProcessWithFreshPid();
-          if (respawn.mode === "spawned" || respawn.mode === "supervised") {
-            const modeLabel =
-              respawn.mode === "spawned"
-                ? `spawned pid ${respawn.pid ?? "unknown"}`
-                : "supervisor restart";
-            gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-            cleanupSignals();
-            params.runtime.exit(0);
-          } else {
-            if (respawn.mode === "failed") {
-              gatewayLog.warn(
-                `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
-              );
-            } else {
-              gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
-            }
-            let canContinueInProcessRestart = true;
-            if (hadLock) {
-              try {
-                lock = await acquireGatewayLock();
-              } catch (err) {
-                gatewayLog.error(
-                  `failed to reacquire gateway lock for in-process restart: ${String(err)}`,
-                );
-                cleanupSignals();
-                params.runtime.exit(1);
-                canContinueInProcessRestart = false;
-              }
-            }
-            if (canContinueInProcessRestart) {
-              shuttingDown = false;
-              restartResolver?.();
-            }
-          }
+          await handleRestartAfterServerClose();
         } else {
-          if (lock) {
-            await lock.release();
-            lock = null;
-          }
-          cleanupSignals();
-          params.runtime.exit(0);
+          await handleStopAfterServerClose();
         }
       }
     })();
@@ -183,10 +189,7 @@ export async function runGatewayLoop(params: {
       });
     }
   } finally {
-    if (lock) {
-      await lock.release();
-      lock = null;
-    }
+    await releaseLockIfHeld();
     cleanupSignals();
   }
 }
