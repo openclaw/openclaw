@@ -50,12 +50,12 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 import type { CliDeps } from "../cli/deps.js";
-import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
+import { agentCommand } from "../commands/agent.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -90,8 +90,8 @@ function buildCtx(): NodeEventContext {
 
 describe("node exec events", () => {
   beforeEach(() => {
-    enqueueSystemEventMock.mockReset();
-    requestHeartbeatNowMock.mockReset();
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
   });
 
   it("enqueues exec.started events", async () => {
@@ -189,8 +189,8 @@ describe("node exec events", () => {
 
 describe("voice transcript events", () => {
   beforeEach(() => {
-    agentCommandMock.mockReset();
-    updateSessionStoreMock.mockReset();
+    agentCommandMock.mockClear();
+    updateSessionStoreMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
@@ -292,9 +292,9 @@ describe("voice transcript events", () => {
 
 describe("agent request events", () => {
   beforeEach(() => {
-    agentCommandMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionEntryMock.mockReset();
+    agentCommandMock.mockClear();
+    updateSessionStoreMock.mockClear();
+    loadSessionEntryMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});

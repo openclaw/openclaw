@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { CliDeps } from "../../../cli/deps.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 
 const runBootOnce = vi.fn();
 
@@ -19,7 +19,7 @@ const { clearInternalHooks, createInternalHookEvent, registerInternalHook, trigg
 
 describe("boot-md startup hook integration", () => {
   beforeEach(() => {
-    runBootOnce.mockReset();
+    runBootOnce.mockClear();
     clearInternalHooks();
   });
 

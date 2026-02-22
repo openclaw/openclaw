@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelApi } from "../config/types.models.js";
 import { APERTIS_BASE_URL } from "../agents/apertis-models.js";
 import {
   buildHuggingfaceModelDefinition,
@@ -5,6 +7,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
@@ -27,12 +30,9 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelApi } from "../config/types.models.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   APERTIS_DEFAULT_MODEL_REF,
-  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -64,6 +64,7 @@ import {
   buildXaiModelDefinition,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  KIMI_CODING_MODEL_ID,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
@@ -209,19 +210,19 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
   const models = { ...cfg.agents?.defaults?.models };
   models[KIMI_CODING_MODEL_REF] = {
     ...models[KIMI_CODING_MODEL_REF],
-    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi K2.5",
+    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi for Coding",
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  const defaultModel = buildKimiCodingProvider().models[0];
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "kimi-coding",
+    api: "anthropic-messages",
+    baseUrl: "https://api.kimi.com/coding/",
+    defaultModel,
+    defaultModelId: KIMI_CODING_MODEL_ID,
+  });
 }
 
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {

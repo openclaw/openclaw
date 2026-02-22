@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelCatalogEntry } from "./model-catalog.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentConfig, resolveAgentModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
+
+const log = createSubsystemLogger("model-selection");
 
 export type ModelRef = {
   provider: string;
@@ -48,6 +51,10 @@ export function normalizeProviderId(provider: string): string {
   }
   if (normalized === "apertis-ai") {
     return "apertis";
+  }
+  // Backward compatibility for older provider naming.
+  if (normalized === "bytedance" || normalized === "doubao") {
+    return "volcengine";
   }
   return normalized;
 }
@@ -269,8 +276,8 @@ export function resolveConfiguredModelRef(params: {
       }
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.
-      console.warn(
-        `[openclaw] Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
+      log.warn(
+        `Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
       );
       return { provider: "anthropic", model: trimmed };
     }

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
@@ -107,13 +107,13 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     resetInboundDedupe();
-    diagnosticMocks.logMessageQueued.mockReset();
-    diagnosticMocks.logMessageProcessed.mockReset();
-    diagnosticMocks.logSessionStateChange.mockReset();
-    hookMocks.runner.hasHooks.mockReset();
+    diagnosticMocks.logMessageQueued.mockClear();
+    diagnosticMocks.logMessageProcessed.mockClear();
+    diagnosticMocks.logSessionStateChange.mockClear();
+    hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runMessageReceived.mockReset();
-    internalHookMocks.createInternalHookEvent.mockReset();
+    hookMocks.runner.runMessageReceived.mockClear();
+    internalHookMocks.createInternalHookEvent.mockClear();
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockClear();
   });

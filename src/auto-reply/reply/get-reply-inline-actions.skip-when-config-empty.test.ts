@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
+import type { TypingController } from "./typing.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { buildTestCtx } from "./test-ctx.js";
-import type { TypingController } from "./typing.js";
 
 const handleCommandsMock = vi.fn();
 
@@ -17,8 +17,6 @@ const { handleInlineActions } = await import("./get-reply-inline-actions.js");
 
 describe("handleInlineActions", () => {
   it("skips whatsapp replies when config is empty and From !== To", async () => {
-    handleCommandsMock.mockReset();
-
     const typing: TypingController = {
       onReplyStart: async () => {},
       startTypingLoop: async () => {},

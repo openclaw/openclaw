@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempWorkspace, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
 const mocks = {
@@ -52,18 +50,6 @@ function mockTarExtractionFlow(params: {
   });
 }
 
-async function withTempWorkspace(
-  run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
-) {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-  try {
-    const stateDir = setTempStateDir(workspaceDir);
-    await run({ workspaceDir, stateDir });
-  } finally {
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
 async function writeTarBz2Skill(params: {
   workspaceDir: string;
   stateDir: string;
@@ -85,20 +71,6 @@ async function writeTarBz2Skill(params: {
   });
 }
 
-function restoreOpenClawStateDir(originalValue: string | undefined): void {
-  if (originalValue === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-    return;
-  }
-  process.env.OPENCLAW_STATE_DIR = originalValue;
-}
-
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
-afterEach(() => {
-  restoreOpenClawStateDir(originalStateDir);
-});
-
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => mocks.runCommand(...args),
 }));
@@ -117,9 +89,9 @@ vi.mock("../security/skill-scanner.js", async (importOriginal) => {
 
 describe("installSkill download extraction safety (tar.bz2)", () => {
   beforeEach(() => {
-    mocks.runCommand.mockReset();
-    mocks.scanSummary.mockReset();
-    mocks.fetchGuard.mockReset();
+    mocks.runCommand.mockClear();
+    mocks.scanSummary.mockClear();
+    mocks.fetchGuard.mockClear();
     mocks.scanSummary.mockResolvedValue({
       scannedFiles: 0,
       critical: 0,

@@ -4,10 +4,10 @@ vi.mock("./docker.js", () => ({
   execDockerRaw: vi.fn(),
 }));
 
+import type { SandboxContext } from "./types.js";
 import { execDockerRaw } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
-import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
 
@@ -26,7 +26,7 @@ function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
 
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
-    mockedExecDockerRaw.mockReset();
+    mockedExecDockerRaw.mockClear();
     mockedExecDockerRaw.mockImplementation(async (args) => {
       const script = args[5] ?? "";
       if (script.includes('stat -c "%F|%s|%Y"')) {

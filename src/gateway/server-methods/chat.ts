@@ -1,15 +1,17 @@
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
@@ -41,7 +43,6 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -103,9 +104,10 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   const entry = { ...(block as Record<string, unknown>) };
   let changed = false;
   if (typeof entry.text === "string") {
-    const res = truncateChatHistoryText(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateChatHistoryText(entry.partialJson);
@@ -158,9 +160,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateChatHistoryText(entry.content);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const res = truncateChatHistoryText(stripped.text);
     entry.content = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
     if (updated.some((item) => item.changed)) {
@@ -170,9 +173,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.text === "string") {
-    const res = truncateChatHistoryText(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   }
 
   return { message: changed ? entry : message, changed };

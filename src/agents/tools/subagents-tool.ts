@@ -1,5 +1,7 @@
-import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import crypto from "node:crypto";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { AnyAgentTool } from "./common.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import {
   resolveSubagentLabel,
@@ -7,8 +9,8 @@ import {
   sortSubagentRuns,
   type SubagentTargetResolution,
 } from "../../auto-reply/reply/subagents-utils.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
@@ -36,7 +38,6 @@ import {
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
 } from "../subagent-registry.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -199,7 +200,8 @@ function resolveRequesterKey(params: {
   // Check if this sub-agent can spawn children (orchestrator).
   // If so, it should see its own children, not its parent's children.
   const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, { cfg: params.cfg });
-  const maxSpawnDepth = params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  const maxSpawnDepth =
+    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth < maxSpawnDepth) {
     // Orchestrator sub-agent: use its own session key as requester
     // so it sees children it spawned.

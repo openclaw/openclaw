@@ -1,7 +1,13 @@
 import path from "node:path";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
   extractFileContentFromSource,
@@ -24,12 +30,6 @@ import {
   resolveMediaAttachmentLocalRoots,
   runCapability,
 } from "./runner.js";
-import type {
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
@@ -382,7 +382,11 @@ async function extractFileBlocks(params: {
     }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
-    const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
+    // Do not coerce real PDFs into text/plain via printable-byte heuristics.
+    // PDFs have a dedicated extraction path in extractFileContentFromSource.
+    const allowTextHeuristic = normalizedRawMime !== "application/pdf";
+    const textLike =
+      allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);

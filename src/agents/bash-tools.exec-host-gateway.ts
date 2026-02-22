@@ -1,5 +1,6 @@
-import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import crypto from "node:crypto";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -11,6 +12,7 @@ import {
   minSecurity,
   recordAllowlistUse,
   requiresExecApproval,
+  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
@@ -23,7 +25,6 @@ import {
   normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -77,12 +78,23 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-  const requiresAsk = requiresExecApproval({
-    ask: hostAsk,
-    security: hostSecurity,
-    analysisOk,
-    allowlistSatisfied,
-  });
+  const hasHeredocSegment = allowlistEval.segments.some((segment) =>
+    segment.argv.some((token) => token.startsWith("<<")),
+  );
+  const requiresHeredocApproval =
+    hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
+  const requiresAsk =
+    requiresExecApproval({
+      ask: hostAsk,
+      security: hostSecurity,
+      analysisOk,
+      allowlistSatisfied,
+    }) || requiresHeredocApproval;
+  if (requiresHeredocApproval) {
+    params.warnings.push(
+      "Warning: heredoc execution requires explicit approval in allowlist mode.",
+    );
+  }
 
   if (requiresAsk) {
     const approvalId = crypto.randomUUID();
@@ -142,8 +154,13 @@ export async function processGatewayAllowlist(
       } else if (decision === "allow-always") {
         approvedByAsk = true;
         if (hostSecurity === "allowlist") {
-          for (const segment of allowlistEval.segments) {
-            const pattern = segment.resolution?.resolvedPath ?? "";
+          const patterns = resolveAllowAlwaysPatterns({
+            segments: allowlistEval.segments,
+            cwd: params.workdir,
+            env: params.env,
+            platform: process.platform,
+          });
+          for (const pattern of patterns) {
             if (pattern) {
               addAllowlistEntry(approvals.file, params.agentId, pattern);
             }

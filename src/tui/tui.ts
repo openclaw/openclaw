@@ -8,6 +8,13 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import type {
+  AgentSummary,
+  SessionInfo,
+  SessionScope,
+  TuiOptions,
+  TuiStateAccess,
+} from "./tui-types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -27,13 +34,6 @@ import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
-import type {
-  AgentSummary,
-  SessionInfo,
-  SessionScope,
-  TuiOptions,
-  TuiStateAccess,
-} from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
@@ -84,13 +84,24 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
   env?: NodeJS.ProcessEnv;
 }): boolean {
   const platform = params?.platform ?? process.platform;
+  const env = params?.env ?? process.env;
+  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+
+  // Some macOS terminals emit multiline paste as rapid single-line submits.
+  // Enable burst coalescing so pasted blocks stay as one user message.
+  if (platform === "darwin") {
+    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
+      return true;
+    }
+    return false;
+  }
+
   if (platform !== "win32") {
     return false;
   }
-  const env = params?.env ?? process.env;
+
   const msystem = (env.MSYSTEM ?? "").toUpperCase();
   const shell = env.SHELL ?? "";
-  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
   if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
     return true;
   }

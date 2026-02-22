@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -8,29 +9,23 @@ import {
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import {
+  hasAvatarUriScheme,
+  isAvatarDataUrl,
+  isAvatarHttpUrl,
+  isPathWithinRoot,
+  isWindowsAbsolutePath,
+} from "../shared/avatar-policy.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
-import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
-
-const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
-const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
-  const relative = path.relative(workspaceRoot, resolved);
-  if (relative === "") {
-    return true;
-  }
-  if (relative.startsWith("..")) {
-    return false;
-  }
-  return !path.isAbsolute(relative);
+  return isPathWithinRoot(workspaceRoot, resolved);
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -51,7 +46,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (!avatar) {
       continue;
     }
-    if (AVATAR_DATA_RE.test(avatar) || AVATAR_HTTP_RE.test(avatar)) {
+    if (isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
     if (avatar.startsWith("~")) {
@@ -61,8 +56,8 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       });
       continue;
     }
-    const hasScheme = AVATAR_SCHEME_RE.test(avatar);
-    if (hasScheme && !WINDOWS_ABS_RE.test(avatar)) {
+    const hasScheme = hasAvatarUriScheme(avatar);
+    if (hasScheme && !isWindowsAbsolutePath(avatar)) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
         message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",

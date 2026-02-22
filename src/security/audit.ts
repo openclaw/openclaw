@@ -1,9 +1,11 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { ExecFn } from "./windows-acl.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -18,8 +20,10 @@ import {
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectSandboxBrowserHashLabelFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
   collectSmallModelRiskFindings,
   collectSandboxDangerousConfigFindings,
@@ -36,8 +40,8 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
-import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -89,6 +93,8 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: typeof probeGateway;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
+  /** Dependency injection for tests (Docker label checks). */
+  execDockerRawFn?: typeof execDockerRaw;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -348,10 +354,10 @@ function collectGatewayConfigFindings(
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "critical",
-      title: "Control UI allows insecure HTTP auth",
+      severity: "warn",
+      title: "Control UI insecure auth toggle enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true is a legacy insecure-auth toggle; Control UI still enforces secure context and device identity unless dangerouslyDisableDeviceAuth is enabled.",
+        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }
@@ -364,6 +370,18 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+    });
+  }
+
+  const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
+  if (enabledDangerousFlags.length > 0) {
+    findings.push({
+      checkId: "config.insecure_or_dangerous_flags",
+      severity: "warn",
+      title: "Insecure or dangerous config flags enabled",
+      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      remediation:
+        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
@@ -677,6 +695,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSandboxDockerNoopFindings(cfg));
   findings.push(...collectSandboxDangerousConfigFindings(cfg));
   findings.push(...collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...collectMinimalProfileOverrideFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
@@ -705,6 +724,11 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
+    );
+    findings.push(
+      ...(await collectSandboxBrowserHashLabelFindings({
+        execDockerRawFn: opts.execDockerRawFn,
+      })),
     );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {

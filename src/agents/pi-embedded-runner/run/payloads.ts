@@ -1,9 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -12,7 +13,6 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -294,7 +294,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  return replyItems
+  const payloads = replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -314,4 +314,13 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
+  if (
+    payloads.length === 0 &&
+    params.toolMetas.length > 0 &&
+    !params.lastToolError &&
+    !lastAssistantErrored
+  ) {
+    return [{ text: "✅ Done." }];
+  }
+  return payloads;
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
@@ -113,8 +113,8 @@ describe("runMessageAction threading auto-injection", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    mocks.executeSendAction.mockReset();
-    mocks.recordSessionMetaFromInbound.mockReset();
+    mocks.executeSendAction.mockClear();
+    mocks.recordSessionMetaFromInbound.mockClear();
   });
 
   it.each([

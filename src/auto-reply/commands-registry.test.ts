@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChatCommandDefinition } from "./commands-registry.types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -16,7 +17,6 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -60,6 +60,20 @@ describe("commands registry", () => {
     });
     expect(nativeDisabled.find((spec) => spec.name === "config")).toBeFalsy();
     expect(nativeDisabled.find((spec) => spec.name === "debug")).toBeFalsy();
+  });
+
+  it("does not enable restricted commands from inherited flags", () => {
+    const inheritedCommands = Object.create({
+      config: true,
+      debug: true,
+      bash: true,
+    }) as Record<string, unknown>;
+    const commands = listChatCommandsForConfig({
+      commands: inheritedCommands as never,
+    });
+    expect(commands.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "debug")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "bash")).toBeFalsy();
   });
 
   it("appends skill commands when provided", () => {

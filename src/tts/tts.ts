@@ -11,7 +11,6 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -21,6 +20,7 @@ import type {
   TtsProvider,
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
@@ -238,11 +238,12 @@ function resolveModelOverridePolicy(
       allowSeed: false,
     };
   }
-  const allow = (value?: boolean) => value ?? true;
+  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
     enabled: true,
     allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider),
+    // Provider switching is higher-impact than voice/style tweaks; keep opt-in.
+    allowProvider: allow(overrides?.allowProvider, false),
     allowVoice: allow(overrides?.allowVoice),
     allowModelId: allow(overrides?.allowModelId),
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
