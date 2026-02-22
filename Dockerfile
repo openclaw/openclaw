@@ -48,6 +48,7 @@ RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
+RUN npm link
 
 ENV NODE_ENV=production
 
