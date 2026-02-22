@@ -51,22 +51,6 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   return { makeStorePath };
 }
 
-export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
-  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await fs.writeFile(
-    params.storePath,
-    JSON.stringify(
-      {
-        version: 1,
-        jobs: params.jobs,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-}
-
 export function installCronTestHooks(options: {
   logger: ReturnType<typeof createNoopLogger>;
   baseTimeIso?: string;

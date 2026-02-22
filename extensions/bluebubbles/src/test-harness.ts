@@ -1,11 +1,15 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 
-export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
+export const BLUE_BUBBLES_PRIVATE_API_STATUS: {
+  enabled: true;
+  disabled: false;
+  unknown: null;
+} = {
   enabled: true,
   disabled: false,
   unknown: null,
-} as const;
+};
 
 type BlueBubblesPrivateApiStatusMock = {
   mockReturnValue: (value: boolean | null) => unknown;

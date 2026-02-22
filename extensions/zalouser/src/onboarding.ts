@@ -23,45 +23,6 @@ import { runZca, runZcaInteractive, checkZcaInstalled, parseJsonOutput } from ".
 
 const channel = "zalouser" as const;
 
-function setZalouserAccountScopedConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-  defaultPatch: Record<string, unknown>,
-  accountPatch: Record<string, unknown> = defaultPatch,
-): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          ...defaultPatch,
-        },
-      },
-    } as OpenClawConfig;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.zalouser?.accounts,
-          [accountId]: {
-            ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-            ...accountPatch,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
 function setZalouserDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
@@ -162,10 +123,40 @@ async function promptZalouserAllowFrom(params: {
       continue;
     }
     const unique = mergeAllowFromEntries(existingAllowFrom, results.filter(Boolean) as string[]);
-    return setZalouserAccountScopedConfig(cfg, accountId, {
-      dmPolicy: "allowlist",
-      allowFrom: unique,
-    });
+    if (accountId === DEFAULT_ACCOUNT_ID) {
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          zalouser: {
+            ...cfg.channels?.zalouser,
+            enabled: true,
+            dmPolicy: "allowlist",
+            allowFrom: unique,
+          },
+        },
+      } as OpenClawConfig;
+    }
+
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        zalouser: {
+          ...cfg.channels?.zalouser,
+          enabled: true,
+          accounts: {
+            ...cfg.channels?.zalouser?.accounts,
+            [accountId]: {
+              ...cfg.channels?.zalouser?.accounts?.[accountId],
+              enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+              dmPolicy: "allowlist",
+              allowFrom: unique,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
   }
 }
 
@@ -174,9 +165,37 @@ function setZalouserGroupPolicy(
   accountId: string,
   groupPolicy: "open" | "allowlist" | "disabled",
 ): OpenClawConfig {
-  return setZalouserAccountScopedConfig(cfg, accountId, {
-    groupPolicy,
-  });
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        zalouser: {
+          ...cfg.channels?.zalouser,
+          enabled: true,
+          groupPolicy,
+        },
+      },
+    } as OpenClawConfig;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      zalouser: {
+        ...cfg.channels?.zalouser,
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.zalouser?.accounts,
+          [accountId]: {
+            ...cfg.channels?.zalouser?.accounts?.[accountId],
+            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+            groupPolicy,
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
 }
 
 function setZalouserGroupAllowlist(
@@ -185,9 +204,37 @@ function setZalouserGroupAllowlist(
   groupKeys: string[],
 ): OpenClawConfig {
   const groups = Object.fromEntries(groupKeys.map((key) => [key, { allow: true }]));
-  return setZalouserAccountScopedConfig(cfg, accountId, {
-    groups,
-  });
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        zalouser: {
+          ...cfg.channels?.zalouser,
+          enabled: true,
+          groups,
+        },
+      },
+    } as OpenClawConfig;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      zalouser: {
+        ...cfg.channels?.zalouser,
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.zalouser?.accounts,
+          [accountId]: {
+            ...cfg.channels?.zalouser?.accounts?.[accountId],
+            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+            groups,
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
 }
 
 async function resolveZalouserGroups(params: {
@@ -356,12 +403,38 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     // Enable the channel
-    next = setZalouserAccountScopedConfig(
-      next,
-      accountId,
-      { profile: account.profile !== "default" ? account.profile : undefined },
-      { profile: account.profile, enabled: true },
-    );
+    if (accountId === DEFAULT_ACCOUNT_ID) {
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          zalouser: {
+            ...next.channels?.zalouser,
+            enabled: true,
+            profile: account.profile !== "default" ? account.profile : undefined,
+          },
+        },
+      } as OpenClawConfig;
+    } else {
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          zalouser: {
+            ...next.channels?.zalouser,
+            enabled: true,
+            accounts: {
+              ...next.channels?.zalouser?.accounts,
+              [accountId]: {
+                ...next.channels?.zalouser?.accounts?.[accountId],
+                enabled: true,
+                profile: account.profile,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+    }
 
     if (forceAllowFrom) {
       next = await promptZalouserAllowFrom({

@@ -41,51 +41,6 @@ function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function buildAgentCommandInput(params: {
-  prompt: { message: string; extraSystemPrompt?: string };
-  sessionKey: string;
-  runId: string;
-}) {
-  return {
-    message: params.prompt.message,
-    extraSystemPrompt: params.prompt.extraSystemPrompt,
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    deliver: false as const,
-    messageChannel: "webchat" as const,
-    bestEffortDeliver: false as const,
-  };
-}
-
-function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
-  writeSse(res, {
-    id: params.runId,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model: params.model,
-    choices: [{ index: 0, delta: { role: "assistant" } }],
-  });
-}
-
-function writeAssistantContentChunk(
-  res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
-) {
-  writeSse(res, {
-    id: params.runId,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model: params.model,
-    choices: [
-      {
-        index: 0,
-        delta: { content: params.content },
-        finish_reason: params.finishReason,
-      },
-    ],
-  });
-}
-
 function asMessages(val: unknown): OpenAiChatMessage[] {
   return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
 }
@@ -239,15 +194,22 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const commandInput = buildAgentCommandInput({
-    prompt,
-    sessionKey,
-    runId,
-  });
 
   if (!stream) {
     try {
-      const result = await agentCommand(commandInput, defaultRuntime, deps);
+      const result = await agentCommand(
+        {
+          message: prompt.message,
+          extraSystemPrompt: prompt.extraSystemPrompt,
+          sessionKey,
+          runId,
+          deliver: false,
+          messageChannel: "webchat",
+          bestEffortDeliver: false,
+        },
+        defaultRuntime,
+        deps,
+      );
 
       const content = resolveAgentResponseText(result);
 
@@ -296,15 +258,28 @@ export async function handleOpenAiHttpRequest(
 
       if (!wroteRole) {
         wroteRole = true;
-        writeAssistantRoleChunk(res, { runId, model });
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, delta: { role: "assistant" } }],
+        });
       }
 
       sawAssistantDelta = true;
-      writeAssistantContentChunk(res, {
-        runId,
+      writeSse(res, {
+        id: runId,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
         model,
-        content,
-        finishReason: null,
+        choices: [
+          {
+            index: 0,
+            delta: { content },
+            finish_reason: null,
+          },
+        ],
       });
       return;
     }
@@ -327,7 +302,19 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommand(commandInput, defaultRuntime, deps);
+      const result = await agentCommand(
+        {
+          message: prompt.message,
+          extraSystemPrompt: prompt.extraSystemPrompt,
+          sessionKey,
+          runId,
+          deliver: false,
+          messageChannel: "webchat",
+          bestEffortDeliver: false,
+        },
+        defaultRuntime,
+        deps,
+      );
 
       if (closed) {
         return;
@@ -336,17 +323,30 @@ export async function handleOpenAiHttpRequest(
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
-          writeAssistantRoleChunk(res, { runId, model });
+          writeSse(res, {
+            id: runId,
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{ index: 0, delta: { role: "assistant" } }],
+          });
         }
 
         const content = resolveAgentResponseText(result);
 
         sawAssistantDelta = true;
-        writeAssistantContentChunk(res, {
-          runId,
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
           model,
-          content,
-          finishReason: null,
+          choices: [
+            {
+              index: 0,
+              delta: { content },
+              finish_reason: null,
+            },
+          ],
         });
       }
     } catch (err) {
@@ -354,11 +354,18 @@ export async function handleOpenAiHttpRequest(
       if (closed) {
         return;
       }
-      writeAssistantContentChunk(res, {
-        runId,
+      writeSse(res, {
+        id: runId,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
         model,
-        content: "Error: internal error",
-        finishReason: "stop",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Error: internal error" },
+            finish_reason: "stop",
+          },
+        ],
       });
       emitAgentEvent({
         runId,
