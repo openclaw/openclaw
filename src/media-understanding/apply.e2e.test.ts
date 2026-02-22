@@ -255,6 +255,50 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
   });
 
+  it("skips URL-only audio when remote file is too small", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
+    mockedFetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.alloc(100),
+      contentType: "audio/ogg",
+      fileName: "tiny.ogg",
+    });
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaUrl: "https://example.com/tiny.ogg",
+      MediaType: "audio/ogg",
+      ChatType: "dm",
+    };
+    const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            scope: {
+              default: "deny",
+              rules: [{ action: "allow", match: { chatType: "direct" } }],
+            },
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(false);
+  });
+
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const ctx = await createAudioCtx({

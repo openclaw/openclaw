@@ -20,6 +20,7 @@ import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_AUDIO_MODELS,
   DEFAULT_TIMEOUT_SECONDS,
+  MIN_AUDIO_FILE_BYTES,
 } from "./defaults.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
@@ -428,6 +429,12 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    if (media.size < MIN_AUDIO_FILE_BYTES) {
+      throw new MediaUnderstandingSkipError(
+        "tooSmall",
+        `Audio attachment ${params.attachmentIndex + 1} is too small (${media.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+      );
+    }
     const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
       providerId,
       cfg,
@@ -548,6 +555,15 @@ export async function runCliEntry(params: {
     maxBytes,
     timeoutMs,
   });
+  if (capability === "audio") {
+    const stat = await fs.stat(pathResult.path);
+    if (stat.size < MIN_AUDIO_FILE_BYTES) {
+      throw new MediaUnderstandingSkipError(
+        "tooSmall",
+        `Audio attachment ${params.attachmentIndex + 1} is too small (${stat.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+      );
+    }
+  }
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cli-"));
   const mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
