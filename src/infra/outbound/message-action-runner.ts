@@ -192,6 +192,7 @@ async function maybeApplyCrossContextMarker(params: {
   args: Record<string, unknown>;
   message: string;
   preferComponents: boolean;
+  agentId?: string;
 }): Promise<string> {
   if (!shouldApplyCrossContextMarker(params.action) || !params.toolContext) {
     return params.message;
@@ -202,6 +203,7 @@ async function maybeApplyCrossContextMarker(params: {
     target: params.target,
     toolContext: params.toolContext,
     accountId: params.accountId ?? undefined,
+    agentId: params.agentId,
   });
   if (!decoration) {
     return params.message;
@@ -458,6 +460,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     args: params,
     message,
     preferComponents: true,
+    agentId,
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
@@ -560,7 +563,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal, agentId } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readStringParam(params, "to", { required: true });
@@ -612,6 +615,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     args: params,
     message: base,
     preferComponents: false,
+    agentId,
   });
 
   const poll = await executePollAction({
@@ -795,6 +799,7 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     cfg,
+    agentId: resolvedAgentId,
   });
 
   const gateway = resolveGateway(input);
@@ -823,6 +828,7 @@ export async function runMessageAction(
       dryRun,
       gateway,
       input,
+      agentId: resolvedAgentId,
       abortSignal: input.abortSignal,
     });
   }

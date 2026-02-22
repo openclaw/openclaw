@@ -894,8 +894,7 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
     defaultPath: "/googlechat",
   });
   if (!webhookPath) {
-    options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
-    return () => {};
+    throw new Error(`[${options.account.accountId}] invalid webhook path`);
   }
 
   const audienceType = normalizeAudienceType(options.account.config.audienceType);
@@ -920,7 +919,22 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
 export async function startGoogleChatMonitor(
   params: GoogleChatMonitorOptions,
 ): Promise<() => void> {
-  return monitorGoogleChatProvider(params);
+  const unregister = monitorGoogleChatProvider(params);
+  if (params.abortSignal.aborted) {
+    unregister();
+    return unregister;
+  }
+
+  return await new Promise((resolve) => {
+    params.abortSignal.addEventListener(
+      "abort",
+      () => {
+        unregister();
+        resolve(unregister);
+      },
+      { once: true },
+    );
+  });
 }
 
 export function resolveGoogleChatWebhookPath(params: {

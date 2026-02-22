@@ -134,6 +134,15 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.envelopeTimezone": "Envelope Timezone",
   "agents.defaults.envelopeTimestamp": "Envelope Timestamp",
   "agents.defaults.envelopeElapsed": "Envelope Elapsed",
+  "agents.defaults.tools.message.allowCrossContextSend": "Default Cross-Context Messaging",
+  "agents.defaults.tools.message.crossContext.allowWithinProvider":
+    "Default Cross-Context (Same Provider)",
+  "agents.defaults.tools.message.crossContext.allowAcrossProviders":
+    "Default Cross-Context (Across Providers)",
+  "agents.defaults.tools.message.crossContext.marker.enabled": "Default Cross-Context Marker",
+  "agents.defaults.tools.message.crossContext.marker.prefix": "Default Cross-Context Marker Prefix",
+  "agents.defaults.tools.message.crossContext.marker.suffix": "Default Cross-Context Marker Suffix",
+  "agents.defaults.tools.message.broadcast.enabled": "Default Message Broadcast",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",

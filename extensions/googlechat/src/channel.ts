@@ -557,14 +557,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         webhookUrl: account.config.webhookUrl,
         statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
-      return () => {
-        unregister?.();
-        ctx.setStatus({
-          accountId: account.accountId,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      };
+      void unregister;
+      return;
     },
   },
 };

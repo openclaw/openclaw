@@ -252,6 +252,33 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Message tool configuration. */
+  message?: {
+    /**
+     * @deprecated Use tools.message.crossContext settings.
+     * Allows cross-context sends across providers.
+     */
+    allowCrossContextSend?: boolean;
+    crossContext?: {
+      /** Allow sends to other channels within the same provider (default: true). */
+      allowWithinProvider?: boolean;
+      /** Allow sends across different providers (default: false). */
+      allowAcrossProviders?: boolean;
+      /** Cross-context marker configuration. */
+      marker?: {
+        /** Enable origin markers for cross-context sends (default: true). */
+        enabled?: boolean;
+        /** Text prefix template, supports {channel}. */
+        prefix?: string;
+        /** Text suffix template, supports {channel}. */
+        suffix?: string;
+      };
+    };
+    broadcast?: {
+      /** Enable broadcast action (default: true). */
+      enabled?: boolean;
+    };
+  };
   sandbox?: {
     tools?: {
       allow?: string[];

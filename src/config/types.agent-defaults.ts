@@ -10,7 +10,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
-import type { MemorySearchConfig } from "./types.tools.js";
+import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -164,6 +164,8 @@ export type AgentDefaultsConfig = {
   compaction?: AgentCompactionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** Tool policy defaults for all agents (overridden by `agents.list[].tools`). */
+  tools?: AgentToolsConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   /** Default verbose level when no /verbose directive is present. */
