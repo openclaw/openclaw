@@ -1,6 +1,49 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
+/**
+ * Recursively strip `patternProperties` from a JSON Schema.
+ *
+ * TypeBox's `Type.Record(Type.String(), ...)` compiles to a schema with
+ * `patternProperties` – a JSON Schema keyword that most OpenAI-compatible
+ * providers (including RouteLLM) do not recognise and will reject with HTTP 400.
+ * Anthropic's API handles it fine, so we only strip for non-Anthropic providers.
+ * Gemini schemas go through `cleanSchemaForGemini` which already covers this.
+ */
+function stripPatternProperties(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map(stripPatternProperties);
+  }
+  const obj = schema as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "patternProperties") {
+      continue;
+    }
+    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+      result[key] = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+          k,
+          stripPatternProperties(v),
+        ]),
+      );
+    } else if (
+      (key === "items" || key === "anyOf" || key === "oneOf" || key === "allOf") &&
+      Array.isArray(value)
+    ) {
+      result[key] = value.map(stripPatternProperties);
+    } else if (key === "items" && value && typeof value === "object") {
+      result[key] = stripPatternProperties(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
@@ -79,6 +122,8 @@ export function normalizeToolParameters(
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic (google-antigravity) expects full JSON Schema draft 2020-12 compliance.
+  // - Most OpenAI-compatible providers (e.g. RouteLLM) reject `patternProperties`,
+  //   which TypeBox emits for `Type.Record(Type.String(), ...)` schemas.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
@@ -92,10 +137,13 @@ export function normalizeToolParameters(
   // If schema already has type + properties (no top-level anyOf to merge),
   // clean it for Gemini compatibility (but only if using Gemini, not Anthropic)
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
-    return {
-      ...tool,
-      parameters: isGeminiProvider && !isAnthropicProvider ? cleanSchemaForGemini(schema) : schema,
-    };
+    const cleaned =
+      isGeminiProvider && !isAnthropicProvider
+        ? cleanSchemaForGemini(schema)
+        : isAnthropicProvider
+          ? schema
+          : stripPatternProperties(schema);
+    return { ...tool, parameters: cleaned };
   }
 
   // Some tool schemas (esp. unions) may omit `type` at the top-level. If we see
@@ -107,13 +155,13 @@ export function normalizeToolParameters(
     !Array.isArray(schema.oneOf)
   ) {
     const schemaWithType = { ...schema, type: "object" };
-    return {
-      ...tool,
-      parameters:
-        isGeminiProvider && !isAnthropicProvider
-          ? cleanSchemaForGemini(schemaWithType)
-          : schemaWithType,
-    };
+    const cleaned =
+      isGeminiProvider && !isAnthropicProvider
+        ? cleanSchemaForGemini(schemaWithType)
+        : isAnthropicProvider
+          ? schemaWithType
+          : stripPatternProperties(schemaWithType);
+    return { ...tool, parameters: cleaned };
   }
 
   const variantKey = Array.isArray(schema.anyOf)
@@ -179,18 +227,18 @@ export function normalizeToolParameters(
     additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
   };
 
-  return {
-    ...tool,
-    // Flatten union schemas into a single object schema:
-    // - Gemini doesn't allow top-level `type` together with `anyOf`.
-    // - OpenAI rejects schemas without top-level `type: "object"`.
-    // - Anthropic accepts proper JSON Schema with constraints.
-    // Merging properties preserves useful enums like `action` while keeping schemas portable.
-    parameters:
-      isGeminiProvider && !isAnthropicProvider
-        ? cleanSchemaForGemini(flattenedSchema)
-        : flattenedSchema,
-  };
+  // Flatten union schemas into a single object schema:
+  // - Gemini doesn't allow top-level `type` together with `anyOf`.
+  // - OpenAI rejects schemas without top-level `type: "object"`.
+  // - Anthropic accepts proper JSON Schema with constraints.
+  // Merging properties preserves useful enums like `action` while keeping schemas portable.
+  const flattenedCleaned =
+    isGeminiProvider && !isAnthropicProvider
+      ? cleanSchemaForGemini(flattenedSchema)
+      : isAnthropicProvider
+        ? flattenedSchema
+        : stripPatternProperties(flattenedSchema);
+  return { ...tool, parameters: flattenedCleaned };
 }
 
 /**
