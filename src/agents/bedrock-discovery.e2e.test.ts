@@ -28,7 +28,7 @@ function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSu
 
 describe("bedrock discovery", () => {
   beforeEach(() => {
-    sendMock.mockReset();
+    sendMock.mockClear();
   });
 
   it("filters to active streaming text models and maps modalities", async () => {

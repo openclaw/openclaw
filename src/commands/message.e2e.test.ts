@@ -64,7 +64,7 @@ beforeEach(async () => {
   process.env.DISCORD_BOT_TOKEN = "";
   testConfig = {};
   await setRegistry(createTestRegistry([]));
-  callGatewayMock.mockReset();
+  callGatewayMock.mockClear();
   webAuthExists.mockClear().mockResolvedValue(false);
   handleDiscordAction.mockClear();
   handleSlackAction.mockClear();

@@ -12,7 +12,7 @@ vi.mock("../../gateway/call.js", () => ({
 
 describe("gateway tool defaults", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("leaves url undefined so callGateway can use config", () => {
