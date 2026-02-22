@@ -4,6 +4,7 @@ import type { SkillsInstallPreferences } from "./skills/types.js";
 export {
   hasBinary,
   isBundledSkillAllowed,
+  isSkillQuarantinedByDefault,
   isConfigPathTruthy,
   resolveBundledAllowlist,
   resolveConfigPath,

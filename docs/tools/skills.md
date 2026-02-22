@@ -66,6 +66,14 @@ By default, `clawhub` installs into `./skills` under your current working
 directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
 that up as `<workspace>/skills` on the next session.
 
+Security default for ClawHub installs:
+
+- Skills detected from `.clawhub/lock.json` are quarantined (disabled) by default.
+- Explicitly enable a skill before it becomes eligible:
+  - `openclaw skills enable <name>`
+- Disable later with:
+  - `openclaw skills disable <name>`
+
 ## Security notes
 
 - Treat third-party skills as **untrusted code**. Read them before enabling.

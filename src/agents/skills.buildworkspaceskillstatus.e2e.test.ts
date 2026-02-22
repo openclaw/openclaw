@@ -110,4 +110,48 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill?.install).toEqual([]);
     }
   });
+
+  it("quarantines clawhub-installed workspace skills until explicitly enabled", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const skillDir = path.join(workspaceDir, "skills", "market-skill");
+    const clawhubDir = path.join(workspaceDir, ".clawhub");
+    await fs.mkdir(clawhubDir, { recursive: true });
+    await fs.writeFile(
+      path.join(clawhubDir, "lock.json"),
+      JSON.stringify({
+        installs: {
+          "market-skill": { version: "1.2.3" },
+        },
+      }),
+      "utf8",
+    );
+    await writeSkill({
+      dir: skillDir,
+      name: "market-skill",
+      description: "Installed from ClawHub",
+    });
+
+    const baseReport = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const baseSkill = baseReport.skills.find((entry) => entry.name === "market-skill");
+    expect(baseSkill).toBeDefined();
+    expect(baseSkill?.disabled).toBe(true);
+    expect(baseSkill?.eligible).toBe(false);
+
+    const enabledReport = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: {
+        skills: {
+          entries: {
+            "market-skill": { enabled: true },
+          },
+        },
+      },
+    });
+    const enabledSkill = enabledReport.skills.find((entry) => entry.name === "market-skill");
+    expect(enabledSkill).toBeDefined();
+    expect(enabledSkill?.disabled).toBe(false);
+    expect(enabledSkill?.eligible).toBe(true);
+  });
 });
