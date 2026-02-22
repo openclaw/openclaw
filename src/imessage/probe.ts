@@ -27,6 +27,15 @@ type RpcSupportResult = {
 
 const rpcSupportCache = new Map<string, RpcSupportResult>();
 
+function isFatalProbeError(errorText: string): boolean {
+  const normalized = errorText.toLowerCase();
+  return (
+    normalized.includes("imsg permission denied") ||
+    normalized.includes("authorization denied (code: 23)") ||
+    (normalized.includes("permission denied") && normalized.includes("chat.db"))
+  );
+}
+
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
   if (cached) {
@@ -98,7 +107,8 @@ export async function probeIMessage(
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    const errorText = String(err);
+    return { ok: false, error: errorText, fatal: isFatalProbeError(errorText) };
   } finally {
     await client.stop();
   }
