@@ -1843,6 +1843,110 @@ describe("QmdMemoryManager", () => {
       }
     });
   });
+
+  it("removes orphaned unscoped collections left from before agent-scoped naming", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Simulate pre-migration state: qmd has unscoped collection names.
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { name: "memory-root", path: workspaceDir, mask: "MEMORY.md" },
+            { name: "memory-alt", path: workspaceDir, mask: "memory.md" },
+            { name: "memory-dir", path: path.join(workspaceDir, "memory"), mask: "**/*.md" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    expect(manager).toBeTruthy();
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+
+    // Old unscoped collections should be removed.
+    const removeNames = commands
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "remove")
+      .map((args: string[]) => args[2]);
+    expect(removeNames).toContain("memory-root");
+    expect(removeNames).toContain("memory-alt");
+    expect(removeNames).toContain("memory-dir");
+
+    // New scoped collections should be added.
+    const addNames = commands
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "add")
+      .map((args: string[]) => args[args.indexOf("--name") + 1]);
+    expect(addNames).toContain("memory-root-main");
+    expect(addNames).toContain("memory-alt-main");
+    expect(addNames).toContain("memory-dir-main");
+  });
+
+  it("skips migration when collections are already scoped", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Simulate post-migration state: qmd already has scoped names.
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { name: "memory-root-main", path: workspaceDir, mask: "MEMORY.md" },
+            { name: "memory-alt-main", path: workspaceDir, mask: "memory.md" },
+            { name: "memory-dir-main", path: path.join(workspaceDir, "memory"), mask: "**/*.md" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    expect(manager).toBeTruthy();
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+
+    // No removal should happen — collections are already scoped.
+    const removeNames = commands
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "remove")
+      .map((args: string[]) => args[2]);
+    expect(removeNames).toHaveLength(0);
+
+    // No adds either — they already exist and paths match.
+    const addNames = commands
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "add")
+      .map((args: string[]) => args[args.indexOf("--name") + 1]);
+    expect(addNames).toHaveLength(0);
+  });
 });
 
 function createDeferred<T>() {

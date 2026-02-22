@@ -269,6 +269,29 @@ export class QmdMemoryManager implements MemorySearchManager {
       // ignore; older qmd versions might not support list --json.
     }
 
+    // Migration: remove orphaned unscoped collections left over from before
+    // agent-scoped naming was introduced (b32ae6fa0).  Old collections like
+    // "memory-root" block the creation of new scoped "memory-root-main" when
+    // both point to the same path.
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    for (const collection of this.qmd.collections) {
+      if (!collection.name.endsWith(agentSuffix)) {
+        continue;
+      }
+      const unscopedName = collection.name.slice(0, -agentSuffix.length);
+      if (unscopedName && existing.has(unscopedName) && !existing.has(collection.name)) {
+        try {
+          await this.removeCollection(unscopedName);
+          existing.delete(unscopedName);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!this.isCollectionMissingError(message)) {
+            log.warn(`qmd legacy collection cleanup failed for ${unscopedName}: ${message}`);
+          }
+        }
+      }
+    }
+
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
       if (listed && !this.shouldRebindCollection(collection, listed)) {
