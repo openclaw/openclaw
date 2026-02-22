@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
@@ -104,6 +105,56 @@ async function listTsFiles(dir: string): Promise<string[]> {
   return out;
 }
 
+function parsePathList(stdout: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    out.add(path.resolve(trimmed));
+  }
+  return out;
+}
+
+function prefilterLikelyTmpdirJoinFiles(root: string): Set<string> | null {
+  const commonArgs = [
+    "--files-with-matches",
+    "--glob",
+    "*.ts",
+    "--glob",
+    "*.tsx",
+    "--glob",
+    "!**/*.test.ts",
+    "--glob",
+    "!**/*.test.tsx",
+    "--glob",
+    "!**/*.e2e.ts",
+    "--glob",
+    "!**/*.e2e.tsx",
+    "--glob",
+    "!**/*.d.ts",
+    "--no-messages",
+  ];
+  const joined = spawnSync("rg", [...commonArgs, "path\\.join", root], { encoding: "utf8" });
+  if (joined.error || (joined.status !== 0 && joined.status !== 1)) {
+    return null;
+  }
+  const tmpdir = spawnSync("rg", [...commonArgs, "os\\.tmpdir", root], { encoding: "utf8" });
+  if (tmpdir.error || (tmpdir.status !== 0 && tmpdir.status !== 1)) {
+    return null;
+  }
+  const joinMatches = parsePathList(joined.stdout);
+  const tmpdirMatches = parsePathList(tmpdir.stdout);
+  const intersection = new Set<string>();
+  for (const file of joinMatches) {
+    if (tmpdirMatches.has(file)) {
+      intersection.add(file);
+    }
+  }
+  return intersection;
+}
+
 describe("temp path guard", () => {
   it("skips test helper filename variants", () => {
     expect(shouldSkip("src/commands/test-helpers.ts")).toBe(true);
@@ -139,7 +190,8 @@ describe("temp path guard", () => {
 
     for (const root of RUNTIME_ROOTS) {
       const absRoot = path.join(repoRoot, root);
-      const files = await listTsFiles(absRoot);
+      const rgPrefiltered = prefilterLikelyTmpdirJoinFiles(absRoot);
+      const files = rgPrefiltered ? [...rgPrefiltered] : await listTsFiles(absRoot);
       for (const file of files) {
         const relativePath = path.relative(repoRoot, file);
         if (shouldSkip(relativePath)) {
