@@ -572,6 +572,20 @@ export const MemorySearchSchema = z
               .object({
                 enabled: z.boolean().optional(),
                 halfLifeDays: z.number().int().positive().optional(),
+                importanceBoost: z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    boostFactor: z.number().positive().optional(),
+                    patterns: z
+                      .object({
+                        contentMarkers: z.array(z.string()).optional(),
+                        filePatterns: z.array(z.string()).optional(),
+                      })
+                      .strict()
+                      .optional(),
+                  })
+                  .strict()
+                  .optional(),
               })
               .strict()
               .optional(),
