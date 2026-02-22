@@ -39,35 +39,8 @@ import {
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+export type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
-
-export type SubagentRunRecord = {
-  runId: string;
-  childSessionKey: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  requesterDisplayKey: string;
-  task: string;
-  cleanup: "delete" | "keep";
-  /** Announcement routing mode for this run. */
-  announce?: SubagentAnnounceMode;
-  label?: string;
-  model?: string;
-  runTimeoutSeconds?: number;
-  createdAt: number;
-  startedAt?: number;
-  endedAt?: number;
-  outcome?: SubagentRunOutcome;
-  archiveAtMs?: number;
-  cleanupCompletedAt?: number;
-  cleanupHandled?: boolean;
-  suppressAnnounceReason?: "steer-restart" | "killed";
-  expectsCompletionMessage?: boolean;
-  /** Number of times announce delivery has been attempted and returned false (deferred). */
-  announceRetryCount?: number;
-  /** Timestamp of the last announce retry attempt (for backoff). */
-  lastAnnounceRetryAt?: number;
-};
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;

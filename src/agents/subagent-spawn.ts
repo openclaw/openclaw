@@ -484,7 +484,6 @@ export async function spawnSubagentDirect(
     label: label || undefined,
     model: resolvedModel,
     runTimeoutSeconds,
-    expectsCompletionMessage,
     spawnMode,
   });
 

@@ -1107,7 +1107,7 @@ export async function runSubagentAnnounceFlow(params: {
     let completionMessage = "";
     let triggerMessage = "";
 
-    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     let requesterIsSubagent =
       forceParentAnnounce || (!expectsCompletionMessage && requesterDepth >= 1);
     // If the requester subagent has already finished, bubble the announce to its
@@ -1211,7 +1211,6 @@ export async function runSubagentAnnounceFlow(params: {
             origin: targetRequesterOrigin,
             routeMode: "fallback" as const,
           };
-    const completionDirectOrigin = completionResolution.origin;
     // Use a deterministic idempotency key so the gateway dedup cache
     // catches duplicates if this announce is also queued by the gateway-
     // level message queue while the main session is busy (#17122).
@@ -1232,7 +1231,7 @@ export async function runSubagentAnnounceFlow(params: {
           completionMessage,
           summaryLine: taskLabel,
           requesterOrigin: targetRequesterOrigin,
-          completionDirectOrigin: targetRequesterOrigin,
+          completionDirectOrigin: completionResolution.origin,
           directOrigin,
           targetRequesterSessionKey,
           requesterIsSubagent,
