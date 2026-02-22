@@ -245,7 +245,6 @@ export type AppViewState = {
   setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
   setTabVisibility: (tab: Tab, visible: boolean) => void;
   applySettings: (next: UiSettings) => void;
-  setTabVisibility: (tab: Tab, visible: boolean) => void;
   loadOverview: () => Promise<void>;
   loadAssistantIdentity: () => Promise<void>;
   loadCron: () => Promise<void>;

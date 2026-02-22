@@ -477,11 +477,6 @@ export class OpenClawApp extends LitElement {
     }, 80);
   }
 
-  setTabVisibility(tab: string, visible: boolean) {
-    const tabVisibility = { ...this.settings.tabVisibility, [tab]: visible };
-    this.applySettings({ ...this.settings, tabVisibility });
-  }
-
   async loadOverview() {
     await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
   }
