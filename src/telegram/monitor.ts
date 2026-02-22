@@ -88,6 +88,18 @@ const isGrammyHttpError = (err: unknown): boolean => {
   return (err as { name?: string }).name === "HttpError";
 };
 
+const waitForWebhookServerClose = async (
+  webhook: Awaited<ReturnType<typeof startTelegramWebhook>>,
+) => {
+  const server = webhook?.server;
+  if (!server || !server.listening) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    server.once("close", resolve);
+  });
+};
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
 
@@ -152,7 +164,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
 
     if (opts.useWebhook) {
-      await startTelegramWebhook({
+      const webhook = await startTelegramWebhook({
         token,
         accountId: account.accountId,
         config: cfg,
@@ -165,6 +177,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
       });
+      await waitForWebhookServerClose(webhook);
       return;
     }
 

@@ -40,7 +40,10 @@ const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async () => undefined),
 }));
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
-  startTelegramWebhookSpy: vi.fn(async () => ({ server: { close: vi.fn() }, stop: vi.fn() })),
+  startTelegramWebhookSpy: vi.fn(async () => ({
+    server: { close: vi.fn(), once: vi.fn(), listening: false },
+    stop: vi.fn(),
+  })),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -242,5 +245,39 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps webhook mode alive until the webhook server closes", async () => {
+    const onceSpy = vi.fn();
+    startTelegramWebhookSpy.mockResolvedValueOnce({
+      server: {
+        close: vi.fn(),
+        listening: true,
+        once: onceSpy,
+      },
+      stop: vi.fn(),
+    });
+
+    let settled = false;
+    const monitorPromise = monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+    }).then(() => {
+      settled = true;
+    });
+
+    for (let i = 0; i < 20 && onceSpy.mock.calls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(settled).toBe(false);
+    expect(startTelegramWebhookSpy).toHaveBeenCalledTimes(1);
+    expect(onceSpy).toHaveBeenCalledWith("close", expect.any(Function));
+    const closeHandler = onceSpy.mock.calls[0]?.[1] as (() => void) | undefined;
+
+    closeHandler?.();
+    await monitorPromise;
+    expect(settled).toBe(true);
   });
 });
