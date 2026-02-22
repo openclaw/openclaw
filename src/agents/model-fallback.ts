@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
+  isProfileHardDisabled,
   isProfileInCooldown,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -325,36 +326,64 @@ export async function runWithModelFallback<T>(params: {
         provider: candidate.provider,
       });
       const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+      // A "hard" disable means billing or auth failure — account-level, affects
+      // all models on this provider. A soft cooldown (rate limit / timeout) is
+      // often model-specific; fallback models on the same provider (e.g.,
+      // Sonnet after Opus exhausts its Max Plan pool) may still work, so we
+      // should not block them based solely on a soft cooldown.
+      const isAnyProfileHardDisabled = profileIds.some((id) =>
+        isProfileHardDisabled(authStore, id),
+      );
+
+      if (profileIds.length > 0 && !isAnyProfileAvailable && isAnyProfileHardDisabled) {
+        // All profiles are hard-disabled (billing/auth) — skip every model on
+        // this provider; the credentials themselves are broken.
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: `Provider ${candidate.provider} is disabled (billing/auth failure)`,
+          reason: "billing",
+        });
+        continue;
+      }
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown.
-        // For the primary model (i === 0), probe it if the soonest cooldown
-        // expiry is close or already past. This avoids staying on a fallback
-        // model long after the real rate-limit window clears.
-        const now = Date.now();
-        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
-        const shouldProbe = shouldProbePrimaryDuringCooldown({
-          isPrimary: i === 0,
-          hasFallbackCandidates,
-          now,
-          throttleKey: probeThrottleKey,
-          authStore,
-          profileIds,
-        });
-        if (!shouldProbe) {
-          // Skip without attempting
-          attempts.push({
-            provider: candidate.provider,
-            model: candidate.model,
-            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: "rate_limit",
+        // All profiles for this provider are in a soft cooldown (rate limit,
+        // timeout). For the primary model (i === 0), probe it if the soonest
+        // cooldown expiry is close or already past so we recover quickly.
+        // For non-primary fallback models, allow the attempt — the cooldown
+        // was likely triggered by a different model (e.g., Opus) on this same
+        // auth profile; trying Sonnet is a valid fallback.
+        if (i > 0) {
+          // Allow non-primary fallback models to bypass soft cooldown.
+          // The inner runner will pick the best available profile and handle
+          // further rotation if needed.
+        } else {
+          const now = Date.now();
+          const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+          const shouldProbe = shouldProbePrimaryDuringCooldown({
+            isPrimary: true,
+            hasFallbackCandidates,
+            now,
+            throttleKey: probeThrottleKey,
+            authStore,
+            profileIds,
           });
-          continue;
+          if (!shouldProbe) {
+            // Skip the primary model without attempting.
+            attempts.push({
+              provider: candidate.provider,
+              model: candidate.model,
+              error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+              reason: "rate_limit",
+            });
+            continue;
+          }
+          // Primary model probe: attempt it despite cooldown to detect recovery.
+          // If it fails, the error is caught below and we fall through to the
+          // next candidate as usual.
+          lastProbeAttempt.set(probeThrottleKey, now);
         }
-        // Primary model probe: attempt it despite cooldown to detect recovery.
-        // If it fails, the error is caught below and we fall through to the
-        // next candidate as usual.
-        lastProbeAttempt.set(probeThrottleKey, now);
       }
     }
     try {

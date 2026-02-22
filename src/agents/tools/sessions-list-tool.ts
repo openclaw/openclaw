@@ -1,7 +1,7 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
@@ -154,15 +154,21 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
         let transcriptPath: string | undefined;
-        if (sessionId && storePath) {
+        if (sessionId) {
           try {
+            const agentId = resolveAgentIdFromSessionKey(key);
+            // Only use storePath for sessionsDir resolution when it is a real absolute
+            // file-system path. When multiple agents are configured the gateway returns
+            // "(multiple)" (or a template string) which, when passed through
+            // path.dirname(), resolves to the process CWD (typically the workspace
+            // directory) rather than the actual agent sessions directory.
+            const effectiveStorePath =
+              storePath && path.isAbsolute(storePath) ? storePath : undefined;
+            const opts = resolveSessionFilePathOptions({ agentId, storePath: effectiveStorePath });
             transcriptPath = resolveSessionFilePath(
               sessionId,
               sessionFile ? { sessionFile } : undefined,
-              {
-                agentId: resolveAgentIdFromSessionKey(key),
-                sessionsDir: path.dirname(storePath),
-              },
+              opts,
             );
           } catch {
             transcriptPath = undefined;

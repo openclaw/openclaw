@@ -28,6 +28,31 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
 }
 
 /**
+ * Check if a profile is hard-disabled due to an account-level failure
+ * (billing or auth). Unlike `isProfileInCooldown`, this returns `false` for
+ * rate-limit or timeout cooldowns, which are often model-specific and should
+ * not prevent fallback models on the same provider from being tried.
+ *
+ * Use this when deciding whether to skip ALL candidates on a provider:
+ * - `isProfileHardDisabled` = true  → billing/auth broken → skip all models
+ * - `isProfileHardDisabled` = false → rate-limit/timeout → let inner runner
+ *   handle rotation; other models on the provider may still work
+ */
+export function isProfileHardDisabled(store: AuthProfileStore, profileId: string): boolean {
+  const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return false;
+  }
+  const now = Date.now();
+  return (
+    typeof stats.disabledUntil === "number" &&
+    Number.isFinite(stats.disabledUntil) &&
+    stats.disabledUntil > 0 &&
+    now < stats.disabledUntil
+  );
+}
+
+/**
  * Return the soonest `unusableUntil` timestamp (ms epoch) among the given
  * profiles, or `null` when no profile has a recorded cooldown. Note: the
  * returned timestamp may be in the past if the cooldown has already expired.
