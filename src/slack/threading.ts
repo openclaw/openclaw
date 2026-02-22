@@ -48,7 +48,11 @@ export function resolveSlackThreadTargets(params: {
 }) {
   const ctx = resolveSlackThreadContext(params);
   const { incomingThreadTs, messageTs, isThreadReply } = ctx;
-  const replyThreadTs = incomingThreadTs ?? (params.replyToMode === "all" ? messageTs : undefined);
+  const replyThreadTs = isThreadReply
+    ? incomingThreadTs
+    : params.replyToMode === "all"
+      ? messageTs
+      : undefined;
   const statusThreadTs = replyThreadTs;
   return { replyThreadTs, statusThreadTs, isThreadReply };
 }
