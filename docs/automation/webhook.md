@@ -100,7 +100,7 @@ Effect:
 `/hooks/agent` payload `sessionKey` overrides are disabled by default.
 
 - Recommended: set a fixed `hooks.defaultSessionKey` and keep request overrides off.
-- Optional: allow request overrides only when needed, and restrict prefixes.
+- If you enable request overrides, you must set `hooks.allowedSessionKeyPrefixes`.
 
 Recommended config:
 
@@ -116,7 +116,7 @@ Recommended config:
 }
 ```
 
-Compatibility config (legacy behavior):
+Compatibility config (request override enabled):
 
 ```json5
 {
@@ -124,7 +124,7 @@ Compatibility config (legacy behavior):
     enabled: true,
     token: "${OPENCLAW_HOOKS_TOKEN}",
     allowRequestSessionKey: true,
-    allowedSessionKeyPrefixes: ["hook:"], // strongly recommended
+    allowedSessionKeyPrefixes: ["hook:"], // required when allowRequestSessionKey=true
   },
 }
 ```
@@ -150,7 +150,7 @@ Mapping options (summary):
 - `hooks.allowedAgentIds` restricts explicit `agentId` routing. Omit it (or include `*`) to allow any agent. Set `[]` to deny explicit `agentId` routing.
 - `hooks.defaultSessionKey` sets the default session for hook agent runs when no explicit key is provided.
 - `hooks.allowRequestSessionKey` controls whether `/hooks/agent` payloads may set `sessionKey` (default: `false`).
-- `hooks.allowedSessionKeyPrefixes` optionally restricts explicit `sessionKey` values from request payloads and mappings.
+- `hooks.allowedSessionKeyPrefixes` restricts explicit `sessionKey` values from request payloads and mappings, and is required when `hooks.allowRequestSessionKey=true`.
 - `allowUnsafeExternalContent: true` disables the external content safety wrapper for that hook
   (dangerous; only for trusted internal sources).
 - `openclaw webhooks gmail setup` writes `hooks.gmail` config for `openclaw webhooks gmail run`.
@@ -208,7 +208,7 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Repeated auth failures are rate-limited per client address to slow brute-force attempts.
 - If you use multi-agent routing, set `hooks.allowedAgentIds` to limit explicit `agentId` selection.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
-- If you enable request `sessionKey`, restrict `hooks.allowedSessionKeyPrefixes` (for example, `["hook:"]`).
+- If you enable request `sessionKey`, set `hooks.allowedSessionKeyPrefixes` (for example, `["hook:"]`).
 - Avoid including sensitive raw payloads in webhook logs.
 - Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
   If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`

@@ -56,9 +56,15 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
+  const allowRequestSessionKey = cfg.hooks?.allowRequestSessionKey === true;
   const allowedSessionKeyPrefixes = resolveAllowedSessionKeyPrefixes(
     cfg.hooks?.allowedSessionKeyPrefixes,
   );
+  if (allowRequestSessionKey && !allowedSessionKeyPrefixes) {
+    throw new Error(
+      "hooks.allowRequestSessionKey=true requires non-empty hooks.allowedSessionKeyPrefixes",
+    );
+  }
   if (
     defaultSessionKey &&
     allowedSessionKeyPrefixes &&
@@ -87,7 +93,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     },
     sessionPolicy: {
       defaultSessionKey,
-      allowRequestSessionKey: cfg.hooks?.allowRequestSessionKey === true,
+      allowRequestSessionKey,
       allowedSessionKeyPrefixes,
     },
   };
