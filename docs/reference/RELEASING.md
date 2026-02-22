@@ -108,6 +108,7 @@ Current npm plugin list (update as needed):
 - @openclaw/diagnostics-otel
 - @openclaw/discord
 - @openclaw/feishu
+- @openclaw/wecom
 - @openclaw/lobster
 - @openclaw/matrix
 - @openclaw/msteams

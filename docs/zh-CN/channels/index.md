@@ -25,6 +25,7 @@ OpenClaw 可以在你已经使用的任何聊天应用上与你交流。每个�
 - [Discord](/channels/discord) — Discord Bot API + Gateway；支持服务器、频道和私信。
 - [Slack](/channels/slack) — Bolt SDK；工作区应用。
 - [飞书](/channels/feishu) — 飞书（Lark）机器人（插件，需单独安装）。
+- [企业微信 WeCom](/channels/wecom) — 企业微信 Bot + 自建应用双模式（插件，需单独安装）。
 - [Google Chat](/channels/googlechat) — 通过 HTTP webhook 的 Google Chat API 应用。
 - [Mattermost](/channels/mattermost) — Bot API + WebSocket；频道、群组、私信（插件，需单独安装）。
 - [Signal](/channels/signal) — signal-cli；注重隐私。
