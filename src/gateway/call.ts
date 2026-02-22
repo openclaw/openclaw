@@ -46,6 +46,13 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /**
+   * When true, do not load or send device identity. This allows internal
+   * callers (e.g. cron announce) to connect as a plain token-authenticated
+   * localhost client, avoiding scope-upgrade / pairing-required failures
+   * when the existing device identity lacks the required scopes.
+   */
+  skipDeviceIdentity?: boolean;
 };
 
 export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
@@ -349,7 +356,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      skipDeviceIdentity: opts.skipDeviceIdentity,
+      deviceIdentity: opts.skipDeviceIdentity ? undefined : loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async () => {
