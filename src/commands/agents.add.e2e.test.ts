@@ -27,7 +27,7 @@ describe("agents add command", () => {
   beforeEach(() => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
-    wizardMocks.createClackPrompter.mockReset();
+    wizardMocks.createClackPrompter.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();

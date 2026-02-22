@@ -50,7 +50,7 @@ async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity =
 
 describe("agents set-identity command", () => {
   beforeEach(() => {
-    configMocks.readConfigFileSnapshot.mockReset();
+    configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
