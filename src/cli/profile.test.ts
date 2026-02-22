@@ -68,6 +68,72 @@ describe("parseCliProfileArgs", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("does not intercept --profile after passthrough terminator", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "--",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "--",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+  });
+
+  it("keeps passthrough --profile when global --profile is set before terminator", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "nodes",
+      "run",
+      "--",
+      "aws",
+      "--profile=prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--",
+      "aws",
+      "--profile=prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+  });
+
   it("parses --profile value and strips it", () => {
     const res = parseCliProfileArgs(["node", "openclaw", "--profile", "work", "status"]);
     if (!res.ok) {

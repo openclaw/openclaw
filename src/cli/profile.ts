@@ -36,11 +36,23 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   let profile: string | null = null;
   let sawDev = false;
   let sawCommand = false;
+  let sawTerminator = false;
 
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) {
+      continue;
+    }
+
+    if (sawTerminator) {
+      out.push(arg);
+      continue;
+    }
+
+    if (arg === "--") {
+      sawTerminator = true;
+      out.push(arg);
       continue;
     }
 
