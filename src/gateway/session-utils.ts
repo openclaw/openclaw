@@ -430,7 +430,7 @@ export function resolveSessionStoreKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): string {
-  const raw = params.sessionKey.trim();
+  const raw = (params.sessionKey ?? "").trim();
   if (!raw) {
     return raw;
   }
