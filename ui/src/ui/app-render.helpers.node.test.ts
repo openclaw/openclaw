@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { GatewayAgentRow, SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
 }
+
+const AGENTS: GatewayAgentRow[] = [
+  { id: "main", name: "Piper" },
+  { id: "clint", name: "Clint" },
+];
 
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
@@ -18,42 +23,42 @@ describe("parseSessionKey", () => {
       {
         name: "bare main",
         key: "main",
-        expected: { prefix: "", fallbackName: "Main Session" },
+        expected: { prefix: "", fallbackName: "Main Session", agentId: "main" },
       },
       {
         name: "agent main key",
         key: "agent:main:main",
-        expected: { prefix: "", fallbackName: "Main Session" },
+        expected: { prefix: "", fallbackName: "Main Session", agentId: "main" },
       },
       {
         name: "subagent key",
         key: "agent:main:subagent:18abfefe-1fa6-43cb-8ba8-ebdc9b43e253",
-        expected: { prefix: "Subagent:", fallbackName: "Subagent:" },
+        expected: { prefix: "Subagent:", fallbackName: "Subagent:", agentId: "main" },
       },
       {
         name: "cron key",
         key: "agent:main:cron:daily-briefing-uuid",
-        expected: { prefix: "Cron:", fallbackName: "Cron Job:" },
+        expected: { prefix: "Cron:", fallbackName: "Cron Job:", agentId: "main" },
       },
       {
         name: "direct known channel",
         key: "agent:main:bluebubbles:direct:+19257864429",
-        expected: { prefix: "", fallbackName: "iMessage · +19257864429" },
+        expected: { prefix: "", fallbackName: "iMessage · +19257864429", agentId: "main" },
       },
       {
         name: "direct telegram",
         key: "agent:main:telegram:direct:user123",
-        expected: { prefix: "", fallbackName: "Telegram · user123" },
+        expected: { prefix: "", fallbackName: "Telegram · user123", agentId: "main" },
       },
       {
         name: "group known channel",
         key: "agent:main:discord:group:guild-chan",
-        expected: { prefix: "", fallbackName: "Discord Group" },
+        expected: { prefix: "", fallbackName: "Discord Group", agentId: "main" },
       },
       {
         name: "unknown channel direct",
         key: "agent:main:mychannel:direct:user1",
-        expected: { prefix: "", fallbackName: "Mychannel · user1" },
+        expected: { prefix: "", fallbackName: "Mychannel · user1", agentId: "main" },
       },
       {
         name: "legacy channel-prefixed key",
@@ -79,6 +84,22 @@ describe("parseSessionKey", () => {
     for (const testCase of cases) {
       expect(parseSessionKey(testCase.key), testCase.name).toEqual(testCase.expected);
     }
+  });
+
+  it("extracts agentId for non-main agent sessions", () => {
+    expect(parseSessionKey("agent:clint:main")).toEqual({
+      prefix: "",
+      fallbackName: "agent:clint:main",
+      agentId: "clint",
+    });
+  });
+
+  it("extracts agentId for non-main agent channel sessions", () => {
+    expect(parseSessionKey("agent:clint:bluebubbles:direct:+19257864429")).toEqual({
+      prefix: "",
+      fallbackName: "iMessage · +19257864429",
+      agentId: "clint",
+    });
   });
 });
 
@@ -212,5 +233,68 @@ describe("resolveSessionDisplayName", () => {
         testCase.expected,
       );
     }
+  });
+
+  // ── Agent name resolution from config ─────────────
+
+  it("uses agent name for main session when agents list is provided", () => {
+    expect(resolveSessionDisplayName("agent:main:main", undefined, AGENTS)).toBe("Piper");
+  });
+
+  it("uses agent name for non-main agent sessions", () => {
+    expect(resolveSessionDisplayName("agent:clint:main", undefined, AGENTS)).toBe("Clint");
+  });
+
+  it("uses agent name instead of delivery-context displayName", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:clint:main",
+        row({ key: "agent:clint:main", displayName: "+1234567890" }),
+        AGENTS,
+      ),
+    ).toBe("Clint");
+  });
+
+  it("prefers user-editable label over agent name", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:clint:main",
+        row({ key: "agent:clint:main", label: "My Custom Label" }),
+        AGENTS,
+      ),
+    ).toBe("My Custom Label");
+  });
+
+  it("applies typed prefix to agent name for subagent sessions", () => {
+    expect(resolveSessionDisplayName("agent:main:subagent:abc-123", undefined, AGENTS)).toBe(
+      "Subagent: Piper",
+    );
+  });
+
+  it("applies typed prefix to agent name for cron sessions", () => {
+    expect(resolveSessionDisplayName("agent:main:cron:daily-briefing", undefined, AGENTS)).toBe(
+      "Cron: Piper",
+    );
+  });
+
+  it("falls back to displayName when agent has no name in config", () => {
+    const agentsNoName: GatewayAgentRow[] = [{ id: "anon" }];
+    expect(
+      resolveSessionDisplayName(
+        "agent:anon:main",
+        row({ key: "agent:anon:main", displayName: "My Session" }),
+        agentsNoName,
+      ),
+    ).toBe("My Session");
+  });
+
+  it("falls back to parsed key when no agents list provided", () => {
+    expect(resolveSessionDisplayName("agent:clint:main")).toBe("agent:clint:main");
+  });
+
+  it("falls back to parsed key when agent not in agents list", () => {
+    expect(resolveSessionDisplayName("agent:unknown:main", undefined, AGENTS)).toBe(
+      "agent:unknown:main",
+    );
   });
 });
