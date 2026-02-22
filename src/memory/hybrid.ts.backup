@@ -1,15 +1,15 @@
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
+  applyTemporalDecayToHybridResults,
+  type TemporalDecayConfig,
+  DEFAULT_TEMPORAL_DECAY_CONFIG,
+} from "./temporal-decay.js";
+import {
   clusterByEmbeddings,
   selectClusterRepresentatives,
   type ClusterConfig,
   DEFAULT_CLUSTER_CONFIG,
 } from "./semantic-clustering.js";
-import {
-  applyTemporalDecayToHybridResults,
-  type TemporalDecayConfig,
-  DEFAULT_TEMPORAL_DECAY_CONFIG,
-} from "./temporal-decay.js";
 
 export type HybridSource = string;
 
@@ -92,7 +92,6 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
-      embedding?: number[];
     }
   >();
 
@@ -106,7 +105,6 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
-      embedding: r.embedding,
     });
   }
 
@@ -133,6 +131,8 @@ export async function mergeHybridResults(params: {
 
   const merged = Array.from(byId.values()).map((entry) => {
     const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    // Extract embedding from vector results if available
+    const vectorResult = params.vector.find((v) => v.id === entry.id);
     return {
       path: entry.path,
       startLine: entry.startLine,
@@ -140,7 +140,7 @@ export async function mergeHybridResults(params: {
       score,
       snippet: entry.snippet,
       source: entry.source,
-      embedding: entry.embedding,
+      embedding: vectorResult?.embedding,
     };
   });
 
@@ -161,14 +161,14 @@ export async function mergeHybridResults(params: {
       sorted.map((r, idx) => ({ ...r, id: `${r.path}:${r.startLine}:${idx}` })),
       clusteringConfig,
     );
-
+    
     // Select diverse representatives from each cluster
     // This ensures we don't have too many similar results before MMR
     const representatives = selectClusterRepresentatives(
-      clusters,
+      clusters.flatMap((c) => c.items),
       1, // Take top 1 from each cluster
     );
-
+    
     // Re-sort representatives by score
     sorted = representatives.toSorted((a, b) => b.score - a.score);
   }
