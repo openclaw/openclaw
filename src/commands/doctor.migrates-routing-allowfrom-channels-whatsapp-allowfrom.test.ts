@@ -18,36 +18,6 @@ import {
 const DOCTOR_MIGRATION_TIMEOUT_MS = 20_000;
 
 describe("doctor command", () => {
-  it(
-    "migrates routing.allowFrom to channels.whatsapp.allowFrom",
-    { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
-    async () => {
-      mockDoctorConfigSnapshot({
-        parsed: { routing: { allowFrom: ["+15555550123"] } },
-        valid: false,
-        issues: [{ path: "routing.allowFrom", message: "legacy" }],
-        legacyIssues: [{ path: "routing.allowFrom", message: "legacy" }],
-      });
-
-      const { doctorCommand } = await import("./doctor.js");
-      const runtime = createDoctorRuntime();
-
-      migrateLegacyConfig.mockReturnValue({
-        config: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
-        changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
-      });
-
-      await doctorCommand(runtime, { nonInteractive: true, repair: true });
-
-      expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
-      expect((written.channels as Record<string, unknown>)?.whatsapp).toEqual({
-        allowFrom: ["+15555550123"],
-      });
-      expect(written.routing).toBeUndefined();
-    },
-  );
-
   it("does not add a new gateway auth token while fixing legacy issues on invalid config", async () => {
     mockDoctorConfigSnapshot({
       config: {
@@ -81,7 +51,12 @@ describe("doctor command", () => {
     const gateway = (written.gateway as Record<string, unknown>) ?? {};
     const auth = gateway.auth as Record<string, unknown> | undefined;
     const remote = gateway.remote as Record<string, unknown>;
+    const channels = (written.channels as Record<string, unknown>) ?? {};
 
+    expect(channels.whatsapp).toEqual({
+      allowFrom: ["+15555550123"],
+    });
+    expect(written.routing).toBeUndefined();
     expect(remote.token).toBe("legacy-remote-token");
     expect(auth).toBeUndefined();
   });
