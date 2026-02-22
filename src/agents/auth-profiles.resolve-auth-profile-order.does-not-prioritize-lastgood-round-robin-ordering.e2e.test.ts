@@ -10,7 +10,7 @@ describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;
   const cfg = ANTHROPIC_CFG;
 
-  it("does not prioritize lastGood over round-robin ordering", () => {
+  it("prioritizes lastGood over round-robin ordering", () => {
     const order = resolveAuthProfileOrder({
       cfg,
       store: {
@@ -23,7 +23,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       provider: "anthropic",
     });
-    expect(order[0]).toBe("anthropic:default");
+    expect(order[0]).toBe("anthropic:work");
   });
   it("uses explicit profiles when order is missing", () => {
     const order = resolveAuthProfileOrder({
