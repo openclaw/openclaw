@@ -267,7 +267,7 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
-  timeoutSec: number;
+  timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
@@ -504,7 +504,9 @@ export async function runExecProcess(opts: {
       }
       const reason =
         exit.reason === "overall-timeout"
-          ? `Command timed out after ${opts.timeoutSec} seconds`
+          ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
+            ? `Command timed out after ${opts.timeoutSec} seconds`
+            : "Command timed out"
           : exit.reason === "no-output-timeout"
             ? "Command timed out waiting for output"
             : exit.exitSignal != null
