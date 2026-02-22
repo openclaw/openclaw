@@ -54,8 +54,8 @@ Optional env vars:
 
 After it finishes:
 
-- Open `http://127.0.0.1:18789/` in your browser.
-- Paste the token into the Control UI (Settings → token).
+- Open `http://127.0.0.1:18789/#token=<your-token>` in your browser (token shown in setup output).
+- If you see "device identity required" or pairing errors with HTTP, see [HTTP Access](#http-access-and-allowinsecureauth) below.
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 It writes config/workspace on the host:
@@ -111,6 +111,44 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 ```
 
 More detail: [Dashboard](/web/dashboard), [Devices](/cli/devices).
+
+### HTTP Access and `allowInsecureAuth`
+
+When accessing the Control UI over HTTP (not HTTPS), browsers restrict certain APIs
+(like `SubtleCrypto`) that OpenClaw uses for device identity. This can cause
+"device identity required" errors even with a valid token.
+
+**For Docker/local development**, enable insecure auth mode:
+
+1. Edit `~/.openclaw/openclaw.json` (or create it if missing):
+
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "allowInsecureAuth": true
+    }
+  }
+}
+```
+
+2. Restart the gateway:
+
+```bash
+docker compose restart openclaw-gateway
+```
+
+3. Access the dashboard from your Docker host:
+
+```
+http://127.0.0.1:18789/#token=<your-token>
+```
+
+**Security note**: `allowInsecureAuth` bypasses device identity checks for localhost
+connections only. Remote connections are still rejected. For production deployments,
+use HTTPS (via Tailscale Serve/Funnel, reverse proxy, or proper TLS certificates).
+
+See: [Security](/gateway/security), [Control UI](/web/control-ui).
 
 ### Extra mounts (optional)
 
