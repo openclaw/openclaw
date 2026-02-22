@@ -58,79 +58,113 @@ export function clearCredentialsCache(): void {
   cachedGeminiCliCredentials = null;
 }
 
+const GEMINI_CLI_OAUTH_URL =
+  "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/packages/core/src/code_assist/oauth2.ts";
+
+function extractCredentialsFromContent(
+  content: string,
+): { clientId: string; clientSecret: string } | null {
+  const idMatch = content.match(
+    /(?:(?:export\s+)?(?:const|let|var)\s+)?OAUTH_CLIENT_ID\s*=\s*['"`](\d+-[a-z0-9]+\.apps\.googleusercontent\.com)['"`]/,
+  );
+
+  const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
+
+  if (idMatch && secretMatch) {
+    return { clientId: idMatch[1], clientSecret: secretMatch[1] };
+  }
+
+  return null;
+}
+
+async function fetchGeminiCliCredentialsFromGitHub(): Promise<{
+  clientId: string;
+  clientSecret: string;
+} | null> {
+  try {
+    const response = await fetch(GEMINI_CLI_OAUTH_URL);
+    if (!response.ok) {
+      return null;
+    }
+    const content = await response.text();
+    return extractCredentialsFromContent(content);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Extracts Google/Gemini credentials from the local CLI files.
- * Checks for bundled oauth2.js or gemini.js files.
+ * Extracts Google/Gemini credentials from the local CLI files or GitHub.
+ * Checks for bundled oauth2.js or fetches from official gemini-cli source.
  */
-export function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
+export async function extractGeminiCliCredentials(): Promise<{
+  clientId: string;
+  clientSecret: string;
+} | null> {
   if (cachedGeminiCliCredentials) {
     return cachedGeminiCliCredentials;
   }
 
   try {
     const geminiPath = findInPath("gemini");
-    if (!geminiPath) {
-      return null;
-    }
+    if (geminiPath) {
+      const resolvedPath = realpathSync(geminiPath);
+      const geminiCliDir = dirname(dirname(resolvedPath));
 
-    const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDir = dirname(dirname(resolvedPath));
+      const searchPaths = [
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "src",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "code_assist",
+          "oauth2.js",
+        ),
+      ];
 
-    const searchPaths = [
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "src",
-        "code_assist",
-        "oauth2.js",
-      ),
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "code_assist",
-        "oauth2.js",
-      ),
-    ];
+      let content: string | null = null;
+      for (const p of searchPaths) {
+        if (existsSync(p)) {
+          content = readFileSync(p, "utf8");
+          break;
+        }
+      }
+      if (!content) {
+        const found = findFile(geminiCliDir, "oauth2.js", 10);
+        if (found) {
+          content = readFileSync(found, "utf8");
+        }
+      }
 
-    let content: string | null = null;
-    for (const p of searchPaths) {
-      if (existsSync(p)) {
-        content = readFileSync(p, "utf8");
-        break;
+      if (content) {
+        const extracted = extractCredentialsFromContent(content);
+        if (extracted) {
+          cachedGeminiCliCredentials = extracted;
+          return cachedGeminiCliCredentials;
+        }
       }
     }
-    if (!content) {
-      /**
-       * Extracts Google/Gemini credentials from the local CLI files.
-       * Checks for bundled oauth2.js or gemini.js files.
-       */
-      const found = findFile(geminiCliDir, "gemini.js", 10);
-      if (found) {
-        content = readFileSync(found, "utf8");
-      }
-    }
-    if (!content) {
-      return null;
-    }
 
-    const idMatch = content.match(
-      /(?:(?:export\s+)?(?:const|let|var)\s+)?OAUTH_CLIENT_ID\s*=\s*['"`](\d+-[a-z0-9]+\.apps\.googleusercontent\.com)['"`]/,
-    );
-
-    const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
-    if (idMatch && secretMatch) {
-      cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
+    const fetched = await fetchGeminiCliCredentialsFromGitHub();
+    if (fetched) {
+      cachedGeminiCliCredentials = fetched;
       return cachedGeminiCliCredentials;
     }
   } catch {
     // Gemini CLI not installed or extraction failed
   }
+
   return null;
 }
 
@@ -164,11 +198,11 @@ function findFile(dir: string, name: string, depth: number): string | null {
         }
       }
     }
-  } catch { }
+  } catch {}
   return null;
 }
 
-function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string } {
+async function resolveOAuthClientConfig(): Promise<{ clientId: string; clientSecret?: string }> {
   // 1. Check env vars first (user override)
   const envClientId = resolveEnv(CLIENT_ID_KEYS);
   const envClientSecret = resolveEnv(CLIENT_SECRET_KEYS);
@@ -176,8 +210,8 @@ function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string }
     return { clientId: envClientId, clientSecret: envClientSecret };
   }
 
-  // 2. Try to extract from installed Gemini CLI
-  const extracted = extractGeminiCliCredentials();
+  // 2. Try to extract from installed Gemini CLI or GitHub
+  const extracted = await extractGeminiCliCredentials();
   if (extracted) {
     return extracted;
   }
@@ -198,8 +232,8 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function buildAuthUrl(challenge: string, verifier: string): string {
-  const { clientId } = resolveOAuthClientConfig();
+async function buildAuthUrl(challenge: string, verifier: string): Promise<string> {
+  const { clientId } = await resolveOAuthClientConfig();
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: "code",
@@ -295,8 +329,8 @@ async function waitForLocalCallback(params: {
         res.setHeader("Content-Type", "text/html; charset=utf-8");
         res.end(
           "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-          "<body><h2>Gemini CLI OAuth complete</h2>" +
-          "<p>You can close this window and return to OpenClaw.</p></body></html>",
+            "<body><h2>Gemini CLI OAuth complete</h2>" +
+            "<p>You can close this window and return to OpenClaw.</p></body></html>",
         );
 
         finish(undefined, { code, state });
@@ -339,7 +373,7 @@ async function exchangeCodeForTokens(
   code: string,
   verifier: string,
 ): Promise<GeminiCliOAuthCredentials> {
-  const { clientId, clientSecret } = resolveOAuthClientConfig();
+  const { clientId, clientSecret } = await resolveOAuthClientConfig();
   const body = new URLSearchParams({
     client_id: clientId,
     code,
@@ -578,20 +612,20 @@ export async function loginGeminiCliOAuth(
   await ctx.note(
     needsManual
       ? [
-        "You are running in a remote/VPS environment.",
-        "A URL will be shown for you to open in your LOCAL browser.",
-        "After signing in, copy the redirect URL and paste it back here.",
-      ].join("\n")
+          "You are running in a remote/VPS environment.",
+          "A URL will be shown for you to open in your LOCAL browser.",
+          "After signing in, copy the redirect URL and paste it back here.",
+        ].join("\n")
       : [
-        "Browser will open for Google authentication.",
-        "Sign in with your Google account for Gemini CLI access.",
-        "The callback will be captured automatically on localhost:8085.",
-      ].join("\n"),
+          "Browser will open for Google authentication.",
+          "Sign in with your Google account for Gemini CLI access.",
+          "The callback will be captured automatically on localhost:8085.",
+        ].join("\n"),
     "Gemini CLI OAuth",
   );
 
   const { verifier, challenge } = generatePkce();
-  const authUrl = buildAuthUrl(challenge, verifier);
+  const authUrl = await buildAuthUrl(challenge, verifier);
 
   if (needsManual) {
     ctx.progress.update("OAuth URL ready");
