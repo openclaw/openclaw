@@ -761,16 +761,17 @@ export const buildTelegramMessageContext = async ({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: !isGroup
-      ? {
-          sessionKey: route.mainSessionKey,
-          channel: "telegram",
-          to: String(chatId),
-          accountId: route.accountId,
-          // Preserve DM topic threadId for replies (fixes #8891)
-          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
-        }
-      : undefined,
+    updateLastRoute:
+      !isGroup && baseSessionKey === route.mainSessionKey
+        ? {
+            sessionKey: route.mainSessionKey,
+            channel: "telegram",
+            to: String(chatId),
+            accountId: route.accountId,
+            // Preserve DM topic threadId for replies (fixes #8891)
+            threadId: dmThreadId != null ? String(dmThreadId) : undefined,
+          }
+        : undefined,
     onRecordError: (err) => {
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },
