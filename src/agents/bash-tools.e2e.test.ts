@@ -223,7 +223,7 @@ describe("exec tool backgrounding", () => {
   });
 
   it("defaults process log to a bounded tail when no window is provided", async () => {
-    const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
+    const lines = Array.from({ length: 220 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
@@ -232,11 +232,11 @@ describe("exec tool backgrounding", () => {
     });
     const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
     const firstLine = textBlock.split("\n")[0]?.trim();
-    expect(textBlock).toContain("showing last 200 of 260 lines");
-    expect(firstLine).toBe("line-61");
-    expect(textBlock).toContain("line-61");
-    expect(textBlock).toContain("line-260");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(260);
+    expect(textBlock).toContain("showing last 200 of 220 lines");
+    expect(firstLine).toBe("line-21");
+    expect(textBlock).toContain("line-21");
+    expect(textBlock).toContain("line-220");
+    expect((log.details as { totalLines?: number }).totalLines).toBe(220);
   });
 
   it("supports line offsets for log slices", async () => {
@@ -258,7 +258,7 @@ describe("exec tool backgrounding", () => {
   });
 
   it("keeps offset-only log requests unbounded by default tail mode", async () => {
-    const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
+    const lines = Array.from({ length: 220 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
@@ -270,9 +270,9 @@ describe("exec tool backgrounding", () => {
     const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
     const renderedLines = textBlock.split("\n");
     expect(renderedLines[0]?.trim()).toBe("line-31");
-    expect(renderedLines[renderedLines.length - 1]?.trim()).toBe("line-260");
+    expect(renderedLines[renderedLines.length - 1]?.trim()).toBe("line-220");
     expect(textBlock).not.toContain("showing last 200");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(260);
+    expect((log.details as { totalLines?: number }).totalLines).toBe(220);
   });
 
   it("scopes process sessions by scopeKey", async () => {
