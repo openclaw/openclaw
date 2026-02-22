@@ -94,4 +94,85 @@ describe("resolveTelegramAccount", () => {
       }
     }
   });
+
+  it("resolves 'default' as a real account when explicitly configured", () => {
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            accounts: {
+              default: { botToken: "tok-default" },
+              secondary: { botToken: "tok-secondary" },
+            },
+          },
+        },
+      };
+      const account = resolveTelegramAccount({ cfg });
+      expect(account.accountId).toBe("default");
+      expect(account.token).toBe("tok-default");
+      expect(account.tokenSource).toBe("config");
+    } finally {
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+    }
+  });
+
+  it("inbound polling resolves correctly for account named 'default'", () => {
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            accounts: {
+              default: { botToken: "tok-default" },
+            },
+          },
+        },
+      };
+      const account = resolveTelegramAccount({ cfg, accountId: "default" });
+      expect(account.accountId).toBe("default");
+      expect(account.token).toBe("tok-default");
+      expect(account.tokenSource).toBe("config");
+      expect(account.enabled).toBe(true);
+    } finally {
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+    }
+  });
+
+  it("does not break other accounts when one is named 'default'", () => {
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            accounts: {
+              default: { botToken: "tok-default" },
+              work: { botToken: "tok-work" },
+            },
+          },
+        },
+      };
+      const defaultAccount = resolveTelegramAccount({ cfg, accountId: "default" });
+      const workAccount = resolveTelegramAccount({ cfg, accountId: "work" });
+      expect(defaultAccount.token).toBe("tok-default");
+      expect(workAccount.token).toBe("tok-work");
+    } finally {
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+    }
+  });
 });

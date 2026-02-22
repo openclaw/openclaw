@@ -53,7 +53,13 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
     return boundDefault;
   }
   const ids = listTelegramAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+  // Only treat DEFAULT_ACCOUNT_ID as the implicit sentinel fallback when it is
+  // NOT an explicitly configured account name. If the user has a real account
+  // named "default", it must be treated like any other named account so that
+  // polling is correctly initialized for it — not silently swallowed by the
+  // sentinel path. See: #23123
+  const isExplicitlyConfigured = Boolean(cfg.channels?.telegram?.accounts?.[DEFAULT_ACCOUNT_ID]);
+  if (!isExplicitlyConfigured && ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
