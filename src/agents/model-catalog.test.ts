@@ -103,4 +103,90 @@ describe("loadModelCatalog", () => {
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
   });
+
+  it("synthesizes google-antigravity/claude-opus-4-6 from claude-opus-4-5 template", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "claude-opus-4-5",
+                  provider: "google-antigravity",
+                  name: "Claude Opus 4.5",
+                  reasoning: true,
+                  contextWindow: 200000,
+                  input: ["text", "image"],
+                },
+                {
+                  id: "claude-opus-4-5-thinking",
+                  provider: "google-antigravity",
+                  name: "Claude Opus 4.5 Thinking",
+                  reasoning: true,
+                  contextWindow: 200000,
+                  input: ["text", "image"],
+                },
+                {
+                  id: "gemini-3-pro",
+                  provider: "google-antigravity",
+                  name: "Gemini 3 Pro",
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    // claude-opus-4-6 synthesized from claude-opus-4-5
+    const opus46 = result.find(
+      (e) => e.provider === "google-antigravity" && e.id === "claude-opus-4-6",
+    );
+    expect(opus46).toBeDefined();
+    expect(opus46?.name).toBe("claude-opus-4-6");
+    expect(opus46?.reasoning).toBe(true);
+    expect(opus46?.contextWindow).toBe(200000);
+
+    // claude-opus-4-6-thinking synthesized from claude-opus-4-5-thinking
+    const opus46Thinking = result.find(
+      (e) => e.provider === "google-antigravity" && e.id === "claude-opus-4-6-thinking",
+    );
+    expect(opus46Thinking).toBeDefined();
+    expect(opus46Thinking?.name).toBe("claude-opus-4-6-thinking");
+  });
+
+  it("does not duplicate claude-opus-4-6 when already in catalog", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "claude-opus-4-5",
+                  provider: "google-antigravity",
+                  name: "Claude Opus 4.5",
+                },
+                {
+                  id: "claude-opus-4-6",
+                  provider: "google-antigravity",
+                  name: "Claude Opus 4.6 (native)",
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const opus46Entries = result.filter(
+      (e) => e.provider === "google-antigravity" && e.id === "claude-opus-4-6",
+    );
+    expect(opus46Entries).toHaveLength(1);
+    expect(opus46Entries[0]?.name).toBe("Claude Opus 4.6 (native)");
+  });
 });

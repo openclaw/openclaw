@@ -59,6 +59,47 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   });
 }
 
+const ANTIGRAVITY_PROVIDER = "google-antigravity";
+const ANTIGRAVITY_FORWARD_COMPAT: ReadonlyArray<{
+  id: string;
+  templates: readonly string[];
+}> = [
+  { id: "claude-opus-4-6-thinking", templates: ["claude-opus-4-5-thinking"] },
+  { id: "claude-opus-4-6", templates: ["claude-opus-4-5"] },
+];
+
+/**
+ * Synthesize google-antigravity forward-compat models (claude-opus-4-6 variants)
+ * from their claude-opus-4-5 templates when the newer models are not yet natively
+ * present in the pi-ai model catalog. This mirrors the forward-compat logic in
+ * list.registry.ts → appendAntigravityForwardCompatModels.
+ */
+function applyAntigravityForwardCompat(models: ModelCatalogEntry[]): void {
+  for (const candidate of ANTIGRAVITY_FORWARD_COMPAT) {
+    const exists = models.some(
+      (entry) => entry.provider === ANTIGRAVITY_PROVIDER && entry.id === candidate.id,
+    );
+    if (exists) {
+      continue;
+    }
+
+    const template = candidate.templates
+      .map((tid) =>
+        models.find((entry) => entry.provider === ANTIGRAVITY_PROVIDER && entry.id === tid),
+      )
+      .find(Boolean);
+    if (!template) {
+      continue;
+    }
+
+    models.push({
+      ...template,
+      id: candidate.id,
+      name: candidate.id,
+    });
+  }
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
@@ -143,6 +184,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       applyOpenAICodexSparkFallback(models);
+      applyAntigravityForwardCompat(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
