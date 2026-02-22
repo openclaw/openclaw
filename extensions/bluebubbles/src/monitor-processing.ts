@@ -420,7 +420,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const privateApiEnabled = getCachedBlueBubblesPrivateApiStatus(account.accountId) !== false;
+  const privateApiEnabled = getCachedBlueBubblesPrivateApiStatus(account.accountId) === true;
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
