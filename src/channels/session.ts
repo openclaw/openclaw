@@ -5,6 +5,7 @@ import {
   type SessionEntry,
   updateLastRoute,
 } from "../config/sessions.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 
 export type InboundLastRouteUpdate = {
   sessionKey: string;
@@ -34,6 +35,13 @@ export async function recordInboundSession(params: {
 
   const update = params.updateLastRoute;
   if (!update) {
+    return;
+  }
+  // WebChat (INTERNAL_MESSAGE_CHANNEL) is a cross-channel viewer that replies
+  // via WebSocket, not through deliveryContext routing.  Updating the session's
+  // delivery fields to "webchat" would break announce/heartbeat/cron delivery
+  // for whichever external channel actually owns the conversation.
+  if (isInternalMessageChannel(update.channel)) {
     return;
   }
   await updateLastRoute({
