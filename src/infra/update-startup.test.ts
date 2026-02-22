@@ -48,6 +48,7 @@ describe("update-startup", () => {
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
   let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
+  let runCommandWithTimeout: (typeof import("../process/exec.js"))["runCommandWithTimeout"];
   let runGatewayUpdateCheck: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
   let scheduleGatewayUpdateCheck: (typeof import("./update-startup.js"))["scheduleGatewayUpdateCheck"];
   let getUpdateAvailable: (typeof import("./update-startup.js"))["getUpdateAvailable"];
@@ -75,6 +76,7 @@ describe("update-startup", () => {
     if (!loaded) {
       ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
       ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+      ({ runCommandWithTimeout } = await import("../process/exec.js"));
       ({
         runGatewayUpdateCheck,
         scheduleGatewayUpdateCheck,
@@ -86,6 +88,7 @@ describe("update-startup", () => {
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
+    vi.mocked(runCommandWithTimeout).mockClear();
     resetUpdateAvailableStateForTest();
   });
 
@@ -305,6 +308,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "stable",
       timeoutMs: 45 * 60 * 1000,
+      root: "/opt/openclaw",
     });
   });
 
@@ -345,7 +349,104 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "beta",
       timeoutMs: 45 * 60 * 1000,
+      root: "/opt/openclaw",
     });
+  });
+
+  it("runs auto-update when checkOnStart is false but auto-update is enabled", async () => {
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "beta",
+      version: "2.0.0-beta.1",
+    });
+    const runAutoUpdate = vi.fn().mockResolvedValue({
+      ok: true,
+      code: 0,
+    });
+
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          checkOnStart: false,
+          channel: "beta",
+          auto: {
+            enabled: true,
+            betaCheckIntervalHours: 1,
+          },
+        },
+      },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses current runtime + entrypoint for default auto-update command execution", async () => {
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "beta",
+      version: "2.0.0-beta.1",
+    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "{}",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const originalArgv = process.argv.slice();
+    process.argv = [process.execPath, "/opt/openclaw/dist/entry.js"];
+    try {
+      await runGatewayUpdateCheck({
+        cfg: {
+          update: {
+            channel: "beta",
+            auto: {
+              enabled: true,
+              betaCheckIntervalHours: 1,
+            },
+          },
+        },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        process.execPath,
+        "/opt/openclaw/dist/entry.js",
+        "update",
+        "--yes",
+        "--channel",
+        "beta",
+        "--json",
+      ],
+      expect.objectContaining({
+        timeoutMs: 45 * 60 * 1000,
+        env: expect.objectContaining({
+          OPENCLAW_AUTO_UPDATE: "1",
+        }),
+      }),
+    );
   });
 
   it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
