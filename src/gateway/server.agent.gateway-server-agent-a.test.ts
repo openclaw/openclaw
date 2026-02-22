@@ -126,6 +126,13 @@ const createStubChannelPlugin = (params: {
   },
 });
 
+const defaultDirectChannelEntries = [
+  { id: "telegram", label: "Telegram" },
+  { id: "discord", label: "Discord" },
+  { id: "slack", label: "Slack" },
+  { id: "signal", label: "Signal" },
+] as const;
+
 const defaultRegistry = createRegistry([
   {
     pluginId: "whatsapp",
@@ -141,26 +148,11 @@ const defaultRegistry = createRegistry([
       },
     }),
   },
-  {
-    pluginId: "telegram",
+  ...defaultDirectChannelEntries.map((entry) => ({
+    pluginId: entry.id,
     source: "test",
-    plugin: createStubChannelPlugin({ id: "telegram", label: "Telegram" }),
-  },
-  {
-    pluginId: "discord",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-  },
-  {
-    pluginId: "slack",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-  },
-  {
-    pluginId: "signal",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "signal", label: "Signal" }),
-  },
+    plugin: createStubChannelPlugin({ id: entry.id, label: entry.label }),
+  })),
 ]);
 
 describe("gateway server agent", () => {

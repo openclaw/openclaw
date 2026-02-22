@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createWebListenerFactoryCapture,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   makeSessionStore,
@@ -250,15 +251,7 @@ describe("web auto-reply", () => {
         const sendComposing = vi.fn();
         const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
-        let capturedOnMessage:
-          | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-          | undefined;
-        const listenerFactory = async (opts: {
-          onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-        }) => {
-          capturedOnMessage = opts.onMessage;
-          return { close: vi.fn() };
-        };
+        const capture = createWebListenerFactoryCapture();
 
         setLoadConfigMock(() => ({
           agents: {
@@ -269,7 +262,8 @@ describe("web auto-reply", () => {
           session: { store: store.storePath },
         }));
 
-        await monitorWebChannel(false, listenerFactory as never, false, resolver);
+        await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
+        const capturedOnMessage = capture.getOnMessage();
         expect(capturedOnMessage).toBeDefined();
 
         // Two messages from the same sender with fixed timestamps

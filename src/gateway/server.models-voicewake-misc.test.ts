@@ -22,6 +22,7 @@ import {
   onceMessage,
   piSdkMock,
   rpcReq,
+  startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
   testState,
@@ -35,17 +36,16 @@ let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: WebSocket;
 let port: number;
 
-beforeAll(async () => {
-  const started = await startServerWithClient();
-  server = started.server;
-  ws = started.ws;
-  port = started.port;
-  await connectOk(ws);
-});
-
 afterAll(async () => {
   ws.close();
   await server.close();
+});
+
+beforeAll(async () => {
+  const started = await startConnectedServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  port = started.port;
 });
 
 const whatsappOutbound: ChannelOutboundAdapter = {
