@@ -77,6 +77,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts channels.modelByChannel without unknown-channel-id error", () => {
+    const res = validateConfigObject({
+      channels: {
+        modelByChannel: {
+          telegram: {
+            "-100123": "openai/gpt-4.1",
+          },
+          discord: {
+            "456": "anthropic/claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {
