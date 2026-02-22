@@ -43,6 +43,33 @@ describe("roleScopesAllow", () => {
     ).toBe(true);
   });
 
+  it("treats operator.approvals/operator.pairing as satisfied by operator.admin", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.approvals"],
+        allowedScopes: ["operator.admin"],
+      }),
+    ).toBe(true);
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.pairing"],
+        allowedScopes: ["operator.admin"],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat operator.admin as satisfying non-operator scopes", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["system.run"],
+        allowedScopes: ["operator.admin"],
+      }),
+    ).toBe(false);
+  });
+
   it("uses strict matching for non-operator roles", () => {
     expect(
       roleScopesAllow({
