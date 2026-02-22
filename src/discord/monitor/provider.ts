@@ -21,6 +21,7 @@ import {
 } from "../../config/commands.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../../config/types.base.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -179,15 +180,13 @@ function resolveDiscordRuntimeGroupPolicy(params: {
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied: boolean;
 } {
-  const groupPolicy =
-    params.groupPolicy ??
-    params.defaultGroupPolicy ??
-    (params.providerConfigPresent ? "open" : "allowlist");
-  const providerMissingFallbackApplied =
-    !params.providerConfigPresent &&
-    params.groupPolicy === undefined &&
-    params.defaultGroupPolicy === undefined;
-  return { groupPolicy, providerMissingFallbackApplied };
+  return resolveRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.groupPolicy,
+    defaultGroupPolicy: params.defaultGroupPolicy,
+    configuredFallbackPolicy: "open",
+    missingProviderFallbackPolicy: "allowlist",
+  });
 }
 
 async function deployDiscordCommands(params: {
@@ -265,20 +264,22 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
-  const discordCfg = account.config;
+  const rawDiscordCfg = account.config;
   const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
-  const discordRestFetch = resolveDiscordRestFetch(discordCfg.proxy, runtime);
-  const dmConfig = discordCfg.dm;
-  let guildEntries = discordCfg.guilds;
+  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  const dmConfig = rawDiscordCfg.dm;
+  let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const providerConfigPresent = cfg.channels?.discord !== undefined;
   const { groupPolicy, providerMissingFallbackApplied } = resolveDiscordRuntimeGroupPolicy({
     providerConfigPresent,
-    groupPolicy: discordCfg.groupPolicy,
+    groupPolicy: rawDiscordCfg.groupPolicy,
     defaultGroupPolicy,
   });
+  const discordCfg =
+    rawDiscordCfg.groupPolicy === groupPolicy ? rawDiscordCfg : { ...rawDiscordCfg, groupPolicy };
   if (providerMissingFallbackApplied) {
     runtime.log?.(
       warn(

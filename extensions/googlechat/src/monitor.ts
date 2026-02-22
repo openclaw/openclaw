@@ -5,6 +5,7 @@ import {
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveRuntimeGroupPolicy,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
@@ -67,6 +68,7 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
 }
 
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
+const warnedMissingProviderGroupPolicy = new Set<string>();
 function warnDeprecatedUsersEmailEntries(
   core: GoogleChatCoreRuntime,
   runtime: GoogleChatRuntimeEnv,
@@ -427,7 +429,21 @@ async function processMessageWithPipeline(params: {
   }
 
   const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+    providerConfigPresent: config.channels?.googlechat !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy,
+    configuredFallbackPolicy: "allowlist",
+    missingProviderFallbackPolicy: "allowlist",
+  });
+  if (providerMissingFallbackApplied && !warnedMissingProviderGroupPolicy.has(account.accountId)) {
+    warnedMissingProviderGroupPolicy.add(account.accountId);
+    logVerbose(
+      core,
+      runtime,
+      'googlechat: channels.googlechat is missing; defaulting groupPolicy to "allowlist" (space messages blocked until explicitly configured).',
+    );
+  }
   const groupConfigResolved = resolveGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,

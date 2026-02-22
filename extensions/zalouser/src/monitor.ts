@@ -3,6 +3,7 @@ import type { OpenClawConfig, MarkdownTableMode, RuntimeEnv } from "openclaw/plu
 import {
   createReplyPrefixOptions,
   mergeAllowlist,
+  resolveRuntimeGroupPolicy,
   resolveSenderCommandAuthorization,
   summarizeMapping,
 } from "openclaw/plugin-sdk";
@@ -178,7 +179,20 @@ async function processMessage(
   const chatId = threadId;
 
   const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+    providerConfigPresent: config.channels?.zalouser !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy,
+    configuredFallbackPolicy: "open",
+    missingProviderFallbackPolicy: "allowlist",
+  });
+  if (providerMissingFallbackApplied) {
+    logVerbose(
+      core,
+      runtime,
+      'zalouser: channels.zalouser is missing; defaulting groupPolicy to "allowlist" (group messages blocked until explicitly configured).',
+    );
+  }
   const groups = account.config.groups ?? {};
   if (isGroup) {
     if (groupPolicy === "disabled") {

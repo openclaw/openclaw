@@ -18,12 +18,12 @@ describe("resolveSlackRuntimeGroupPolicy", () => {
     expect(resolved.providerMissingFallbackApplied).toBe(false);
   });
 
-  it("respects explicit global defaults", () => {
+  it("ignores explicit global defaults when provider config is missing", () => {
     const resolved = __testing.resolveSlackRuntimeGroupPolicy({
       providerConfigPresent: false,
       defaultGroupPolicy: "open",
     });
-    expect(resolved.groupPolicy).toBe("open");
-    expect(resolved.providerMissingFallbackApplied).toBe(false);
+    expect(resolved.groupPolicy).toBe("allowlist");
+    expect(resolved.providerMissingFallbackApplied).toBe(true);
   });
 });
