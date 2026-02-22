@@ -169,7 +169,7 @@ Notes:
 ## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
-CDP endpoints over HTTPS. You can point a OpenClaw browser profile at a
+CDP endpoints over HTTPS. You can point an OpenClaw browser profile at a
 Browserless region endpoint and authenticate with your API key.
 
 Example:
