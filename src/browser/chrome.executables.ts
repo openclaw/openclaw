@@ -255,11 +255,13 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
     execText("xdg-settings", ["get", "default-web-browser"]) ||
     execText("xdg-mime", ["query", "default", "x-scheme-handler/http"]);
   if (!desktopId) {
-    return null;
+    // Fallback: try WSL2 Windows browser detection
+    return detectWsl2WindowsBrowser();
   }
   const trimmed = desktopId.trim();
   if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) {
-    return null;
+    // Fallback: try WSL2 Windows browser detection
+    return detectWsl2WindowsBrowser();
   }
   const desktopPath = findDesktopFilePath(trimmed);
   if (!desktopPath) {
@@ -279,9 +281,55 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   }
   const exeName = path.posix.basename(resolved).toLowerCase();
   if (!CHROMIUM_EXE_NAMES.has(exeName)) {
-    return null;
+    // Fallback: try WSL2 Windows browser detection
+    return detectWsl2WindowsBrowser();
   }
   return { kind: inferKindFromExecutableName(exeName), path: resolved };
+}
+
+// Detect WSL2 and find Windows browsers mounted at /mnt/c/
+function isWsl2(): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  // Check /proc/version for "Microsoft" or "WSL2"
+  let version: string | null;
+  try {
+    version = fs.readFileSync("/proc/version", "utf8").trim();
+  } catch {
+    return false;
+  }
+  return version.toLowerCase().includes("microsoft") || version.toLowerCase().includes("wsl2");
+}
+
+function detectWsl2WindowsBrowser(): BrowserExecutable | null {
+  if (!isWsl2()) {
+    return null;
+  }
+
+  // Windows browser paths on WSL2
+  const windowsPaths: Array<BrowserExecutable> = [
+    // Brave
+    {
+      kind: "brave",
+      path: "/mnt/c/Program Files/Brave Software/Brave-Browser/Application/brave.exe",
+    },
+    {
+      kind: "brave",
+      path: "/mnt/c/Program Files (x86)/Brave Software/Brave-Browser/Application/brave.exe",
+    },
+    // Chrome
+    { kind: "chrome", path: "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe" },
+    { kind: "chrome", path: "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe" },
+    // Edge
+    { kind: "edge", path: "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" },
+    { kind: "edge", path: "/mnt/c/Program Files/Microsoft/Edge/Application/msedge.exe" },
+    // Chromium
+    { kind: "chromium", path: "/mnt/c/Program Files/Chromium/Application/chrome.exe" },
+    { kind: "chromium", path: "/mnt/c/Program Files (x86)/Chromium/Application/chrome.exe" },
+  ];
+
+  return findFirstExecutable(windowsPaths);
 }
 
 function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
@@ -507,6 +555,12 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
 }
 
 export function findChromeExecutableLinux(): BrowserExecutable | null {
+  // Try WSL2 Windows browser detection first
+  const wslBrowser = detectWsl2WindowsBrowser();
+  if (wslBrowser) {
+    return wslBrowser;
+  }
+
   const candidates: Array<BrowserExecutable> = [
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
