@@ -25,7 +25,7 @@ import {
 } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const STUCK_RUN_MS = 30 * 60 * 1000;
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   if (staggerMs <= 1) {
