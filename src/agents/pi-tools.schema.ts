@@ -78,7 +78,8 @@ export function normalizeToolParameters(
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
-  // - Anthropic (google-antigravity) expects full JSON Schema draft 2020-12 compliance.
+  // - google-antigravity routes through Cloud Code Assist's OpenAPI 3.03
+  //   `parameters` field, which has the same restrictions as Gemini.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
@@ -86,11 +87,10 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider =
-    options?.modelProvider?.toLowerCase().includes("anthropic") ||
-    options?.modelProvider?.toLowerCase().includes("google-antigravity");
+    options?.modelProvider?.toLowerCase().includes("anthropic");
 
   // If schema already has type + properties (no top-level anyOf to merge),
-  // clean it for Gemini compatibility (but only if using Gemini, not Anthropic)
+  // clean it for Gemini compatibility (also for google-antigravity via Cloud Code Assist)
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
     return {
       ...tool,
