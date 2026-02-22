@@ -13,6 +13,7 @@ type AuthChoiceFlagOptions = Pick<
   | "geminiApiKey"
   | "openaiApiKey"
   | "openrouterApiKey"
+  | "falOpenrouterApiKey"
   | "aiGatewayApiKey"
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
