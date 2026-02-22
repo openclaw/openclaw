@@ -2,60 +2,10 @@
    Mobile Layout
    =========================================== */
 
-/* Tablet: Horizontal nav */
+/* Tablet: keep side nav vertical, narrow sidebar */
 @media (max-width: 1100px) {
-  .sidebar {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .sidebar-header {
-    display: none;
-  }
-
-  .sidebar-footer {
-    display: none;
-  }
-
-  .sidebar-nav {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    gap: 4px;
-    padding: 10px 14px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .sidebar-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .nav-group {
-    display: contents;
-  }
-
-  .nav-group__items {
-    display: contents;
-  }
-
-  .nav-group__label {
-    display: none;
-  }
-
-  .nav-group--collapsed .nav-group__items {
-    display: contents;
-  }
-
-  .nav-item {
-    padding: 8px 14px;
-    font-size: 13px;
-    border-radius: var(--radius-md);
-    white-space: nowrap;
-    flex-shrink: 0;
+  .shell {
+    --shell-nav-width: 200px;
   }
 }
 
@@ -64,6 +14,7 @@
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
+    --shell-nav-width: 180px;
   }
 
   /* Topbar */
@@ -142,8 +93,12 @@
 
   /* Content — compact header on chat, hide on other tabs */
   .content-header {
-    padding: 0;
-    max-height: 48px;
+    height: 64px;
+    min-height: 64px;
+    padding: 12px 0;
+    /* This controls the height of the content header on mobile */
+    max-height: 64px;
+    margin-top: 24px;
   }
 
   .content:not(.content--chat) .content-header {
@@ -151,7 +106,7 @@
   }
 
   .content--chat .page-title {
-    font-size: 18px;
+    font-size: 16px;
   }
 
   .content--chat .page-sub {
@@ -159,8 +114,8 @@
   }
 
   .content {
-    padding: 4px 4px 16px;
-    gap: 12px;
+    padding: 4px 6px 12px;
+    gap: 10px;
   }
 
   /* Cards */
@@ -226,22 +181,7 @@
 
   /* Chat */
   .chat-agent-bar {
-    padding: 4px 8px;
-    gap: 4px;
-  }
-
-  .chat-agent-bar__name {
-    font-size: 11px;
-  }
-
-  .chat-agent-select {
-    font-size: 11px;
-    padding: 2px 16px 2px 4px;
-  }
-
-  .chat-sessions-summary {
-    padding: 2px 4px;
-    font-size: 10px;
+    padding: 2px 6px;
   }
 
   .chat-header {
@@ -366,18 +306,10 @@
     font-size: 11px;
   }
 
-  .theme-toggle {
-    height: 28px;
-  }
-
-  .theme-btn svg {
-    width: 12px;
-    height: 12px;
-  }
-
-  .theme-icon {
-    width: 12px;
-    height: 12px;
+  .theme-select {
+    height: 26px;
+    min-width: 78px;
+    font-size: 11px;
   }
 }
 
@@ -440,12 +372,9 @@
     padding: 3px 6px;
   }
 
-  .theme-toggle {
-    height: 26px;
-  }
-
-  .theme-icon {
-    width: 11px;
-    height: 11px;
+  .theme-select {
+    height: 24px;
+    min-width: 72px;
+    font-size: 10px;
   }
 }

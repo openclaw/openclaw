@@ -7,7 +7,7 @@
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -122,6 +122,13 @@ img.chat-avatar {
   display: block;
   object-fit: cover;
   object-position: center;
+}
+
+/* Logo avatar (OpenClaw favicon) - contain to show full logo */
+img.chat-avatar.chat-avatar--logo {
+  object-fit: contain;
+  padding: 6px;
+  box-sizing: border-box;
 }
 
 /* Minimal Bubble Design - dynamic width based on content */

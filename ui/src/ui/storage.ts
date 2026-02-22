@@ -13,6 +13,7 @@ export type UiSettings = {
   chatShowThinking: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
+  navWidth: number; // Sidebar width when expanded (180–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
 };
@@ -33,6 +34,7 @@ export function loadSettings(): UiSettings {
     chatShowThinking: true,
     splitRatio: 0.6,
     navCollapsed: false,
+    navWidth: 220,
     navGroupsCollapsed: {},
   };
 
@@ -74,6 +76,10 @@ export function loadSettings(): UiSettings {
           : defaults.splitRatio,
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
+      navWidth:
+        typeof parsed.navWidth === "number" && parsed.navWidth >= 180 && parsed.navWidth <= 400
+          ? parsed.navWidth
+          : defaults.navWidth,
       navGroupsCollapsed:
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed

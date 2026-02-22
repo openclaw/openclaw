@@ -18,7 +18,8 @@
 
 .chat-sidebar {
   flex: 1;
-  min-width: 300px;
+  min-width: 200px;
+  container-type: inline-size;
   border-left: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
   display: flex;
   flex-direction: column;
@@ -77,11 +78,14 @@
   flex: 1;
   overflow: auto;
   padding: 16px;
+  min-width: 0;
 }
 
 .sidebar-markdown {
   font-size: 14px;
   line-height: 1.6;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .sidebar-markdown pre {
@@ -95,6 +99,38 @@
 .sidebar-markdown code {
   font-family: var(--mono);
   font-size: 13px;
+}
+
+/* Minimal state when sidebar is narrow: hide content, show expand hint */
+@container (max-width: 260px) {
+  .chat-sidebar .sidebar-header {
+    padding: 6px 8px;
+    border-bottom: none;
+    justify-content: flex-end;
+  }
+
+  .chat-sidebar .sidebar-title {
+    display: none;
+  }
+
+  .chat-sidebar .sidebar-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .chat-sidebar .sidebar-content > * {
+    display: none;
+  }
+
+  .chat-sidebar .sidebar-content::before {
+    content: "← Drag to expand";
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
 }
 
 /* Mobile: Full-screen modal */

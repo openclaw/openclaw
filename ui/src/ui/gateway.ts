@@ -109,13 +109,6 @@ export class GatewayBrowserClient {
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason });
-      // 1008 = Policy Violation (gateway auth rejection).
-      // Don't auto-reconnect on auth failures — surface the login gate
-      // so the user can fix their token/password instead of looping.
-      if (ev.code === 1008) {
-        this.closed = true;
-        return;
-      }
       this.scheduleReconnect();
     });
     this.ws.addEventListener("error", () => {

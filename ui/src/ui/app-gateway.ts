@@ -170,11 +170,6 @@ export function connectGateway(host: GatewayHost) {
         return;
       }
       host.connected = false;
-      // Code 1008 = Policy Violation (auth failure) — show the gateway's reason directly
-      if (code === 1008) {
-        host.lastError = reason || "Authentication failed. Check your gateway token.";
-        return;
-      }
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       if (code !== 1012) {
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
