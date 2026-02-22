@@ -1,5 +1,7 @@
+import { resolveUserTimezone } from "../../agents/date-time.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -67,8 +69,29 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(
+  ctx: TemplateContext,
+  opts?: { userTimezone?: string },
+): string {
   const blocks: string[] = [];
+
+  // Inject timestamp for channel messages so the agent knows when the message
+  // was sent. TUI/web messages get timestamps via injectTimestamp() in
+  // agent-timestamp.ts; channel messages set ctx.Timestamp instead.
+  // See: https://github.com/openclaw/openclaw/issues/16442
+  if (typeof ctx.Timestamp === "number" && ctx.Timestamp > 0) {
+    const tz = resolveUserTimezone(opts?.userTimezone);
+    const msgDate = new Date(ctx.Timestamp);
+    const formatted = formatZonedTimestamp(msgDate, { timeZone: tz });
+    if (formatted) {
+      const dow = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        weekday: "short",
+      }).format(msgDate);
+      blocks.push(`[${dow} ${formatted}]`);
+    }
+  }
+
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
