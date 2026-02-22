@@ -392,7 +392,7 @@ export async function rejectDevicePairing(
       idKey: "deviceId",
       loadState: () => loadState(baseDir),
       persistState: (state) => persistState(state, baseDir),
-      getId: (pending) => pending.deviceId,
+      getId: (pending: DevicePairingPendingRequest) => pending.deviceId,
     });
   });
 }
