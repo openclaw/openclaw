@@ -521,7 +521,7 @@ export async function prepareSlackMessage(params: {
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+    if (threadInitialHistoryLimit > 0) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
