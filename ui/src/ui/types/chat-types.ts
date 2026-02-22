@@ -14,6 +14,8 @@ export type MessageGroup = {
   kind: "group";
   key: string;
   role: string;
+  /** Display origin when all messages in group share it (human/mainAgent/subAgent) */
+  origin?: ChatOrigin;
   messages: Array<{ message: unknown; key: string }>;
   timestamp: number;
   isStreaming: boolean;
@@ -27,12 +29,17 @@ export type MessageContentItem = {
   args?: unknown;
 };
 
+/** Display origin for multi-role Chat UI (human vs main agent vs sub-agent). Issue #22774 */
+export type ChatOrigin = "human" | "mainAgent" | "subAgent";
+
 /** Normalized message structure for rendering */
 export type NormalizedMessage = {
   role: string;
   content: MessageContentItem[];
   timestamp: number;
   id?: string;
+  /** When set, used for avatar/label instead of role alone */
+  origin?: ChatOrigin;
 };
 
 /** Tool card representation for tool calls and results */

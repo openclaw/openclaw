@@ -3,7 +3,23 @@
  */
 
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
+import type {
+  ChatOrigin,
+  NormalizedMessage,
+  MessageContentItem,
+} from "../types/chat-types.ts";
+
+export type { ChatOrigin };
+
+export function getMessageOrigin(message: unknown): ChatOrigin | undefined {
+  const m = message as Record<string, unknown>;
+  const openclaw = m?.__openclaw as Record<string, unknown> | undefined;
+  const origin = openclaw?.origin;
+  if (origin === "human" || origin === "mainAgent" || origin === "subAgent") {
+    return origin;
+  }
+  return undefined;
+}
 
 /**
  * Normalize a raw message object into a consistent structure.
@@ -61,19 +77,24 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   }
 
-  return { role, content, timestamp, id };
+  const origin = getMessageOrigin(message);
+  return { role, content, timestamp, id, origin };
 }
 
 /**
- * Normalize role for grouping purposes.
+ * Normalize role for grouping purposes. When origin is mainAgent/subAgent,
+ * returns a composite key so assistant messages split by origin (issue #22774).
  */
-export function normalizeRoleForGrouping(role: string): string {
+export function normalizeRoleForGrouping(role: string, origin?: ChatOrigin): string {
   const lower = role.toLowerCase();
   // Preserve original casing when it's already a core role.
   if (role === "user" || role === "User") {
     return role;
   }
   if (role === "assistant") {
+    if (origin === "mainAgent" || origin === "subAgent") {
+      return `assistant:${origin}`;
+    }
     return "assistant";
   }
   if (role === "system") {
@@ -89,6 +110,12 @@ export function normalizeRoleForGrouping(role: string): string {
     return "tool";
   }
   return role;
+}
+
+/** Base role for CSS classes (e.g. "assistant:mainAgent" -> "assistant"). */
+export function baseRoleForGroup(groupRole: string): string {
+  const i = groupRole.indexOf(":");
+  return i >= 0 ? groupRole.slice(0, i) : groupRole;
 }
 
 /**

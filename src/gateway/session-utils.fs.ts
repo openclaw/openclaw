@@ -88,7 +88,13 @@ export function readSessionMessages(
     try {
       const parsed = JSON.parse(line);
       if (parsed?.message) {
-        messages.push(parsed.message);
+        const msg = parsed.message as Record<string, unknown>;
+        const openclaw = parsed.__openclaw as Record<string, unknown> | undefined;
+        if (openclaw && typeof openclaw === "object") {
+          messages.push({ ...msg, __openclaw: openclaw });
+        } else {
+          messages.push(msg);
+        }
         continue;
       }
 

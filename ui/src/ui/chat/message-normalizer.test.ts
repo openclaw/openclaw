@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
+  baseRoleForGroup,
   isToolResultMessage,
 } from "./message-normalizer.ts";
 
@@ -29,6 +30,7 @@ describe("message-normalizer", () => {
         content: [{ type: "text", text: "Hello world" }],
         timestamp: 1000,
         id: "msg-1",
+        origin: undefined,
       });
     });
 
@@ -102,6 +104,15 @@ describe("message-normalizer", () => {
       expect(result.timestamp).toBe(Date.now());
     });
 
+    it("extracts origin from __openclaw", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "Sub-agent reply",
+        __openclaw: { origin: "subAgent" },
+      });
+      expect(result.origin).toBe("subAgent");
+    });
+
     it("handles arguments field (alternative to args)", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -143,8 +154,32 @@ describe("message-normalizer", () => {
       expect(normalizeRoleForGrouping("assistant")).toBe("assistant");
     });
 
+    it("returns composite key for assistant with mainAgent origin", () => {
+      expect(normalizeRoleForGrouping("assistant", "mainAgent")).toBe("assistant:mainAgent");
+    });
+
+    it("returns composite key for assistant with subAgent origin", () => {
+      expect(normalizeRoleForGrouping("assistant", "subAgent")).toBe("assistant:subAgent");
+    });
+
+    it("preserves assistant when origin is undefined", () => {
+      expect(normalizeRoleForGrouping("assistant", undefined)).toBe("assistant");
+    });
+
     it("preserves system role", () => {
       expect(normalizeRoleForGrouping("system")).toBe("system");
+    });
+  });
+
+  describe("baseRoleForGroup", () => {
+    it("returns base role for composite group key", () => {
+      expect(baseRoleForGroup("assistant:mainAgent")).toBe("assistant");
+      expect(baseRoleForGroup("assistant:subAgent")).toBe("assistant");
+    });
+
+    it("returns role unchanged when no colon", () => {
+      expect(baseRoleForGroup("user")).toBe("user");
+      expect(baseRoleForGroup("assistant")).toBe("assistant");
     });
   });
 

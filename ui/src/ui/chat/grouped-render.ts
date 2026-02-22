@@ -3,14 +3,18 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { MessageGroup } from "../types/chat-types.ts";
+import type { ChatOrigin, MessageGroup } from "../types/chat-types.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import {
+  baseRoleForGroup,
+  isToolResultMessage,
+  normalizeRoleForGrouping,
+} from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
@@ -113,16 +117,11 @@ export function renderMessageGroup(
     assistantAvatar?: string | null;
   },
 ) {
-  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const baseRole = baseRoleForGroup(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
-  const who =
-    normalizedRole === "user"
-      ? "You"
-      : normalizedRole === "assistant"
-        ? assistantName
-        : normalizedRole;
+  const who = whoLabel(baseRole, group.origin, assistantName);
   const roleClass =
-    normalizedRole === "user" ? "user" : normalizedRole === "assistant" ? "assistant" : "other";
+    baseRole === "user" ? "user" : baseRole === "assistant" ? "assistant" : "other";
   const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
@@ -133,7 +132,7 @@ export function renderMessageGroup(
       ${renderAvatar(group.role, {
         name: assistantName,
         avatar: opts.assistantAvatar ?? null,
-      })}
+      }, group.origin)}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
           renderGroupedMessage(
@@ -154,28 +153,36 @@ export function renderMessageGroup(
   `;
 }
 
-function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" | "avatar">) {
-  const normalized = normalizeRoleForGrouping(role);
+function whoLabel(baseRole: string, origin?: ChatOrigin, assistantName?: string): string {
+  if (baseRole === "user") return "You";
+  if (baseRole === "assistant") {
+    if (origin === "subAgent") return "Sub-agent";
+    return assistantName ?? "Assistant";
+  }
+  return baseRole;
+}
+
+function renderAvatar(
+  role: string,
+  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
+  origin?: ChatOrigin,
+) {
+  const baseRole = baseRoleForGroup(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
-  const initial =
-    normalized === "user"
-      ? "U"
-      : normalized === "assistant"
-        ? assistantName.charAt(0).toUpperCase() || "A"
-        : normalized === "tool"
-          ? "⚙"
-          : "?";
+  const initial = avatarInitial(baseRole, origin, assistantName);
   const className =
-    normalized === "user"
+    baseRole === "user"
       ? "user"
-      : normalized === "assistant"
-        ? "assistant"
-        : normalized === "tool"
+      : baseRole === "assistant"
+        ? origin === "subAgent"
+          ? "assistant sub-agent"
+          : "assistant"
+        : baseRole === "tool"
           ? "tool"
           : "other";
 
-  if (assistantAvatar && normalized === "assistant") {
+  if (assistantAvatar && baseRole === "assistant" && origin !== "subAgent") {
     if (isAvatarUrl(assistantAvatar)) {
       return html`<img
         class="chat-avatar ${className}"
@@ -186,7 +193,21 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
     return html`<div class="chat-avatar ${className}">${assistantAvatar}</div>`;
   }
 
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
+  return html`<div class="chat-avatar ${className}" title="${origin === "subAgent" ? "Sub-agent" : ""}">${initial}</div>`;
+}
+
+function avatarInitial(
+  baseRole: string,
+  origin?: ChatOrigin,
+  assistantName?: string,
+): string {
+  if (baseRole === "user") return "U";
+  if (baseRole === "assistant") {
+    if (origin === "subAgent") return "⚙";
+    return (assistantName ?? "A").charAt(0).toUpperCase() || "A";
+  }
+  if (baseRole === "tool") return "⚙";
+  return "?";
 }
 
 function isAvatarUrl(value: string): boolean {

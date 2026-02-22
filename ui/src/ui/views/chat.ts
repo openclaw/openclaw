@@ -496,7 +496,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     }
 
     const normalized = normalizeMessage(item.message);
-    const role = normalizeRoleForGrouping(normalized.role);
+    const role = normalizeRoleForGrouping(normalized.role, normalized.origin);
     const timestamp = normalized.timestamp || Date.now();
 
     if (!currentGroup || currentGroup.role !== role) {
@@ -507,6 +507,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
+        origin: normalized.origin,
         messages: [{ message: item.message, key: item.key }],
         timestamp,
         isStreaming: false,
