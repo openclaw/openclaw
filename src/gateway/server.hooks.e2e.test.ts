@@ -40,7 +40,7 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.some((e) => e.includes("Ping"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -58,7 +58,7 @@ describe("gateway server hooks", () => {
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -83,7 +83,7 @@ describe("gateway server hooks", () => {
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -104,7 +104,7 @@ describe("gateway server hooks", () => {
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -237,7 +237,7 @@ describe("gateway server hooks", () => {
       ],
     };
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
 
       const defaultRoute = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
@@ -256,7 +256,7 @@ describe("gateway server hooks", () => {
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
       const mappedOk = await fetch(`http://127.0.0.1:${port}/hooks/mapped-ok`, {
         method: "POST",
@@ -317,7 +317,7 @@ describe("gateway server hooks", () => {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -338,7 +338,7 @@ describe("gateway server hooks", () => {
       expect(noAgentCall?.job?.agentId).toBeUndefined();
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
