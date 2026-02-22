@@ -1,11 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
-  CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
+  resolveConfigPath,
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
@@ -15,6 +16,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -22,6 +24,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait } from "../ports.js";
+import { isValidProfileName } from "../profile-utils.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -98,13 +101,76 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
   return resolved;
 }
 
+function resolveDevResetPaths(env: NodeJS.ProcessEnv = process.env): {
+  stateDir: string;
+  configPath: string;
+  defaultStateDir: string;
+  defaultConfigPath: string;
+  expectedDevStateDir: string;
+  expectedDevConfigPath: string;
+} {
+  const home = resolveRequiredHomeDir(env, os.homedir);
+  const stateDir = resolveStateDir(env);
+  const configPath = resolveConfigPath(env, stateDir);
+  const defaultStateDir = path.join(home, ".openclaw");
+  const expectedDevStateDir = path.join(home, ".openclaw-dev");
+  return {
+    stateDir,
+    configPath,
+    defaultStateDir,
+    defaultConfigPath: path.join(defaultStateDir, "openclaw.json"),
+    expectedDevStateDir,
+    expectedDevConfigPath: path.join(expectedDevStateDir, "openclaw.json"),
+  };
+}
+
 async function runGatewayCommand(opts: GatewayRunOpts) {
-  const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
+  const envProfile = process.env.OPENCLAW_PROFILE?.trim();
+  if (envProfile && !isValidProfileName(envProfile)) {
+    defaultRuntime.error(
+      'Invalid OPENCLAW_PROFILE (use letters, numbers, "_", "-" only, or unset the variable).',
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const isDevProfile = envProfile?.toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
     defaultRuntime.exit(1);
     return;
+  }
+
+  if (opts.reset && devMode) {
+    const paths = resolveDevResetPaths(process.env);
+    const resolvedStateDir = path.resolve(paths.stateDir);
+    const resolvedConfigPath = path.resolve(paths.configPath);
+    const stateIsDefault = resolvedStateDir === path.resolve(paths.defaultStateDir);
+    const configIsDefault = resolvedConfigPath === path.resolve(paths.defaultConfigPath);
+    const stateMatchesDev = resolvedStateDir === path.resolve(paths.expectedDevStateDir);
+    const configMatchesDev = resolvedConfigPath === path.resolve(paths.expectedDevConfigPath);
+    const hasStateOverride = Boolean(process.env.OPENCLAW_STATE_DIR?.trim());
+    const hasConfigOverride = Boolean(process.env.OPENCLAW_CONFIG_PATH?.trim());
+    const hasExplicitCustomTarget =
+      (hasStateOverride || hasConfigOverride) && !stateIsDefault && !configIsDefault;
+
+    if (!hasExplicitCustomTarget && (!stateMatchesDev || !configMatchesDev)) {
+      defaultRuntime.error(
+        [
+          "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+          `Resolved state dir: ${paths.stateDir}`,
+          `Resolved config path: ${paths.configPath}`,
+          `Expected dev state dir: ${paths.expectedDevStateDir}`,
+          `Expected dev config path: ${paths.expectedDevConfigPath}`,
+          "Retry with:",
+          "  openclaw --dev gateway --dev --reset",
+          `  OPENCLAW_STATE_DIR="${paths.expectedDevStateDir}" OPENCLAW_CONFIG_PATH="${paths.expectedDevConfigPath}" openclaw gateway --dev --reset`,
+        ].join("\n"),
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   setConsoleTimestampPrefix(true);
@@ -206,8 +272,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const tokenRaw = toOptionString(opts.token);
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
-  const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
-  const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
+  const stateDir = resolveStateDir(process.env);
+  const configPath = resolveConfigPath(process.env, stateDir);
+  const configExists = snapshot?.exists ?? fs.existsSync(configPath);
+  const configAuditPath = path.join(stateDir, "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {

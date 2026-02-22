@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_GATEWAY_PORT,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
+  resolveGatewayPort,
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
@@ -148,5 +150,46 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
     });
+  });
+});
+
+describe("resolveGatewayPort", () => {
+  it("returns DEFAULT_GATEWAY_PORT when no env or config port is set", () => {
+    expect(resolveGatewayPort(undefined, {} as NodeJS.ProcessEnv)).toBe(DEFAULT_GATEWAY_PORT);
+  });
+
+  it("prefers OPENCLAW_GATEWAY_PORT env var over config", () => {
+    const env = { OPENCLAW_GATEWAY_PORT: "18790" } as NodeJS.ProcessEnv;
+    const cfg = { gateway: { port: 19001 } } as Parameters<typeof resolveGatewayPort>[0];
+    expect(resolveGatewayPort(cfg, env)).toBe(18790);
+  });
+
+  it("prefers CLAWDBOT_GATEWAY_PORT env var over config", () => {
+    const env = { CLAWDBOT_GATEWAY_PORT: "18791" } as NodeJS.ProcessEnv;
+    const cfg = { gateway: { port: 19001 } } as Parameters<typeof resolveGatewayPort>[0];
+    expect(resolveGatewayPort(cfg, env)).toBe(18791);
+  });
+
+  it("falls back to config port when env var is absent", () => {
+    const cfg = { gateway: { port: 18790 } } as Parameters<typeof resolveGatewayPort>[0];
+    expect(resolveGatewayPort(cfg, {} as NodeJS.ProcessEnv)).toBe(18790);
+  });
+
+  it("falls back to DEFAULT_GATEWAY_PORT when env and config are both missing", () => {
+    expect(
+      resolveGatewayPort({} as Parameters<typeof resolveGatewayPort>[0], {} as NodeJS.ProcessEnv),
+    ).toBe(DEFAULT_GATEWAY_PORT);
+  });
+
+  it("ignores invalid env ports and falls back to config", () => {
+    const env = { OPENCLAW_GATEWAY_PORT: "abc" } as NodeJS.ProcessEnv;
+    const cfg = { gateway: { port: 18790 } } as Parameters<typeof resolveGatewayPort>[0];
+    expect(resolveGatewayPort(cfg, env)).toBe(18790);
+  });
+
+  it("ignores zero env ports and falls back to config", () => {
+    const env = { OPENCLAW_GATEWAY_PORT: "0" } as NodeJS.ProcessEnv;
+    const cfg = { gateway: { port: 18790 } } as Parameters<typeof resolveGatewayPort>[0];
+    expect(resolveGatewayPort(cfg, env)).toBe(18790);
   });
 });

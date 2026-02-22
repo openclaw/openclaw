@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import {
+  applyCliProfileEnv,
+  parseCliProfileArgs,
+  resolveEffectiveCliProfile,
+} from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
@@ -90,10 +94,28 @@ if (!ensureExperimentalWarningSuppressed()) {
     process.exit(2);
   }
 
-  if (parsed.profile) {
-    applyCliProfileEnv({ profile: parsed.profile });
+  // Always clear inherited service vars before running the CLI command.
+  delete process.env.OPENCLAW_LAUNCHD_LABEL;
+  delete process.env.OPENCLAW_SYSTEMD_UNIT;
+  delete process.env.OPENCLAW_SERVICE_VERSION;
+  delete process.env.OPENCLAW_SERVICE_KIND;
+  delete process.env.OPENCLAW_SERVICE_MARKER;
+
+  const effectiveProfile = resolveEffectiveCliProfile({
+    parsedProfile: parsed.profile,
+    envProfile: process.env.OPENCLAW_PROFILE,
+  });
+  if (!effectiveProfile.ok) {
+    console.error(`[openclaw] ${effectiveProfile.error}`);
+    process.exit(2);
+  }
+
+  if (effectiveProfile.profile) {
+    applyCliProfileEnv({ profile: effectiveProfile.profile });
     // Keep Commander and ad-hoc argv checks consistent.
-    process.argv = parsed.argv;
+    if (parsed.profile) {
+      process.argv = parsed.argv;
+    }
   }
 
   import("./cli/run-main.js")

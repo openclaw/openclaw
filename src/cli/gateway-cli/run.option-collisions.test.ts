@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
@@ -17,14 +17,19 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const resolveStateDir = vi.fn<(env?: NodeJS.ProcessEnv) => string>(() => "/tmp");
+const resolveConfigPath = vi.fn((_env: NodeJS.ProcessEnv, stateDir: string) => {
+  return `${stateDir}/openclaw.json`;
+});
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   loadConfig: () => ({}),
   readConfigFileSnapshot: async () => ({ exists: false }),
-  resolveStateDir: () => "/tmp",
+  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
+  resolveStateDir: (env?: NodeJS.ProcessEnv) => resolveStateDir(env),
   resolveGatewayPort: () => 18789,
 }));
 
@@ -106,6 +111,16 @@ describe("gateway run option collisions", () => {
     forceFreePortAndWait.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    resolveStateDir.mockReset();
+    resolveStateDir.mockReturnValue("/tmp");
+    resolveConfigPath.mockReset();
+    resolveConfigPath.mockImplementation((_env: NodeJS.ProcessEnv, stateDir: string) => {
+      return `${stateDir}/openclaw.json`;
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -116,6 +131,10 @@ describe("gateway run option collisions", () => {
       }) as (program: Command) => void,
       argv,
     });
+  }
+
+  async function expectGatewayExit(argv: string[]) {
+    await expect(runGatewayCli(argv)).rejects.toThrow("__exit__:1");
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
@@ -151,5 +170,45 @@ describe("gateway run option collisions", () => {
         bind: "loopback",
       }),
     );
+  });
+
+  it("hard-stops --dev --reset when target resolves to default profile paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw");
+    resolveConfigPath.mockImplementation((_env: NodeJS.ProcessEnv, stateDir: string) => {
+      return `${stateDir}/openclaw.json`;
+    });
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+    expect(runtimeErrors.join("\n")).toContain("/Users/test/.openclaw");
+  });
+
+  it("allows --dev --reset when target resolves to dev profile paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-dev");
+    resolveConfigPath.mockImplementation((_env: NodeJS.ProcessEnv, stateDir: string) => {
+      return `${stateDir}/openclaw.json`;
+    });
+
+    await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
+
+    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+  });
+
+  it("allows --dev --reset for explicit non-default custom state/config paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/custom-dev");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/custom-dev/openclaw.json");
+    resolveStateDir.mockReturnValue("/tmp/custom-dev");
+    resolveConfigPath.mockReturnValue("/tmp/custom-dev/openclaw.json");
+
+    await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
+
+    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
   });
 });
