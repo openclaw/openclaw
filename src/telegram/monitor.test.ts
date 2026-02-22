@@ -55,6 +55,10 @@ const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnha
     };
   });
 
+const { createTelegramBotErrors } = vi.hoisted(() => ({
+  createTelegramBotErrors: [] as unknown[],
+}));
+
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
   sleepWithAbort: vi.fn(async () => undefined),
@@ -73,6 +77,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("./bot.js", () => ({
   createTelegramBot: () => {
+    const nextError = createTelegramBotErrors.shift();
+    if (nextError) {
+      throw nextError;
+    }
     handlers.message = async (ctx: MockCtx) => {
       const chatId = ctx.message.chat.id;
       const isGroup = ctx.message.chat.type !== "private";
@@ -134,6 +142,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     startTelegramWebhookSpy.mockClear();
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
+    createTelegramBotErrors.length = 0;
   });
 
   it("processes a DM and sends reply", async () => {
@@ -218,6 +227,62 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("retries setup-time recoverable errors before starting polling", async () => {
+    const setupError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    createTelegramBotErrors.push(setupError);
+
+    runSpy.mockImplementationOnce(() => ({
+      task: () => Promise.resolve(),
+      stop: vi.fn(),
+      isRunning: () => false,
+    }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaits runner.stop before retrying after recoverable polling error", async () => {
+    const recoverableError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    let firstStopped = false;
+    const firstStop = vi.fn(async () => {
+      await Promise.resolve();
+      firstStopped = true;
+    });
+
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(recoverableError),
+        stop: firstStop,
+        isRunning: () => false,
+      }))
+      .mockImplementationOnce(() => {
+        expect(firstStopped).toBe(true);
+        return {
+          task: () => Promise.resolve(),
+          stop: vi.fn(),
+          isRunning: () => false,
+        };
+      });
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(firstStop).toHaveBeenCalled();
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces non-recoverable errors", async () => {
     runSpy.mockImplementationOnce(() => ({
       task: () => Promise.reject(new Error("bad token")),
@@ -256,7 +321,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(emitUnhandledRejection(new TypeError("fetch failed"))).toBe(true);
     await monitor;
 
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(computeBackoff).toHaveBeenCalled();
     expect(sleepWithAbort).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);

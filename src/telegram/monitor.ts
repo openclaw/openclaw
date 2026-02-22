@@ -152,18 +152,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const bot = createTelegramBot({
-      token,
-      runtime: opts.runtime,
-      proxyFetch,
-      config: cfg,
-      accountId: account.accountId,
-      updateOffset: {
-        lastUpdateId,
-        onUpdateId: persistUpdateId,
-      },
-    });
-
     if (opts.useWebhook) {
       await startTelegramWebhook({
         token,
@@ -192,9 +180,46 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     // Use grammyjs/runner for concurrent update processing
     let restartAttempts = 0;
+    const runnerOptions = createTelegramRunnerOptions(cfg);
 
     while (!opts.abortSignal?.aborted) {
-      const runner = run(bot, createTelegramRunnerOptions(cfg));
+      let bot;
+      try {
+        bot = createTelegramBot({
+          token,
+          runtime: opts.runtime,
+          proxyFetch,
+          config: cfg,
+          accountId: account.accountId,
+          updateOffset: {
+            lastUpdateId,
+            onUpdateId: persistUpdateId,
+          },
+        });
+      } catch (err) {
+        if (opts.abortSignal?.aborted) {
+          return;
+        }
+        if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+          throw err;
+        }
+        restartAttempts += 1;
+        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+        (opts.runtime?.error ?? console.error)(
+          `Telegram setup network error: ${formatErrorMessage(err)}; retrying in ${formatDurationPrecise(delayMs)}.`,
+        );
+        try {
+          await sleepWithAbort(delayMs, opts.abortSignal);
+        } catch (sleepErr) {
+          if (opts.abortSignal?.aborted) {
+            return;
+          }
+          throw sleepErr;
+        }
+        continue;
+      }
+
+      const runner = run(bot, runnerOptions);
       activeRunner = runner;
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
@@ -243,6 +268,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         }
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+        try {
+          await runner.stop();
+        } catch {
+          // Runner may already be stopped by abort/retry paths.
+        }
       }
     }
   } finally {
