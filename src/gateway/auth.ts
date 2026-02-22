@@ -144,7 +144,16 @@ export function isLocalDirectRequest(
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+  const isLocal = (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+
+  // CRITICAL-1: Audit-log loopback requests that are treated as local/trusted.
+  if (isLocal) {
+    process.stderr.write(
+      `[SECURITY AUDIT] request classified as local-direct: client=${clientIp} host=${host} remote=${req.socket?.remoteAddress ?? "unknown"}\n`,
+    );
+  }
+
+  return isLocal;
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
