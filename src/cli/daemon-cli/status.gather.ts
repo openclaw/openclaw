@@ -182,7 +182,7 @@ export async function gatherDaemonStatus(
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride =
     typeof opts.rpc.url === "string" && opts.rpc.url.trim().length > 0 ? opts.rpc.url.trim() : null;
-  const probeUrl = probeUrlOverride ?? `ws://${probeHost}:${daemonPort}`;
+  const probeUrl = probeUrlOverride ?? `${(daemonCfg as { gateway?: { tls?: { enabled?: boolean } } })?.gateway?.tls?.enabled ? "wss" : "ws"}://${probeHost}:${daemonPort}`;
   const probeNote =
     !probeUrlOverride && bindMode === "lan"
       ? `bind=lan listens on 0.0.0.0 (all interfaces); probing via ${probeHost}.`
