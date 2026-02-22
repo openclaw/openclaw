@@ -37,6 +37,8 @@ export type SafeBinProfileFixture = {
   deniedFlags?: readonly string[];
 };
 
+export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
+
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
 const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
@@ -62,8 +64,6 @@ function compileSafeBinProfiles(
     Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
   ) as Record<string, SafeBinProfile>;
 }
-
-export const SAFE_BIN_GENERIC_PROFILE_FIXTURE: SafeBinProfileFixture = {};
 
 export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
   jq: {
@@ -184,10 +184,48 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
   },
 };
 
-export const SAFE_BIN_GENERIC_PROFILE = compileSafeBinProfile(SAFE_BIN_GENERIC_PROFILE_FIXTURE);
-
 export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
   compileSafeBinProfiles(SAFE_BIN_PROFILE_FIXTURES);
+
+function normalizeSafeBinProfileName(raw: string): string | null {
+  const name = raw.trim().toLowerCase();
+  return name.length > 0 ? name : null;
+}
+
+function normalizeSafeBinProfileFixtures(
+  fixtures?: SafeBinProfileFixtures | null,
+): Record<string, SafeBinProfileFixture> {
+  const normalized: Record<string, SafeBinProfileFixture> = {};
+  if (!fixtures) {
+    return normalized;
+  }
+  for (const [rawName, fixture] of Object.entries(fixtures)) {
+    const name = normalizeSafeBinProfileName(rawName);
+    if (!name) {
+      continue;
+    }
+    normalized[name] = {
+      minPositional: fixture.minPositional,
+      maxPositional: fixture.maxPositional,
+      allowedValueFlags: fixture.allowedValueFlags,
+      deniedFlags: fixture.deniedFlags,
+    };
+  }
+  return normalized;
+}
+
+export function resolveSafeBinProfiles(
+  fixtures?: SafeBinProfileFixtures | null,
+): Record<string, SafeBinProfile> {
+  const normalizedFixtures = normalizeSafeBinProfileFixtures(fixtures);
+  if (Object.keys(normalizedFixtures).length === 0) {
+    return SAFE_BIN_PROFILES;
+  }
+  return {
+    ...SAFE_BIN_PROFILES,
+    ...compileSafeBinProfiles(normalizedFixtures),
+  };
+}
 
 export function resolveSafeBinDeniedFlags(
   fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,

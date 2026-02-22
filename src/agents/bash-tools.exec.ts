@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, maxAsk, minSecurity, resolveSafeBins } from "../infra/exec-approvals.js";
+import { resolveSafeBinProfiles } from "../infra/exec-safe-bin-policy.js";
 import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import {
   getShellPathFromLoginShell,
@@ -164,6 +165,13 @@ export function createExecTool(
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const safeBins = resolveSafeBins(defaults?.safeBins);
+  const safeBinProfiles = resolveSafeBinProfiles(defaults?.safeBinProfiles);
+  const unprofiledSafeBins = Array.from(safeBins).filter((entry) => !safeBinProfiles[entry]);
+  if (unprofiledSafeBins.length > 0) {
+    logInfo(
+      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+    );
+  }
   const trustedSafeBinDirs = getTrustedSafeBinDirs();
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
@@ -404,6 +412,7 @@ export function createExecTool(
           security,
           ask,
           safeBins,
+          safeBinProfiles,
           agentId,
           sessionKey: defaults?.sessionKey,
           scopeKey: defaults?.scopeKey,
