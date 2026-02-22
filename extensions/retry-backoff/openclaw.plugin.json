@@ -1,0 +1,27 @@
+{
+  "id": "retry-backoff",
+  "kind": "agent",
+  "name": "Retry Backoff",
+  "description": "Exponential retry backoff for retryable model failures (rate_limit, timeout, unknown, 429)",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "retryMaxRounds": {
+        "type": "number",
+        "default": 2,
+        "description": "Max retry rounds when all providers fail with retryable errors"
+      },
+      "retryBaseDelayMs": {
+        "type": "number",
+        "default": 15000,
+        "description": "Base delay for retry backoff (actual = base × 2^round)"
+      },
+      "retryMaxDelayMs": {
+        "type": "number",
+        "default": 60000,
+        "description": "Hard ceiling for any single retry delay"
+      }
+    }
+  }
+}

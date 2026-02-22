@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/retry-backoff",
+  "version": "2026.2.22",
+  "private": true,
+  "description": "Retryable-failure retry with exponential backoff for model fallback (rate_limit, timeout, unknown)",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
