@@ -95,7 +95,7 @@ describe("models list auth-profile sync", () => {
       const openrouter = getProviderRow(String(runtime.log.mock.calls[0]?.[0]), "openrouter/");
       expect(openrouter).toBeDefined();
       expect(openrouter?.available).toBe(true);
-      expect(await pathExists(authPath)).toBe(true);
+      expect(await pathExists(authPath)).toBe(false);
     });
   });
 
