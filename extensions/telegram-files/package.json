@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/telegram-files",
+  "version": "2026.2.10",
+  "private": true,
+  "description": "Telegram Mini App for managing agent workspace files on mobile",
+  "type": "module",
+  "scripts": {
+    "build": "cd webapp && npx vite build"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "vite": "7.3.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
