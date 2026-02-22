@@ -176,6 +176,30 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
+
+export function parseToolsBySenderTypedKey(
+  rawKey: string,
+): { type: ToolsBySenderKeyType; value: string } | undefined {
+  const trimmed = rawKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    return {
+      type,
+      value: trimmed.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
 /**
  * Per-sender overrides.
  *

@@ -378,6 +378,49 @@ describe("doctor config flow", () => {
     expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
   });
 
+  it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          whatsapp: {
+            groups: {
+              "123@g.us": {
+                toolsBySender: {
+                  owner: { allow: ["exec"] },
+                  alice: { deny: ["exec"] },
+                  "id:owner": { deny: ["exec"] },
+                  "username:@ops-bot": { allow: ["fs.read"] },
+                  "*": { deny: ["exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        whatsapp: {
+          groups: {
+            "123@g.us": {
+              toolsBySender: Record<string, { allow?: string[]; deny?: string[] }>;
+            };
+          };
+        };
+      };
+    };
+    const toolsBySender = cfg.channels.whatsapp.groups["123@g.us"].toolsBySender;
+    expect(toolsBySender.owner).toBeUndefined();
+    expect(toolsBySender.alice).toBeUndefined();
+    expect(toolsBySender["id:owner"]).toEqual({ deny: ["exec"] });
+    expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
+    expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
+    expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
+  });
+
   it("repairs googlechat dm.policy open by setting dm.allowFrom on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
