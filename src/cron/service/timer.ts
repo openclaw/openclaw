@@ -547,7 +547,7 @@ export async function runMissedJobs(
     const startedAt = state.deps.nowMs();
     emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
     try {
-      const result = await executeJobCore(state, candidate.job);
+      const result = await executeJobCoreWithTimeout(state, candidate.job);
       outcomes.push({
         jobId: candidate.jobId,
         status: result.status,
