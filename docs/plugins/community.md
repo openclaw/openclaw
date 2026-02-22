@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Plugins
+
+- **permctl** — macOS TCC permission error detection + agent remediation skill
+  npm: `@stakeswky/openclaw-permctl`
+  repo: `https://github.com/stakeswky/openclaw-plugin-permctl`
+  install: `openclaw plugins install @stakeswky/openclaw-permctl`
