@@ -21,74 +21,38 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
 }
 
 describe("workspace path resolution", () => {
-  it("reads relative paths against workspaceDir even after cwd changes", async () => {
+  it("resolves relative read/write/edit paths against workspaceDir even after cwd changes", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const testFile = "read.txt";
-        const contents = "workspace read ok";
-        await fs.writeFile(path.join(workspaceDir, testFile), contents, "utf8");
-
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
         try {
           const tools = createOpenClawCodingTools({ workspaceDir });
-          const readTool = tools.find((tool) => tool.name === "read");
-          expect(readTool).toBeDefined();
+          const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
 
-          const result = await readTool?.execute("ws-read", { path: testFile });
-          expect(getTextContent(result)).toContain(contents);
-        } finally {
-          cwdSpy.mockRestore();
-        }
-      });
-    });
-  });
+          const readFile = "read.txt";
+          await fs.writeFile(path.join(workspaceDir, readFile), "workspace read ok", "utf8");
+          const readResult = await readTool.execute("ws-read", { path: readFile });
+          expect(getTextContent(readResult)).toContain("workspace read ok");
 
-  it("writes relative paths against workspaceDir even after cwd changes", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const testFile = "write.txt";
-        const contents = "workspace write ok";
-
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
-        try {
-          const tools = createOpenClawCodingTools({ workspaceDir });
-          const writeTool = tools.find((tool) => tool.name === "write");
-          expect(writeTool).toBeDefined();
-
-          await writeTool?.execute("ws-write", {
-            path: testFile,
-            content: contents,
+          const writeFile = "write.txt";
+          await writeTool.execute("ws-write", {
+            path: writeFile,
+            content: "workspace write ok",
           });
+          expect(await fs.readFile(path.join(workspaceDir, writeFile), "utf8")).toBe(
+            "workspace write ok",
+          );
 
-          const written = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
-          expect(written).toBe(contents);
-        } finally {
-          cwdSpy.mockRestore();
-        }
-      });
-    });
-  });
-
-  it("edits relative paths against workspaceDir even after cwd changes", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const testFile = "edit.txt";
-        await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
-
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
-        try {
-          const tools = createOpenClawCodingTools({ workspaceDir });
-          const editTool = tools.find((tool) => tool.name === "edit");
-          expect(editTool).toBeDefined();
-
-          await editTool?.execute("ws-edit", {
-            path: testFile,
+          const editFile = "edit.txt";
+          await fs.writeFile(path.join(workspaceDir, editFile), "hello world", "utf8");
+          await editTool.execute("ws-edit", {
+            path: editFile,
             oldText: "world",
             newText: "openclaw",
           });
-
-          const updated = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
-          expect(updated).toBe("hello openclaw");
+          expect(await fs.readFile(path.join(workspaceDir, editFile), "utf8")).toBe(
+            "hello openclaw",
+          );
         } finally {
           cwdSpy.mockRestore();
         }
