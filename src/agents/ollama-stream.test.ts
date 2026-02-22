@@ -244,6 +244,40 @@ describe("parseNdjsonStream", () => {
     // Final done:true chunk has no tool_calls
     expect(chunks[2].message.tool_calls).toBeUndefined();
   });
+
+  it("preserves unsafe integer tool arguments as exact strings", async () => {
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"send","arguments":{"target":1234567890123456789,"nested":{"thread":9223372036854775807}}}}]},"done":false}',
+    ]);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    const args = chunks[0]?.message.tool_calls?.[0]?.function.arguments as
+      | { target?: unknown; nested?: { thread?: unknown } }
+      | undefined;
+    expect(args?.target).toBe("1234567890123456789");
+    expect(args?.nested?.thread).toBe("9223372036854775807");
+  });
+
+  it("keeps safe integer tool arguments as numbers", async () => {
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"send","arguments":{"retries":3,"delayMs":2500}}}]},"done":false}',
+    ]);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    const args = chunks[0]?.message.tool_calls?.[0]?.function.arguments as
+      | { retries?: unknown; delayMs?: unknown }
+      | undefined;
+    expect(args?.retries).toBe(3);
+    expect(args?.delayMs).toBe(2500);
+  });
 });
 
 describe("createOllamaStreamFn", () => {
