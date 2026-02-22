@@ -64,7 +64,7 @@
   padding-top: 0;
 }
 
-.shell--chat-focus .content > * + * {
+.shell--chat-focus .content>*+* {
   margin-top: 0;
 }
 
@@ -308,11 +308,7 @@
 
 .sidebar--collapsed .sidebar-header {
   justify-content: center;
-  padding: 14px 0 10px;
-}
-
-.sidebar--collapsed .sidebar-brand {
-  display: none;
+  padding: 8px;
 }
 
 .sidebar--collapsed .nav-group__items {
@@ -361,56 +357,36 @@
 /* Sidebar header (brand + collapse) */
 .sidebar-header {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  padding: 12px 12px 8px;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  padding: 8px;
+  gap: 0;
   flex-shrink: 0;
 }
 
 .sidebar-brand {
+  flex: 2;
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
   min-width: 0;
 }
 
 .sidebar-brand__logo {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-}
-
-.sidebar-brand__logo img {
-  width: 100%;
-  height: 100%;
   object-fit: contain;
 }
 
-.sidebar-brand__text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.sidebar-brand__title {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.1;
-  color: var(--text-strong);
-  white-space: nowrap;
-}
-
 .sidebar-collapse-btn {
-  width: 100%;
-  height: 36px;
+  flex: 1;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-hover);
-  border: 1px solid transparent;
+  border: var(--border) 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--muted);
@@ -421,6 +397,11 @@
     color var(--duration-fast) ease;
 }
 
+.sidebar--collapsed .sidebar-collapse-btn {
+  flex: none;
+  width: 100%;
+}
+
 .sidebar-collapse-btn:hover {
   background: var(--bg-hover);
   border-color: var(--border);
@@ -428,8 +409,8 @@
 }
 
 .sidebar-collapse-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -654,7 +635,7 @@
   overflow-x: hidden;
 }
 
-.content > * + * {
+.content>*+* {
   margin-top: 24px;
 }
 
@@ -666,7 +647,7 @@
   padding-bottom: 0;
 }
 
-.content--chat > * + * {
+.content--chat>*+* {
   margin-top: 0;
 }
 
@@ -724,7 +705,7 @@
   gap: 16px;
 }
 
-.content--chat .content-header > div:first-child {
+.content--chat .content-header>div:first-child {
   text-align: left;
 }
 

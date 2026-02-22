@@ -165,36 +165,32 @@ export function renderApp(state: AppViewState) {
         </div>
       </header>
       <aside class="sidebar ${state.settings.navCollapsed ? "sidebar--collapsed" : ""}">
-        <div class="sidebar-header">
+      <div class="sidebar-header">
+        ${
+          state.settings.navCollapsed
+            ? nothing
+            : html`
           <div class="sidebar-brand">
-            <div class="sidebar-brand__logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" width="28" height="28" />
-            </div>
-            ${
-              !state.settings.navCollapsed
-                ? html`
-                    <div class="sidebar-brand__text">
-                      <div class="sidebar-brand__title">OpenClaw</div>
-                    </div>
-                  `
-                : nothing
-            }
+            <img class="sidebar-brand__logo" src="${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"}" alt="OpenClaw" />
           </div>
-          <button
-            class="sidebar-collapse-btn"
-            @click=${() =>
-              state.applySettings({
-                ...state.settings,
-                navCollapsed: !state.settings.navCollapsed,
-              })}
-            title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-            aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-          >
-            ${state.settings.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
-          </button>
-        </div>
-
-        <nav class="sidebar-nav">
+        `
+        }
+        <button
+          class="sidebar-collapse-btn"
+          @click=${() =>
+            state.applySettings({
+              ...state.settings,
+              navCollapsed: !state.settings.navCollapsed,
+            })}
+          title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+          aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+        >
+          ${state.settings.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+        </button>
+      </div>
+ 
+          
+          <nav class="sidebar-nav">
           ${TAB_GROUPS.map((group) => {
             const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
             const hasActiveTab = group.tabs.some((tab) => tab === state.tab);

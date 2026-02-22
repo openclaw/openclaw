@@ -318,65 +318,98 @@
    =========================================== */
 
 .theme-toggle {
-  --theme-item: 28px;
-  --theme-gap: 2px;
-  --theme-pad: 4px;
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--clay-border-color);
+  border-radius: 999px;
+  padding: 4px;
+  height: 32px;
+  background: var(--clay-bg);
+  overflow: hidden;
+  max-width: 32px;
+  transition:
+    max-width var(--clay-duration-normal) var(--clay-easing),
+    padding var(--clay-duration-normal) var(--clay-easing);
 }
 
-.theme-toggle__track {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(2, var(--theme-item));
-  gap: var(--theme-gap);
-  padding: var(--theme-pad);
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--secondary);
+@media (hover: hover) {
+  .theme-toggle:hover {
+    max-width: 400px;
+    padding: 4px 6px;
+  }
 }
 
-.theme-toggle__indicator {
-  position: absolute;
-  top: 50%;
-  left: var(--theme-pad);
-  width: var(--theme-item);
-  height: var(--theme-item);
-  border-radius: var(--radius-full);
-  transform: translateY(-50%)
-    translateX(calc(var(--theme-index, 0) * (var(--theme-item) + var(--theme-gap))));
-  background: var(--accent);
-  transition: transform var(--duration-normal) var(--ease-out);
-  z-index: 0;
+.theme-toggle:focus-within {
+  max-width: 400px;
+  padding: 4px 6px;
 }
 
-.theme-toggle__button {
-  height: var(--theme-item);
-  width: var(--theme-item);
-  display: grid;
-  place-items: center;
+.theme-toggle.theme-toggle--open {
+  max-width: 400px;
+  padding: 4px 6px;
+}
+
+.theme-btn {
   border: 0;
-  border-radius: var(--radius-full);
   background: transparent;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
-  position: relative;
-  z-index: 1;
-  transition: color var(--duration-fast) ease;
+  transition:
+    color var(--clay-duration-fast) var(--clay-easing),
+    background var(--clay-duration-fast) var(--clay-easing),
+    transform var(--clay-duration-fast) var(--clay-easing);
 }
 
-.theme-toggle__button:hover {
+.theme-btn.active {
+  padding: 5px 6px;
+  background: var(--clay-bg-button);
+  color: var(--text);
+  box-shadow: var(--clay-shadow-pressed);
+}
+
+.theme-btn:not(.active) {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  padding: 5px 0;
+  overflow: hidden;
+  transition:
+    opacity var(--clay-duration-fast) var(--clay-easing),
+    width var(--clay-duration-fast) var(--clay-easing),
+    padding var(--clay-duration-fast) var(--clay-easing),
+    color var(--clay-duration-fast) var(--clay-easing),
+    background var(--clay-duration-fast) var(--clay-easing),
+    transform var(--clay-duration-fast) var(--clay-easing);
+}
+
+.theme-toggle:hover .theme-btn,
+.theme-toggle:focus-within .theme-btn,
+.theme-toggle--open .theme-btn {
+  opacity: 1;
+  pointer-events: auto;
+  width: auto;
+  padding: 5px 8px;
+}
+
+.theme-btn:hover {
+  border: 0;
   color: var(--text);
 }
 
-.theme-toggle__button.active {
-  color: var(--accent-foreground);
+.theme-btn:active {
+  transform: scale(0.93);
 }
 
-.theme-toggle__button.active .theme-icon {
-  stroke: var(--accent-foreground);
-}
-
-.theme-icon {
+.theme-btn svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -486,14 +519,6 @@
 
 .btn.primary .btn-kbd {
   background: rgba(255, 255, 255, 0.2);
-}
-
-:root[data-theme="light"] .btn-kbd {
-  background: rgba(0, 0, 0, 0.08);
-}
-
-:root[data-theme="light"] .btn.primary .btn-kbd {
-  background: rgba(255, 255, 255, 0.25);
 }
 
 .btn.active {
@@ -617,33 +642,6 @@
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-}
-
-:root[data-theme="light"] .field input,
-:root[data-theme="light"] .field textarea,
-:root[data-theme="light"] .field select {
-  background: var(--card);
-  border-color: var(--input);
-}
-
-:root[data-theme="light"] .btn {
-  background: var(--bg);
-  border-color: var(--input);
-}
-
-:root[data-theme="light"] .btn:hover {
-  background: var(--bg-hover);
-}
-
-:root[data-theme="light"] .btn.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-:root[data-theme="light"] .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
 }
 
 /* ===========================================
@@ -777,13 +775,6 @@
   max-height: 360px;
   overflow: auto;
   max-width: 100%;
-}
-
-:root[data-theme="light"] .code-block,
-:root[data-theme="light"] .list-item,
-:root[data-theme="light"] .table-row,
-:root[data-theme="light"] .chip {
-  background: var(--bg);
 }
 
 /* ===========================================
@@ -1412,29 +1403,14 @@
   min-width: 0;
 }
 
-:root[data-theme="light"] .chat-bubble {
-  border-color: var(--border);
-  background: var(--bg);
-}
-
 .chat-line.user .chat-bubble {
   border-color: transparent;
   background: var(--accent-subtle);
 }
 
-:root[data-theme="light"] .chat-line.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--warn) 20%, transparent);
-  background: var(--warn-subtle);
-}
-
 .chat-line.assistant .chat-bubble {
   border-color: transparent;
   background: var(--secondary);
-}
-
-:root[data-theme="light"] .chat-line.assistant .chat-bubble {
-  border-color: var(--border);
-  background: var(--bg-muted);
 }
 
 @keyframes chatStreamPulse {
@@ -1567,10 +1543,6 @@
   background: var(--secondary);
 }
 
-:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
-  background: var(--bg-muted);
-}
-
 .chat-text :where(pre) {
   margin-top: 0.75em;
   padding: 10px 12px;
@@ -1578,10 +1550,6 @@
   border: 1px solid var(--border);
   background: var(--secondary);
   overflow: auto;
-}
-
-:root[data-theme="light"] .chat-text :where(pre) {
-  background: var(--bg-muted);
 }
 
 .chat-text :where(pre code) {
@@ -1618,10 +1586,6 @@
   background: var(--secondary);
   display: grid;
   gap: 4px;
-}
-
-:root[data-theme="light"] .chat-tool-card {
-  background: var(--bg-muted);
 }
 
 .chat-tool-card__title {
@@ -1676,10 +1640,6 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--card);
-}
-
-:root[data-theme="light"] .chat-tool-card__output {
-  background: var(--bg);
 }
 
 .chat-stamp {

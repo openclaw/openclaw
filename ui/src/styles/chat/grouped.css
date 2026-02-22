@@ -247,12 +247,6 @@ img.chat-avatar {
   }
 }
 
-/* Light mode: restore borders */
-:root[data-theme="light"] .chat-bubble {
-  border-color: var(--border);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-}
-
 .chat-bubble:hover {
   background: color-mix(in srgb, var(--card) 82%, var(--bg-hover));
   border-color: var(--border-strong);
@@ -263,11 +257,6 @@ img.chat-avatar {
 .chat-group.user .chat-bubble {
   background: color-mix(in srgb, var(--accent-subtle) 85%, var(--secondary));
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-:root[data-theme="light"] .chat-group.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--warn) 20%, transparent);
-  background: var(--warn-subtle);
 }
 
 .chat-group.user .chat-bubble:hover {

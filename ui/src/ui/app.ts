@@ -60,7 +60,7 @@ import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
-import type { ResolvedTheme, ThemeMode } from "./theme.ts";
+import { VALID_THEMES, type ResolvedTheme, type ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
@@ -121,6 +121,7 @@ export class OpenClawApp extends LitElement {
   @state() connected = false;
   @state() theme: ThemeMode = this.settings.theme ?? "dark";
   @state() themeResolved: ResolvedTheme = "dark";
+  @state() themeOrder: ThemeMode[] = this.buildThemeOrder(this.theme);
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
@@ -451,6 +452,19 @@ export class OpenClawApp extends LitElement {
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
     setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
+    this.themeOrder = this.buildThemeOrder(next);
+  }
+
+  buildThemeOrder(active: ThemeMode): ThemeMode[] {
+    const all = [...VALID_THEMES];
+    const rest = all.filter((id) => id !== active);
+    return [active, ...rest];
+  }
+
+  handleThemeToggleCollapse() {
+    setTimeout(() => {
+      this.themeOrder = this.buildThemeOrder(this.theme);
+    }, 80);
   }
 
   async loadOverview() {
