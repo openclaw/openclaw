@@ -51,7 +51,7 @@ describe("draft-stream-controls", () => {
   it("clearFinalizableDraftMessage skips invalid message ids", async () => {
     const deleteMessage = vi.fn(async () => {});
 
-    await clearFinalizableDraftMessage({
+    await clearFinalizableDraftMessage<unknown>({
       stopForClear: async () => {},
       readMessageId: () => 123,
       clearMessageId: () => {},
