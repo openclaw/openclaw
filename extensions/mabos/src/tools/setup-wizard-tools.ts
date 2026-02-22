@@ -609,10 +609,18 @@ ${nextSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`);
         } = params;
 
         try {
+          interface HealthChecks {
+            gateway: { status: string; message: string };
+            versions?: { compatible: boolean; gateway_version: string; update_available?: string };
+            channels?: ChannelHealth[];
+            agents?: AgentHealth[];
+            configuration: ConfigHealth;
+          }
+
           const healthReport = {
             overall_health: "healthy" as "healthy" | "warning" | "critical",
             timestamp: new Date().toISOString(),
-            checks: {} as any,
+            checks: {} as Partial<HealthChecks>,
             auto_fixable_issues: [] as string[],
             manual_issues: [] as string[],
           };
@@ -701,10 +709,30 @@ ${nextSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`);
                     const agentPath = join(agentsDir, agentId);
                     const stats = await stat(agentPath);
 
+                    // Determine agent status from config and activity
+                    let agentStatus: AgentHealth["status"] = "active";
+                    try {
+                      const configPath = join(agentPath, "config.json");
+                      if (existsSync(configPath)) {
+                        const agentConfig = JSON.parse(await readFile(configPath, "utf-8"));
+                        if (agentConfig.archived || agentConfig.status === "archived") {
+                          agentStatus = "inactive";
+                        }
+                      }
+                    } catch {
+                      // Config unreadable — leave as active
+                    }
+
+                    // Mark inactive if no file modification in 7 days
+                    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+                    if (agentStatus === "active" && stats.mtime.getTime() < sevenDaysAgo) {
+                      agentStatus = "inactive";
+                    }
+
                     agents.push({
                       agent_id: agentId,
                       business_id: businessId,
-                      status: "active", // TODO: Implement proper agent status checking
+                      status: agentStatus,
                       last_activity: stats.mtime.toISOString(),
                     });
                   }
@@ -727,10 +755,35 @@ ${nextSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`);
             const stats = await stat(configPath);
             configHealth.last_modified = stats.mtime.toISOString();
 
-            // TODO: Add actual YAML validation
-            // For now, just check if file is readable
+            // Lightweight YAML validation (no parser dependency)
             try {
-              await readFile(configPath, "utf-8");
+              const content = await readFile(configPath, "utf-8");
+              const trimmed = content.trim();
+
+              if (trimmed.length === 0) {
+                configHealth.valid = false;
+                configHealth.issues.push("Config file is empty");
+              } else if (trimmed.includes("\t")) {
+                configHealth.valid = false;
+                configHealth.issues.push("Config file contains tabs (YAML requires spaces)");
+              } else {
+                // Check for at least one key-value pair (key: value or key:)
+                const hasKeyValue = trimmed
+                  .split("\n")
+                  .some((line) => /^[a-zA-Z_][a-zA-Z0-9_]*\s*:/.test(line.trim()));
+                if (!hasKeyValue) {
+                  configHealth.valid = false;
+                  configHealth.issues.push("Config file has no recognizable key-value pairs");
+                }
+              }
+
+              if (!configHealth.valid) {
+                healthReport.overall_health =
+                  healthReport.overall_health === "critical" ? "critical" : "warning";
+                healthReport.manual_issues.push(
+                  `Gateway config validation: ${configHealth.issues.join("; ")}`,
+                );
+              }
             } catch (error) {
               configHealth.valid = false;
               configHealth.issues.push(`Cannot read config file: ${error}`);
@@ -748,8 +801,35 @@ ${nextSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`);
 
           // Auto-fix issues if requested
           if (fix_automatically && healthReport.auto_fixable_issues.length > 0) {
-            // TODO: Implement actual auto-fix logic
-            api.logger.info(`Would auto-fix: ${healthReport.auto_fixable_issues.join(", ")}`);
+            const fixResults: string[] = [];
+            for (const issue of healthReport.auto_fixable_issues) {
+              try {
+                if (issue.includes("Start gateway service")) {
+                  // Attempt to start the gateway
+                  const { execSync } = await import("node:child_process");
+                  execSync("systemctl --user start openclaw-gateway", { timeout: 10000 });
+                  fixResults.push(`Fixed: ${issue}`);
+                } else if (issue.includes("Generate default gateway configuration")) {
+                  // Generate a minimal gateway config
+                  const defaultConfig = [
+                    "# OpenClaw Gateway Configuration",
+                    "host: 0.0.0.0",
+                    "port: 3000",
+                    "plugins:",
+                    "  mabos:",
+                    "    enabled: true",
+                    "",
+                  ].join("\n");
+                  await writeFile(configPath, defaultConfig, "utf-8");
+                  fixResults.push(`Fixed: ${issue}`);
+                } else {
+                  fixResults.push(`Skipped (manual): ${issue}`);
+                }
+              } catch (fixErr) {
+                fixResults.push(`Failed: ${issue} — ${fixErr}`);
+              }
+            }
+            api.logger.info(`Auto-fix results: ${fixResults.join("; ")}`);
           }
 
           // Generate summary report
@@ -769,11 +849,11 @@ ${nextSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`);
           }
 
 **Components:**
-- Gateway: ${healthReport.checks.gateway.status === "healthy" ? "✅" : "❌"} ${healthReport.checks.gateway.message}
-${include_version_check ? `- Version: ${healthReport.checks.versions.compatible ? "✅" : "⚠️"} Gateway ${healthReport.checks.versions.gateway_version}` : ""}
+- Gateway: ${healthReport.checks.gateway?.status === "healthy" ? "✅" : "❌"} ${healthReport.checks.gateway?.message ?? "Unknown"}
+${include_version_check ? `- Version: ${healthReport.checks.versions?.compatible ? "✅" : "⚠️"} Gateway ${healthReport.checks.versions?.gateway_version ?? "unknown"}` : ""}
 ${include_channels ? `- Channels: ${channelCount} configured` : ""}
 ${include_agents ? `- Agents: ${agentCount} active` : ""}
-- Configuration: ${healthReport.checks.configuration.valid ? "✅" : "❌"} ${healthReport.checks.configuration.valid ? "Valid" : "Issues found"}
+- Configuration: ${healthReport.checks.configuration?.valid ? "✅" : "❌"} ${healthReport.checks.configuration?.valid ? "Valid" : "Issues found"}
 
 ${
   issueCount > 0

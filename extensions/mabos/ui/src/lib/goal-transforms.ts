@@ -21,14 +21,14 @@ function inferLevel(goal: BusinessGoal): GoalLevel {
 }
 
 export function goalsToPhases(goalModel: TroposGoalModel): Phase[] {
-  const { goals } = goalModel;
+  const goals = goalModel.goals ?? [];
   if (goals.length === 0) return [];
 
   const phases: Phase[] = [];
   let weekOffset = 0;
 
   // Sort by priority (highest first)
-  const sorted = [...goals].sort((a, b) => (b.priority || 0.5) - (a.priority || 0.5));
+  const sorted = [...goals].sort((a, b) => (b.priority ?? 0.5) - (a.priority ?? 0.5));
 
   sorted.forEach((goal, idx) => {
     const level = inferLevel(goal);
@@ -37,7 +37,7 @@ export function goalsToPhases(goalModel: TroposGoalModel): Phase[] {
 
     phases.push({
       id: goal.id || `g-${idx}`,
-      label: goal.name || `Goal ${idx + 1}`,
+      label: goal.text ?? goal.name ?? `Goal ${idx + 1}`,
       phase: categoryMap[level],
       startWeek: weekOffset,
       durationWeeks: duration,
@@ -51,17 +51,17 @@ export function goalsToPhases(goalModel: TroposGoalModel): Phase[] {
 }
 
 export function goalsToMilestones(goalModel: TroposGoalModel): Milestone[] {
-  const { goals } = goalModel;
+  const goals = goalModel.goals ?? [];
   if (goals.length === 0) return [];
 
   // High priority goals become milestones
   return goals
-    .filter((g) => (g.priority || 0.5) >= 0.7)
+    .filter((g) => (g.priority ?? 0.5) >= 0.7)
     .map((g, idx) => {
       const level = inferLevel(g);
       return {
         id: `m-${g.id || idx}`,
-        label: g.name || `Milestone ${idx + 1}`,
+        label: g.text ?? g.name ?? `Milestone ${idx + 1}`,
         week: Math.max(2, idx * 4 + 4),
         color: phaseColors[level] || "var(--accent-green)",
       };

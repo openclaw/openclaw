@@ -21,6 +21,15 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
 import { textResult, resolveWorkspaceDir } from "./common.js";
 
+// ── JSON-LD ontology types ──────────────────────────────────────────────
+
+type JsonLdNode = Record<string, unknown> & { "@id": string; "@type"?: string };
+type JsonLdOntology = {
+  "@context": Record<string, unknown>;
+  "@graph": JsonLdNode[];
+  [key: string]: unknown;
+};
+
 // ── Schemas ────────────────────────────────────────────────────────────
 
 const ProposeConceptParams = Type.Object({
@@ -330,7 +339,7 @@ export function createOntologyManagementTools(api: OpenClawPluginApi): AnyAgentT
           errors.push(`Domain ontology '${proposal.domain}' not found`);
         }
 
-        const graph = ((ont as any)?.["@graph"] as Array<Record<string, unknown>>) || [];
+        const graph = (ont as JsonLdOntology | null)?.["@graph"] ?? [];
 
         // ── Check 1: Duplicate ID ──
         const existingNode = graph.find((n) => n["@id"] === proposal.node["@id"]);
@@ -528,13 +537,13 @@ export function createOntologyManagementTools(api: OpenClawPluginApi): AnyAgentT
         }
 
         // Load ontology
-        const ont = (await loadOntologyFile(proposal.domain)) as any;
+        const ont = (await loadOntologyFile(proposal.domain)) as JsonLdOntology | null;
         if (!ont) {
           return textResult(`Error: Domain ontology '${proposal.domain}' not found.`);
         }
 
         // Double-check no duplicate ID crept in
-        const existing = ont["@graph"].find((n: any) => n["@id"] === proposal.node["@id"]);
+        const existing = ont["@graph"].find((n) => n["@id"] === proposal.node["@id"]);
         if (existing) {
           proposal.status = "rejected";
           await saveProposals(ws, proposals);
@@ -544,7 +553,7 @@ export function createOntologyManagementTools(api: OpenClawPluginApi): AnyAgentT
         }
 
         // Merge — add to @graph
-        ont["@graph"].push(proposal.node);
+        ont["@graph"].push(proposal.node as JsonLdNode);
 
         // Ensure the namespace prefix exists in @context
         const nodeId = proposal.node["@id"] as string;
@@ -802,9 +811,9 @@ export function createOntologyManagementTools(api: OpenClawPluginApi): AnyAgentT
         await saveOntologyFile(params.domain_name, ontology);
 
         // Update cross-domain.jsonld with a relationship to the new domain
-        const crossDomain = await loadOntologyFile("cross-domain");
+        const crossDomain = (await loadOntologyFile("cross-domain")) as JsonLdOntology | null;
         if (crossDomain) {
-          const cdGraph = (crossDomain as any)["@graph"] as Array<Record<string, unknown>>;
+          const cdGraph = crossDomain["@graph"];
 
           // Add cross-domain relationship
           cdGraph.push({
@@ -819,7 +828,7 @@ export function createOntologyManagementTools(api: OpenClawPluginApi): AnyAgentT
           });
 
           // Add namespace to cross-domain context
-          (crossDomain as any)["@context"][prefix] = namespace;
+          crossDomain["@context"][prefix] = namespace;
 
           await saveOntologyFile("cross-domain", crossDomain);
         }

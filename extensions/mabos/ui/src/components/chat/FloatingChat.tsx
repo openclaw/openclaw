@@ -1,6 +1,6 @@
 import { useRouterState } from "@tanstack/react-router";
 import { Send, History, Sparkles, X } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useChat } from "@/hooks/useChat";
@@ -64,7 +64,7 @@ export function FloatingChat() {
   }
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] w-full max-w-[600px] px-4">
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] w-[calc(100vw-2rem)] md:w-full md:max-w-[600px]">
       {/* Suggestion popup */}
       {showSuggestions && suggestions.length > 0 && (
         <div

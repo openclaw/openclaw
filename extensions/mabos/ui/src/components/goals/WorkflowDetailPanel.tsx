@@ -23,9 +23,15 @@ type WorkflowDetailPanelProps = {
   workflow: (Workflow & { goalName: string }) | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  sheetSide?: "right" | "bottom";
 };
 
-export function WorkflowDetailPanel({ workflow, open, onOpenChange }: WorkflowDetailPanelProps) {
+export function WorkflowDetailPanel({
+  workflow,
+  open,
+  onOpenChange,
+  sheetSide = "right",
+}: WorkflowDetailPanelProps) {
   if (!workflow) return null;
 
   const statusColor = statusColors[workflow.status];
@@ -34,8 +40,8 @@ export function WorkflowDetailPanel({ workflow, open, onOpenChange }: WorkflowDe
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        side="right"
-        className="w-full sm:max-w-lg bg-[var(--bg-primary)] border-l border-[var(--border-mabos)] overflow-y-auto"
+        side={sheetSide}
+        className={`bg-[var(--bg-primary)] overflow-y-auto ${sheetSide === "bottom" ? "h-[85vh] border-t" : "w-full sm:max-w-lg border-l"} border-[var(--border-mabos)]`}
       >
         <SheetHeader className="pb-0">
           <SheetTitle className="text-lg text-[var(--text-primary)]">{workflow.name}</SheetTitle>

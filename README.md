@@ -18,8 +18,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+**OpenClaw** with the **MABOS Framework** is an enhanced _personal AI assistant_ designed to operate across multiple platforms, providing refined BDI (Belief-Desire-Intention) cognitive architecture and ontology-based knowledge representation.
+This version improves upon traditional functionalities with integrations like:
+
+- Advanced session management and multi-agent operations.
+- Sophisticated ontology-based insights and decision-making capabilities.
+- Enhanced voice and visual interaction capabilities across macOS/iOS/Android.
+- Expanded support for additional channels such as WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat, BlueBubbles, Matrix, Zalo, and Zalo Personal.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 

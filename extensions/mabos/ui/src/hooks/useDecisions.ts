@@ -7,9 +7,7 @@ export function useDecisions() {
     queryKey: ["decisions"],
     queryFn: async () => {
       const res = await api.getDecisions();
-      // API wraps decisions in { decisions: [...] }
-      const arr = Array.isArray(res) ? res : ((res as any)?.decisions ?? []);
-      return arr as Decision[];
+      return res.decisions;
     },
     refetchInterval: 30_000,
   });

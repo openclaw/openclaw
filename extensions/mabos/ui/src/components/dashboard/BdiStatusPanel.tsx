@@ -16,9 +16,9 @@ export function BdiStatusPanel({ status, agents }: BdiStatusPanelProps) {
     mutationFn: ({ agentId }: { agentId: string }) => api.triggerBdiCycle("vividwalls", agentId),
   });
 
-  const heartbeat = (status as any)?.bdiHeartbeat;
-  const isActive = heartbeat === "active" || heartbeat?.active;
-  const intervalMin = (status as any)?.bdiIntervalMinutes || 30;
+  const heartbeat = status?.bdiHeartbeat;
+  const isActive = heartbeat === "active";
+  const intervalMin = status?.bdiIntervalMinutes ?? 30;
 
   return (
     <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
@@ -60,9 +60,7 @@ export function BdiStatusPanel({ status, agents }: BdiStatusPanelProps) {
           </div>
           <div>
             <p className="text-xs text-[var(--text-muted)]">Total Cycles</p>
-            <p className="text-sm text-[var(--text-primary)]">
-              {status?.bdiCycles ?? (status as any)?.agents?.length ?? "-"}
-            </p>
+            <p className="text-sm text-[var(--text-primary)]">{status?.agents?.length ?? "-"}</p>
           </div>
         </div>
 

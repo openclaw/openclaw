@@ -39,8 +39,7 @@ export function useTasks(businessId: string) {
     queryKey: ["tasks", businessId],
     queryFn: async () => {
       const raw = await api.getTasks(businessId);
-      const arr = Array.isArray(raw) ? raw : [];
-      return arr.map(normalizeTask);
+      return (raw.tasks ?? []).map(normalizeTask);
     },
     enabled: !!businessId,
   });

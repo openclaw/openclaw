@@ -57,17 +57,20 @@ export type Project = {
 };
 
 export type SystemStatus = {
+  product: string;
   version: string;
-  uptime: number;
-  businesses: number;
-  agents: { total: number; active: number; idle: number; error: number };
-  bdiCycles: number;
-  bdiHeartbeat?: {
-    active: boolean;
-    intervalMs: number;
-    lastCycle: string | null;
-    nextCycle: string | null;
-  };
+  bdiHeartbeat: string;
+  bdiIntervalMinutes: number;
+  agents: Array<{
+    agentId: string;
+    beliefCount: number;
+    goalCount: number;
+    intentionCount: number;
+    desireCount: number;
+  }>;
+  businessCount: number;
+  workspaceDir: string;
+  reasoningToolCount: number;
 };
 
 export type AgentListItem = {
@@ -124,7 +127,7 @@ export type Decision = {
   createdAt: string;
 };
 
-export type DecisionsResponse = Decision[];
+export type DecisionsResponse = { decisions: Decision[] };
 
 export type DecisionResolution = {
   optionId: string;
@@ -155,10 +158,12 @@ export type Workflow = {
 export type BusinessGoal = {
   id: string;
   name: string;
+  text?: string;
   description: string;
   level: GoalLevel;
   type: GoalType;
   priority: number;
+  actor?: string;
   desires: string[];
   workflows: Workflow[];
 };
@@ -194,7 +199,7 @@ export type Contractor = {
   status: "active" | "inactive" | "pending";
 };
 
-export type ContractorsResponse = Contractor[];
+export type ContractorsResponse = { contractors: Contractor[] };
 
 // --- Panel / Layout ---
 

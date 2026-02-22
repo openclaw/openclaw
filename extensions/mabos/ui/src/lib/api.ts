@@ -4,43 +4,73 @@ import type {
   AgentListResponse,
   AgentListItem,
   AgentDetail,
-  Task,
-  DecisionsResponse,
+  Decision,
   DecisionResolution,
-  ContractorsResponse,
+  Contractor,
   TroposGoalModel,
 } from "./types";
 
 const BASE = "/mabos/api";
+const REQUEST_TIMEOUT_MS = 30_000;
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-  const ct = res.headers.get("content-type") || "";
-  if (!ct.includes("application/json")) {
-    throw new Error(`API returned non-JSON (${ct || "no content-type"}): ${path}`);
+export class ApiError extends Error {
+  status: number;
+  path: string;
+  body: unknown;
+
+  constructor(status: number, path: string, body: unknown) {
+    super(`API ${status}: ${path}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.path = path;
+    this.body = body;
   }
-  return res.json();
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => res.text().catch(() => null));
+      throw new ApiError(res.status, path, body);
+    }
+
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      throw new ApiError(res.status, path, `Non-JSON response: ${ct || "no content-type"}`);
+    }
+
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function get<T>(path: string): Promise<T> {
+  return request<T>(path);
+}
+
+function post<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-  return res.json();
 }
 
-async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+function put<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-  return res.json();
 }
 
 export const api = {
@@ -48,7 +78,7 @@ export const api = {
   getStatus: () => get<SystemStatus>("/status"),
 
   // Businesses
-  getBusinesses: () => get<Business[]>("/businesses"),
+  getBusinesses: () => get<{ businesses: Business[] }>("/businesses"),
 
   // Agents
   getAgents: (businessId: string) => get<AgentListResponse>(`/businesses/${businessId}/agents`),
@@ -71,7 +101,7 @@ export const api = {
     post<{ ok: boolean }>(`/businesses/${businessId}/agents/${agentId}/archive`, {}),
 
   // Tasks
-  getTasks: (businessId: string) => get<Task[]>(`/businesses/${businessId}/tasks`),
+  getTasks: (businessId: string) => get<{ tasks: unknown[] }>(`/businesses/${businessId}/tasks`),
   updateTask: (businessId: string, taskId: string, body: unknown) =>
     put<unknown>(`/businesses/${businessId}/tasks/${taskId}`, body),
 
@@ -84,12 +114,12 @@ export const api = {
     put<{ ok: boolean }>(`/businesses/${businessId}/goals`, body),
 
   // Decisions
-  getDecisions: () => get<DecisionsResponse>("/decisions"),
+  getDecisions: () => get<{ decisions: Decision[] }>("/decisions"),
   resolveDecision: (id: string, body: DecisionResolution) =>
     post<{ ok: boolean }>(`/decisions/${id}/resolve`, body),
 
   // Contractors
-  getContractors: () => get<ContractorsResponse>("/contractors"),
+  getContractors: () => get<{ contractors: Contractor[] }>("/contractors"),
 
   // Campaigns
   getCampaigns: (businessId: string) => get<unknown[]>(`/businesses/${businessId}/campaigns`),

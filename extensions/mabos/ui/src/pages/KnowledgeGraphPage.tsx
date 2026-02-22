@@ -35,7 +35,7 @@ export function KnowledgeGraphPage() {
 
   const { nodes, edges } = useMemo(() => {
     if (!goalModel) return { nodes: [], edges: [] };
-    return troposToFlowGraph(goalModel as any);
+    return troposToFlowGraph(goalModel);
   }, [goalModel]);
 
   const onNodeClick = useCallback(

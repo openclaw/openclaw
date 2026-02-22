@@ -36,11 +36,11 @@ export function WorkflowsPage() {
   // Extract all workflows from goals
   const workflows: (Workflow & { goalName: string })[] = useMemo(() => {
     if (!goalModel) return [];
-    const rawGoals = (goalModel as any).goals || [];
+    const rawGoals = goalModel.goals ?? [];
     const result: (Workflow & { goalName: string })[] = [];
     for (const g of rawGoals) {
-      const goalName = g.text || g.name || g.id || "";
-      for (const w of g.workflows || []) {
+      const goalName = g.text ?? g.name ?? g.id ?? "";
+      for (const w of g.workflows ?? []) {
         result.push({ ...w, goalName });
       }
     }

@@ -388,9 +388,10 @@ ${expiring.length ? `\n⏰ **${expiring.length} license(s) expiring within 30 da
         }
 
         if (params.action === "record_transaction") {
+          const txData = (params.data ?? {}) as Record<string, unknown>;
           const tx = {
             id: `TX-${Date.now().toString(36)}`,
-            ...(params.data as any),
+            ...txData,
             recorded_at: new Date().toISOString(),
           };
           fin.transactions.push(tx);

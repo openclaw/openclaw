@@ -1,5 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -7,22 +10,13 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { getAgentIcon, getAgentName } from "@/lib/agent-icons";
 import { api } from "@/lib/api";
 import type { Task } from "@/lib/types";
 
 const BUSINESS_ID = "vividwalls";
 
-const statusOrder: Task["status"][] = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "review",
-  "done",
-];
+const statusOrder: Task["status"][] = ["backlog", "todo", "in_progress", "review", "done"];
 
 const statusLabels: Record<Task["status"], string> = {
   backlog: "Backlog",
@@ -50,9 +44,10 @@ interface TaskDetailProps {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  sheetSide?: "right" | "bottom";
 }
 
-export function TaskDetail({ task, open, onOpenChange }: TaskDetailProps) {
+export function TaskDetail({ task, open, onOpenChange, sheetSide = "right" }: TaskDetailProps) {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
@@ -66,17 +61,14 @@ export function TaskDetail({ task, open, onOpenChange }: TaskDetailProps) {
   if (!task) return null;
 
   const currentIndex = statusOrder.indexOf(task.status);
-  const nextStatus =
-    currentIndex < statusOrder.length - 1
-      ? statusOrder[currentIndex + 1]
-      : null;
+  const nextStatus = currentIndex < statusOrder.length - 1 ? statusOrder[currentIndex + 1] : null;
   const prevStatus = currentIndex > 0 ? statusOrder[currentIndex - 1] : null;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        side="right"
-        className="w-full sm:max-w-md bg-[var(--bg-primary)] border-l border-[var(--border-mabos)] overflow-y-auto"
+        side={sheetSide}
+        className={`bg-[var(--bg-primary)] overflow-y-auto ${sheetSide === "bottom" ? "h-[85vh] border-t" : "w-full sm:max-w-md border-l"} border-[var(--border-mabos)]`}
       >
         <SheetHeader className="pb-0">
           <div className="flex items-center gap-2 mb-1">
@@ -95,9 +87,7 @@ export function TaskDetail({ task, open, onOpenChange }: TaskDetailProps) {
               {statusLabels[task.status]}
             </Badge>
           </div>
-          <SheetTitle className="text-lg text-[var(--text-primary)]">
-            {task.title}
-          </SheetTitle>
+          <SheetTitle className="text-lg text-[var(--text-primary)]">{task.title}</SheetTitle>
           <SheetDescription className="text-[var(--text-secondary)]">
             {task.department} department
           </SheetDescription>
@@ -133,10 +123,7 @@ export function TaskDetail({ task, open, onOpenChange }: TaskDetailProps) {
                         s === task.status
                           ? `color-mix(in srgb, ${statusColors[s]} 20%, transparent)`
                           : "transparent",
-                      color:
-                        s === task.status
-                          ? statusColors[s]
-                          : "var(--text-muted)",
+                      color: s === task.status ? statusColors[s] : "var(--text-muted)",
                       border:
                         s === task.status
                           ? `1px solid color-mix(in srgb, ${statusColors[s]} 30%, transparent)`
@@ -173,16 +160,12 @@ export function TaskDetail({ task, open, onOpenChange }: TaskDetailProps) {
                       <div className="flex items-center justify-center w-7 h-7 rounded-full bg-[var(--bg-tertiary)]">
                         <Icon className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
                       </div>
-                      <span className="text-sm text-[var(--text-primary)]">
-                        {name}
-                      </span>
+                      <span className="text-sm text-[var(--text-primary)]">{name}</span>
                     </div>
                   );
                 })
               ) : (
-                <p className="text-xs text-[var(--text-muted)]">
-                  No agents assigned
-                </p>
+                <p className="text-xs text-[var(--text-muted)]">No agents assigned</p>
               )}
             </div>
           </div>
@@ -216,9 +199,7 @@ export function TaskDetail({ task, open, onOpenChange }: TaskDetailProps) {
                   color: "#000",
                 }}
               >
-                {mutation.isPending
-                  ? "Updating..."
-                  : `Move to ${statusLabels[nextStatus]}`}
+                {mutation.isPending ? "Updating..." : `Move to ${statusLabels[nextStatus]}`}
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             )}

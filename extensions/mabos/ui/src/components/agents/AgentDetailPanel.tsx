@@ -35,6 +35,7 @@ interface AgentDetailPanelProps {
   agentId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  sheetSide?: "right" | "bottom";
 }
 
 function PanelSkeleton() {
@@ -149,7 +150,12 @@ function ConfigurationTab({ agent }: { agent: AgentListItem | undefined }) {
   );
 }
 
-export function AgentDetailPanel({ agentId, open, onOpenChange }: AgentDetailPanelProps) {
+export function AgentDetailPanel({
+  agentId,
+  open,
+  onOpenChange,
+  sheetSide = "right",
+}: AgentDetailPanelProps) {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
 
@@ -175,8 +181,8 @@ export function AgentDetailPanel({ agentId, open, onOpenChange }: AgentDetailPan
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent
-          side="right"
-          className="w-full sm:max-w-lg bg-[var(--bg-primary)] border-l border-[var(--border-mabos)] overflow-y-auto"
+          side={sheetSide}
+          className={`bg-[var(--bg-primary)] overflow-y-auto ${sheetSide === "bottom" ? "h-[85vh] border-t" : "w-full sm:max-w-lg border-l"} border-[var(--border-mabos)]`}
         >
           {detailLoading ? (
             <PanelSkeleton />

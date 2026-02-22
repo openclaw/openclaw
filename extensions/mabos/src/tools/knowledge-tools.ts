@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { textResult, resolveWorkspaceDir } from "./common.js";
+import { textResult, resolveWorkspaceDir, getPluginConfig } from "./common.js";
 
 async function readJson(p: string) {
   try {
@@ -69,7 +69,7 @@ export function createKnowledgeTools(api: OpenClawPluginApi): AnyAgentTool[] {
       async execute(_id: string, params: Static<typeof OntologyQueryParams>) {
         const ws = resolveWorkspaceDir(api);
         // Look in plugin ontology dir or workspace ontologies
-        const ontDir = (api.pluginConfig as any)?.ontologyDir || join(ws, "ontologies");
+        const ontDir = getPluginConfig(api).ontologyDir || join(ws, "ontologies");
         const ontPath = join(ontDir, `${params.domain}.jsonld`);
         const ont = await readJson(ontPath);
 

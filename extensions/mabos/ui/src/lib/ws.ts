@@ -11,10 +11,14 @@ export type WsConnectionOptions = {
   onStatusChange: (status: WsStatus) => void;
 };
 
+const MIN_RECONNECT_MS = 1000;
+const MAX_RECONNECT_MS = 30_000;
+
 export function createWsConnection(opts: WsConnectionOptions) {
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let intentionalClose = false;
+  let reconnectDelay = MIN_RECONNECT_MS;
 
   function connect() {
     intentionalClose = false;
@@ -29,6 +33,7 @@ export function createWsConnection(opts: WsConnectionOptions) {
     }
 
     ws.onopen = () => {
+      reconnectDelay = MIN_RECONNECT_MS;
       opts.onStatusChange("connected");
     };
 
@@ -36,8 +41,8 @@ export function createWsConnection(opts: WsConnectionOptions) {
       try {
         const msg = JSON.parse(event.data as string) as WsMessage;
         opts.onMessage(msg);
-      } catch {
-        // Ignore non-JSON messages
+      } catch (err) {
+        console.warn("[ws] Failed to parse message:", err);
       }
     };
 
@@ -48,14 +53,17 @@ export function createWsConnection(opts: WsConnectionOptions) {
       }
     };
 
-    ws.onerror = () => {
+    ws.onerror = (event) => {
+      console.warn("[ws] Connection error:", event);
       ws?.close();
     };
   }
 
   function scheduleReconnect() {
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connect, 3000);
+    reconnectTimer = setTimeout(connect, reconnectDelay);
+    // Exponential backoff: 1s → 2s → 4s → 8s → ... → 30s max
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_MS);
   }
 
   function send(msg: WsMessage) {

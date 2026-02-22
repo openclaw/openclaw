@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { textResult, resolveWorkspaceDir } from "./common.js";
+import { textResult, resolveWorkspaceDir, getPluginConfig } from "./common.js";
 
 async function readJson(p: string) {
   try {
@@ -117,7 +117,7 @@ export function createCbrTools(api: OpenClawPluginApi): AnyAgentTool[] {
         const ws = resolveWorkspaceDir(api);
         const casesPath = join(ws, "agents", params.agent_id, "cases.json");
         const cases = (await readJson(casesPath)) || [];
-        const maxCases = (api.pluginConfig as any)?.cbrMaxCases || 10000;
+        const maxCases = getPluginConfig(api).cbrMaxCases || 10000;
 
         const newCase = {
           case_id: params.case_id,

@@ -7,12 +7,12 @@
   "author": "Kingler Bercy <kingler@me.com>",
   "type": "module",
   "scripts": {
-    "build:ui": "cd ui && npm run build",
     "build": "npm run build:ui && tsc",
-    "dev:ui": "cd ui && npm run dev",
+    "build:ui": "cd ui && npm run build",
     "check": "tsc --noEmit",
     "clean": "rm -rf dist ui/dist",
-    "test": "node --test dist/tests/*.test.js"
+    "dev:ui": "cd ui && npm run dev",
+    "test": "vitest run --config ../../vitest.extensions.config.ts"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",

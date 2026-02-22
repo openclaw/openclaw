@@ -22,9 +22,9 @@ export function troposToFlowGraph(goalModel: TroposGoalModel): {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
-  const actors = (goalModel as any).actors || [];
-  const goals = (goalModel as any).goals || [];
-  const dependencies = (goalModel as any).dependencies || [];
+  const actors = goalModel.actors ?? [];
+  const goals = goalModel.goals ?? [];
+  const dependencies = goalModel.dependencies ?? [];
 
   // Layout constants
   const ACTOR_SPACING = 220;
@@ -32,20 +32,20 @@ export function troposToFlowGraph(goalModel: TroposGoalModel): {
   const GOAL_SPACING = 180;
 
   // Create actor nodes
-  const principalActors = actors.filter((a: any) => a.type === "principal");
-  const agentActors = actors.filter((a: any) => a.type === "agent" || a.type !== "principal");
+  const principalActors = actors.filter((a) => a.type === "principal");
+  const agentActors = actors.filter((a) => a.type === "agent" || a.type !== "principal");
 
   // Place principal actors at top center
-  principalActors.forEach((actor: any, idx: number) => {
+  principalActors.forEach((actor, idx) => {
     const totalWidth = principalActors.length * ACTOR_SPACING;
     const x = idx * ACTOR_SPACING - totalWidth / 2 + ACTOR_SPACING / 2 + 400;
 
-    const actorGoals = goals.filter((g: any) => g.actor === actor.id);
+    const actorGoals = goals.filter((g) => g.actor === actor.id);
 
     nodes.push({
       id: `actor-${actor.id}`,
       type: "actorNode",
-      position: { x: actor.x || x, y: actor.y || 50 },
+      position: { x, y: 50 },
       data: {
         label: actor.id === "stakeholder" ? "Stakeholder" : actor.id.toUpperCase(),
         type: "principal",
@@ -55,28 +55,28 @@ export function troposToFlowGraph(goalModel: TroposGoalModel): {
   });
 
   // Place agent actors in a row below
-  agentActors.forEach((actor: any, idx: number) => {
+  agentActors.forEach((actor, idx) => {
     const totalWidth = agentActors.length * ACTOR_SPACING;
     const x = idx * ACTOR_SPACING - totalWidth / 2 + ACTOR_SPACING / 2 + 400;
     const y = 180;
 
-    const actorGoals = goals.filter((g: any) => g.actor === actor.id);
+    const actorGoals = goals.filter((g) => g.actor === actor.id);
 
     nodes.push({
       id: `actor-${actor.id}`,
       type: "actorNode",
-      position: { x: actor.x || x, y: actor.y || y },
+      position: { x, y },
       data: {
         label: actor.id.toUpperCase(),
         type: "agent",
-        goalCount: actorGoals.length || actor.delegated_goals?.length || 0,
+        goalCount: actorGoals.length || actor.goals?.length || 0,
       },
     });
   });
 
   // Create goal nodes grouped by actor
   const actorGoalPositions: Record<string, number> = {};
-  goals.forEach((goal: any, idx: number) => {
+  goals.forEach((goal, idx) => {
     const actorId = goal.actor || "unknown";
     const actorIdx = actorGoalPositions[actorId] ?? 0;
     actorGoalPositions[actorId] = actorIdx + 1;
@@ -94,7 +94,7 @@ export function troposToFlowGraph(goalModel: TroposGoalModel): {
         y: baseY + actorIdx * 80,
       },
       data: {
-        label: goal.text || goal.name || goal.id,
+        label: goal.text ?? goal.name ?? goal.id,
         priority: goal.priority || 0.5,
         level: goal.level || "tactical",
         type: goal.type || "hard",
@@ -114,7 +114,7 @@ export function troposToFlowGraph(goalModel: TroposGoalModel): {
   });
 
   // Create dependency edges
-  dependencies.forEach((dep: any, idx: number) => {
+  dependencies.forEach((dep, idx) => {
     const isDelegation = dep.type === "delegation";
     edges.push({
       id: `e-dep-${idx}`,

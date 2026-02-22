@@ -55,6 +55,13 @@ type Rule = {
   created_at: string;
 };
 
+type Fact = {
+  subject: string;
+  predicate: string;
+  object: string;
+  confidence?: number;
+};
+
 function rulesPath(api: OpenClawPluginApi, agentId: string) {
   return join(resolveWorkspaceDir(api), "agents", agentId, "rules.json");
 }
@@ -314,7 +321,7 @@ export function createRuleEngineTools(api: OpenClawPluginApi): AnyAgentTool[] {
       description: "Evaluate all constraint rules against current facts. Returns violations.",
       parameters: ConstraintCheckParams,
       async execute(_id: string, params: Static<typeof ConstraintCheckParams>) {
-        const facts = ((await readJson(factsPath(api, params.agent_id)))?.facts || []) as any[];
+        const facts = ((await readJson(factsPath(api, params.agent_id)))?.facts || []) as Fact[];
         const rules = ((await readJson(rulesPath(api, params.agent_id)))?.rules || []) as Rule[];
 
         const constraints = rules.filter(
@@ -386,7 +393,7 @@ ${output}`);
         "Evaluate policy rules against current context. Returns triggered policies and required actions.",
       parameters: PolicyEvalParams,
       async execute(_id: string, params: Static<typeof PolicyEvalParams>) {
-        const facts = ((await readJson(factsPath(api, params.agent_id)))?.facts || []) as any[];
+        const facts = ((await readJson(factsPath(api, params.agent_id)))?.facts || []) as Fact[];
         const rules = ((await readJson(rulesPath(api, params.agent_id)))?.rules || []) as Rule[];
 
         const policies = rules.filter((r) => r.enabled && r.type === "policy");

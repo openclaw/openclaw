@@ -29,13 +29,13 @@ export function TimelinePage() {
 
   const phases = useMemo(() => {
     if (!goalModel) return [];
-    const result = goalsToPhases(goalModel as any);
+    const result = goalsToPhases(goalModel);
     return result.length > 0 ? result : [];
   }, [goalModel]);
 
   const milestones = useMemo(() => {
     if (!goalModel) return [];
-    return goalsToMilestones(goalModel as any);
+    return goalsToMilestones(goalModel);
   }, [goalModel]);
 
   const totalWeeks = useMemo(() => calculateTotalWeeks(phases), [phases]);

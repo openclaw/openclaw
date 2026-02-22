@@ -9,18 +9,10 @@ type StatusCardsProps = {
   isLoading: boolean;
 };
 
-// The API may return agents as an array or as a summary object.
-// Normalize to { total, active, idle, error } for display.
+// Agents come as an array from the API. Derive summary stats.
 function getAgentSummary(status: SystemStatus) {
-  const raw = status.agents as unknown;
-  if (Array.isArray(raw)) {
-    return { total: raw.length, active: raw.length, idle: 0, error: 0 };
-  }
-  if (raw && typeof raw === "object" && "total" in raw) {
-    const obj = raw as { total: number; active: number; idle: number; error: number };
-    return obj;
-  }
-  return { total: 0, active: 0, idle: 0, error: 0 };
+  const agents = status.agents ?? [];
+  return { total: agents.length, active: agents.length, idle: 0, error: 0 };
 }
 
 const statusCards = [
@@ -68,8 +60,7 @@ const statusCards = [
     icon: Cpu,
     color: "var(--accent-orange)",
     getValue: (s: SystemStatus) => {
-      // API may return agent array length instead of bdiCycles
-      const cycles = s.bdiCycles ?? (s as any).agents?.length ?? 0;
+      const cycles = s.agents?.length ?? 0;
       return cycles.toLocaleString();
     },
     getSubtitle: () => "Belief-Desire-Intention",

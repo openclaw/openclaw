@@ -1,4 +1,4 @@
-import type { KanbanColumnConfig, SLAPerspective } from "./types";
+import type { SLAPerspective } from "./types";
 
 export const perspectives: SLAPerspective[] = [
   {

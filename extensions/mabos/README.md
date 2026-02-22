@@ -1,18 +1,48 @@
 # MABOS — Multi-Agent Business Operating System
 
-An OpenClaw plugin that turns AI agents into a full business operating system using BDI (Belief-Desire-Intention) cognitive architecture, SBVR-aligned ontologies, and enterprise-grade management tooling.
+MABOS is an AI-powered business operating system that assigns autonomous agents — each with beliefs, desires, goals, and plans — to run every function of your business. It uses BDI (Belief-Desire-Intention) cognitive architecture, SBVR-aligned ontologies, and enterprise-grade coordination protocols to turn a single command into a fully staffed, reasoning organization.
 
-## What is MABOS?
+## Origin
 
-MABOS lets you create and manage multiple business ventures, each operated by 9+ autonomous AI agents with human-like reasoning capabilities. Every agent has beliefs about the world, desires that motivate them, goals they pursue, and plans they execute — all coordinated through formal communication protocols.
+MABOS started as two standalone projects:
 
-Businesses are onboarded through a guided 5-phase pipeline (conversational CLI or web UI), generating TOGAF architecture, Business Model Canvas, Tropos goal models, and a full knowledge graph backed by TypeDB. Each agent is initialized with role-specific desires and can reason across 17+ methods, manage contractors, integrate with external services, and report to a stakeholder dashboard.
+- [**mabos-standalone**](https://github.com/kingler/mabos-standalone) — the original BDI agent framework, cognitive file architecture, and multi-agent coordination layer
+- [**mabos-workbench**](https://github.com/kingler/mabos-workbench) — a FastAPI + Next.js backend providing persistent storage (PostgreSQL, TypeDB, Redis) and a 6-step onboarding UI
+
+These projects were merged and rebuilt on top of a fork of [OpenClaw](https://github.com/openclaw/openclaw), an open-source personal AI assistant platform. OpenClaw provided the plugin SDK, gateway infrastructure, CLI framework, and extension system that MABOS needed. Rather than reinvent that plumbing, forking OpenClaw gave MABOS a production-grade runtime from day one — freeing development to focus entirely on the agent intelligence layer, ontology system, and business tooling.
+
+The combined project lives at [github.com/kingler/openclaw-mabos](https://github.com/kingler/openclaw-mabos). The `mabos.mjs` entry point wraps the shared runtime, and `extensions/mabos/` contains the full MABOS extension (99 tools, 21 modules, React dashboard).
+
+---
+
+## What MABOS Does
+
+You describe a business. MABOS creates it:
+
+1. **Onboards** the venture through a 5-phase pipeline (conversational CLI or web UI)
+2. **Generates** TOGAF enterprise architecture, Business Model Canvas, and Tropos goal models
+3. **Spawns** 9 C-suite agents (CEO, CFO, COO, CMO, CTO, HR, Legal, Strategy, Knowledge) plus domain-specific agents
+4. **Initializes** each agent with role-specific desires, beliefs, and playbooks
+5. **Runs** continuous BDI reasoning cycles where agents perceive, deliberate, plan, act, and learn
+6. **Coordinates** through FIPA-standard ACL messaging, contract-net task allocation, and stakeholder escalation
+7. **Persists** knowledge in a 3-layer SBVR-aligned ontology (JSON-LD/OWL), optionally synced to TypeDB
+
+Every agent maintains 10 cognitive files (Persona, Beliefs, Desires, Goals, Intentions, Plans, Capabilities, Memory, Cases, Playbook) and can reason across 17+ methods including Bayesian updating, causal analysis, counterfactual reasoning, and case-based retrieval.
 
 ---
 
 ## Installation
 
-1. Clone to your OpenClaw workspace:
+### From the Combined Repository
+
+```bash
+git clone https://github.com/kingler/openclaw-mabos.git
+cd openclaw-mabos
+pnpm install
+pnpm build
+```
+
+### As a Standalone Extension
 
 ```bash
 cd ~/.openclaw/workspace/extensions
@@ -20,7 +50,7 @@ git clone https://github.com/kingler/mabos.git
 cd mabos && npm install && npm run build
 ```
 
-2. Enable in OpenClaw config (`~/.openclaw/openclaw.json`):
+Enable in your config (`~/.openclaw/openclaw.json`):
 
 ```json
 {
@@ -32,19 +62,35 @@ cd mabos && npm install && npm run build
 }
 ```
 
-3. Restart gateway:
+---
 
-```bash
-openclaw gateway restart
-```
+## `mabos.mjs` CLI
+
+The repository root contains `mabos.mjs`, the MABOS command-line entry point. It sets `MABOS_PRODUCT=1` to activate MABOS mode within the shared runtime, enables Node.js compile caching for fast startup, and delegates to the compiled entry point.
+
+### Subcommands
+
+| Command               | Description                                   |
+| --------------------- | --------------------------------------------- |
+| `mabos onboard`       | Start the guided business onboarding pipeline |
+| `mabos agents`        | List and manage agents across businesses      |
+| `mabos bdi cycle`     | Manually trigger a BDI reasoning cycle        |
+| `mabos business list` | List all managed business ventures            |
+| `mabos dashboard`     | Open the stakeholder dashboard                |
+| `mabos migrate`       | Run database/schema migrations                |
+
+### Environment Variables
+
+| Variable                     | Default                   | Description                             |
+| ---------------------------- | ------------------------- | --------------------------------------- |
+| `MABOS_PRODUCT`              | `"1"` (set automatically) | Signals MABOS mode to the runtime       |
+| `NODE_DISABLE_COMPILE_CACHE` | unset                     | Set to `"1"` to disable compile caching |
 
 ---
 
 ## Quick Start
 
 ### Guided Onboarding (Conversational)
-
-Use the `mabos-onboarding` skill to walk through all 5 phases interactively:
 
 ```
 /mabos-onboarding
@@ -82,6 +128,57 @@ metrics_dashboard()
 
 ---
 
+## Agent Architecture
+
+### 9 C-Suite Roles
+
+Every business gets these agents, each with their own cognitive workspace:
+
+| Role      | Focus             | Terminal Desires                                                   |
+| --------- | ----------------- | ------------------------------------------------------------------ |
+| CEO       | Vision & Strategy | Sustainable Growth, Stakeholder Value, Organizational Excellence   |
+| CFO       | Finance           | Financial Health, Capital Efficiency, Fiscal Compliance            |
+| COO       | Operations        | Operational Efficiency, Process Reliability, Resource Optimization |
+| CMO       | Marketing         | Brand Awareness, Customer Acquisition, Market Intelligence         |
+| CTO       | Technology        | System Reliability, Technical Excellence, Innovation Pipeline      |
+| HR        | People            | Talent Quality, Workforce Utilization, Contractor Satisfaction     |
+| Legal     | Compliance        | Legal Compliance, Risk Mitigation, IP Protection                   |
+| Strategy  | Competitive       | Competitive Advantage, Market Positioning, Strategic Foresight     |
+| Knowledge | Learning          | Knowledge Accuracy, Organizational Learning, Ontology Completeness |
+
+### Domain-Specific Agents
+
+Additional agents are spawned per business type:
+
+| Business Type | Domain Agents                               |
+| ------------- | ------------------------------------------- |
+| E-commerce    | inventory-mgr, fulfillment-mgr, product-mgr |
+| SaaS          | devops, product-manager, customer-success   |
+| Consulting    | engagement-mgr, practice-lead, delivery-mgr |
+| Marketplace   | trust-safety, seller-success, platform-ops  |
+| Retail        | store-ops, merchandising, pos-manager       |
+
+### Cognitive Files (per agent)
+
+Each agent's workspace contains 10 cognitive files:
+
+| File              | Purpose                                                |
+| ----------------- | ------------------------------------------------------ |
+| `Persona.md`      | Role definition, responsibilities, decision authority  |
+| `Beliefs.md`      | Current world model across 4 categories                |
+| `Desires.md`      | Terminal and instrumental desires with priority scores |
+| `Goals.md`        | 3-tier goal hierarchy (strategic/tactical/operational) |
+| `Intentions.md`   | Active commitments with commitment strategy            |
+| `Plans.md`        | Current and past plans with HTN decomposition          |
+| `Capabilities.md` | Skills, tools, and integrations available              |
+| `Memory.md`       | Working, short-term, and long-term memory stores       |
+| `Cases.md`        | Case base for CBR retrieval                            |
+| `Playbook.md`     | Domain-specific rules and procedures                   |
+
+Desire priority formula: `base * 0.30 + importance * 0.25 + urgency * 0.25 + alignment * 0.15 + deps * 0.05`
+
+---
+
 ## Tool Reference (99 tools across 21 modules)
 
 ### BDI Cognitive Core (6 tools)
@@ -103,8 +200,6 @@ metrics_dashboard()
 | `desire_evaluate`      | Evaluate all desires for an agent, checking priorities, conflicts, and goal recommendations      |
 | `desire_drop`          | Drop a desire and log the reason, cascading to dependent goals and intentions                    |
 | `intention_reconsider` | Trigger reconsideration based on belief changes, stalls, resource constraints, or better options |
-
-Priority formula: `base * 0.30 + importance * 0.25 + urgency * 0.25 + alignment * 0.15 + deps * 0.05`
 
 ### Planning (5 tools)
 
@@ -298,7 +393,7 @@ Supported reasoning methods:
 
 ---
 
-## Skills (3)
+## Onboarding Skills
 
 ### mabos-core
 
@@ -349,58 +444,9 @@ The ontology loader (`src/ontology/index.ts`) provides:
 
 ---
 
-## Agent Architecture
-
-### 9 C-Suite Roles
-
-Every business gets these agents, each with their own cognitive workspace:
-
-| Role      | Focus             | Terminal Desires                                                   |
-| --------- | ----------------- | ------------------------------------------------------------------ |
-| CEO       | Vision & Strategy | Sustainable Growth, Stakeholder Value, Organizational Excellence   |
-| CFO       | Finance           | Financial Health, Capital Efficiency, Fiscal Compliance            |
-| COO       | Operations        | Operational Efficiency, Process Reliability, Resource Optimization |
-| CMO       | Marketing         | Brand Awareness, Customer Acquisition, Market Intelligence         |
-| CTO       | Technology        | System Reliability, Technical Excellence, Innovation Pipeline      |
-| HR        | People            | Talent Quality, Workforce Utilization, Contractor Satisfaction     |
-| Legal     | Compliance        | Legal Compliance, Risk Mitigation, IP Protection                   |
-| Strategy  | Competitive       | Competitive Advantage, Market Positioning, Strategic Foresight     |
-| Knowledge | Learning          | Knowledge Accuracy, Organizational Learning, Ontology Completeness |
-
-### Domain-Specific Agents
-
-Additional agents are spawned per business type:
-
-| Business Type | Domain Agents                               |
-| ------------- | ------------------------------------------- |
-| E-commerce    | inventory-mgr, fulfillment-mgr, product-mgr |
-| SaaS          | devops, product-manager, customer-success   |
-| Consulting    | engagement-mgr, practice-lead, delivery-mgr |
-| Marketplace   | trust-safety, seller-success, platform-ops  |
-| Retail        | store-ops, merchandising, pos-manager       |
-
-### Cognitive Files (per agent)
-
-Each agent's workspace contains 10 cognitive files:
-
-| File              | Purpose                                                |
-| ----------------- | ------------------------------------------------------ |
-| `Persona.md`      | Role definition, responsibilities, decision authority  |
-| `Beliefs.md`      | Current world model across 4 categories                |
-| `Desires.md`      | Terminal and instrumental desires with priority scores |
-| `Goals.md`        | 3-tier goal hierarchy (strategic/tactical/operational) |
-| `Intentions.md`   | Active commitments with commitment strategy            |
-| `Plans.md`        | Current and past plans with HTN decomposition          |
-| `Capabilities.md` | Skills, tools, and integrations available              |
-| `Memory.md`       | Working, short-term, and long-term memory stores       |
-| `Cases.md`        | Case base for CBR retrieval                            |
-| `Playbook.md`     | Domain-specific rules and procedures                   |
-
----
-
 ## Backend Integration
 
-MABOS connects to a FastAPI backend (`mabos-workbench`) for persistent storage:
+MABOS connects to the [mabos-workbench](https://github.com/kingler/mabos-workbench) backend for persistent storage:
 
 | Service    | Purpose                                                             |
 | ---------- | ------------------------------------------------------------------- |
@@ -408,40 +454,32 @@ MABOS connects to a FastAPI backend (`mabos-workbench`) for persistent storage:
 | TypeDB     | SBVR ontology graph, agent knowledge nodes, typed inference queries |
 | Redis      | State caching, session data, real-time metrics                      |
 
-### Key Endpoints
-
-| Method | Path                            | Purpose                                             |
-| ------ | ------------------------------- | --------------------------------------------------- |
-| POST   | `/api/businesses/onboard`       | Full business onboarding with SBVR ontology loading |
-| GET    | `/api/businesses/{id}/progress` | Onboarding progress derived from DB state           |
-
 The extension works fully offline with file-based storage. Backend sync is best-effort — if unavailable, SBVR exports are saved locally for later sync.
 
 ---
 
-## Web UI
+## React Dashboard
 
-A Next.js frontend (`mabos-workbench`) provides a 6-step onboarding dialog:
+The built-in React dashboard (`ui/`) provides a real-time view of your MABOS-managed businesses:
 
-1. **Welcome** — Introduction and getting started
-2. **Business Overview** — Form: name, type (ecommerce/saas/consulting/marketplace/retail/other), legal name, jurisdiction, stage
-3. **Business Model Canvas** — Interactive 9-block BMC editor
-4. **Goals & Constraints** — Stakeholder goals with priority/type, business constraints
-5. **Review & Confirm** — Summary before submission
-6. **Progress** — Real-time pipeline execution status with agent activation indicators
-
-Both the CLI skill and web UI converge on the same backend endpoint.
+- **Overview** — System status, agent count, health score, BDI cycle status
+- **Agents** — Per-agent cognitive state, trigger manual BDI cycles
+- **Tasks** — Kanban board with SLA perspectives, parsed from agent Plans.md
+- **Decisions** — Stakeholder decision queue with urgency sorting and resolution
+- **Goals** — Tropos goal model browser with level/type filtering
+- **Timeline** — Gantt chart generated from goal priorities and durations
+- **Knowledge Graph** — Interactive ReactFlow visualization of the Tropos model
+- **Workflows** — BPMN process flows linked to business goals
+- **HR** — Contractor workforce management with trust scoring
 
 ---
 
 ## Lifecycle Hooks
 
-The plugin registers two lifecycle hooks:
-
-| Hook                 | Trigger              | Behavior                                                                          |
-| -------------------- | -------------------- | --------------------------------------------------------------------------------- |
-| `before_agent_start` | Agent session begins | Injects `Persona.md` content into system prompt if found in workspace             |
-| `after_tool_call`    | Any tool completes   | Logs BDI tool calls (belief*\*, goal*\_, intention\_\_, bdi_cycle) to audit trail |
+| Hook                 | Trigger              | Behavior                                                              |
+| -------------------- | -------------------- | --------------------------------------------------------------------- |
+| `before_agent_start` | Agent session begins | Injects `Persona.md` content into system prompt if found in workspace |
+| `after_tool_call`    | Any tool completes   | Logs BDI tool calls to audit trail                                    |
 
 ---
 
@@ -449,66 +487,63 @@ The plugin registers two lifecycle hooks:
 
 ```
 extensions/mabos/
-  dist/                          # Compiled output
+  .context/                        # Project status and API contracts
   src/
     tools/
-      bdi-tools.ts               # BDI cognitive core (6 tools)
-      desire-tools.ts            # Desire management (4 tools)
-      planning-tools.ts          # HTN planning (5 tools)
-      cbr-tools.ts               # Case-based reasoning (2 tools)
-      reasoning-tools.ts         # Multi-method reasoning (4 tools)
-      knowledge-tools.ts         # Ontology queries (3 tools)
-      fact-store.ts              # SPO triple store (4 tools)
-      inference-tools.ts         # Forward/backward chaining (4 tools)
-      rule-engine.ts             # Rule management (5 tools)
-      memory-tools.ts            # 3-store memory (4 tools)
-      communication-tools.ts     # ACL messaging (5 tools)
-      business-tools.ts          # Business CRUD (3 tools)
-      onboarding-tools.ts        # Onboarding pipeline (8 tools)
-      stakeholder-tools.ts       # Governance (4 tools)
-      workforce-tools.ts         # Contractors & packages (8 tools)
-      integration-tools.ts       # External services (5 tools)
-      marketing-tools.ts         # Social & ads (8 tools)
-      reporting-tools.ts         # Reports & finance (3 tools)
-      metrics-tools.ts           # KPI tracking (2 tools)
+      bdi-tools.ts                 # BDI cognitive core (6 tools)
+      desire-tools.ts              # Desire management (4 tools)
+      planning-tools.ts            # HTN planning (5 tools)
+      cbr-tools.ts                 # Case-based reasoning (2 tools)
+      reasoning-tools.ts           # Multi-method reasoning (4 tools)
+      knowledge-tools.ts           # Ontology queries (3 tools)
+      fact-store.ts                # SPO triple store (4 tools)
+      inference-tools.ts           # Forward/backward chaining (4 tools)
+      rule-engine.ts               # Rule management (5 tools)
+      memory-tools.ts              # 3-store memory (4 tools)
+      communication-tools.ts       # ACL messaging (5 tools)
+      business-tools.ts            # Business CRUD (3 tools)
+      onboarding-tools.ts          # Onboarding pipeline (8 tools)
+      stakeholder-tools.ts         # Governance (4 tools)
+      workforce-tools.ts           # Contractors & packages (8 tools)
+      integration-tools.ts         # External services (5 tools)
+      marketing-tools.ts           # Social & ads (8 tools)
+      reporting-tools.ts           # Reports & finance (3 tools)
+      metrics-tools.ts             # KPI tracking (2 tools)
       ontology-management-tools.ts # Ontology evolution (5 tools)
-      setup-wizard-tools.ts      # Setup & health (5 tools)
-      common.ts                  # Shared helpers
+      setup-wizard-tools.ts        # Setup & health (5 tools)
+      common.ts                    # Shared helpers
+    types/
+      bdi-runtime.d.ts             # BDI runtime type declarations
     ontology/
-      index.ts                   # Loader, validator, SBVR exporter
-      mabos-upper.jsonld         # Upper ontology
-      business-core.jsonld       # Business core ontology
-      ecommerce.jsonld           # E-commerce domain
-      saas.jsonld                # SaaS domain
-      consulting.jsonld          # Consulting domain
-      marketplace.jsonld         # Marketplace domain
-      retail.jsonld              # Retail domain
-      cross-domain.jsonld        # Cross-domain bridges
-      shapes.jsonld              # SHACL validation shapes
-      shapes-sbvr.jsonld         # SBVR-specific shapes
+      index.ts                     # Loader, validator, SBVR exporter
+      mabos-upper.jsonld           # Upper ontology
+      business-core.jsonld         # Business core ontology
+      ecommerce.jsonld             # E-commerce domain
+      saas.jsonld                  # SaaS domain
+      consulting.jsonld            # Consulting domain
+      marketplace.jsonld           # Marketplace domain
+      retail.jsonld                # Retail domain
+      cross-domain.jsonld          # Cross-domain bridges
+      shapes.jsonld                # SHACL validation shapes
+      shapes-sbvr.jsonld           # SBVR-specific shapes
+  ui/                              # React dashboard
+    src/
+      components/                  # Reusable UI components
+      hooks/                       # React Query hooks
+      lib/                         # API client, types, utilities
+      pages/                       # Route-level page components
   templates/base/
-    desires-ceo.md               # CEO desire template
-    desires-cfo.md               # CFO desire template
-    desires-coo.md               # COO desire template
-    desires-cmo.md               # CMO desire template
-    desires-cto.md               # CTO desire template
-    desires-hr.md                # HR desire template
-    desires-legal.md             # Legal desire template
-    desires-strategy.md          # Strategy desire template
-    desires-knowledge.md         # Knowledge desire template
-    plan-templates.md            # Reusable plan patterns
-    marketing-playbooks.md       # Marketing playbooks
-    agents/{role}/Persona.md     # Per-role persona templates
-    agents/{role}/Capabilities.md # Per-role capability templates
+    desires-{role}.md              # Per-role desire templates
+    plan-templates.md              # Reusable plan patterns
+    agents/{role}/Persona.md       # Per-role persona templates
   skills/
-    mabos-core/SKILL.md          # BDI cognitive skill
-    mabos-dashboard/SKILL.md     # Stakeholder dashboard skill
-    mabos-onboarding/SKILL.md    # 5-phase onboarding skill
+    mabos-core/SKILL.md            # BDI cognitive skill
+    mabos-dashboard/SKILL.md       # Stakeholder dashboard skill
+    mabos-onboarding/SKILL.md      # 5-phase onboarding skill
   tests/
-    plugin.test.ts               # Plugin registration tests
-    ontology.test.ts             # Ontology validation tests
-    onboarding-e2e.test.ts       # E2E onboarding pipeline tests
-  index.ts                       # Plugin entry point
+    api-error-handling.test.ts     # HTTP retry and timeout tests
+    typedb-fallback.test.ts        # TypeDB connection fallback tests
+  index.ts                         # Extension entry point
   package.json
   tsconfig.json
 ```
@@ -518,14 +553,27 @@ extensions/mabos/
 ## Testing
 
 ```bash
-npm run build && npm test
+pnpm test -- --config vitest.extensions.config.ts
 ```
 
 Tests cover:
 
+- HTTP request retry behavior, timeouts, and error handling
+- TypeDB connection fallback and best-effort write patterns
 - Plugin registration (all 21 tool modules load, lifecycle hooks register)
 - Ontology validation (SBVR alignment, SHACL shapes, cross-references)
 - Onboarding pipeline E2E (all 5 phases, orchestrate mode, recovery, idempotency)
+
+---
+
+## Related Projects
+
+| Project                                                         | Description                                             |
+| --------------------------------------------------------------- | ------------------------------------------------------- |
+| [openclaw-mabos](https://github.com/kingler/openclaw-mabos)     | This repository — the combined MABOS + OpenClaw runtime |
+| [mabos-standalone](https://github.com/kingler/mabos-standalone) | Original standalone BDI agent framework                 |
+| [mabos-workbench](https://github.com/kingler/mabos-workbench)   | FastAPI + Next.js backend (PostgreSQL, TypeDB, Redis)   |
+| [OpenClaw](https://github.com/openclaw/openclaw)                | Upstream personal AI assistant platform                 |
 
 ---
 

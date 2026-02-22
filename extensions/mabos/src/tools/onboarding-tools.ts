@@ -837,7 +837,7 @@ ${agents.map((a) => `- **${a.id}:** ${a.name} — ${a.role}`).join("\n")}`);
             await writeJson(join(agentPath, "inbox.json"), []);
             await writeJson(join(agentPath, "cases.json"), []);
           }
-          (manifest as any).domain_agents = agents.map((a) => a.id);
+          (manifest as Record<string, unknown>).domain_agents = agents.map((a) => a.id);
           await writeJson(join(bizDir, "manifest.json"), manifest);
           orchestrationResults.push(`Domain agents: ${agents.length} spawned`);
 

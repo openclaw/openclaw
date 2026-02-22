@@ -77,7 +77,7 @@ function ContractorCard({ contractor }: { contractor: Contractor }) {
 
 export function HRPage() {
   const { data: contractorsRaw } = useContractors();
-  const contractors = (contractorsRaw as any)?.contractors as Contractor[] | undefined;
+  const contractors = contractorsRaw?.contractors;
   const hasContractors = contractors && contractors.length > 0;
 
   return (

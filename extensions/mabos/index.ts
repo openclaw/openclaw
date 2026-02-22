@@ -14,7 +14,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createBdiTools } from "./src/tools/bdi-tools.js";
 import { createBusinessTools } from "./src/tools/business-tools.js";
 import { createCbrTools } from "./src/tools/cbr-tools.js";
-import { resolveWorkspaceDir } from "./src/tools/common.js";
+import { resolveWorkspaceDir, getPluginConfig } from "./src/tools/common.js";
 import { createCommunicationTools } from "./src/tools/communication-tools.js";
 import { createDesireTools } from "./src/tools/desire-tools.js";
 import { createFactStoreTools } from "./src/tools/fact-store.js";
@@ -75,7 +75,7 @@ export default function register(api: OpenClawPluginApi) {
 
   // ── 2. BDI Background Service ─────────────────────────────────
   const workspaceDir = resolveWorkspaceDir(api);
-  const bdiIntervalMinutes = (api.pluginConfig as any)?.bdiCycleIntervalMinutes ?? 30;
+  const bdiIntervalMinutes = getPluginConfig(api).bdiCycleIntervalMinutes ?? 30;
 
   // Dynamic import to avoid bundling issues — the bdi-runtime
   // lives in mabos/ which is outside the extension directory.
@@ -105,7 +105,7 @@ export default function register(api: OpenClawPluginApi) {
         try {
           const { discoverAgents, readAgentCognitiveState, runMaintenanceCycle } = (await import(
             /* webpackIgnore: true */ BDI_RUNTIME_PATH
-          )) as any;
+          )) as import("./src/types/bdi-runtime.js").BdiRuntime;
           const agents = await discoverAgents(workspaceDir);
           for (const agentId of agents) {
             const { join } = await import("node:path");
@@ -367,7 +367,7 @@ export default function register(api: OpenClawPluginApi) {
       try {
         const { getAgentsSummary } = (await import(
           /* webpackIgnore: true */ BDI_RUNTIME_PATH
-        )) as any;
+        )) as import("./src/types/bdi-runtime.js").BdiRuntime;
         const agents = await getAgentsSummary(workspaceDir);
 
         const { readdir } = await import("node:fs/promises");
@@ -1046,7 +1046,7 @@ export default function register(api: OpenClawPluginApi) {
               parent_goal: null,
               decomposition: "AND",
               linked_tasks: [] as string[],
-              contributions: [] as any[],
+              contributions: [] as Array<{ from: string; to: string; type: string }>,
             };
           });
           const tropos = {

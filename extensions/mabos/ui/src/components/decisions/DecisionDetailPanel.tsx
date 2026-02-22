@@ -27,9 +27,15 @@ type DecisionDetailPanelProps = {
   decision: Decision | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  sheetSide?: "right" | "bottom";
 };
 
-export function DecisionDetailPanel({ decision, open, onOpenChange }: DecisionDetailPanelProps) {
+export function DecisionDetailPanel({
+  decision,
+  open,
+  onOpenChange,
+  sheetSide = "right",
+}: DecisionDetailPanelProps) {
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const resolveDecision = useResolveDecision();
@@ -62,8 +68,8 @@ export function DecisionDetailPanel({ decision, open, onOpenChange }: DecisionDe
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        side="right"
-        className="w-full sm:max-w-lg bg-[var(--bg-primary)] border-l border-[var(--border-mabos)] overflow-y-auto"
+        side={sheetSide}
+        className={`bg-[var(--bg-primary)] overflow-y-auto ${sheetSide === "bottom" ? "h-[85vh] border-t" : "w-full sm:max-w-lg border-l"} border-[var(--border-mabos)]`}
       >
         <SheetHeader className="pb-0">
           <SheetTitle className="text-lg text-[var(--text-primary)]">{decision.title}</SheetTitle>

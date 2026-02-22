@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { textResult, resolveWorkspaceDir } from "./common.js";
+import { textResult, resolveWorkspaceDir, getPluginConfig } from "./common.js";
 
 async function readJson(p: string) {
   try {
@@ -134,7 +134,7 @@ export function createCommunicationTools(api: OpenClawPluginApi): AnyAgentTool[]
         queue.push(decision);
         await writeJson(queuePath, queue);
 
-        const threshold = (api.pluginConfig as any)?.stakeholderApprovalThresholdUsd || 5000;
+        const threshold = getPluginConfig(api).stakeholderApprovalThresholdUsd || 5000;
         const hasCostOverThreshold = params.options.some((o) => (o.cost || 0) > threshold);
 
         return textResult(`Decision ${params.decision_id} queued for stakeholder review.
@@ -190,7 +190,7 @@ ${hasCostOverThreshold ? `⚠️ Cost exceeds approval threshold ($${threshold})
           deadline: params.deadline,
           budget: params.budget,
           status: "open",
-          proposals: [] as any[],
+          proposals: [] as Array<Record<string, unknown>>,
           created_at: now,
         };
         await writeJson(cfpPath, cfp);
