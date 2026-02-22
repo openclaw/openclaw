@@ -27,6 +27,20 @@ beforeAll(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+    await import("../infra/device-identity.js");
+  const identity = loadOrCreateDeviceIdentity();
+  const pending = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    clientId: "openclaw-cli",
+    clientMode: "cli",
+    role: "operator",
+    scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
+    silent: false,
+  });
+  await approveDevicePairing(pending.request.requestId);
   server = await startGatewayServer(gatewayPort);
 });
 
