@@ -239,7 +239,6 @@ describe("subagent registry steer restarts", () => {
         task: "persistent session task",
         cleanup: "keep",
         expectsCompletionMessage: true,
-        spawnMode: "session",
       });
 
       lifecycleHandler?.({
@@ -258,7 +257,6 @@ describe("subagent registry steer restarts", () => {
       const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
       expect(run?.runId).toBe("run-persistent-session");
       expect(run?.cleanupCompletedAt).toBeTypeOf("number");
-      expect(run?.endedHookEmittedAt).toBeUndefined();
     } finally {
       if (originalCallGateway) {
         callGateway.mockImplementation(originalCallGateway);
@@ -310,8 +308,6 @@ describe("subagent registry steer restarts", () => {
     const previous = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(previous?.runId).toBe("run-terminal-state-old");
     if (previous) {
-      previous.endedHookEmittedAt = Date.now();
-      previous.endedReason = "subagent-complete";
       previous.endedAt = Date.now();
       previous.outcome = { status: "ok" };
     }
@@ -326,8 +322,8 @@ describe("subagent registry steer restarts", () => {
     const runs = mod.listSubagentRunsForRequester("agent:main:main");
     expect(runs).toHaveLength(1);
     expect(runs[0].runId).toBe("run-terminal-state-new");
-    expect(runs[0].endedHookEmittedAt).toBeUndefined();
-    expect(runs[0].endedReason).toBeUndefined();
+    expect(runs[0].endedAt).toBeUndefined();
+    expect(runs[0].outcome).toBeUndefined();
 
     lifecycleHandler?.({
       stream: "lifecycle",

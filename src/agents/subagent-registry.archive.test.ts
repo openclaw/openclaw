@@ -47,7 +47,7 @@ describe("subagent registry archive behavior", () => {
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("does not set archiveAtMs for persistent session-mode runs", () => {
+  it("sets archiveAtMs for keep runs when archiveAfterMinutes is configured", () => {
     mod.registerSubagentRun({
       runId: "run-session-1",
       childSessionKey: "agent:main:subagent:session-1",
@@ -55,16 +55,14 @@ describe("subagent registry archive behavior", () => {
       requesterDisplayKey: "main",
       task: "persistent-session",
       cleanup: "keep",
-      spawnMode: "session",
     });
 
     const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(run?.runId).toBe("run-session-1");
-    expect(run?.spawnMode).toBe("session");
-    expect(run?.archiveAtMs).toBeUndefined();
+    expect(typeof run?.archiveAtMs).toBe("number");
   });
 
-  it("keeps archiveAtMs unset when replacing a session-mode run after steer restart", () => {
+  it("keeps archiveAtMs set when replacing a run after steer restart", () => {
     mod.registerSubagentRun({
       runId: "run-old",
       childSessionKey: "agent:main:subagent:session-1",
@@ -72,7 +70,6 @@ describe("subagent registry archive behavior", () => {
       requesterDisplayKey: "main",
       task: "persistent-session",
       cleanup: "keep",
-      spawnMode: "session",
     });
 
     const replaced = mod.replaceSubagentRunAfterSteer({
@@ -84,7 +81,6 @@ describe("subagent registry archive behavior", () => {
     const run = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-new");
-    expect(run?.spawnMode).toBe("session");
-    expect(run?.archiveAtMs).toBeUndefined();
+    expect(typeof run?.archiveAtMs).toBe("number");
   });
 });

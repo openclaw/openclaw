@@ -484,7 +484,6 @@ export async function spawnSubagentDirect(
     model: resolvedModel,
     runTimeoutSeconds,
     expectsCompletionMessage,
-    spawnMode,
   });
 
   if (hookRunner?.hasHooks("subagent_spawned")) {

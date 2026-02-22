@@ -294,7 +294,6 @@ describe("/focus, /unfocus, /agents", () => {
       task: "persistent task",
       cleanup: "keep",
       label: "persistent-1",
-      spawnMode: "session",
       createdAt: Date.now(),
       endedAt: Date.now(),
     });
