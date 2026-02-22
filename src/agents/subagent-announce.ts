@@ -1042,7 +1042,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (requesterDepth >= 1 && reply?.trim()) {
-      const minReplyChangeWaitMs = FAST_TEST_MODE ? 100 : 250;
+      const minReplyChangeWaitMs = FAST_TEST_MODE ? 80 : 250;
       reply = await waitForSubagentOutputChange({
         sessionKey: params.childSessionKey,
         baselineReply: reply,
