@@ -4,9 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE_IMAGE="${OPENCLAW_INSTALL_SMOKE_IMAGE:-${CLAWDBOT_INSTALL_SMOKE_IMAGE:-openclaw-install-smoke:local}}"
 NONROOT_IMAGE="${OPENCLAW_INSTALL_NONROOT_IMAGE:-${CLAWDBOT_INSTALL_NONROOT_IMAGE:-openclaw-install-nonroot:local}}"
+UNSUPPORTED_NODE_PATH_IMAGE="${OPENCLAW_INSTALL_UNSUPPORTED_NODE_PATH_IMAGE:-${CLAWDBOT_INSTALL_UNSUPPORTED_NODE_PATH_IMAGE:-openclaw-install-unsupported-node-path:local}}"
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://openclaw.bot/install.sh}}"
 CLI_INSTALL_URL="${OPENCLAW_INSTALL_CLI_URL:-${CLAWDBOT_INSTALL_CLI_URL:-https://openclaw.bot/install-cli.sh}}"
 SKIP_NONROOT="${OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT:-${CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT:-0}}"
+SKIP_UNSUPPORTED_NODE_PATH="${OPENCLAW_INSTALL_SMOKE_SKIP_UNSUPPORTED_NODE_PATH:-${CLAWDBOT_INSTALL_SMOKE_SKIP_UNSUPPORTED_NODE_PATH:-0}}"
 LATEST_DIR="$(mktemp -d)"
 LATEST_FILE="${LATEST_DIR}/latest"
 
@@ -52,6 +54,25 @@ else
     -e OPENCLAW_NO_ONBOARD=1 \
     -e DEBIAN_FRONTEND=noninteractive \
     "$NONROOT_IMAGE"
+fi
+
+if [[ "$SKIP_UNSUPPORTED_NODE_PATH" == "1" ]]; then
+  echo "==> Skip unsupported-node-path installer smoke (OPENCLAW_INSTALL_SMOKE_SKIP_UNSUPPORTED_NODE_PATH=1)"
+else
+  echo "==> Build unsupported-node-path image: $UNSUPPORTED_NODE_PATH_IMAGE"
+  docker build \
+    -t "$UNSUPPORTED_NODE_PATH_IMAGE" \
+    -f "$ROOT_DIR/scripts/docker/install-sh-unsupported-node-path/Dockerfile" \
+    "$ROOT_DIR/scripts/docker/install-sh-unsupported-node-path"
+
+  echo "==> Run installer unsupported-node-path test: $INSTALL_URL"
+  docker run --rm -t \
+    -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
+    -e OPENCLAW_INSTALL_METHOD=npm \
+    -e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION" \
+    -e OPENCLAW_NO_ONBOARD=1 \
+    -e DEBIAN_FRONTEND=noninteractive \
+    "$UNSUPPORTED_NODE_PATH_IMAGE"
 fi
 
 if [[ "${OPENCLAW_INSTALL_SMOKE_SKIP_CLI:-${CLAWDBOT_INSTALL_SMOKE_SKIP_CLI:-0}}" == "1" ]]; then
