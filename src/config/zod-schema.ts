@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { MemorySearchSchema, ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
@@ -585,6 +585,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    memorySearch: MemorySearchSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
