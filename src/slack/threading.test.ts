@@ -109,6 +109,23 @@ describe("resolveSlackThreadTargets", () => {
     expect(statusThreadTs).toBe("123");
   });
 
+  it("uses messageTs for first reply when thread_ts is auto-created and replyToMode is first", () => {
+    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+      replyToMode: "first",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        thread_ts: "123", // auto-created: same as ts
+      },
+    });
+
+    // "first" mode should use messageTs (not the auto-created thread_ts)
+    // so the first reply starts a proper thread from the message itself.
+    expect(replyThreadTs).toBe("123");
+    expect(statusThreadTs).toBe("123");
+  });
+
   it("identifies auto-created thread_ts as non-thread-reply", () => {
     const context = resolveSlackThreadContext({
       replyToMode: "off",
