@@ -646,7 +646,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
     },
     onReplyStart: async () => {
-      await typingCallbacks.onReplyStart();
+      // Typing is UX-only; don't block reply dispatch on Discord REST latency.
+      void typingCallbacks.onReplyStart();
       await statusReactions.setThinking();
     },
   });

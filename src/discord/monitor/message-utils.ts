@@ -79,9 +79,28 @@ export function resolveDiscordMessageChannelId(params: {
   );
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!(timeoutMs > 0)) {
+    return promise;
+  }
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timeoutId.unref?.();
+    promise
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        clearTimeout(timeoutId);
+      });
+  });
+}
+
 export async function resolveDiscordChannelInfo(
   client: Client,
   channelId: string,
+  options?: { timeoutMs?: number },
 ): Promise<DiscordChannelInfo | null> {
   const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
   if (cached) {
@@ -91,7 +110,15 @@ export async function resolveDiscordChannelInfo(
     DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
   }
   try {
-    const channel = await client.fetchChannel(channelId);
+    const fetchPromise = client.fetchChannel(channelId);
+    const shouldApplyTimeout = options !== undefined && "timeoutMs" in options;
+    const channel = shouldApplyTimeout
+      ? await withTimeout(
+          fetchPromise,
+          options?.timeoutMs ?? 0,
+          `discord channel lookup (${channelId})`,
+        )
+      : await fetchPromise;
     if (!channel) {
       DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
         value: null,

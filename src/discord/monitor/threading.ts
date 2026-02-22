@@ -129,6 +129,7 @@ export async function resolveDiscordThreadParentInfo(params: {
   client: Client;
   threadChannel: DiscordThreadChannel;
   channelInfo: import("./message-utils.js").DiscordChannelInfo | null;
+  channelLookupTimeoutMs?: number;
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
   const parentId =
@@ -137,7 +138,9 @@ export async function resolveDiscordThreadParentInfo(params: {
     return {};
   }
   let parentName = threadChannel.parent?.name;
-  const parentInfo = await resolveDiscordChannelInfo(client, parentId);
+  const parentInfo = await resolveDiscordChannelInfo(client, parentId, {
+    timeoutMs: params.channelLookupTimeoutMs,
+  });
   parentName = parentName ?? parentInfo?.name;
   const parentType = parentInfo?.type;
   return { id: parentId, name: parentName, type: parentType };
