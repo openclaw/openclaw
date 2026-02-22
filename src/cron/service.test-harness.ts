@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
-import { createCronServiceState } from "./service/state.js";
+import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
 export type NoopLogger = {
@@ -85,6 +85,16 @@ export function installCronTestHooks(options: {
   });
 }
 
+export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
+  const logger = createNoopLogger();
+  const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
+  installCronTestHooks({
+    logger,
+    baseTimeIso: options?.baseTimeIso,
+  });
+  return { logger, makeStorePath };
+}
+
 export function createFinishedBarrier() {
   const resolvers = new Map<string, (evt: CronEvent) => void>();
   return {
@@ -151,4 +161,44 @@ export function createRunningCronServiceState(params: {
     jobs: params.jobs,
   };
   return state;
+}
+
+export function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+export function createMockCronStateForJobs(params: {
+  jobs: CronJob[];
+  nowMs?: number;
+}): CronServiceState {
+  const nowMs = params.nowMs ?? Date.now();
+  return {
+    store: { version: 1, jobs: params.jobs },
+    running: false,
+    timer: null,
+    storeLoadedAtMs: nowMs,
+    storeFileMtimeMs: null,
+    op: Promise.resolve(),
+    warnedDisabled: false,
+    deps: {
+      storePath: "/mock/path",
+      cronEnabled: true,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: () => {},
+      requestHeartbeatNow: () => {},
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
+      log: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      } as never,
+    },
+  };
 }
