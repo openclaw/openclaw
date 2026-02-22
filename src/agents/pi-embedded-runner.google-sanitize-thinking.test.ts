@@ -3,11 +3,21 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 
-type AssistantThinking = { type?: string; thinking?: string; thinkingSignature?: string };
+type AssistantContentBlock = {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  thinkingSignature?: string;
+  thought_signature?: string;
+  thoughtSignature?: string;
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+};
 
 function getAssistantMessage(out: AgentMessage[]) {
   const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as
-    | { content?: AssistantThinking[] }
+    | { content?: AssistantContentBlock[] }
     | undefined;
   if (!assistant) {
     throw new Error("Expected assistant message in sanitized history");
@@ -43,6 +53,7 @@ async function sanitizeSimpleSession(params: {
   sessionId: string;
   content: unknown[];
   modelId?: string;
+  provider?: string;
 }) {
   const sessionManager = SessionManager.inMemory();
   const input = [
@@ -59,10 +70,32 @@ async function sanitizeSimpleSession(params: {
   return sanitizeSessionHistory({
     messages: input,
     modelApi: params.modelApi,
+    provider: params.provider,
     modelId: params.modelId,
     sessionManager,
     sessionId: params.sessionId,
   });
+}
+
+function geminiThoughtSignatureInput() {
+  return [
+    { type: "text", text: "hello", thought_signature: "msg_abc123" },
+    { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
+    {
+      type: "toolCall",
+      id: "call_1",
+      name: "read",
+      arguments: { path: "/tmp/foo" },
+      thoughtSignature: '{"id":1}',
+    },
+    {
+      type: "toolCall",
+      id: "call_2",
+      name: "read",
+      arguments: { path: "/tmp/bar" },
+      thoughtSignature: "c2ln",
+    },
+  ];
 }
 
 describe("sanitizeSessionHistory (google thinking)", () => {
@@ -106,29 +139,14 @@ describe("sanitizeSessionHistory (google thinking)", () => {
   });
 
   it("maps base64 signatures to thinkingSignature for Antigravity Claude", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const input = [
-      {
-        role: "user",
-        content: "hi",
-      },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "reasoning", signature: "c2ln" }],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = await sanitizeSessionHistory({
-      messages: input,
+    const out = await sanitizeSimpleSession({
       modelApi: "google-antigravity",
       modelId: "anthropic/claude-3.5-sonnet",
-      sessionManager,
       sessionId: "session:antigravity-claude",
+      content: [{ type: "thinking", thinking: "reasoning", signature: "c2ln" }],
     });
 
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; thinking?: string; thinkingSignature?: string }>;
-    };
+    const assistant = getAssistantMessage(out);
     expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
     expect(assistant.content?.[0]?.thinkingSignature).toBe("c2ln");
@@ -166,52 +184,15 @@ describe("sanitizeSessionHistory (google thinking)", () => {
   });
 
   it("strips non-base64 thought signatures for OpenRouter Gemini", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const input = [
-      {
-        role: "user",
-        content: "hi",
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "hello", thought_signature: "msg_abc123" },
-          { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
-          {
-            type: "toolCall",
-            id: "call_1",
-            name: "read",
-            arguments: { path: "/tmp/foo" },
-            thoughtSignature: '{"id":1}',
-          },
-          {
-            type: "toolCall",
-            id: "call_2",
-            name: "read",
-            arguments: { path: "/tmp/bar" },
-            thoughtSignature: "c2ln",
-          },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = await sanitizeSessionHistory({
-      messages: input,
+    const out = await sanitizeSimpleSession({
       modelApi: "openrouter",
       provider: "openrouter",
       modelId: "google/gemini-1.5-pro",
-      sessionManager,
       sessionId: "session:openrouter-gemini",
+      content: geminiThoughtSignatureInput(),
     });
 
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{
-        type?: string;
-        thought_signature?: string;
-        thoughtSignature?: string;
-        thinking?: string;
-      }>;
-    };
+    const assistant = getAssistantMessage(out);
     expect(assistant.content).toEqual([
       { type: "text", text: "hello" },
       { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
@@ -232,52 +213,15 @@ describe("sanitizeSessionHistory (google thinking)", () => {
   });
 
   it("strips non-base64 thought signatures for native Google Gemini", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const input = [
-      {
-        role: "user",
-        content: "hi",
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "hello", thought_signature: "msg_abc123" },
-          { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
-          {
-            type: "toolCall",
-            id: "call_1",
-            name: "read",
-            arguments: { path: "/tmp/foo" },
-            thoughtSignature: '{"id":1}',
-          },
-          {
-            type: "toolCall",
-            id: "call_2",
-            name: "read",
-            arguments: { path: "/tmp/bar" },
-            thoughtSignature: "c2ln",
-          },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = await sanitizeSessionHistory({
-      messages: input,
+    const out = await sanitizeSimpleSession({
       modelApi: "google-generative-ai",
       provider: "google",
       modelId: "gemini-2.0-flash",
-      sessionManager,
       sessionId: "session:google-gemini",
+      content: geminiThoughtSignatureInput(),
     });
 
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{
-        type?: string;
-        thought_signature?: string;
-        thoughtSignature?: string;
-        thinking?: string;
-      }>;
-    };
+    const assistant = getAssistantMessage(out);
     expect(assistant.content).toEqual([
       { type: "text", text: "hello" },
       { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
@@ -298,59 +242,19 @@ describe("sanitizeSessionHistory (google thinking)", () => {
   });
 
   it("keeps mixed signed/unsigned thinking blocks for Google models", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const input = [
-      {
-        role: "user",
-        content: "hi",
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
-          { type: "thinking", thinking: "unsigned" },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = await sanitizeSessionHistory({
-      messages: input,
-      modelApi: "google-antigravity",
-      sessionManager,
-      sessionId: "session:google-mixed-signatures",
-    });
-
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; thinking?: string }>;
-    };
+    const assistant = await sanitizeGoogleAssistantWithContent([
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      { type: "thinking", thinking: "unsigned" },
+    ]);
     expect(assistant.content?.map((block) => block.type)).toEqual(["thinking", "thinking"]);
     expect(assistant.content?.[0]?.thinking).toBe("signed");
     expect(assistant.content?.[1]?.thinking).toBe("unsigned");
   });
 
   it("keeps empty thinking blocks for Google models", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const input = [
-      {
-        role: "user",
-        content: "hi",
-      },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "   " }],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = await sanitizeSessionHistory({
-      messages: input,
-      modelApi: "google-antigravity",
-      sessionManager,
-      sessionId: "session:google-empty",
-    });
-
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; thinking?: string }>;
-    };
+    const assistant = await sanitizeGoogleAssistantWithContent([
+      { type: "thinking", thinking: "   " },
+    ]);
     expect(assistant?.content?.map((block) => block.type)).toEqual(["thinking"]);
   });
 

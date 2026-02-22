@@ -1,35 +1,36 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
-import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import {
+  createSubscribedSessionHarness,
+  emitAssistantLifecycleErrorAndEnd,
+  findLifecycleErrorAgentEvent,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession lifecycle billing errors", () => {
-  it("includes provider and model context in lifecycle billing errors", () => {
-    const { session, emit } = createStubSessionHarness();
+  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session,
-      runId: "run-billing-error",
+    const { emit } = createSubscribedSessionHarness({
+      runId: options?.runId ?? "run",
+      sessionKey: options?.sessionKey,
       onAgentEvent,
+    });
+    return { emit, onAgentEvent };
+  }
+
+  it("includes provider and model context in lifecycle billing errors", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      runId: "run-billing-error",
       sessionKey: "test-session",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      stopReason: "error",
+    emitAssistantLifecycleErrorAndEnd({
+      emit,
       errorMessage: "insufficient credits",
       provider: "Anthropic",
       model: "claude-3-5-sonnet",
-    } as AssistantMessage;
+    });
 
-    emit({ type: "message_update", message: assistantMessage });
-    emit({ type: "agent_end" });
-
-    const lifecycleError = onAgentEvent.mock.calls.find(
-      (call) => call[0]?.stream === "lifecycle" && call[0]?.data?.phase === "error",
-    );
+    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
     expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.[0]?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
+    expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
   });
 });

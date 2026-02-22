@@ -5,6 +5,28 @@ import { resolveMemorySearchConfig } from "./memory-search.js";
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
 describe("memory search config", () => {
+  function configWithDefaultProvider(provider: "openai" | "local" | "gemini"): OpenClawConfig {
+    return asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider,
+          },
+        },
+      },
+    });
+  }
+
+  function expectDefaultRemoteBatch(resolved: ReturnType<typeof resolveMemorySearchConfig>): void {
+    expect(resolved?.remote?.batch).toEqual({
+      enabled: false,
+      wait: true,
+      concurrency: 2,
+      pollIntervalMs: 2000,
+      timeoutMinutes: 60,
+    });
+  }
+
   it("returns null when disabled", () => {
     const cfg = asConfig({
       agents: {
@@ -108,57 +130,21 @@ describe("memory search config", () => {
   });
 
   it("includes batch defaults for openai without remote overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-          },
-        },
-      },
-    });
+    const cfg = configWithDefaultProvider("openai");
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.remote?.batch).toEqual({
-      enabled: false,
-      wait: true,
-      concurrency: 2,
-      pollIntervalMs: 2000,
-      timeoutMinutes: 60,
-    });
+    expectDefaultRemoteBatch(resolved);
   });
 
   it("keeps remote unset for local provider without overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "local",
-          },
-        },
-      },
-    });
+    const cfg = configWithDefaultProvider("local");
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.remote).toBeUndefined();
   });
 
   it("includes remote defaults for gemini without overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "gemini",
-          },
-        },
-      },
-    });
+    const cfg = configWithDefaultProvider("gemini");
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.remote?.batch).toEqual({
-      enabled: false,
-      wait: true,
-      concurrency: 2,
-      pollIntervalMs: 2000,
-      timeoutMinutes: 60,
-    });
+    expectDefaultRemoteBatch(resolved);
   });
 
   it("defaults session delta thresholds", () => {

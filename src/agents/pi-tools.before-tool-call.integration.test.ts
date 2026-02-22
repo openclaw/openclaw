@@ -9,20 +9,35 @@ vi.mock("../plugins/hook-runner-global.js");
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 
-describe("before_tool_call hook integration", () => {
-  let hookRunner: {
-    hasHooks: ReturnType<typeof vi.fn>;
-    runBeforeToolCall: ReturnType<typeof vi.fn>;
+type HookRunnerMock = {
+  hasHooks: ReturnType<typeof vi.fn>;
+  runBeforeToolCall: ReturnType<typeof vi.fn>;
+};
+
+function installMockHookRunner(params?: {
+  hasHooksReturn?: boolean;
+  runBeforeToolCallImpl?: (...args: unknown[]) => unknown;
+}) {
+  const hookRunner: HookRunnerMock = {
+    hasHooks:
+      params?.hasHooksReturn === undefined
+        ? vi.fn()
+        : vi.fn(() => params.hasHooksReturn as boolean),
+    runBeforeToolCall: params?.runBeforeToolCallImpl
+      ? vi.fn(params.runBeforeToolCallImpl)
+      : vi.fn(),
   };
+  // oxlint-disable-next-line typescript/no-explicit-any
+  mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+  return hookRunner;
+}
+
+describe("before_tool_call hook integration", () => {
+  let hookRunner: HookRunnerMock;
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
-    hookRunner = {
-      hasHooks: vi.fn(),
-      runBeforeToolCall: vi.fn(),
-    };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    hookRunner = installMockHookRunner();
   });
 
   it("executes tool normally when no hook is registered", async () => {
@@ -127,19 +142,14 @@ describe("before_tool_call hook integration", () => {
 });
 
 describe("before_tool_call hook deduplication (#15502)", () => {
-  let hookRunner: {
-    hasHooks: ReturnType<typeof vi.fn>;
-    runBeforeToolCall: ReturnType<typeof vi.fn>;
-  };
+  let hookRunner: HookRunnerMock;
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
-    hookRunner = {
-      hasHooks: vi.fn(() => true),
-      runBeforeToolCall: vi.fn(async () => undefined),
-    };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    hookRunner = installMockHookRunner({
+      hasHooksReturn: true,
+      runBeforeToolCallImpl: async () => undefined,
+    });
   });
 
   it("fires hook exactly once when tool goes through wrap + toToolDefinitions", async () => {
@@ -191,19 +201,11 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 });
 
 describe("before_tool_call hook integration for client tools", () => {
-  let hookRunner: {
-    hasHooks: ReturnType<typeof vi.fn>;
-    runBeforeToolCall: ReturnType<typeof vi.fn>;
-  };
+  let hookRunner: HookRunnerMock;
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
-    hookRunner = {
-      hasHooks: vi.fn(),
-      runBeforeToolCall: vi.fn(),
-    };
-    // oxlint-disable-next-line typescript/no-explicit-any
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    hookRunner = installMockHookRunner();
   });
 
   it("passes modified params to client tool callbacks", async () => {

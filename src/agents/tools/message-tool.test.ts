@@ -32,6 +32,14 @@ function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
   } satisfies MessageActionRunResult);
 }
 
+function getToolProperties(tool: ReturnType<typeof createMessageTool>) {
+  return (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+}
+
+function getActionEnum(properties: Record<string, unknown>) {
+  return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+}
+
 describe("message tool agent routing", () => {
   it("derives agentId from the session key", async () => {
     mockSendResult();
@@ -149,9 +157,8 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "telegram",
     });
-    const properties =
-      (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-    const actionEnum = (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
 
     expect(properties.components).toBeUndefined();
     expect(properties.buttons).toBeDefined();
@@ -179,9 +186,8 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "discord",
     });
-    const properties =
-      (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-    const actionEnum = (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
 
     expect(properties.components).toBeDefined();
     expect(properties.buttons).toBeUndefined();

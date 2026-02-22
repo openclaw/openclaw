@@ -7,6 +7,9 @@ import {
 
 describe("buildAuthHealthSummary", () => {
   const now = 1_700_000_000_000;
+  const profileStatuses = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
+    Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.status]));
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -50,9 +53,7 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    const statuses = Object.fromEntries(
-      summary.profiles.map((profile) => [profile.profileId, profile.status]),
-    );
+    const statuses = profileStatuses(summary);
 
     expect(statuses["anthropic:ok"]).toBe("ok");
     // OAuth credentials with refresh tokens are auto-renewable, so they report "ok"
@@ -84,9 +85,7 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    const statuses = Object.fromEntries(
-      summary.profiles.map((profile) => [profile.profileId, profile.status]),
-    );
+    const statuses = profileStatuses(summary);
 
     expect(statuses["google:no-refresh"]).toBe("expired");
   });

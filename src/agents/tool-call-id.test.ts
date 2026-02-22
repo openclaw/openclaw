@@ -48,6 +48,20 @@ function expectCollisionIdsRemainDistinct(
   return { aId: a.id as string, bId: b.id as string };
 }
 
+function expectSingleToolCallRewrite(
+  out: AgentMessage[],
+  expectedId: string,
+  mode: "strict" | "strict9",
+): void {
+  const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+  const toolCall = assistant.content?.[0] as { id?: string };
+  expect(toolCall.id).toBe(expectedId);
+  expect(isValidCloudCodeAssistToolId(toolCall.id as string, mode)).toBe(true);
+
+  const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+  expect(result.toolCallId).toBe(toolCall.id);
+}
+
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict mode (default)", () => {
     it("is a no-op for already-valid non-colliding IDs", () => {
@@ -84,15 +98,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
       expect(out).not.toBe(input);
-
-      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCall = assistant.content?.[0] as { id?: string };
       // Strict mode strips all non-alphanumeric characters
-      expect(toolCall.id).toBe("callitem123");
-      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "strict")).toBe(true);
-
-      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
-      expect(result.toolCallId).toBe(toolCall.id);
+      expectSingleToolCallRewrite(out, "callitem123", "strict");
     });
 
     it("avoids collisions when sanitization would produce duplicate IDs", () => {
@@ -159,15 +166,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
       expect(out).not.toBe(input);
-
-      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCall = assistant.content?.[0] as { id?: string };
       // Strict mode strips all non-alphanumeric characters
-      expect(toolCall.id).toBe("whatsapplogin17687998415271");
-      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "strict")).toBe(true);
-
-      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
-      expect(result.toolCallId).toBe(toolCall.id);
+      expectSingleToolCallRewrite(out, "whatsapplogin17687998415271", "strict");
     });
 
     it("avoids collisions with alphanumeric-only suffixes", () => {
@@ -183,6 +183,24 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   });
 
   describe("strict9 mode (Mistral tool call IDs)", () => {
+    it("is a no-op for already-valid 9-char alphanumeric IDs", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "abc123XYZ", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "abc123XYZ",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] as unknown as AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
+      expect(out).toBe(input);
+    });
+
     it("enforces alphanumeric IDs with length 9", () => {
       const input = [
         {

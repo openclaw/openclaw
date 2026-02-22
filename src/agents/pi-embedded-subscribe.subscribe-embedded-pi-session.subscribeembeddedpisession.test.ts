@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
+  emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
   expectSingleAgentEventText,
   extractAgentEventPayloads,
+  findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -490,24 +492,15 @@ describe("subscribeEmbeddedPiSession", () => {
       sessionKey: "test-session",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      stopReason: "error",
+    emitAssistantLifecycleErrorAndEnd({
+      emit,
       errorMessage: "429 Rate limit exceeded",
-    } as AssistantMessage;
-
-    // Simulate message update to set lastAssistant
-    emit({ type: "message_update", message: assistantMessage });
-
-    // Trigger agent_end
-    emit({ type: "agent_end" });
+    });
 
     // Look for lifecycle:error event
-    const lifecycleError = onAgentEvent.mock.calls.find(
-      (call) => call[0]?.stream === "lifecycle" && call[0]?.data?.phase === "error",
-    );
+    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
     expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.[0]?.data?.error).toContain("API rate limit reached");
+    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
   });
 });

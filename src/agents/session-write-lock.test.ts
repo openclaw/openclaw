@@ -9,6 +9,18 @@ import {
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
 
+async function expectLockRemovedOnlyAfterFinalRelease(params: {
+  lockPath: string;
+  firstLock: { release: () => Promise<void> };
+  secondLock: { release: () => Promise<void> };
+}) {
+  await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
+  await params.firstLock.release();
+  await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
+  await params.secondLock.release();
+  await expect(fs.access(params.lockPath)).rejects.toThrow();
+}
+
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
@@ -45,11 +57,11 @@ describe("acquireSessionWriteLock", () => {
       const lockA = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
       const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
-      await expect(fs.access(lockPath)).resolves.toBeUndefined();
-      await lockA.release();
-      await expect(fs.access(lockPath)).resolves.toBeUndefined();
-      await lockB.release();
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectLockRemovedOnlyAfterFinalRelease({
+        lockPath,
+        firstLock: lockA,
+        secondLock: lockB,
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -130,11 +142,11 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
 
       // Old release handle must not affect the new lock.
-      await lockA.release();
-      await expect(fs.access(lockPath)).resolves.toBeUndefined();
-
-      await lockB.release();
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectLockRemovedOnlyAfterFinalRelease({
+        lockPath,
+        firstLock: lockA,
+        secondLock: lockB,
+      });
     } finally {
       warnSpy.mockRestore();
       await fs.rm(root, { recursive: true, force: true });
