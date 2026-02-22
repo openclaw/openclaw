@@ -114,7 +114,7 @@ export type CronJob = {
   payload: CronPayload;
   delivery?: CronDelivery;
   /** Skip execution when the session is actively conversing with a human. */
-  deferWhileActive?: CronDeferWhileActive;
+  deferWhileActive?: CronDeferWhileActive | false;
   state: CronJobState;
 };
 

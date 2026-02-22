@@ -582,7 +582,7 @@ async function executeJobCore(
     const globalDefer = state.deps.cronConfig?.deferWhileActive;
     const effectiveDefer = jobDefer !== undefined ? jobDefer : globalDefer;
 
-    if (effectiveDefer && (effectiveDefer as unknown) !== false) {
+    if (effectiveDefer !== undefined && effectiveDefer !== false) {
       const quietMs = effectiveDefer.quietMs ?? DEFAULT_DEFER_QUIET_MS;
       const lastInbound = state.deps.getLastInboundAtMs({
         agentId: job.agentId,
