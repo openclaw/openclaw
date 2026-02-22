@@ -135,7 +135,7 @@ export function buildGatewayConnectionDetails(
         ? "missing gateway.remote.url (fallback local)"
         : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
-    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
+    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local (e.g. for Ollama VPS)."
     : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
 
