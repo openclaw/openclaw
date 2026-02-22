@@ -241,17 +241,18 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
   if (!prepared.ran) {
     return prepared;
   }
+  if (!prepared.executionJob || typeof prepared.startedAt !== "number") {
+    return { ok: false } as const;
+  }
+  const executionJob = prepared.executionJob;
+  const startedAt = prepared.startedAt;
+  const jobId = prepared.jobId;
 
-  let coreResult:
-    | Awaited<ReturnType<typeof executeJobCore>>
-    | {
-        status: "error";
-        error: string;
-      };
+  let coreResult: Awaited<ReturnType<typeof executeJobCore>>;
   const configuredTimeoutMs =
-    prepared.executionJob.payload.kind === "agentTurn" &&
-    typeof prepared.executionJob.payload.timeoutSeconds === "number"
-      ? Math.floor(prepared.executionJob.payload.timeoutSeconds * 1_000)
+    executionJob.payload.kind === "agentTurn" &&
+    typeof executionJob.payload.timeoutSeconds === "number"
+      ? Math.floor(executionJob.payload.timeoutSeconds * 1_000)
       : undefined;
   const jobTimeoutMs =
     configuredTimeoutMs !== undefined
@@ -267,7 +268,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
             let timeoutId: NodeJS.Timeout | undefined;
             try {
               return await Promise.race([
-                executeJobCore(state, prepared.executionJob, runAbortController?.signal),
+                executeJobCore(state, executionJob, runAbortController?.signal),
                 new Promise<never>((_, reject) => {
                   timeoutId = setTimeout(() => {
                     runAbortController?.abort(new Error("cron: job execution timed out"));
@@ -281,7 +282,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
               }
             }
           })()
-        : await executeJobCore(state, prepared.executionJob);
+        : await executeJobCore(state, executionJob);
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
@@ -289,7 +290,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
 
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
+    const job = state.store?.jobs.find((entry) => entry.id === jobId);
     if (!job) {
       return;
     }
@@ -298,7 +299,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       status: coreResult.status,
       error: coreResult.error,
       delivered: coreResult.delivered,
-      startedAt: prepared.startedAt,
+      startedAt,
       endedAt,
     });
 
@@ -313,7 +314,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       deliveryError: job.state.lastDeliveryError,
       sessionId: coreResult.sessionId,
       sessionKey: coreResult.sessionKey,
-      runAtMs: prepared.startedAt,
+      runAtMs: startedAt,
       durationMs: job.state.lastDurationMs,
       nextRunAtMs: job.state.nextRunAtMs,
       model: coreResult.model,
