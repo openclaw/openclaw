@@ -349,12 +349,12 @@ describe("clearAuthProfileCooldown", () => {
   });
 });
 
-describe("markAuthProfileFailure — cooldown is never reset to an earlier deadline", () => {
+describe("markAuthProfileFailure — active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516
   // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
   // each retry was resetting cooldownUntil to now+60m, preventing recovery.
 
-  it("does not shorten an existing cooldown when a retry fires mid-window", async () => {
+  it("keeps an active cooldownUntil unchanged on a mid-window retry", async () => {
     const now = 1_000_000;
     // Profile already has 50 min remaining on its cooldown
     const existingCooldownUntil = now + 50 * 60 * 1000;
@@ -379,19 +379,16 @@ describe("markAuthProfileFailure — cooldown is never reset to an earlier deadl
     }
 
     const stats = store.usageStats?.["anthropic:default"];
-    // cooldownUntil must NOT have been reset to now+60m (= now+3_600_000 < existingCooldownUntil)
-    // It should remain at the original deadline or be extended, never shortened.
-    expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(existingCooldownUntil);
+    expect(stats?.cooldownUntil).toBe(existingCooldownUntil);
   });
 
-  it("does extend cooldownUntil when the new backoff would end later", async () => {
+  it("recomputes cooldownUntil when the previous window already expired", async () => {
     const now = 1_000_000;
-    // Profile has only 5 min remaining but the next backoff level gives 60 min
-    const existingCooldownUntil = now + 5 * 60 * 1000;
+    const expiredCooldownUntil = now - 60_000;
     const store = makeStore({
       "anthropic:default": {
-        cooldownUntil: existingCooldownUntil,
-        errorCount: 2, // next step: 60-min backoff
+        cooldownUntil: expiredCooldownUntil,
+        errorCount: 3, // saturated 60-min backoff
         lastFailureAt: now - 60_000,
       },
     });
@@ -409,11 +406,10 @@ describe("markAuthProfileFailure — cooldown is never reset to an earlier deadl
     }
 
     const stats = store.usageStats?.["anthropic:default"];
-    // now+60min > existingCooldownUntil (now+5min), so it should be extended
-    expect(stats?.cooldownUntil).toBeGreaterThan(existingCooldownUntil);
+    expect(stats?.cooldownUntil).toBe(now + 60 * 60 * 1000);
   });
 
-  it("does not shorten an existing disabledUntil on a billing retry", async () => {
+  it("keeps an active disabledUntil unchanged on a billing retry", async () => {
     const now = 1_000_000;
     // Profile already has 20 hours remaining on a billing disable
     const existingDisabledUntil = now + 20 * 60 * 60 * 1000;
@@ -440,7 +436,35 @@ describe("markAuthProfileFailure — cooldown is never reset to an earlier deadl
     }
 
     const stats = store.usageStats?.["anthropic:default"];
-    // disabledUntil must not have been shortened
-    expect(stats?.disabledUntil).toBeGreaterThanOrEqual(existingDisabledUntil);
+    expect(stats?.disabledUntil).toBe(existingDisabledUntil);
+  });
+
+  it("recomputes disabledUntil when the previous billing window already expired", async () => {
+    const now = 1_000_000;
+    const expiredDisabledUntil = now - 60_000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: expiredDisabledUntil,
+        disabledReason: "billing",
+        errorCount: 5,
+        failureCounts: { billing: 2 }, // next billing backoff: 20h
+        lastFailureAt: now - 60_000,
+      },
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "billing",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.disabledUntil).toBe(now + 20 * 60 * 60 * 1000);
   });
 });
