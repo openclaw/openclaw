@@ -22,6 +22,7 @@ import {
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
+  globalInstallArgsForCellar,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -875,11 +876,18 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
     const spec = `${packageName}@${tag}`;
+
+    // Check for Homebrew Cellar path - if the binary points to a different location
+    // than where `npm root -g` says, we need to install to the Cellar path directly
+    const cellarArgs = globalInstallArgsForCellar(globalManager, spec, pkgRoot);
+    const installArgs = cellarArgs ?? globalInstallArgs(globalManager, spec);
+    const installCwd = cellarArgs ? path.dirname(path.dirname(pkgRoot)) : pkgRoot;
+
     const updateStep = await runStep({
       runCommand,
-      name: "global update",
-      argv: globalInstallArgs(globalManager, spec),
-      cwd: pkgRoot,
+      name: cellarArgs ? "global update (homebrew cellar)" : "global update",
+      argv: installArgs,
+      cwd: installCwd,
       timeoutMs,
       progress,
       stepIndex: 0,
