@@ -1,4 +1,4 @@
-import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { inspectBrowserExecutableConfig, resolveBrowserExecutableForPlatform } from "../chrome.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
@@ -57,6 +57,15 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     let detectedBrowser: string | null = null;
     let detectedExecutablePath: string | null = null;
     let detectError: string | null = null;
+    let relayAttachedTabCount = 0;
+    if (profileCtx.profile.driver === "extension" && cdpHttp) {
+      relayAttachedTabCount = await profileCtx
+        .listTabs()
+        .then((tabs) => tabs.filter((tab) => (tab.type ?? "page") === "page").length)
+        .catch(() => 0);
+    }
+
+    const executableCheck = inspectBrowserExecutableConfig(current.resolved);
 
     try {
       const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
@@ -68,9 +77,20 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       detectError = String(err);
     }
 
+    const fixSteps: string[] = [];
+    if (profileCtx.profile.driver === "extension" && relayAttachedTabCount === 0) {
+      fixSteps.push(
+        "Relay tab is not attached. Click the OpenClaw Browser Relay extension icon on a Chrome tab until badge shows ON, or use profile=openclaw.",
+      );
+    }
+    if (executableCheck.missingPlaywrightChromium && executableCheck.remediationCommand) {
+      fixSteps.push(`Playwright Chromium is missing. Run: ${executableCheck.remediationCommand}`);
+    }
+
     res.json({
       enabled: current.resolved.enabled,
       profile: profileCtx.profile.name,
+      activeProfile: profileCtx.profile.name,
       running: cdpReady,
       cdpReady,
       cdpHttp,
@@ -86,6 +106,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       headless: current.resolved.headless,
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
+      executablePathExists: executableCheck.configuredPathExists,
+      missingPlaywrightChromium: executableCheck.missingPlaywrightChromium,
+      relayAttachedTabCount,
+      fixSteps,
       attachOnly: current.resolved.attachOnly,
     });
   });

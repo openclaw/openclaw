@@ -1,3 +1,4 @@
+import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "../constants.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -51,6 +52,66 @@ export function resolveProfileContext(
     return null;
   }
   return profileCtx;
+}
+
+export function resolveRequestedProfileName(req: BrowserRequest): string | undefined {
+  if (typeof req.query.profile === "string") {
+    const fromQuery = req.query.profile.trim();
+    if (fromQuery) {
+      return fromQuery;
+    }
+  }
+  if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.profile === "string") {
+      const fromBody = body.profile.trim();
+      if (fromBody) {
+        return fromBody;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function isProfileExplicitlyRequested(req: BrowserRequest): boolean {
+  return Boolean(resolveRequestedProfileName(req));
+}
+
+export function isRelayAttachedTabMissingError(err: unknown): boolean {
+  const msg = String(err).toLowerCase();
+  return (
+    msg.includes("no tab is connected") ||
+    msg.includes("no attached chrome tabs") ||
+    msg.includes("openclaw browser relay toolbar icon")
+  );
+}
+
+function resolveManagedFallbackProfile(
+  req: BrowserRequest,
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  err: unknown,
+): ProfileContext | null {
+  const requestedProfile = resolveRequestedProfileName(req);
+  if (requestedProfile) {
+    // Respect explicit profile choice; only auto-fallback for implicit/default routing.
+    return null;
+  }
+  if (profileCtx.profile.driver !== "extension") {
+    return null;
+  }
+  if (!isRelayAttachedTabMissingError(err)) {
+    return null;
+  }
+  try {
+    const fallback = ctx.forProfile(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    if (fallback.profile.driver !== "openclaw") {
+      return null;
+    }
+    return fallback;
+  } catch {
+    return null;
+  }
 }
 
 export async function getPwAiModule(): Promise<PwAiModule | null> {
@@ -110,6 +171,22 @@ export async function withRouteTabContext<T>(
       cdpUrl: profileCtx.profile.cdpUrl,
     });
   } catch (err) {
+    // Common failure mode: extension relay profile is selected but no tab is attached yet.
+    // For implicit/default profile requests, automatically retry on the self-managed profile.
+    const fallbackProfile = resolveManagedFallbackProfile(params.req, params.ctx, profileCtx, err);
+    if (fallbackProfile) {
+      try {
+        const tab = await fallbackProfile.ensureTabAvailable(params.targetId);
+        return await params.run({
+          profileCtx: fallbackProfile,
+          tab,
+          cdpUrl: fallbackProfile.profile.cdpUrl,
+        });
+      } catch (fallbackErr) {
+        handleRouteError(params.ctx, params.res, fallbackErr);
+        return undefined;
+      }
+    }
     handleRouteError(params.ctx, params.res, err);
     return undefined;
   }

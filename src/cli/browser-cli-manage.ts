@@ -92,9 +92,10 @@ export function registerBrowserManageCommands(
         }
         const detectedPath = status.detectedExecutablePath ?? status.executablePath;
         const detectedDisplay = detectedPath ? shortenHomePath(detectedPath) : "auto";
+        const fixSteps = Array.isArray(status.fixSteps) ? status.fixSteps : [];
         defaultRuntime.log(
           [
-            `profile: ${status.profile ?? "openclaw"}`,
+            `activeProfile: ${status.activeProfile ?? status.profile ?? "openclaw"}`,
             `enabled: ${status.enabled}`,
             `running: ${status.running}`,
             `cdpPort: ${status.cdpPort}`,
@@ -102,8 +103,13 @@ export function registerBrowserManageCommands(
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
+            `configuredExecutablePathExists: ${status.executablePathExists ?? "n/a"}`,
+            `relayAttachedTabs: ${status.relayAttachedTabCount ?? 0}`,
             `profileColor: ${status.color}`,
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
+            ...(fixSteps.length > 0
+              ? ["fixSteps:", ...fixSteps.map((step, idx) => `  ${idx + 1}. ${step}`)]
+              : []),
           ].join("\n"),
         );
       });

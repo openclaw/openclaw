@@ -653,6 +653,23 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       return { status: 400, message: err.message };
     }
     const msg = String(err);
+    if (
+      msg.includes("no tab is connected") ||
+      msg.includes("no attached Chrome tabs") ||
+      msg.includes("Browser Relay toolbar icon")
+    ) {
+      return {
+        status: 409,
+        message:
+          "relay tab missing: attach OpenClaw Browser Relay to a Chrome tab (badge ON), or use profile=openclaw",
+      };
+    }
+    if (msg.includes("Playwright Chromium executable missing")) {
+      return {
+        status: 503,
+        message: msg,
+      };
+    }
     if (msg.includes("ambiguous target id prefix")) {
       return { status: 409, message: "ambiguous target id prefix" };
     }

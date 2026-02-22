@@ -106,6 +106,21 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     "Use an alternative approach or inform the user that the browser is currently unavailable.";
   const msg = String(err);
   const msgLower = msg.toLowerCase();
+  if (msgLower.includes("playwright chromium executable missing")) {
+    return new Error(
+      `OpenClaw browser runtime is missing Playwright Chromium. ${msg} Install Chromium and retry once.`,
+    );
+  }
+  if (
+    msgLower.includes("no tab is connected") ||
+    msgLower.includes("no attached chrome tabs") ||
+    msgLower.includes("browser relay toolbar icon")
+  ) {
+    return new Error(
+      "OpenClaw relay mode is active but no Chrome tab is attached. " +
+        "Attach the OpenClaw Browser Relay extension to a tab (badge ON), or use profile=openclaw for self-managed automation.",
+    );
+  }
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||

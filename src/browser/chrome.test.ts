@@ -8,6 +8,7 @@ import {
   ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
+  inspectBrowserExecutableConfig,
   isChromeReachable,
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
@@ -238,6 +239,35 @@ describe("browser chrome helpers", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
+  });
+
+  it("inspects configured executable path health", () => {
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) =>
+        String(p).includes("/ms-playwright/chromium-1208/chrome-linux/chrome"),
+      );
+
+    expect(
+      inspectBrowserExecutableConfig({
+        executablePath: "/home/node/.cache/ms-playwright/chromium-1208/chrome-linux/chrome",
+      } as Parameters<typeof inspectBrowserExecutableConfig>[0]),
+    ).toMatchObject({
+      configuredPathExists: true,
+      missingPlaywrightChromium: false,
+    });
+
+    expect(
+      inspectBrowserExecutableConfig({
+        executablePath: "/home/node/.cache/ms-playwright/chromium-9999/chrome-linux/chrome",
+      } as Parameters<typeof inspectBrowserExecutableConfig>[0]),
+    ).toMatchObject({
+      configuredPathExists: false,
+      missingPlaywrightChromium: true,
+      remediationCommand: "npx playwright install chromium",
+    });
+
+    exists.mockRestore();
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {

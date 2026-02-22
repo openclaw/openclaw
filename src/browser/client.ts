@@ -3,6 +3,7 @@ import { fetchBrowserJson } from "./client-fetch.js";
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
+  activeProfile?: string;
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
@@ -18,6 +19,10 @@ export type BrowserStatus = {
   headless: boolean;
   noSandbox?: boolean;
   executablePath?: string | null;
+  executablePathExists?: boolean | null;
+  missingPlaywrightChromium?: boolean;
+  relayAttachedTabCount?: number;
+  fixSteps?: string[];
   attachOnly: boolean;
 };
 

@@ -25,6 +25,8 @@ import {
 
 const log = createSubsystemLogger("browser").child("chrome");
 
+const PLAYWRIGHT_INSTALL_CHROMIUM_COMMAND = "npx playwright install chromium";
+
 export type { BrowserExecutable } from "./chrome.executables.js";
 export {
   findChromeExecutableLinux,
@@ -46,6 +48,49 @@ function exists(filePath: string) {
   }
 }
 
+function isLikelyPlaywrightChromiumPath(filePath: string): boolean {
+  const normalized = filePath.replaceAll("\\", "/").toLowerCase();
+  return normalized.includes("/ms-playwright/") && normalized.includes("/chrome");
+}
+
+function buildPlaywrightChromiumMissingMessage(filePath: string): string {
+  return [
+    `Playwright Chromium executable missing: ${filePath}`,
+    `Run: ${PLAYWRIGHT_INSTALL_CHROMIUM_COMMAND}`,
+  ].join(". ");
+}
+
+export type BrowserExecutableConfigCheck = {
+  configuredPath: string | null;
+  configuredPathExists: boolean | null;
+  missingPlaywrightChromium: boolean;
+  remediationCommand?: string;
+};
+
+export function inspectBrowserExecutableConfig(
+  resolved: ResolvedBrowserConfig,
+): BrowserExecutableConfigCheck {
+  const configuredPath = resolved.executablePath?.trim() || null;
+  if (!configuredPath) {
+    return {
+      configuredPath: null,
+      configuredPathExists: null,
+      missingPlaywrightChromium: false,
+    };
+  }
+
+  const configuredPathExists = exists(configuredPath);
+  const missingPlaywrightChromium =
+    !configuredPathExists && isLikelyPlaywrightChromiumPath(configuredPath);
+
+  return {
+    configuredPath,
+    configuredPathExists,
+    missingPlaywrightChromium,
+    remediationCommand: missingPlaywrightChromium ? PLAYWRIGHT_INSTALL_CHROMIUM_COMMAND : undefined,
+  };
+}
+
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -56,7 +101,20 @@ export type RunningChrome = {
 };
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
-  return resolveBrowserExecutableForPlatform(resolved, process.platform);
+  try {
+    return resolveBrowserExecutableForPlatform(resolved, process.platform);
+  } catch (err) {
+    const msg = String(err);
+    const configuredPath = resolved.executablePath?.trim() || "";
+    if (
+      msg.includes("browser.executablePath not found") &&
+      configuredPath &&
+      isLikelyPlaywrightChromiumPath(configuredPath)
+    ) {
+      throw new Error(buildPlaywrightChromiumMissingMessage(configuredPath), { cause: err });
+    }
+    throw err;
+  }
 }
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
