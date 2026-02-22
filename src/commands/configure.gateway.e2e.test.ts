@@ -140,6 +140,7 @@ describe("promptGatewayConfig", () => {
     expect(call?.trustedProxy).toEqual({
       userHeader: "x-remote-user",
       // requiredHeaders and allowUsers should be undefined when empty
+      allowAll: true,
     });
     expect(result.config.gateway?.bind).toBe("loopback");
     expect(result.config.gateway?.trustedProxies).toEqual(["10.0.0.1"]);

@@ -463,18 +463,34 @@ function collectGatewayConfigFindings(
       });
     }
 
-    const allowUsers = trustedProxyConfig?.allowUsers ?? [];
-    if (allowUsers.length === 0) {
-      findings.push({
-        checkId: "gateway.trusted_proxy_no_allowlist",
-        severity: "warn",
-        title: "Trusted-proxy auth allows all authenticated users",
-        detail:
-          "gateway.auth.trustedProxy.allowUsers is empty, so any user authenticated by your proxy can access the Gateway.",
-        remediation:
-          "Consider setting gateway.auth.trustedProxy.allowUsers to restrict access to specific users " +
-          '(e.g., ["nick@example.com"]).',
-      });
+    if (trustedProxyConfig) {
+      const allowUsers = trustedProxyConfig.allowUsers ?? [];
+      const allowAll = trustedProxyConfig.allowAll === true;
+
+      if (allowUsers.length === 0 && !allowAll) {
+        findings.push({
+          checkId: "gateway.trusted_proxy_allowlist_required",
+          severity: "critical",
+          title: "Trusted-proxy auth missing allowUsers or allowAll",
+          detail:
+            "gateway.auth.trustedProxy.allowUsers is empty and gateway.auth.trustedProxy.allowAll is not true. " +
+            "Gateway startup will be rejected in trusted-proxy mode.",
+          remediation:
+            "Set gateway.auth.trustedProxy.allowUsers to a non-empty user list (recommended), " +
+            "or set gateway.auth.trustedProxy.allowAll=true to explicitly allow any authenticated proxy user.",
+        });
+      } else if (allowUsers.length === 0 && allowAll) {
+        findings.push({
+          checkId: "gateway.trusted_proxy_allow_all",
+          severity: "warn",
+          title: "Trusted-proxy auth allows all authenticated users",
+          detail:
+            "gateway.auth.trustedProxy.allowAll=true, so any user authenticated by your proxy can access the Gateway.",
+          remediation:
+            "Prefer gateway.auth.trustedProxy.allowUsers to restrict access to specific users " +
+            '(e.g., ["nick@example.com"]).',
+        });
+      }
     }
   }
 

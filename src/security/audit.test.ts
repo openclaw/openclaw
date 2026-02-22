@@ -989,7 +989,10 @@ describe("security audit", () => {
             trustedProxies: ["10.0.0.1"],
             auth: {
               mode: "trusted-proxy",
-              trustedProxy: { userHeader: "x-forwarded-user" },
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+              },
             },
           },
         },
@@ -1005,7 +1008,10 @@ describe("security audit", () => {
             trustedProxies: [],
             auth: {
               mode: "trusted-proxy",
-              trustedProxy: { userHeader: "x-forwarded-user" },
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+              },
             },
           },
         },
@@ -1020,7 +1026,9 @@ describe("security audit", () => {
             trustedProxies: ["10.0.0.1"],
             auth: {
               mode: "trusted-proxy",
-              trustedProxy: {} as never,
+              trustedProxy: {
+                allowUsers: ["nick@example.com"],
+              } as never,
             },
           },
         },
@@ -1028,7 +1036,7 @@ describe("security audit", () => {
         expectedSeverity: "critical",
       },
       {
-        name: "missing user allowlist",
+        name: "missing user allowlist and allowAll override",
         cfg: {
           gateway: {
             bind: "lan",
@@ -1042,7 +1050,25 @@ describe("security audit", () => {
             },
           },
         },
-        expectedCheckId: "gateway.trusted_proxy_no_allowlist",
+        expectedCheckId: "gateway.trusted_proxy_allowlist_required",
+        expectedSeverity: "critical",
+      },
+      {
+        name: "explicit allowAll override",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowAll: true,
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_allow_all",
         expectedSeverity: "warn",
       },
     ];

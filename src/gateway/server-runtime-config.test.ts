@@ -5,6 +5,7 @@ const TRUSTED_PROXY_AUTH = {
   mode: "trusted-proxy" as const,
   trustedProxy: {
     userHeader: "x-forwarded-user",
+    allowUsers: ["nick@example.com"],
   },
 };
 
@@ -67,6 +68,22 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it.each([
+      {
+        name: "trusted-proxy auth without allowUsers or allowAll",
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: {
+              mode: "trusted-proxy" as const,
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+              },
+            },
+            trustedProxies: ["127.0.0.1"],
+          },
+        },
+        expectedMessage: "gateway auth mode is trusted-proxy, but trustedProxy.allowUsers is empty",
+      },
       {
         name: "loopback binding without trusted proxies",
         cfg: {
