@@ -167,10 +167,6 @@ async function scanMemoryFiles(
   const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   for (const extraPath of resolvedExtraPaths) {
     try {
-      const stat = await fs.lstat(extraPath);
-      if (stat.isSymbolicLink()) {
-        continue;
-      }
       const extraCheck = await checkReadableFile(extraPath);
       if (extraCheck.issue) {
         issues.push(extraCheck.issue);
