@@ -5,6 +5,7 @@ import path from "node:path";
 const DEFAULT_DEDUP_DIR = path.join(os.homedir(), ".openclaw", "feishu", "dedup");
 const MAX_ENTRIES_PER_FILE = 10_000;
 const CLEANUP_PROBABILITY = 0.02;
+const CACHE_STALE_MS = 30_000;
 
 type DedupData = Record<string, number>;
 
@@ -18,6 +19,7 @@ type DedupData = Record<string, number>;
 export class DedupStore {
   private readonly dir: string;
   private cache = new Map<string, DedupData>();
+  private cacheLoadedAt = new Map<string, number>();
 
   constructor(dir?: string) {
     this.dir = dir ?? DEFAULT_DEDUP_DIR;
@@ -29,6 +31,12 @@ export class DedupStore {
   }
 
   async load(namespace: string): Promise<DedupData> {
+    const loadedAt = this.cacheLoadedAt.get(namespace);
+    if (loadedAt != null && Date.now() - loadedAt > CACHE_STALE_MS) {
+      this.cache.delete(namespace);
+      this.cacheLoadedAt.delete(namespace);
+    }
+
     const cached = this.cache.get(namespace);
     if (cached) return cached;
 
@@ -36,10 +44,12 @@ export class DedupStore {
       const raw = await fs.promises.readFile(this.filePath(namespace), "utf-8");
       const data: DedupData = JSON.parse(raw);
       this.cache.set(namespace, data);
+      this.cacheLoadedAt.set(namespace, Date.now());
       return data;
     } catch {
       const data: DedupData = {};
       this.cache.set(namespace, data);
+      this.cacheLoadedAt.set(namespace, Date.now());
       return data;
     }
   }
@@ -49,7 +59,9 @@ export class DedupStore {
     const ts = data[messageId];
     if (ts == null) return false;
     if (Date.now() - ts > ttlMs) {
-      delete data[messageId];
+      // Expired — treat as absent.  Skip the delete here to avoid silent
+      // cache/disk divergence; actual cleanup happens probabilistically
+      // inside record().
       return false;
     }
     return true;
@@ -87,5 +99,6 @@ export class DedupStore {
     const tmp = `${fp}.tmp.${process.pid}`;
     await fs.promises.writeFile(tmp, JSON.stringify(data), "utf-8");
     await fs.promises.rename(tmp, fp);
+    this.cacheLoadedAt.set(namespace, Date.now());
   }
 }
