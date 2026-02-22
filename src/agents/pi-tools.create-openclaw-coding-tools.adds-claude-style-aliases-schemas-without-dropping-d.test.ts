@@ -14,7 +14,7 @@ const tinyPngBuffer = Buffer.from(
 );
 
 describe("createOpenClawCodingTools", () => {
-  it("keeps read tool image metadata intact", async () => {
+  it("returns image metadata for images and text-only blocks for text files", async () => {
     const readTool = defaultTools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
@@ -23,39 +23,30 @@ describe("createOpenClawCodingTools", () => {
       const imagePath = path.join(tmpDir, "sample.png");
       await fs.writeFile(imagePath, tinyPngBuffer);
 
-      const result = await readTool?.execute("tool-1", {
+      const imageResult = await readTool?.execute("tool-1", {
         path: imagePath,
       });
 
-      expect(result?.content?.some((block) => block.type === "image")).toBe(true);
-      const text = result?.content?.find((block) => block.type === "text") as
+      expect(imageResult?.content?.some((block) => block.type === "image")).toBe(true);
+      const imageText = imageResult?.content?.find((block) => block.type === "text") as
         | { text?: string }
         | undefined;
-      expect(text?.text ?? "").toContain("Read image file [image/png]");
-      const image = result?.content?.find((block) => block.type === "image") as
+      expect(imageText?.text ?? "").toContain("Read image file [image/png]");
+      const image = imageResult?.content?.find((block) => block.type === "image") as
         | { mimeType?: string }
         | undefined;
       expect(image?.mimeType).toBe("image/png");
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-  it("returns text content without image blocks for text files", async () => {
-    const readTool = defaultTools.find((tool) => tool.name === "read");
-    expect(readTool).toBeDefined();
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-"));
-    try {
       const textPath = path.join(tmpDir, "sample.txt");
       const contents = "Hello from openclaw read tool.";
       await fs.writeFile(textPath, contents, "utf8");
 
-      const result = await readTool?.execute("tool-2", {
+      const textResult = await readTool?.execute("tool-2", {
         path: textPath,
       });
 
-      expect(result?.content?.some((block) => block.type === "image")).toBe(false);
-      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+      expect(textResult?.content?.some((block) => block.type === "image")).toBe(false);
+      const textBlocks = textResult?.content?.filter((block) => block.type === "text") as
         | Array<{ text?: string }>
         | undefined;
       expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
