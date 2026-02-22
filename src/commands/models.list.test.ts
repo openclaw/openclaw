@@ -104,6 +104,17 @@ function makeRuntime() {
   };
 }
 
+function expectModelRegistryUnavailable(
+  runtime: ReturnType<typeof makeRuntime>,
+  expectedDetail: string,
+) {
+  expect(runtime.error).toHaveBeenCalledTimes(1);
+  expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
+  expect(runtime.error.mock.calls[0]?.[0]).toContain(expectedDetail);
+  expect(runtime.log).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(1);
+}
+
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -432,12 +443,8 @@ describe("models list/status", () => {
     const runtime = makeRuntime();
     await modelsListCommand({ json: true }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("model discovery failed");
+    expectModelRegistryUnavailable(runtime, "model discovery failed");
     expect(runtime.error.mock.calls[0]?.[0]).not.toContain("configured models may appear missing");
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
   });
 
   it("models list fails fast when registry model discovery is unavailable", async () => {
@@ -452,11 +459,7 @@ describe("models list/status", () => {
     modelRegistryState.available = [];
     await modelsListCommand({ json: true }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("model discovery unavailable");
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
+    expectModelRegistryUnavailable(runtime, "model discovery unavailable");
   });
 
   it("loadModelRegistry throws when model discovery is unavailable", async () => {

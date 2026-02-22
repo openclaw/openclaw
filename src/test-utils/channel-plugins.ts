@@ -51,6 +51,27 @@ export const createChannelTestPluginBase = (params: {
   },
 });
 
+export const createMSTeamsTestPluginBase = (): Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config"
+> => {
+  const base = createChannelTestPluginBase({
+    id: "msteams",
+    label: "Microsoft Teams",
+    docsPath: "/channels/msteams",
+    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+  });
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      selectionLabel: "Microsoft Teams (Bot Framework)",
+      blurb: "Bot Framework; enterprise support.",
+      aliases: ["teams"],
+    },
+  };
+};
+
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;
   outbound: ChannelOutboundAdapter;
