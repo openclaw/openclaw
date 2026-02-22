@@ -67,12 +67,14 @@ export function resolveSlackThreadTs(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
+  isThreadReply?: boolean;
   hasReplied: boolean;
 }): string | undefined {
   const planner = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
+    isThreadReply: params.isThreadReply,
     hasReplied: params.hasReplied,
   });
   return planner.use();
@@ -87,11 +89,17 @@ function createSlackReplyReferencePlanner(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
+  isThreadReply?: boolean;
   hasReplied?: boolean;
 }) {
-  // When already inside a Slack thread, always stay in it regardless of
-  // replyToMode — thread_ts is required to keep messages in the thread.
-  const effectiveMode = params.incomingThreadTs ? "all" : params.replyToMode;
+  // Only force "all" for genuine thread replies (user explicitly wrote in a
+  // thread).  When incomingThreadTs is auto-created (e.g. by Slack's "Agents &
+  // AI Apps" feature) but the message is a top-level channel message, respect
+  // the configured replyToMode so that "off" keeps replies in the main channel.
+  const isGenuineThread =
+    params.isThreadReply ??
+    (params.incomingThreadTs != null && params.incomingThreadTs !== params.messageTs);
+  const effectiveMode = isGenuineThread ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
@@ -104,12 +112,14 @@ export function createSlackReplyDeliveryPlan(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
+  isThreadReply?: boolean;
   hasRepliedRef: { value: boolean };
 }): SlackReplyDeliveryPlan {
   const replyReference = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
+    isThreadReply: params.isThreadReply,
     hasReplied: params.hasRepliedRef.value,
   });
   return {

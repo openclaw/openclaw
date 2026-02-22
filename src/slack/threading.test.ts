@@ -75,4 +75,52 @@ describe("resolveSlackThreadTargets", () => {
     expect(context.messageThreadId).toBe("456");
     expect(context.replyToId).toBe("456");
   });
+
+  it("respects replyToMode off when thread_ts is auto-created (same as ts)", () => {
+    // Slack's "Agents & AI Apps" feature auto-creates thread_ts equal to ts
+    // for top-level channel messages. replyToMode: "off" should keep replies
+    // in the main channel, not force them into the auto-created thread.
+    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        thread_ts: "123", // auto-created: same as ts
+      },
+    });
+
+    expect(replyThreadTs).toBeUndefined();
+    expect(statusThreadTs).toBe("123");
+  });
+
+  it("threads auto-created thread_ts when replyToMode is all", () => {
+    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+      replyToMode: "all",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        thread_ts: "123", // auto-created: same as ts
+      },
+    });
+
+    expect(replyThreadTs).toBe("123");
+    expect(statusThreadTs).toBe("123");
+  });
+
+  it("identifies auto-created thread_ts as non-thread-reply", () => {
+    const context = resolveSlackThreadContext({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        thread_ts: "123", // auto-created: same as ts, no parent_user_id
+      },
+    });
+
+    expect(context.isThreadReply).toBe(false);
+    expect(context.messageThreadId).toBeUndefined();
+  });
 });

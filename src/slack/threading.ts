@@ -38,8 +38,15 @@ export function resolveSlackThreadTargets(params: {
   message: SlackMessageEvent | SlackAppMentionEvent;
   replyToMode: ReplyToMode;
 }) {
-  const { incomingThreadTs, messageTs } = resolveSlackThreadContext(params);
-  const replyThreadTs = incomingThreadTs ?? (params.replyToMode === "all" ? messageTs : undefined);
+  const { incomingThreadTs, messageTs, isThreadReply } = resolveSlackThreadContext(params);
+  // Only use incomingThreadTs for threading when it's a genuine thread reply.
+  // For auto-created thread_ts (e.g. Slack "Agents & AI Apps"), respect
+  // replyToMode so that "off" keeps replies in the main channel.
+  const replyThreadTs = isThreadReply
+    ? incomingThreadTs
+    : params.replyToMode === "off"
+      ? undefined
+      : (incomingThreadTs ?? (params.replyToMode === "all" ? messageTs : undefined));
   const statusThreadTs = replyThreadTs ?? messageTs;
   return { replyThreadTs, statusThreadTs };
 }

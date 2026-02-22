@@ -92,6 +92,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
+  const isThreadReply =
+    typeof incomingThreadTs === "string" &&
+    incomingThreadTs.length > 0 &&
+    (incomingThreadTs !== messageTs || Boolean(message.parent_user_id));
   let didSetStatus = false;
 
   // Shared mutable ref for "replyToMode=first". Both tool + auto-reply flows
@@ -101,6 +105,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyToMode: ctx.replyToMode,
     incomingThreadTs,
     messageTs,
+    isThreadReply,
     hasRepliedRef,
   });
 
