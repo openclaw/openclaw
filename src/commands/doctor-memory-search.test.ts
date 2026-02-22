@@ -104,6 +104,18 @@ describe("noteMemorySearchHealth", () => {
     });
     expect(note).not.toHaveBeenCalled();
   });
+
+  it("does not warn when memory backend is qmd (self-contained embeddings)", async () => {
+    const qmdConfig = {
+      memory: { backend: "qmd" },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(qmdConfig);
+
+    // QMD handles its own embeddings, so no memorySearch provider check is needed
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveMemorySearchConfig).not.toHaveBeenCalled();
+  });
 });
 
 describe("detectLegacyWorkspaceDirs", () => {

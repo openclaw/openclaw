@@ -13,8 +13,15 @@ import { resolveUserPath } from "../utils.js";
  * Runs as part of `openclaw doctor` — config-only, no network calls.
  */
 export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void> {
+  // QMD backend is self-contained — it handles its own embeddings and doesn't
+  // need the standard memorySearch provider configuration. Skip the check.
+  if (cfg.memory?.backend === "qmd") {
+    return;
+  }
+
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = Boolean(resolved?.remote?.apiKey?.trim());
 
