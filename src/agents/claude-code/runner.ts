@@ -12,18 +12,18 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveClaudeBinary } from "./binary.js";
-import { activeSpawns, queuedSpawns, liveSessions, type LiveSession } from "./live-state.js";
-import { startMcpBridge, type McpBridgeHandle } from "./mcp-bridge.js";
 import type { CCAssistantMessage } from "./protocol.js";
-import { parseOutboundMessage } from "./protocol.js";
-import { peekSessionHistory, resolveSession, saveSession, updateSessionStats } from "./sessions.js";
 import type {
   ClaudeCodePermissionMode,
   ClaudeCodeResult,
   ClaudeCodeSpawnOptions,
 } from "./types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveClaudeBinary } from "./binary.js";
+import { activeSpawns, queuedSpawns, liveSessions, type LiveSession } from "./live-state.js";
+import { startMcpBridge, type McpBridgeHandle } from "./mcp-bridge.js";
+import { parseOutboundMessage } from "./protocol.js";
+import { peekSessionHistory, resolveSession, saveSession, updateSessionStats } from "./sessions.js";
 
 const log = createSubsystemLogger("agent/claude-code");
 
@@ -283,10 +283,6 @@ async function executeSpawn(options: ClaudeCodeSpawnOptions): Promise<ClaudeCode
     env: env as NodeJS.ProcessEnv,
   });
 
-  child.on("error", (err) => {
-    log.error(`claude-code spawn error: ${err.message}`);
-  });
-
   child.on("exit", (code, signal) => {
     log.info(`claude-code process exited: code=${code} signal=${signal}`);
   });
@@ -297,15 +293,19 @@ async function executeSpawn(options: ClaudeCodeSpawnOptions): Promise<ClaudeCode
   const ndjsonLog = createNdjsonLogger(repoPath);
 
   // 7. Send initial task on stdin — keep stdin OPEN for multi-turn
+  // Prepend source attribution marker so JSONL scanners can identify OpenClaw sessions
+  const marker = `[openclaw:agent=${agentId}]`;
   // When resuming, prepend previous session context so CC knows what happened
-  let taskContent = options.task;
+  let taskContent = `${marker}\n\n${options.task}`;
   if (sessionContext) {
     taskContent = [
+      marker,
+      "",
       "<previous_session_context>",
       sessionContext,
       "</previous_session_context>",
       "",
-      taskContent,
+      options.task,
     ].join("\n");
   }
   const initMessage = JSON.stringify({

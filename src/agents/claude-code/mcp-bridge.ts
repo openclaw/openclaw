@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ClaudeCodeSpawnOptions } from "./types.js";
+import type { ClaudeCodeSpawnOptions, DiscoveredSession } from "./types.js";
 
 export type McpBridgeHandle = {
   /** MCP config object for `--mcp-config` injection. */
@@ -42,6 +42,8 @@ function generateBridgeScript(options: {
   maxBudgetUsd?: number;
   announceQueuePath: string;
   workspaceDir?: string;
+  recentSessions?: DiscoveredSession[];
+  activeSessions?: Array<{ sessionId: string; repoPath: string }>;
 }): string {
   const taskJson = JSON.stringify(options.task);
   const agentIdJson = JSON.stringify(options.agentId ?? "default");
@@ -52,6 +54,24 @@ function generateBridgeScript(options: {
     options.workspaceDir ??
       path.join(os.homedir(), ".openclaw", "agents", options.agentId ?? "default"),
   );
+  // Serialize session data for injection into the bridge script
+  const recentSessionsJson = JSON.stringify(
+    (options.recentSessions ?? []).map((s) => ({
+      sessionId: s.sessionId,
+      source: s.source,
+      agentId: s.agentId,
+      branch: s.branch,
+      firstMessage: s.firstMessage,
+      lastModified: s.lastModified.toISOString(),
+      messageCount: s.messageCount,
+      totalCostUsd: s.totalCostUsd,
+      totalTurns: s.totalTurns,
+      lastTask: s.lastTask,
+      label: s.label,
+      isRunning: s.isRunning,
+    })),
+  );
+  const activeSessionsJson = JSON.stringify(options.activeSessions ?? []);
 
   return `
 "use strict";
@@ -62,9 +82,15 @@ const os = require("os");
 
 const rl = readline.createInterface({ input: process.stdin });
 
-// Stateful budget tracking
+// TODO: budget tracking is non-functional — totalCostUsd is never updated
 let totalCostUsd = 0;
 const maxBudgetUsd = ${budgetJson};
+
+const CONFIG = {
+  repoPath: ${repoJson},
+  recentSessions: ${recentSessionsJson},
+  activeSessions: ${activeSessionsJson},
+};
 
 const TOOLS = [
   {
@@ -98,6 +124,22 @@ const TOOLS = [
     name: "openclaw_session_info",
     description: "Returns metadata about the current OpenClaw session: agent ID, repo path, task description, cost budget remaining.",
     inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "openclaw_project_status",
+    description: "Returns the current project status including git state, recent commits, open PRs, active sessions, and available documentation. Call this before starting work to understand what's changed.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "openclaw_session_list",
+    description: "Lists all Claude Code sessions for this repository, from any source (this agent, other agents, VSCode, CLI). Use to understand prior work and decide whether to build on existing context.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        include_native: { type: "boolean", description: "Include sessions not spawned by OpenClaw (VSCode, CLI). Default: true" },
+      },
+      required: [],
+    },
   },
 ];
 
@@ -251,6 +293,77 @@ function handleRequest(parsed) {
           }],
         });
 
+      case "openclaw_project_status": {
+        const { execSync } = require("child_process");
+        const repoPath = CONFIG.repoPath;
+
+        const run = (cmd) => {
+          try { return execSync(cmd, { cwd: repoPath, timeout: 5000 }).toString().trim(); }
+          catch { return ""; }
+        };
+
+        const branch = run("git branch --show-current");
+        const headCommit = run("git log -1 --format='%h — %s'");
+        const status = run("git status --short").split("\\n").filter(Boolean);
+        const stashCount = run("git stash list").split("\\n").filter(Boolean).length;
+        const recentCommits = run("git log --oneline -10 --format='%h|%s|%an|%ar'")
+          .split("\\n").filter(Boolean)
+          .map(function(l) { var p = l.split("|"); return { sha: p[0], message: p[1], author: p[2], date: p[3] }; });
+
+        // Check docs
+        const docs = {
+          claudeMd: fs.existsSync(path.join(repoPath, "CLAUDE.md")),
+          specs: fs.existsSync(path.join(repoPath, ".specs"))
+            ? fs.readdirSync(path.join(repoPath, ".specs")).filter(function(f) { return f.endsWith(".md"); })
+            : [],
+          todo: fs.existsSync(path.join(repoPath, "TODO.md")),
+        };
+
+        // Open PRs (if gh available)
+        var openPrs = [];
+        try {
+          var prJson = run("gh pr list --json number,title,headRefName,state --limit 5");
+          if (prJson) openPrs = JSON.parse(prJson);
+        } catch(e) {}
+
+        return respond(id, {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              repo: path.basename(repoPath),
+              branch: branch,
+              headCommit: headCommit,
+              uncommittedChanges: status.filter(function(l) { return /^.[MADRC?]/.test(l); }),
+              stagedChanges: status.filter(function(l) { return /^[MADRC]/.test(l); }),
+              stashCount: stashCount,
+              recentCommits: recentCommits,
+              activeSessions: CONFIG.activeSessions,
+              recentSessions: CONFIG.recentSessions,
+              docs: docs,
+              openPrs: openPrs,
+            }, null, 2),
+          }],
+        });
+      }
+
+      case "openclaw_session_list": {
+        var includeNative = toolArgs.include_native !== false;
+        var sessions = CONFIG.recentSessions;
+        if (!includeNative) {
+          sessions = sessions.filter(function(s) { return s.source === "openclaw"; });
+        }
+        return respond(id, {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              sessions: sessions,
+              total: sessions.length,
+              activeCount: CONFIG.activeSessions.length,
+            }, null, 2),
+          }],
+        });
+      }
+
       default:
         return respondError(id, -32601, "Unknown tool: " + toolName);
     }
@@ -289,7 +402,13 @@ process.on("SIGINT", () => process.exit(0));
  * Start the MCP bridge server as a subprocess.
  * Returns a handle with the MCP config for `--mcp-config` and a stop function.
  */
-export async function startMcpBridge(options: ClaudeCodeSpawnOptions): Promise<McpBridgeHandle> {
+export async function startMcpBridge(
+  options: ClaudeCodeSpawnOptions,
+  sessionData?: {
+    recentSessions?: DiscoveredSession[];
+    activeSessions?: Array<{ sessionId: string; repoPath: string }>;
+  },
+): Promise<McpBridgeHandle> {
   const tmpDir = path.join(os.tmpdir(), "openclaw-mcp-bridge");
   fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -308,6 +427,8 @@ export async function startMcpBridge(options: ClaudeCodeSpawnOptions): Promise<M
     maxBudgetUsd: options.maxBudgetUsd,
     announceQueuePath,
     workspaceDir,
+    recentSessions: sessionData?.recentSessions,
+    activeSessions: sessionData?.activeSessions,
   });
 
   fs.writeFileSync(scriptPath, script, "utf8");

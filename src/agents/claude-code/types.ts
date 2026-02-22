@@ -37,10 +37,6 @@ export type ClaudeCodeSubagentConfig = {
   mcpBridge?: {
     /** Enable the MCP bridge (default: true). */
     enabled?: boolean;
-    /** Let CC read OpenClaw memory files. */
-    exposeMemory?: boolean;
-    /** Let CC read triggering conversation context. */
-    exposeConversation?: boolean;
   };
   /** Progress relay settings. */
   progressRelay?: {
@@ -51,6 +47,25 @@ export type ClaudeCodeSubagentConfig = {
     /** Show which tools are being called. */
     includeToolUse?: boolean;
   };
+  /** Session selection settings for intelligent resume vs fresh decisions. */
+  sessionSelection?: Partial<SessionSelectionConfig>;
+};
+
+// ---------------------------------------------------------------------------
+// Session selection config
+// ---------------------------------------------------------------------------
+
+export type SessionSelectionConfig = {
+  /** Model for task relevance scoring. Default: "claude-haiku". */
+  relevanceModel: string;
+  /** Max response tokens for relevance call. Default: 500. */
+  relevanceMaxTokens: number;
+  /** Timeout for relevance call in ms. Default: 3000. */
+  relevanceTimeoutMs: number;
+  /** Score threshold for resume vs fresh. Default: 0.6. */
+  resumeThreshold: number;
+  /** Enable LLM-based relevance. False = keyword fallback only. Default: true. */
+  enabled: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -151,4 +166,44 @@ export type ClaudeCodeTaskHistoryEntry = {
 
 export type ClaudeCodeSessionRegistry = {
   sessions: Record<string, ClaudeCodeSessionEntry>;
+};
+
+// ---------------------------------------------------------------------------
+// Session discovery
+// ---------------------------------------------------------------------------
+
+export type JsonlHeader = {
+  gitBranch?: string;
+  firstUserMessage?: string;
+  slug?: string;
+  version?: string;
+  lineCount: number;
+  originMarker?: string;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  compactionCount: number;
+};
+
+export type DiscoveredSession = {
+  sessionId: string;
+  source: "openclaw" | "native-only";
+  agentId?: string;
+  repoPath: string;
+  branch: string;
+  /** First user message text (session "title"), max 200 chars. */
+  firstMessage: string;
+  lastModified: Date;
+  messageCount: number;
+  fileSizeBytes: number;
+  totalCostUsd?: number;
+  totalTurns?: number;
+  lastTask?: string;
+  label?: string;
+  slug?: string;
+  isRunning: boolean;
+  originMarker?: string;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  compactionCount: number;
+  budgetUsedPct?: number;
 };

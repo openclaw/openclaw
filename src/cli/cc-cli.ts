@@ -9,9 +9,10 @@
  *   costs             Cost summary across all CC sessions
  */
 
+import type { Command } from "commander";
 import { execSync } from "node:child_process";
 import path from "node:path";
-import type { Command } from "commander";
+import type { ClaudeCodeSessionEntry, DiscoveredSession } from "../agents/claude-code/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveClaudeBinary } from "../agents/claude-code/binary.js";
 import {
@@ -19,8 +20,7 @@ import {
   killClaudeCode,
   isClaudeCodeRunning,
 } from "../agents/claude-code/live-state.js";
-import { listAllSessions, listSessions } from "../agents/claude-code/sessions.js";
-import type { ClaudeCodeSessionEntry } from "../agents/claude-code/types.js";
+import { listAllSessions, listSessions, discoverSessions } from "../agents/claude-code/sessions.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -28,6 +28,7 @@ type CcListOptions = {
   json?: boolean;
   agent?: string;
   all?: boolean;
+  repo?: string;
 };
 
 type CcInfoOptions = {
@@ -97,6 +98,51 @@ function formatSessionList(
   return lines.join("\n");
 }
 
+function formatAge(date: Date): string {
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) {
+    return "just now";
+  }
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function formatDiscoveredSessions(sessions: DiscoveredSession[]): string {
+  if (sessions.length === 0) {
+    return "No Claude Code sessions found.";
+  }
+
+  const lines: string[] = ["Claude Code Sessions (all sources):", ""];
+
+  for (const s of sessions) {
+    const status = s.isRunning ? " [RUNNING]" : "";
+    const source = s.source === "openclaw" ? "openclaw" : "native";
+    const cost = s.totalCostUsd != null ? `  ${formatCost(s.totalCostUsd)}` : "";
+    const turns = s.totalTurns != null ? `  ${s.totalTurns}t` : "";
+    const agent = s.agentId ? `  agent:${s.agentId}` : "";
+    const label = s.label ? `  [${s.label}]` : "";
+    const age = formatAge(s.lastModified);
+    const msgs = `${s.messageCount} msgs`;
+    const firstMsg = s.firstMessage.slice(0, 70).replace(/\n/g, " ");
+
+    lines.push(
+      `  ${s.sessionId.slice(0, 12)}...  ${s.branch}${status}${label}  (${source})  ${age}  ${msgs}${cost}${turns}${agent}`,
+    );
+    lines.push(`    ${firstMsg}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 function formatSessionInfo(
   sessionId: string,
   entry: ClaudeCodeSessionEntry & { repoPath: string },
@@ -137,8 +183,27 @@ export function registerCcCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .option("--agent <id>", "Filter by agent ID")
     .option("--all", "Show all agents", false)
-    .action((opts: CcListOptions) => {
+    .option("--repo <path>", "Discover all sessions for a repo (cross-source)")
+    .action(async (opts: CcListOptions) => {
       try {
+        // --repo mode: use discoverSessions() for cross-source discovery
+        if (opts.repo) {
+          const discovered = await discoverSessions(path.resolve(opts.repo));
+          if (opts.json) {
+            defaultRuntime.log(
+              JSON.stringify(
+                discovered.map((s) => ({ ...s, lastModified: s.lastModified.toISOString() })),
+                null,
+                2,
+              ),
+            );
+          } else {
+            defaultRuntime.log(formatDiscoveredSessions(discovered));
+          }
+          return;
+        }
+
+        // Legacy mode: registry-only listing
         let sessions: Array<ClaudeCodeSessionEntry & { agentId: string; repoPath: string }>;
         if (opts.all) {
           sessions = listAllSessions();
