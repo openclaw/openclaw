@@ -78,9 +78,7 @@ describe("resolveEnableState", () => {
   it("allows non-bundled plugins when explicitly in allowlist", () => {
     const config = normalizePluginsConfig({ allow: ["my-plugin"] });
     const result = resolveEnableState("my-plugin", "workspace", config);
-    expect(result.enabled).toBe(false); // still denied if no entry.enabled
-    // but NOT denied by "not in allowlist"
-    expect(result.reason).toBe("not explicitly allowed");
+    expect(result.enabled).toBe(true);
   });
 
   it("allows non-bundled plugins when entry.enabled=true", () => {

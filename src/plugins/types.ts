@@ -250,6 +250,8 @@ export type OpenClawPluginApi = {
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;
+  /** Filtered environment — sensitive credentials (API keys, tokens) are stripped. */
+  env: Readonly<Record<string, string>>;
   logger: PluginLogger;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
