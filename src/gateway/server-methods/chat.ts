@@ -832,6 +832,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       const ackPayload = {
         runId: clientRunId,
+        sessionKey,
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });

@@ -278,16 +278,17 @@ export class AcpGatewayAgent implements Agent {
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
 
     return new Promise<PromptResponse>((resolve, reject) => {
-      this.pendingPrompts.set(params.sessionId, {
+      const pending: PendingPrompt = {
         sessionId: params.sessionId,
         sessionKey: session.sessionKey,
         idempotencyKey: runId,
         resolve,
         reject,
-      });
+      };
+      this.pendingPrompts.set(params.sessionId, pending);
 
       this.gateway
-        .request(
+        .request<{ runId?: string; sessionKey?: string; status?: string }>(
           "chat.send",
           {
             sessionKey: session.sessionKey,
@@ -300,6 +301,12 @@ export class AcpGatewayAgent implements Agent {
           },
           { expectFinal: true },
         )
+        .then((result) => {
+          // Update the session key to the canonical form returned by the gateway
+          if (result?.sessionKey && result.sessionKey !== session.sessionKey) {
+            pending.sessionKey = result.sessionKey;
+          }
+        })
         .catch((err) => {
           this.pendingPrompts.delete(params.sessionId);
           this.sessionStore.clearActiveRun(params.sessionId);
