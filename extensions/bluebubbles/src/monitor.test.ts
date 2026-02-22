@@ -1723,7 +1723,7 @@ describe("BlueBubbles webhook monitor", () => {
   });
 
   describe("inbound debouncing", () => {
-    it("coalesces text-only then attachment webhook events by messageId", async () => {
+    it("coalesces text-only then attachment webhook events by chat+sender", async () => {
       vi.useFakeTimers();
       try {
         const account = createMockAccount({ dmPolicy: "open" });
