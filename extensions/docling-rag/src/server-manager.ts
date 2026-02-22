@@ -3,10 +3,35 @@
  *
  * Lazy-starts on first use — zero resources if RAG is never invoked.
  * Stops cleanly when the gateway shuts down.
+ *
+ * Installation: docling-serve is a Python package installed natively
+ * on all platforms (macOS, Linux, Windows) via `pip install docling-serve[ui]`.
+ * No Docker/containers needed. If the user already has a running instance
+ * (including one running in a container they manage), they can point
+ * doclingServeUrl to it and set autoManage=false.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { DEFAULT_DOCLING_SERVE_URL } from "./types.js";
+
+const INSTALL_INSTRUCTIONS = [
+  "docling-serve is not installed or not running.",
+  "",
+  "Install natively (macOS, Linux, Windows):",
+  '  pip install "docling-serve[ui]"',
+  "",
+  "Or if you prefer containers (self-managed):",
+  "  # Docker:",
+  "  docker run -p 5001:5001 quay.io/docling-project/docling-serve-cpu",
+  "  # Podman:",
+  "  podman run -p 5001:5001 quay.io/docling-project/docling-serve-cpu",
+  "",
+  "Then set in your openclaw config:",
+  '  plugins.docling-rag.config.doclingServeUrl = "http://127.0.0.1:5001"',
+  "  plugins.docling-rag.config.autoManage = false",
+  "",
+  "Docs: https://github.com/docling-project/docling-serve",
+].join("\n");
 
 export class DoclingServerManager {
   private child: ChildProcess | null = null;
@@ -41,7 +66,7 @@ export class DoclingServerManager {
       return;
     }
 
-    await this.startProcess();
+    await this.startNativeProcess();
     this.started = true;
   }
 
@@ -56,46 +81,34 @@ export class DoclingServerManager {
     }
   }
 
-  private async startProcess(): Promise<void> {
-    const commands = [
-      { cmd: "docling-serve", args: ["run", "--port", String(this.port), "--host", "127.0.0.1"] },
-      {
-        cmd: "docker",
-        args: [
-          "run",
-          "--rm",
-          "-p",
-          `${this.port}:5001`,
-          "quay.io/docling-project/docling-serve-cpu",
-        ],
-      },
-    ];
-
-    for (const { cmd, args } of commands) {
-      try {
-        this.child = spawn(cmd, args, {
+  /**
+   * Start docling-serve as a native Python process.
+   * No Docker/container fallback — if not installed, show clear instructions
+   * for native install or self-managed container options.
+   */
+  private async startNativeProcess(): Promise<void> {
+    try {
+      this.child = spawn(
+        "docling-serve",
+        ["run", "--port", String(this.port), "--host", "127.0.0.1"],
+        {
           stdio: ["ignore", "pipe", "pipe"],
           detached: false,
-        });
+        },
+      );
 
-        this.child.on("error", () => {
-          this.child = null;
-        });
+      this.child.on("error", () => {
+        this.child = null;
+      });
 
-        await this.waitForHealthy(60_000);
-        return;
-      } catch {
-        if (this.child) {
-          this.child.kill("SIGTERM");
-          this.child = null;
-        }
+      await this.waitForHealthy(60_000);
+    } catch {
+      if (this.child) {
+        this.child.kill("SIGTERM");
+        this.child = null;
       }
+      throw new Error(INSTALL_INSTRUCTIONS);
     }
-
-    throw new Error(
-      "Could not start docling-serve. Install it with: pip install docling-serve[ui]\n" +
-        "Or use Docker: docker pull quay.io/docling-project/docling-serve-cpu",
-    );
   }
 
   private async waitForHealthy(timeoutMs: number): Promise<void> {
