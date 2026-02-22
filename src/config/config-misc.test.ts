@@ -7,7 +7,11 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import {
+  readConfigFileSnapshot,
+  validateConfigObject,
+  validateConfigObjectWithPlugins,
+} from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -312,5 +316,33 @@ describe("config strict validation", () => {
       expect(snap.valid).toBe(false);
       expect(snap.legacyIssues).not.toHaveLength(0);
     });
+  });
+
+  it("accepts config with invalid models.providers.<key>.api by stripping that provider and returning warnings", () => {
+    const raw = {
+      agents: { list: [{ id: "main" }] },
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            api: "google-genai" as unknown,
+            models: [{ id: "gemini-1.5-flash", name: "Gemini 1.5 Flash" }],
+          },
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [{ id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet" }],
+          },
+        },
+      },
+    };
+    const res = validateConfigObjectWithPlugins(raw);
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.models?.providers?.google).toBeUndefined();
+    expect(res.config.models?.providers?.anthropic).toBeDefined();
+    expect(res.warnings.some((w) => w.path === "models.providers.google")).toBe(true);
+    expect(res.warnings.some((w) => w.message.includes("Provider disabled"))).toBe(true);
   });
 });

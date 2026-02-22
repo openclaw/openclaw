@@ -13,6 +13,11 @@ export const ModelApiSchema = z.union([
   z.literal("ollama"),
 ]);
 
+/** Supported model API types; derived from ModelApiSchema so error messages stay in sync. */
+export const MODEL_API_VALUES: readonly string[] = (
+  ModelApiSchema as { options: Array<{ value: string }> }
+).options.map((opt) => opt.value);
+
 export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
