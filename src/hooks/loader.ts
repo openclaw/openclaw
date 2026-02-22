@@ -11,9 +11,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
+import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
-import { importFileModule, resolveFunctionModuleExport } from "./module-loader.js";
+import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
@@ -82,12 +83,12 @@ export async function loadInternalHooks(
           );
           continue;
         }
+        // Import handler module — only cache-bust mutable (workspace/managed) hooks
+        const importUrl = buildImportUrl(entry.hook.handlerPath, entry.hook.source);
+        const mod = (await import(importUrl)) as Record<string, unknown>;
+
         // Get handler function (default or named export)
         const exportName = entry.metadata?.export ?? "default";
-        const mod = await importFileModule({
-          modulePath: entry.hook.handlerPath,
-          cacheBust: true,
-        });
         const handler = resolveFunctionModuleExport<InternalHookHandler>({
           mod,
           exportName,
@@ -159,12 +160,12 @@ export async function loadInternalHooks(
         continue;
       }
 
+      // Legacy handlers are always workspace-relative, so use mtime-based cache busting
+      const importUrl = buildImportUrl(modulePath, "openclaw-workspace");
+      const mod = (await import(importUrl)) as Record<string, unknown>;
+
       // Get the handler function
       const exportName = handlerConfig.export ?? "default";
-      const mod = await importFileModule({
-        modulePath,
-        cacheBust: true,
-      });
       const handler = resolveFunctionModuleExport<InternalHookHandler>({
         mod,
         exportName,

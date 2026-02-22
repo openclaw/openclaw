@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - Cron/Schedule: for `every` jobs, prefer `lastRunAtMs + everyMs` when still in the future after restarts, then fall back to anchor scheduling for catch-up windows, so NEXT timing matches the last successful cadence. (#22895) Thanks @SidQin-cyber.
 - Agents/Compaction: restore embedded compaction safeguard/context-pruning extension loading in production by wiring bundled extension factories into the resource loader instead of runtime file-path resolution. (#22349) Thanks @Glucksberg.
 - Feishu/Media: for inbound video messages that include both `file_key` (video) and `image_key` (thumbnail), prefer `file_key` when downloading media so video attachments are saved instead of silently failing on thumbnail keys. (#23633)
+- Hooks/Loader: avoid redundant hook-module recompilation on gateway restart by skipping cache-busting for bundled hooks and using stable file metadata keys (`mtime+size`) for mutable workspace/managed/plugin hook imports. (#16953) Thanks @mudrii.
 - Hooks/Cron: suppress duplicate main-session events for delivered hook turns and mark `SILENT_REPLY_TOKEN` (`NO_REPLY`) early exits as delivered to prevent hook context pollution. (#20678) Thanks @JonathanWorks.
 - Providers/OpenRouter: inject `cache_control` on system prompts for OpenRouter Anthropic models to improve prompt-cache reuse. (#17473) Thanks @rrenamed.
 - Installer/Smoke tests: remove legacy `OPENCLAW_USE_GUM` overrides from docker install-smoke runs so tests exercise installer auto TTY detection behavior directly.
