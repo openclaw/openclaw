@@ -289,6 +289,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           "--skip-semantic",
           "Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)",
         )
+        .option("--skip-retroactive-tagging", "Skip retroactive tagging (Phase 2b)")
         .option("--workspace <dir>", "Workspace directory for TASKS.md cleanup")
         .option("--report", "Show quality metrics after sleep cycle completes")
         .action(
@@ -302,6 +303,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             maxSemanticPairs?: string;
             concurrency?: string;
             skipSemantic?: boolean;
+            skipRetroactiveTagging?: boolean;
             workspace?: string;
             report?: boolean;
           }) => {
@@ -385,6 +387,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 agentId: opts.agent,
                 dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
                 skipSemanticDedup: opts.skipSemantic === true,
+                skipRetroactiveTagging: opts.skipRetroactiveTagging === true,
                 maxSemanticDedupPairs: maxSemanticPairs,
                 llmConcurrency: concurrency,
                 decayRetentionThreshold: decayThreshold,

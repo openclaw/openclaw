@@ -773,12 +773,16 @@ export async function runSleepCycle(
                 );
               } catch (err) {
                 result.retroactiveTagging.failed++;
+                await db.incrementTaggingRetries(memory.id);
                 logger.warn(
                   `memory-neo4j: [sleep] retroactive tagging write failed for ${memory.id.slice(0, 8)}: ${String(err)}`,
                 );
               }
             } else {
               result.retroactiveTagging.failed++;
+              // Increment retry counter so this memory is eventually skipped
+              // after maxRetries (default 3), preventing infinite loops
+              await db.incrementTaggingRetries(memory.id);
             }
           }
         }

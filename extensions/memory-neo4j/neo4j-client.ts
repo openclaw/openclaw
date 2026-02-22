@@ -1041,6 +1041,7 @@ export class Neo4jMemoryClient {
   async listUntaggedMemories(
     limit: number = 50,
     agentId?: string,
+    maxRetries: number = 3,
   ): Promise<Array<{ id: string; text: string }>> {
     await this.ensureInitialized();
     const session = this.driver!.session();
@@ -1050,15 +1051,38 @@ export class Neo4jMemoryClient {
         `MATCH (m:Memory)
          WHERE m.extractionStatus = 'complete' ${agentFilter}
            AND NOT EXISTS { MATCH (m)-[:TAGGED]->(:Tag) }
+           AND coalesce(m.taggingRetries, 0) < $maxRetries
          RETURN m.id AS id, m.text AS text
          ORDER BY m.createdAt ASC
          LIMIT $limit`,
-        { limit: neo4j.int(limit), ...(agentId ? { agentId } : {}) },
+        {
+          limit: neo4j.int(limit),
+          maxRetries: neo4j.int(maxRetries),
+          ...(agentId ? { agentId } : {}),
+        },
       );
       return result.records.map((r) => ({
         id: r.get("id") as string,
         text: r.get("text") as string,
       }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Increment the tagging retry counter for a memory that failed retroactive tagging.
+   * After maxRetries, listUntaggedMemories will skip it.
+   */
+  async incrementTaggingRetries(memoryId: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `MATCH (m:Memory {id: $id})
+         SET m.taggingRetries = coalesce(m.taggingRetries, 0) + 1`,
+        { id: memoryId },
+      );
     } finally {
       await session.close();
     }
