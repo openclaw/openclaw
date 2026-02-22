@@ -867,6 +867,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    // Pre-check write permissions before running the global install.
+    // npm/pnpm/bun remove the existing package before installing the new one,
+    // so an EACCES mid-install leaves the CLI partially deleted with no rollback.
+    try {
+      await fs.access(pkgRoot, fs.constants.W_OK);
+    } catch {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: "no-write-permission",
+        before: { version: beforeVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
