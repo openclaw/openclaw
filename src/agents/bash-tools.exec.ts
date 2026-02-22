@@ -285,7 +285,7 @@ export function createExecTool(
       if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
         throw new Error(
           `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
-            `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
+            `configure tools.exec.host=${renderExecHostLabel(requestedHost)} to allow).`,
         );
       }
       if (elevatedRequested) {

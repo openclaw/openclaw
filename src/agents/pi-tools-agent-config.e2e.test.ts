@@ -659,7 +659,9 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("exec host not allowed");
+    ).rejects.toThrow(
+      /exec host not allowed \(requested sandbox; configure tools\.exec\.host=sandbox to allow\)\./,
+    );
 
     const helperTools = createOpenClawCodingTools({
       config: cfg,
