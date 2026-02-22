@@ -30,7 +30,7 @@ export function scheduleFollowupDrain(
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.
           //
-          // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
+          // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -38,13 +38,14 @@ export function scheduleFollowupDrain(
             const to = item.originatingTo;
             const accountId = item.originatingAccountId;
             const threadId = item.originatingThreadId;
-            if (!channel && !to && !accountId && threadId == null) {
+            if (!channel && !to && !accountId && (threadId == null || threadId === "")) {
               return {};
             }
             if (!isRoutableChannel(channel) || !to) {
               return { cross: true };
             }
-            const threadKey = threadId != null ? String(threadId) : "";
+            // Support both number (Telegram topic IDs) and string (Slack thread_ts) thread IDs.
+            const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
             return {
               key: [channel, to, accountId || "", threadKey].join("|"),
             };
@@ -76,8 +77,9 @@ export function scheduleFollowupDrain(
           const originatingAccountId = items.find(
             (i) => i.originatingAccountId,
           )?.originatingAccountId;
+          // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
           const originatingThreadId = items.find(
-            (i) => i.originatingThreadId != null,
+            (i) => i.originatingThreadId != null && i.originatingThreadId !== "",
           )?.originatingThreadId;
 
           const prompt = buildCollectPrompt({
