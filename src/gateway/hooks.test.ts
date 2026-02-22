@@ -215,7 +215,12 @@ describe("gateway hooks helpers", () => {
 
   test("resolveHookSessionKey allows request sessionKey when explicitly enabled", () => {
     const cfg = {
-      hooks: { enabled: true, token: "secret", allowRequestSessionKey: true },
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:"],
+      },
     } as OpenClawConfig;
     const resolved = resolveHooksConfig(cfg);
     expect(resolved).not.toBeNull();
@@ -228,6 +233,33 @@ describe("gateway hooks helpers", () => {
       sessionKey: "hook:manual",
     });
     expect(allowed).toEqual({ ok: true, value: "hook:manual" });
+  });
+
+  test("resolveHooksConfig requires prefixes when request sessionKey override is enabled", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowRequestSessionKey: true,
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowRequestSessionKey=true requires non-empty hooks.allowedSessionKeyPrefixes",
+    );
+
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowRequestSessionKey: true,
+          allowedSessionKeyPrefixes: [],
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowRequestSessionKey=true requires non-empty hooks.allowedSessionKeyPrefixes",
+    );
   });
 
   test("resolveHookSessionKey enforces allowed prefixes", () => {
