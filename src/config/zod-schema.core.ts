@@ -185,6 +185,7 @@ export const TtsConfigSchema = z
         allowVoiceSettings: z.boolean().optional(),
         allowNormalization: z.boolean().optional(),
         allowSeed: z.boolean().optional(),
+        allowInstructions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -215,6 +216,7 @@ export const TtsConfigSchema = z
         apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
         voice: z.string().optional(),
+        instructions: z.string().optional(),
       })
       .strict()
       .optional(),

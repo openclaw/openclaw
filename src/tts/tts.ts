@@ -114,6 +114,7 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+    instructions?: string;
   };
   edge: {
     enabled: boolean;
@@ -152,6 +153,7 @@ export type ResolvedTtsModelOverrides = {
   allowVoiceSettings: boolean;
   allowNormalization: boolean;
   allowSeed: boolean;
+  allowInstructions: boolean;
 };
 
 export type TtsDirectiveOverrides = {
@@ -160,6 +162,7 @@ export type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+    instructions?: string;
   };
   elevenlabs?: {
     voiceId?: string;
@@ -236,6 +239,7 @@ function resolveModelOverridePolicy(
       allowVoiceSettings: false,
       allowNormalization: false,
       allowSeed: false,
+      allowInstructions: false,
     };
   }
   const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
@@ -249,6 +253,7 @@ function resolveModelOverridePolicy(
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
     allowNormalization: allow(overrides?.allowNormalization),
     allowSeed: allow(overrides?.allowSeed),
+    allowInstructions: allow(overrides?.allowInstructions),
   };
 }
 
@@ -289,6 +294,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       apiKey: raw.openai?.apiKey,
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+      instructions: raw.openai?.instructions?.trim() || undefined,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -661,6 +667,7 @@ export async function textToSpeech(params: {
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
+        const openaiInstructionsOverride = params.overrides?.openai?.instructions;
         audioBuffer = await openaiTTS({
           text: params.text,
           apiKey,
@@ -668,6 +675,7 @@ export async function textToSpeech(params: {
           voice: openaiVoiceOverride ?? config.openai.voice,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
+          instructions: openaiInstructionsOverride ?? config.openai.instructions,
         });
       }
 
@@ -767,6 +775,7 @@ export async function textToSpeechTelephony(params: {
         voice: config.openai.voice,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
+        instructions: config.openai.instructions,
       });
 
       return {
