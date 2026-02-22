@@ -9,6 +9,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
+import type { BackoffPolicy } from "../infra/backoff.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
@@ -46,6 +47,7 @@ export type MonitorSignalOpts = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
+  reconnectPolicy?: Partial<BackoffPolicy>;
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
@@ -449,6 +451,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       abortSignal: daemonLifecycle.abortSignal,
       runtime,
+      policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {
           runtime.error?.(`event handler failed: ${String(err)}`);
