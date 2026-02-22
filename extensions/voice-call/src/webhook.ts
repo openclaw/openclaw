@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import http from "node:http";
 import { URL } from "node:url";
 import {
@@ -17,6 +18,8 @@ import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+const WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
+const WEBHOOK_REPLAY_MAX_KEYS = 5_000;
 
 /**
  * HTTP server for receiving voice call webhooks from providers.
@@ -29,6 +32,7 @@ export class VoiceCallWebhookServer {
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
   private staleCallReaperInterval: ReturnType<typeof setInterval> | null = null;
+  private recentReplayKeys = new Map<string, number>();
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -330,16 +334,23 @@ export class VoiceCallWebhookServer {
       return;
     }
 
+    const replayKey = this.buildReplayKey(ctx);
+    const isReplay = replayKey ? this.shouldDropReplayWebhook(replayKey, Date.now()) : false;
+
     // Parse events
     const result = this.provider.parseWebhookEvent(ctx);
 
     // Process each event
-    for (const event of result.events) {
-      try {
-        this.manager.processEvent(event);
-      } catch (err) {
-        console.error(`[voice-call] Error processing event ${event.type}:`, err);
+    if (!isReplay) {
+      for (const event of result.events) {
+        try {
+          this.manager.processEvent(event);
+        } catch (err) {
+          console.error(`[voice-call] Error processing event ${event.type}:`, err);
+        }
       }
+    } else {
+      console.warn("[voice-call] Replay webhook dropped after successful signature verification");
     }
 
     // Send response
@@ -363,6 +374,67 @@ export class VoiceCallWebhookServer {
     timeoutMs = 30_000,
   ): Promise<string> {
     return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
+  }
+
+  private getHeaderValue(ctx: WebhookContext, name: string): string | null {
+    const value = ctx.headers[name.toLowerCase()];
+    if (!value) {
+      return null;
+    }
+    if (Array.isArray(value)) {
+      const first = value[0]?.trim();
+      return first || null;
+    }
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
+  private buildReplayKey(ctx: WebhookContext): string | null {
+    const telnyxSignature = this.getHeaderValue(ctx, "telnyx-signature-ed25519");
+    const telnyxTimestamp = this.getHeaderValue(ctx, "telnyx-timestamp");
+    if (telnyxSignature && telnyxTimestamp) {
+      return `${this.provider.name}:telnyx:${telnyxTimestamp}:${telnyxSignature}`;
+    }
+
+    const plivoV3Signature = this.getHeaderValue(ctx, "x-plivo-signature-v3");
+    const plivoV3Nonce = this.getHeaderValue(ctx, "x-plivo-signature-v3-nonce");
+    if (plivoV3Signature && plivoV3Nonce) {
+      return `${this.provider.name}:plivo:v3:${plivoV3Nonce}:${plivoV3Signature}`;
+    }
+
+    const plivoV2Signature = this.getHeaderValue(ctx, "x-plivo-signature-v2");
+    const plivoV2Nonce = this.getHeaderValue(ctx, "x-plivo-signature-v2-nonce");
+    if (plivoV2Signature && plivoV2Nonce) {
+      return `${this.provider.name}:plivo:v2:${plivoV2Nonce}:${plivoV2Signature}`;
+    }
+
+    const twilioSignature = this.getHeaderValue(ctx, "x-twilio-signature");
+    const twilioIdempotencyToken = this.getHeaderValue(ctx, "i-twilio-idempotency-token");
+    if (twilioSignature && twilioIdempotencyToken) {
+      return `${this.provider.name}:twilio:${twilioIdempotencyToken}:${twilioSignature}`;
+    }
+
+    return null;
+  }
+
+  private shouldDropReplayWebhook(replayKey: string, nowMs: number): boolean {
+    const replayFingerprint = crypto.createHash("sha256").update(replayKey).digest("hex");
+    const seenAt = this.recentReplayKeys.get(replayFingerprint);
+    this.recentReplayKeys.set(replayFingerprint, nowMs);
+
+    if (typeof seenAt === "number" && nowMs - seenAt < WEBHOOK_REPLAY_WINDOW_MS) {
+      return true;
+    }
+
+    if (this.recentReplayKeys.size > WEBHOOK_REPLAY_MAX_KEYS) {
+      for (const [key, timestamp] of this.recentReplayKeys) {
+        if (nowMs - timestamp >= WEBHOOK_REPLAY_WINDOW_MS) {
+          this.recentReplayKeys.delete(key);
+        }
+      }
+    }
+
+    return false;
   }
 
   /**
