@@ -57,7 +57,7 @@ function hasDynamicTmpdirJoin(source: string, filePath = "fixture.ts"): boolean 
     filePath,
     source,
     ts.ScriptTarget.Latest,
-    true,
+    false,
     filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
   let found = false;
