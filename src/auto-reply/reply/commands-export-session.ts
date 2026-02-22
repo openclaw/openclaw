@@ -90,11 +90,11 @@ function generateHtml(sessionData: SessionData): string {
     .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
   return template
-    .replace("{{CSS}}", css)
-    .replace("{{JS}}", templateJs)
-    .replace("{{SESSION_DATA}}", sessionDataBase64)
-    .replace("{{MARKED_JS}}", markedJs)
-    .replace("{{HIGHLIGHT_JS}}", hljsJs);
+    .replace("{{CSS}}", () => css)
+    .replace("{{JS}}", () => templateJs)
+    .replace("{{SESSION_DATA}}", () => sessionDataBase64)
+    .replace("{{MARKED_JS}}", () => markedJs)
+    .replace("{{HIGHLIGHT_JS}}", () => hljsJs);
 }
 
 function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {
