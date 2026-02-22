@@ -189,6 +189,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable experimental session transcript indexing for memory search (default: false).",
   "agents.defaults.memorySearch.provider":
     'Embedding provider ("openai", "gemini", "voyage", or "local").',
+  "models.providers.ollama.baseUrl":
+    "Ollama API base URL (default: http://127.0.0.1:11434). For VPS: set to http://YOUR_VPS_IP:11434; run scripts/setup-ollama-vps.sh on the VPS first.",
   "agents.defaults.memorySearch.remote.baseUrl":
     "Custom base URL for remote embeddings (OpenAI-compatible proxies or Gemini overrides).",
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",

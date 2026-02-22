@@ -243,6 +243,33 @@ ps aux | grep ollama
 ollama serve
 ```
 
+## VPS deployment
+
+Run Ollama on a VPS so OpenClaw can use self-hosted models at zero API cost. Use the provided setup script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/setup-ollama-vps.sh | bash
+```
+
+The script installs Ollama, configures `OLLAMA_HOST=0.0.0.0` so the API is reachable from outside localhost, and optionally pulls a model. For remote clients, set `models.providers.ollama.baseUrl` to your VPS address:
+
+```json5
+{
+  gateway: { mode: "local" },
+  agents: { defaults: { model: { primary: "ollama/llama3.1:8b" } } },
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://YOUR_VPS_IP:11434",
+        apiKey: "ollama-local"
+      }
+    }
+  }
+}
+```
+
+Example config: [ollama-vps.example.json](ollama-vps.example.json).
+
 ## See Also
 
 - [Model Providers](/concepts/model-providers) - Overview of all providers

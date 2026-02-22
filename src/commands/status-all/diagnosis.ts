@@ -100,7 +100,7 @@ export async function appendStatusAllDiagnosis(params: {
   if (params.remoteUrlMissing) {
     lines.push("");
     emitCheck("Gateway remote mode misconfigured (gateway.remote.url missing)", "warn");
-    lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
+    lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local (e.g. for Ollama VPS).")}`);
   }
 
   if (params.sentinel?.payload) {
