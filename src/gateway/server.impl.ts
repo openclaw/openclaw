@@ -75,6 +75,7 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
+import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
@@ -630,6 +631,19 @@ export async function startGatewayServer(
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });
+  const secretsHandlers = createSecretsHandlers({
+    reloadSecrets: async () => {
+      const active = getActiveSecretsRuntimeSnapshot();
+      if (!active) {
+        throw new Error("Secrets runtime snapshot is not active.");
+      }
+      const prepared = await activateRuntimeSecrets(active.sourceConfig, {
+        reason: "reload",
+        activate: true,
+      });
+      return { warningCount: prepared.warnings.length };
+    },
+  });
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
@@ -650,6 +664,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...secretsHandlers,
     },
     broadcast,
     context: {
