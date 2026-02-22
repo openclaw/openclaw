@@ -143,6 +143,33 @@ function resolveChannelGroups(
   return accountGroups ?? channelConfig.groups;
 }
 
+type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
+
+function resolveChannelGroupPolicyMode(
+  cfg: OpenClawConfig,
+  channel: GroupPolicyChannel,
+  accountId?: string | null,
+): ChannelGroupPolicyMode | undefined {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const channelConfig = cfg.channels?.[channel] as
+    | {
+        groupPolicy?: ChannelGroupPolicyMode;
+        accounts?: Record<string, { groupPolicy?: ChannelGroupPolicyMode }>;
+      }
+    | undefined;
+  if (!channelConfig) {
+    return undefined;
+  }
+  const accountPolicy =
+    channelConfig.accounts?.[normalizedAccountId]?.groupPolicy ??
+    channelConfig.accounts?.[
+      Object.keys(channelConfig.accounts ?? {}).find(
+        (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
+      ) ?? ""
+    ]?.groupPolicy;
+  return accountPolicy ?? channelConfig.groupPolicy;
+}
+
 export function resolveChannelGroupPolicy(params: {
   cfg: OpenClawConfig;
   channel: GroupPolicyChannel;
@@ -152,14 +179,17 @@ export function resolveChannelGroupPolicy(params: {
 }): ChannelGroupPolicy {
   const { cfg, channel } = params;
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
-  const allowlistEnabled = Boolean(groups && Object.keys(groups).length > 0);
+  const groupPolicy = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
+  const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
+  const allowlistEnabled = groupPolicy === "allowlist" || hasGroups;
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId
     ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)
     : undefined;
   const defaultConfig = groups?.["*"];
   const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
-  const allowed = !allowlistEnabled || allowAll || Boolean(groupConfig);
+  const allowed =
+    groupPolicy === "disabled" ? false : !allowlistEnabled || allowAll || Boolean(groupConfig);
   return {
     allowlistEnabled,
     allowed,
