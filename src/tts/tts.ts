@@ -56,6 +56,24 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+const DEFAULT_CHATTERBOX_BASE_URL = "http://localhost:4123";
+const DEFAULT_CHATTERBOX_VOICE = "default";
+const DEFAULT_CHATTERBOX_MODEL = "chatterbox";
+const DEFAULT_CHATTERBOX_EXAGGERATION = 0.5;
+const DEFAULT_CHATTERBOX_CFG_WEIGHT = 0.5;
+const DEFAULT_CHATTERBOX_SPEED = 1.0;
+
+const DEFAULT_PIPER_BASE_URL = "http://localhost:8101";
+const DEFAULT_PIPER_VOICE = "en_US-lessac-high";
+const DEFAULT_PIPER_LENGTH_SCALE = 1.0;
+const DEFAULT_PIPER_NOISE_SCALE = 0.667;
+const DEFAULT_PIPER_NOISE_W = 0.8;
+const DEFAULT_PIPER_SENTENCE_SILENCE = 0.2;
+
+const DEFAULT_KOKORO_BASE_URL = "http://localhost:8102";
+const DEFAULT_KOKORO_VOICE = "af_bella";
+const DEFAULT_KOKORO_SPEED = 1.0;
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -127,6 +145,35 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  chatterbox: {
+    enabled: boolean;
+    baseUrl: string;
+    apiKey?: string;
+    voice: string;
+    model: string;
+    language?: string;
+    exaggeration: number;
+    cfgWeight: number;
+    speed: number;
+  };
+  piper: {
+    enabled: boolean;
+    baseUrl: string;
+    apiKey?: string;
+    voice: string;
+    speakerId?: number;
+    lengthScale: number;
+    noiseScale: number;
+    noiseW: number;
+    sentenceSilence: number;
+  };
+  kokoro: {
+    enabled: boolean;
+    baseUrl: string;
+    apiKey?: string;
+    voice: string;
+    speed: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -302,6 +349,35 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    chatterbox: {
+      enabled: raw.chatterbox?.enabled ?? false,
+      baseUrl: raw.chatterbox?.baseUrl?.trim() || DEFAULT_CHATTERBOX_BASE_URL,
+      apiKey: raw.chatterbox?.apiKey?.trim() || undefined,
+      voice: raw.chatterbox?.voice?.trim() || DEFAULT_CHATTERBOX_VOICE,
+      model: raw.chatterbox?.model?.trim() || DEFAULT_CHATTERBOX_MODEL,
+      language: raw.chatterbox?.language?.trim() || undefined,
+      exaggeration: raw.chatterbox?.exaggeration ?? DEFAULT_CHATTERBOX_EXAGGERATION,
+      cfgWeight: raw.chatterbox?.cfgWeight ?? DEFAULT_CHATTERBOX_CFG_WEIGHT,
+      speed: raw.chatterbox?.speed ?? DEFAULT_CHATTERBOX_SPEED,
+    },
+    piper: {
+      enabled: raw.piper?.enabled ?? false,
+      baseUrl: raw.piper?.baseUrl?.trim() || DEFAULT_PIPER_BASE_URL,
+      apiKey: raw.piper?.apiKey?.trim() || undefined,
+      voice: raw.piper?.voice?.trim() || DEFAULT_PIPER_VOICE,
+      speakerId: raw.piper?.speakerId,
+      lengthScale: raw.piper?.lengthScale ?? DEFAULT_PIPER_LENGTH_SCALE,
+      noiseScale: raw.piper?.noiseScale ?? DEFAULT_PIPER_NOISE_SCALE,
+      noiseW: raw.piper?.noiseW ?? DEFAULT_PIPER_NOISE_W,
+      sentenceSilence: raw.piper?.sentenceSilence ?? DEFAULT_PIPER_SENTENCE_SILENCE,
+    },
+    kokoro: {
+      enabled: raw.kokoro?.enabled ?? false,
+      baseUrl: raw.kokoro?.baseUrl?.trim() || DEFAULT_KOKORO_BASE_URL,
+      apiKey: raw.kokoro?.apiKey?.trim() || undefined,
+      voice: raw.kokoro?.voice?.trim() || DEFAULT_KOKORO_VOICE,
+      speed: raw.kokoro?.speed ?? DEFAULT_KOKORO_SPEED,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -508,7 +584,14 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = [
+  "openai",
+  "elevenlabs",
+  "edge",
+  "chatterbox",
+  "piper",
+  "kokoro",
+] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -517,6 +600,15 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "chatterbox") {
+    return config.chatterbox.enabled;
+  }
+  if (provider === "piper") {
+    return config.piper.enabled;
+  }
+  if (provider === "kokoro") {
+    return config.kokoro.enabled;
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -527,6 +619,191 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${error.message}`;
+}
+
+/**
+ * Chatterbox TTS - local/self-hosted text-to-speech using OpenAI-compatible API.
+ * Supports voice cloning, multilingual, and expressive speech synthesis.
+ * See: https://github.com/resemble-ai/chatterbox
+ */
+async function chatterboxTTS(params: {
+  text: string;
+  config: ResolvedTtsConfig["chatterbox"];
+  responseFormat: "mp3" | "opus" | "wav";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, config, responseFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.apiKey) {
+    headers["Authorization"] = `Bearer ${config.apiKey}`;
+  }
+
+  // Build request body - Chatterbox uses OpenAI-compatible format
+  // with additional parameters for voice control
+  const body: Record<string, unknown> = {
+    model: config.model,
+    input: text,
+    voice: config.voice,
+    response_format: responseFormat,
+  };
+
+  // Add Chatterbox-specific parameters if provided
+  if (config.language) {
+    body.language = config.language;
+  }
+  if (config.exaggeration !== DEFAULT_CHATTERBOX_EXAGGERATION) {
+    body.exaggeration = config.exaggeration;
+  }
+  if (config.cfgWeight !== DEFAULT_CHATTERBOX_CFG_WEIGHT) {
+    body.cfg_weight = config.cfgWeight;
+  }
+  if (config.speed !== DEFAULT_CHATTERBOX_SPEED) {
+    body.speed = config.speed;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Chatterbox TTS API error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Piper TTS - fast, local neural text-to-speech with high-quality voices.
+ * Lightweight and privacy-focused, runs entirely offline.
+ * See: https://github.com/rhasspy/piper
+ */
+async function piperTTS(params: {
+  text: string;
+  config: ResolvedTtsConfig["piper"];
+  responseFormat: "mp3" | "opus" | "wav";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, config, responseFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.apiKey) {
+    headers["Authorization"] = `Bearer ${config.apiKey}`;
+  }
+
+  // Build request body - Piper uses OpenAI-compatible format
+  const body: Record<string, unknown> = {
+    model: config.voice, // Piper uses voice name as model
+    input: text,
+    voice: config.voice,
+    response_format: responseFormat,
+  };
+
+  // Add Piper-specific parameters if provided
+  if (config.speakerId !== undefined) {
+    body.speaker_id = config.speakerId;
+  }
+  if (config.lengthScale !== undefined) {
+    body.length_scale = config.lengthScale;
+  }
+  if (config.noiseScale !== undefined) {
+    body.noise_scale = config.noiseScale;
+  }
+  if (config.noiseW !== undefined) {
+    body.noise_w = config.noiseW;
+  }
+  if (config.sentenceSilence !== undefined) {
+    body.sentence_silence = config.sentenceSilence;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Piper TTS API error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function kokoroTTS(params: {
+  text: string;
+  config: ResolvedTtsConfig["kokoro"];
+  responseFormat: "mp3" | "opus" | "wav";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, config, responseFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.apiKey) {
+    headers["Authorization"] = `Bearer ${config.apiKey}`;
+  }
+
+  // Build request body - Kokoro uses OpenAI-compatible format
+  const body: Record<string, unknown> = {
+    model: "kokoro",
+    input: text,
+    voice: config.voice,
+    response_format: responseFormat,
+  };
+
+  // Add Kokoro-specific parameters if provided
+  if (config.speed !== undefined && config.speed !== 1.0) {
+    body.speed = config.speed;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Kokoro TTS API error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function textToSpeech(params: {
@@ -628,6 +905,108 @@ export async function textToSpeech(params: {
         };
       }
 
+      if (provider === "chatterbox") {
+        if (!config.chatterbox.enabled) {
+          lastError = "chatterbox: disabled";
+          continue;
+        }
+
+        const responseFormat = channelId === "telegram" ? "opus" : "mp3";
+        const audioBuffer = await chatterboxTTS({
+          text: params.text,
+          config: config.chatterbox,
+          responseFormat: responseFormat as "mp3" | "opus" | "wav",
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+        const extension = responseFormat === "opus" ? ".opus" : ".mp3";
+
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        const voiceCompatible = responseFormat === "opus";
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: responseFormat,
+          voiceCompatible,
+        };
+      }
+
+      if (provider === "piper") {
+        if (!config.piper.enabled) {
+          lastError = "piper: disabled";
+          continue;
+        }
+
+        const responseFormat = channelId === "telegram" ? "opus" : "mp3";
+        const audioBuffer = await piperTTS({
+          text: params.text,
+          config: config.piper,
+          responseFormat: responseFormat as "mp3" | "opus" | "wav",
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+        const extension = responseFormat === "opus" ? ".opus" : ".mp3";
+
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        const voiceCompatible = responseFormat === "opus";
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: responseFormat,
+          voiceCompatible,
+        };
+      }
+
+      if (provider === "kokoro") {
+        if (!config.kokoro.enabled) {
+          lastError = "kokoro: disabled";
+          continue;
+        }
+
+        const responseFormat = channelId === "telegram" ? "opus" : "mp3";
+        const audioBuffer = await kokoroTTS({
+          text: params.text,
+          config: config.kokoro,
+          responseFormat: responseFormat as "mp3" | "opus" | "wav",
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+        const extension = responseFormat === "opus" ? ".opus" : ".mp3";
+
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        const voiceCompatible = responseFormat === "opus";
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: responseFormat,
+          voiceCompatible,
+        };
+      }
+
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
         errors.push(`${provider}: no API key`);
@@ -724,6 +1103,13 @@ export async function textToSpeechTelephony(params: {
     try {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
+        continue;
+      }
+
+      if (provider === "chatterbox") {
+        // Chatterbox telephony support could be added in the future
+        // when PCM output format is supported by the API
+        lastError = "chatterbox: unsupported for telephony";
         continue;
       }
 

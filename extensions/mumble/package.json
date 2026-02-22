@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/mumble",
+  "version": "1.0.0",
+  "description": "OpenClaw Mumble voice chat plugin",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@discordjs/opus": "^0.10.0",
+    "@tf2pickup-org/mumble-client": "^0.12.5",
+    "node-fetch": "^3.3.2",
+    "opus-decoder": "^0.7.11",
+    "opus-encdec": "^0.1.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "openclaw": "*",
+    "typescript": "^5.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}

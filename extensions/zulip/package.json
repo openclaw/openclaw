@@ -1,0 +1,59 @@
+{
+  "name": "@openclaw/zulip",
+  "version": "0.1.0",
+  "private": false,
+  "description": "OpenClaw Zulip channel plugin",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "src",
+    "openclaw.plugin.json"
+  ],
+  "keywords": [
+    "openclaw",
+    "zulip",
+    "chat",
+    "channel",
+    "plugin"
+  ],
+  "author": "Myka",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "openclaw": "^2026.2.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "zulip",
+      "label": "Zulip",
+      "selectionLabel": "Zulip (plugin)",
+      "docsPath": "/channels/zulip",
+      "docsLabel": "zulip",
+      "blurb": "Open-source threaded team chat with powerful search and integrations.",
+      "order": 66
+    },
+    "install": {
+      "npmSpec": "@openclaw/zulip",
+      "localPath": "extensions/zulip",
+      "defaultChoice": "npm"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/myka/openclaw-zulip.git"
+  }
+}
