@@ -46,6 +46,12 @@ describe("boot-md handler", () => {
     return cfg;
   }
 
+  function setupSingleMainAgentBootConfig(cfg: unknown) {
+    listAgentIds.mockReturnValue(["main"]);
+    resolveAgentWorkspaceDir.mockReturnValue(MAIN_WORKSPACE_DIR);
+    return cfg;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -82,9 +88,7 @@ describe("boot-md handler", () => {
   });
 
   it("runs boot for single default agent when no agents configured", async () => {
-    const cfg = {};
-    listAgentIds.mockReturnValue(["main"]);
-    resolveAgentWorkspaceDir.mockReturnValue(MAIN_WORKSPACE_DIR);
+    const cfg = setupSingleMainAgentBootConfig({});
     runBootOnce.mockResolvedValue({ status: "skipped", reason: "missing" });
 
     await runBootChecklist(makeEvent({ context: { cfg } }));
@@ -112,9 +116,7 @@ describe("boot-md handler", () => {
   });
 
   it("logs debug details when a per-agent boot run is skipped", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
-    listAgentIds.mockReturnValue(["main"]);
-    resolveAgentWorkspaceDir.mockReturnValue(MAIN_WORKSPACE_DIR);
+    const cfg = setupSingleMainAgentBootConfig({ agents: { list: [{ id: "main" }] } });
     runBootOnce.mockResolvedValue({ status: "skipped", reason: "missing" });
 
     await runBootChecklist(makeEvent({ context: { cfg } }));
