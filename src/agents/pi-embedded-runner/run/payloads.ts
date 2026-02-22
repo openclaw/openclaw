@@ -4,6 +4,7 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { deriveSessionChatType } from "../../../sessions/session-key-utils.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -95,6 +96,7 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -332,8 +334,13 @@ export function buildEmbeddedRunPayloads(params: {
     payloads.length === 0 &&
     params.toolMetas.length > 0 &&
     !params.lastToolError &&
-    !lastAssistantErrored
+    !lastAssistantErrored &&
+    !params.didSendViaMessagingTool
   ) {
+    const sessionChatType = deriveSessionChatType(params.sessionKey);
+    if (sessionChatType === "channel" || sessionChatType === "group") {
+      return [];
+    }
     return [{ text: "✅ Done." }];
   }
   return payloads;
