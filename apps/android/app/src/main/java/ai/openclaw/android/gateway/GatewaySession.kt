@@ -1,6 +1,7 @@
 package ai.openclaw.android.gateway
 
 import android.util.Log
+import ai.openclaw.android.node.ConnectionManager
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -191,6 +192,9 @@ class GatewaySession(
       }
 
     suspend fun connect() {
+      if (tls == null && !isLoopbackHost(endpoint.host)) {
+        throw IllegalStateException("non-loopback gateway connections require TLS")
+      }
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
       val httpScheme = if (tls != null) "https" else "http"
@@ -649,14 +653,7 @@ class GatewaySession(
     return "$fallbackScheme://$formattedHost$portSuffix"
   }
 
-  private fun isLoopbackHost(raw: String?): Boolean {
-    val host = raw?.trim()?.lowercase().orEmpty()
-    if (host.isEmpty()) return false
-    if (host == "localhost") return true
-    if (host == "::1") return true
-    if (host == "0.0.0.0" || host == "::") return true
-    return host.startsWith("127.")
-  }
+  private fun isLoopbackHost(raw: String?): Boolean = ConnectionManager.isLoopbackHost(raw)
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

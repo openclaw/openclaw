@@ -593,6 +593,10 @@ class NodeRuntime(context: Context) {
       _statusText.value = "Failed: invalid manual host/port"
       return
     }
+    if (!manualTls.value && !ConnectionManager.isLoopbackHost(host)) {
+      _statusText.value = "Failed: non-loopback manual gateway requires TLS"
+      return
+    }
     connect(GatewayEndpoint.manual(host = host, port = port))
   }
 

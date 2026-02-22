@@ -27,6 +27,22 @@ class ConnectionManager(
   private val manualTls: () -> Boolean,
 ) {
   companion object {
+    internal fun isLoopbackHost(rawHost: String?): Boolean {
+      val host =
+        rawHost
+          ?.trim()
+          ?.lowercase()
+          ?.removePrefix("[")
+          ?.removeSuffix("]")
+          .orEmpty()
+      if (host.isEmpty()) return false
+      if (host == "localhost") return true
+      if (host == "::1") return true
+      if (host == "0.0.0.0" || host == "::") return false
+      if (host.startsWith("::ffff:127.")) return true
+      return host.startsWith("127.")
+    }
+
     internal fun resolveTlsParamsForEndpoint(
       endpoint: GatewayEndpoint,
       storedFingerprint: String?,
@@ -35,9 +51,19 @@ class ConnectionManager(
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
       val isManual = stableId.startsWith("manual|")
+      val loopbackHost = isLoopbackHost(endpoint.host)
 
       if (isManual) {
-        if (!manualTlsEnabled) return null
+        if (!manualTlsEnabled) {
+          if (loopbackHost) return null
+          // Never allow non-loopback manual connections to downgrade to plaintext.
+          return GatewayTlsParams(
+            required = true,
+            expectedFingerprint = null,
+            allowTOFU = false,
+            stableId = stableId,
+          )
+        }
         if (!stored.isNullOrBlank()) {
           return GatewayTlsParams(
             required = true,
@@ -67,6 +93,16 @@ class ConnectionManager(
       val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
       if (hinted) {
         // TXT is unauthenticated. Do not treat the advertised fingerprint as authoritative.
+        return GatewayTlsParams(
+          required = true,
+          expectedFingerprint = null,
+          allowTOFU = false,
+          stableId = stableId,
+        )
+      }
+
+      if (!loopbackHost) {
+        // Discovery TXT is unauthenticated; require TLS for any non-loopback endpoint.
         return GatewayTlsParams(
           required = true,
           expectedFingerprint = null,
