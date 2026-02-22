@@ -1,5 +1,8 @@
 ---
 summary: "Harden cron.add input handling, align schemas, and improve cron UI/agent tooling"
+read_when:
+  - Debugging invalid `cron.add` payloads
+  - Aligning cron schemas across gateway, CLI, and UI
 owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"

@@ -1,6 +1,10 @@
 ---
 title: Outbound Session Mirroring Refactor (Issue #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
+summary: "Refactor notes for mirroring outbound sends into target channel sessions"
+read_when:
+  - Working on outbound transcript/session mirroring behavior
+  - Debugging sessionKey derivation for send/message tool paths
 ---
 
 # Outbound Session Mirroring Refactor (Issue #1520)

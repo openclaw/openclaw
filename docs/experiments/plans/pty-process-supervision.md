@@ -1,5 +1,8 @@
 ---
 summary: "Production plan for reliable interactive process supervision (PTY + non-PTY) with explicit ownership, unified lifecycle, and deterministic cleanup"
+read_when:
+  - Working on exec/process lifecycle ownership and cleanup
+  - Debugging PTY and non-PTY supervision behavior
 owner: "openclaw"
 status: "in-progress"
 last_updated: "2026-02-15"

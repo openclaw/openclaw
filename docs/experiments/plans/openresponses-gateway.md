@@ -1,5 +1,8 @@
 ---
 summary: "Plan: Add OpenResponses /v1/responses endpoint and deprecate chat completions cleanly"
+read_when:
+  - Designing or implementing `/v1/responses` gateway support
+  - Planning migration from Chat Completions compatibility
 owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
