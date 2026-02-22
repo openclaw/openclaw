@@ -102,11 +102,90 @@ describeUnix("inspectPortUsage", () => {
     runCommandWithTimeoutMock.mockRejectedValueOnce(
       Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
     );
+    // ss fallback also fails (not installed)
+    runCommandWithTimeoutMock.mockRejectedValueOnce(
+      Object.assign(new Error("spawn ss ENOENT"), { code: "ENOENT" }),
+    );
 
     try {
       const result = await inspectPortUsage(port);
       expect(result.status).toBe("busy");
       expect(result.errors?.some((err) => err.includes("ENOENT"))).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("falls back to ss when lsof fails and resolves PIDs", async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as net.AddressInfo).port;
+    const pid = process.pid;
+
+    // lsof fails
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "lsof: permission denied",
+      code: 1,
+    });
+
+    // ss succeeds with PID info
+    const ssOutput = `State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process\nLISTEN  0       511     127.0.0.1:${port}  0.0.0.0:*  users:(("node",pid=${pid},fd=24))`;
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: ssOutput,
+      stderr: "",
+      code: 0,
+    });
+
+    // ps -o command= for commandLine
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "node /some/openclaw/dist/entry.js gateway\n",
+      stderr: "",
+      code: 0,
+    });
+
+    // ps -o user= for user
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "testuser\n",
+      stderr: "",
+      code: 0,
+    });
+
+    try {
+      const result = await inspectPortUsage(port);
+      expect(result.status).toBe("busy");
+      expect(result.listeners.length).toBeGreaterThan(0);
+      expect(result.listeners[0].pid).toBe(pid);
+      expect(result.listeners[0].commandLine).toContain("openclaw");
+      expect(result.listeners[0].user).toBe("testuser");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("reports busy with empty listeners when both lsof and ss fail", async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as net.AddressInfo).port;
+
+    // lsof fails
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "lsof: error",
+      code: 1,
+    });
+
+    // ss also fails
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "ss: error",
+      code: 1,
+    });
+
+    try {
+      const result = await inspectPortUsage(port);
+      expect(result.status).toBe("busy");
+      expect(result.listeners).toHaveLength(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

@@ -75,6 +75,68 @@ async function resolveUnixUser(pid: number): Promise<string | undefined> {
   return line || undefined;
 }
 
+function parseSsOutput(output: string, port: number): PortListener[] {
+  const listeners: PortListener[] = [];
+  const portToken = `:${port}`;
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || !line.startsWith("LISTEN")) {
+      continue;
+    }
+    if (!line.includes(portToken)) {
+      continue;
+    }
+    // ss -tlnp output: LISTEN  0  511  127.0.0.1:18789  0.0.0.0:*  users:(("node",pid=1234,fd=24))
+    const pidMatch = line.match(/pid=(\d+)/);
+    const pid = pidMatch ? Number.parseInt(pidMatch[1], 10) : NaN;
+    const parts = line.split(/\s+/);
+    const localAddr = parts[3];
+    const listener: PortListener = {};
+    if (Number.isFinite(pid)) {
+      listener.pid = pid;
+    }
+    if (localAddr?.includes(portToken)) {
+      listener.address = localAddr;
+    }
+    if (listener.pid || listener.address) {
+      listeners.push(listener);
+    }
+  }
+  return listeners;
+}
+
+async function readSsListeners(
+  port: number,
+): Promise<{ listeners: PortListener[]; errors: string[] }> {
+  const errors: string[] = [];
+  const res = await runCommandSafe(["ss", "-tlnp", `sport = :${port}`]);
+  if (res.code !== 0) {
+    if (res.error) {
+      errors.push(res.error);
+    }
+    return { listeners: [], errors };
+  }
+  const listeners = parseSsOutput(res.stdout, port);
+  await Promise.all(
+    listeners.map(async (listener) => {
+      if (!listener.pid) {
+        return;
+      }
+      const [commandLine, user] = await Promise.all([
+        resolveUnixCommandLine(listener.pid),
+        resolveUnixUser(listener.pid),
+      ]);
+      if (commandLine) {
+        listener.commandLine = commandLine;
+      }
+      if (user) {
+        listener.user = user;
+      }
+    }),
+  );
+  return { listeners, errors };
+}
+
 async function readUnixListeners(
   port: number,
 ): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
@@ -102,6 +164,13 @@ async function readUnixListeners(
     );
     return { listeners, detail: res.stdout.trim() || undefined, errors };
   }
+  // lsof failed or returned no results — fall back to ss(8) which is available
+  // on virtually all Linux systems and can resolve PIDs for same-user processes
+  // without elevated privileges.
+  const ssFallback = await readSsListeners(port);
+  if (ssFallback.listeners.length > 0) {
+    return { listeners: ssFallback.listeners, detail: undefined, errors };
+  }
   const stderr = res.stderr.trim();
   if (res.code === 1 && !res.error && !stderr) {
     return { listeners: [], detail: undefined, errors };
@@ -109,6 +178,7 @@ async function readUnixListeners(
   if (res.error) {
     errors.push(res.error);
   }
+  errors.push(...ssFallback.errors);
   const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
   if (detail) {
     errors.push(detail);
