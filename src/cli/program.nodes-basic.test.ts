@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, installBaseProgramMocks, runTui, runtime } from "./program.test-mocks.js";
+import {
+  callGateway,
+  installBaseProgramMocks,
+  installSmokeProgramMocks,
+  runTui,
+  runtime,
+} from "./program.test-mocks.js";
 
 installBaseProgramMocks();
+installSmokeProgramMocks();
 
 const { buildProgram } = await import("./program.js");
 
