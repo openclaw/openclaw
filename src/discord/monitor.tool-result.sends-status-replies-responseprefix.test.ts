@@ -16,14 +16,14 @@ type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
 
 beforeEach(() => {
   __resetDiscordChannelInfoCacheForTest();
-  sendMock.mockReset().mockResolvedValue(undefined);
-  updateLastRouteMock.mockReset();
-  dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
+  sendMock.mockClear().mockResolvedValue(undefined);
+  updateLastRouteMock.mockClear();
+  dispatchMock.mockClear().mockImplementation(async ({ dispatcher }) => {
     dispatcher.sendFinalReply({ text: "hi" });
     return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
   });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
 const BASE_CFG: Config = {
