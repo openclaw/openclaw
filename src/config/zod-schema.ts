@@ -336,6 +336,8 @@ export const OpenClawSchema = z
         allowRequestSessionKey: z.boolean().optional(),
         allowedSessionKeyPrefixes: z.array(z.string()).optional(),
         allowedAgentIds: z.array(z.string()).optional(),
+        requireTimestamp: z.boolean().optional(),
+        replayCacheSize: z.number().int().positive().optional(),
         maxBodyBytes: z.number().int().positive().optional(),
         presets: z.array(z.string()).optional(),
         transformsDir: z.string().optional(),

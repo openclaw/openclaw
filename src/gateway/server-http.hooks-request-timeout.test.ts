@@ -22,6 +22,9 @@ function createHooksConfig(): HooksConfigResolved {
     basePath: "/hooks",
     token: "hook-secret",
     maxBodyBytes: 1024,
+    requireTimestamp: false,
+    replayCacheSize: 1024,
+    timestampWindowMs: 300_000,
     mappings: [],
     agentPolicy: {
       defaultAgentId: "main",
@@ -39,6 +42,8 @@ function createHooksConfig(): HooksConfigResolved {
 function createRequest(params?: {
   authorization?: string;
   remoteAddress?: string;
+  timestamp?: string;
+  nonce?: string;
 }): IncomingMessage {
   return {
     method: "POST",
@@ -46,9 +51,11 @@ function createRequest(params?: {
     headers: {
       host: "127.0.0.1:18789",
       authorization: params?.authorization ?? "Bearer hook-secret",
+      "x-openclaw-timestamp": params?.timestamp,
+      "x-openclaw-nonce": params?.nonce,
     },
     socket: { remoteAddress: params?.remoteAddress ?? "127.0.0.1" },
-  } as IncomingMessage;
+  } as unknown as IncomingMessage;
 }
 
 function createResponse(): {
@@ -136,5 +143,46 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(handled).toBe(true);
     expect(mappedRes.statusCode).toBe(429);
     expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
+  });
+
+  test("rejects replayed nonce when timestamp protection is enabled", async () => {
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: { text: "Ping" } });
+    const dispatchWakeHook = vi.fn();
+    const dispatchAgentHook = vi.fn(() => "run-1");
+    const handler = createHooksRequestHandler({
+      getHooksConfig: () => ({
+        ...createHooksConfig(),
+        requireTimestamp: true,
+        replayCacheSize: 16,
+      }),
+      bindHost: "127.0.0.1",
+      port: 18789,
+      logHooks: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        error: vi.fn(),
+      } as unknown as ReturnType<typeof createSubsystemLogger>,
+      dispatchWakeHook,
+      dispatchAgentHook,
+    });
+
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const firstReq = createRequest({ timestamp, nonce: "nonce-1" });
+    const firstRes = createResponse();
+    const firstHandled = await handler(firstReq, firstRes.res);
+    expect(firstHandled).toBe(true);
+    expect(firstRes.res.statusCode).toBe(200);
+    expect(dispatchWakeHook).toHaveBeenCalledTimes(1);
+
+    const replayReq = createRequest({ timestamp, nonce: "nonce-1" });
+    const replayRes = createResponse();
+    const replayHandled = await handler(replayReq, replayRes.res);
+    expect(replayHandled).toBe(true);
+    expect(replayRes.res.statusCode).toBe(409);
+    expect(replayRes.end).toHaveBeenCalledWith(
+      JSON.stringify({ ok: false, error: "replay detected" }),
+    );
+    expect(readJsonBodyMock).toHaveBeenCalledTimes(1);
   });
 });
