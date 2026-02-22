@@ -25,7 +25,7 @@ struct ExecCommandResolution: Sendable {
         cwd: String?,
         env: [String: String]?) -> [ExecCommandResolution]
     {
-        let shell = self.extractShellCommandFromArgv(command: command, rawCommand: rawCommand)
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand)
         if shell.isWrapper {
             guard let shellCommand = shell.command,
                   let segments = self.splitShellCommandChain(shellCommand)
@@ -54,7 +54,7 @@ struct ExecCommandResolution: Sendable {
     }
 
     static func resolve(command: [String], cwd: String?, env: [String: String]?) -> ExecCommandResolution? {
-        let effective = self.unwrapDispatchWrappersForResolution(command)
+        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(command)
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
@@ -100,166 +100,6 @@ struct ExecCommandResolution: Sendable {
             return String(rest)
         }
         return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
-    }
-
-    private static func basenameLower(_ token: String) -> String {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        let normalized = trimmed.replacingOccurrences(of: "\\", with: "/")
-        return normalized.split(separator: "/").last.map { String($0).lowercased() } ?? normalized.lowercased()
-    }
-
-    private static func extractShellCommandFromArgv(
-        command: [String],
-        rawCommand: String?) -> (isWrapper: Bool, command: String?)
-    {
-        guard let token0 = command.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token0.isEmpty else {
-            return (false, nil)
-        }
-        let base0 = self.basenameLower(token0)
-        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let preferredRaw = trimmedRaw.isEmpty ? nil : trimmedRaw
-
-        if base0 == "env" {
-            guard let unwrapped = self.unwrapEnvInvocation(command) else {
-                return (false, nil)
-            }
-            return self.extractShellCommandFromArgv(command: unwrapped, rawCommand: rawCommand)
-        }
-
-        if ["ash", "sh", "bash", "zsh", "dash", "ksh", "fish"].contains(base0) {
-            let flag = command.count > 1 ? command[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
-            let normalizedFlag = flag.lowercased()
-            guard normalizedFlag == "-lc" || normalizedFlag == "-c" || normalizedFlag == "--command" else {
-                return (false, nil)
-            }
-            let payload = command.count > 2 ? command[2].trimmingCharacters(in: .whitespacesAndNewlines) : ""
-            let normalized = preferredRaw ?? (payload.isEmpty ? nil : payload)
-            return (true, normalized)
-        }
-
-        if base0 == "cmd.exe" || base0 == "cmd" {
-            guard let idx = command
-                .firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "/c" })
-            else {
-                return (false, nil)
-            }
-            let tail = command.suffix(from: command.index(after: idx)).joined(separator: " ")
-            let payload = tail.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalized = preferredRaw ?? (payload.isEmpty ? nil : payload)
-            return (true, normalized)
-        }
-
-        if ["powershell", "powershell.exe", "pwsh", "pwsh.exe"].contains(base0) {
-            for idx in 1..<command.count {
-                let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if token.isEmpty { continue }
-                if token == "--" { break }
-                if token == "-c" || token == "-command" || token == "--command" {
-                    let payload = idx + 1 < command.count
-                        ? command[idx + 1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        : ""
-                    let normalized = preferredRaw ?? (payload.isEmpty ? nil : payload)
-                    return (true, normalized)
-                }
-            }
-        }
-
-        return (false, nil)
-    }
-
-    private static let envOptionsWithValue = Set([
-        "-u",
-        "--unset",
-        "-c",
-        "--chdir",
-        "-s",
-        "--split-string",
-        "--default-signal",
-        "--ignore-signal",
-        "--block-signal",
-    ])
-    private static let envFlagOptions = Set(["-i", "--ignore-environment", "-0", "--null"])
-
-    private static func isEnvAssignment(_ token: String) -> Bool {
-        let pattern = #"^[A-Za-z_][A-Za-z0-9_]*=.*"#
-        return token.range(of: pattern, options: .regularExpression) != nil
-    }
-
-    private static func unwrapEnvInvocation(_ command: [String]) -> [String]? {
-        var idx = 1
-        var expectsOptionValue = false
-        while idx < command.count {
-            let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if expectsOptionValue {
-                expectsOptionValue = false
-                idx += 1
-                continue
-            }
-            if token == "--" || token == "-" {
-                idx += 1
-                break
-            }
-            if self.isEnvAssignment(token) {
-                idx += 1
-                continue
-            }
-            if token.hasPrefix("-"), token != "-" {
-                let lower = token.lowercased()
-                let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
-                if self.envFlagOptions.contains(flag) {
-                    idx += 1
-                    continue
-                }
-                if self.envOptionsWithValue.contains(flag) {
-                    if !lower.contains("=") {
-                        expectsOptionValue = true
-                    }
-                    idx += 1
-                    continue
-                }
-                if lower.hasPrefix("-u") ||
-                    lower.hasPrefix("-c") ||
-                    lower.hasPrefix("-s") ||
-                    lower.hasPrefix("--unset=") ||
-                    lower.hasPrefix("--chdir=") ||
-                    lower.hasPrefix("--split-string=") ||
-                    lower.hasPrefix("--default-signal=") ||
-                    lower.hasPrefix("--ignore-signal=") ||
-                    lower.hasPrefix("--block-signal=")
-                {
-                    idx += 1
-                    continue
-                }
-                return nil
-            }
-            break
-        }
-        guard idx < command.count else { return nil }
-        return Array(command[idx...])
-    }
-
-    private static func unwrapDispatchWrappersForResolution(_ command: [String]) -> [String] {
-        var current = command
-        var depth = 0
-        while depth < 4 {
-            guard let token = current.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
-                break
-            }
-            guard self.basenameLower(token) == "env" else {
-                break
-            }
-            guard let unwrapped = self.unwrapEnvInvocation(current), !unwrapped.isEmpty else {
-                break
-            }
-            current = unwrapped
-            depth += 1
-        }
-        return current
     }
 
     private enum ShellTokenContext {

@@ -53,6 +53,16 @@ type ShellParserParityFixture = {
   cases: ShellParserParityFixtureCase[];
 };
 
+type WrapperResolutionParityFixtureCase = {
+  id: string;
+  argv: string[];
+  expectedRawExecutable: string | null;
+};
+
+type WrapperResolutionParityFixture = {
+  cases: WrapperResolutionParityFixtureCase[];
+};
+
 function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
   const fixturePath = path.join(
     process.cwd(),
@@ -61,6 +71,19 @@ function loadShellParserParityFixtureCases(): ShellParserParityFixtureCase[] {
     "exec-allowlist-shell-parser-parity.json",
   );
   const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ShellParserParityFixture;
+  return fixture.cases;
+}
+
+function loadWrapperResolutionParityFixtureCases(): WrapperResolutionParityFixtureCase[] {
+  const fixturePath = path.join(
+    process.cwd(),
+    "test",
+    "fixtures",
+    "exec-wrapper-resolution-parity.json",
+  );
+  const fixture = JSON.parse(
+    fs.readFileSync(fixturePath, "utf8"),
+  ) as WrapperResolutionParityFixture;
   return fixture.cases;
 }
 
@@ -443,6 +466,17 @@ describe("exec approvals shell parser parity fixture", () => {
       } else {
         expect(res.segments).toHaveLength(0);
       }
+    });
+  }
+});
+
+describe("exec approvals wrapper resolution parity fixture", () => {
+  const fixtures = loadWrapperResolutionParityFixtureCases();
+
+  for (const fixture of fixtures) {
+    it(`matches wrapper fixture: ${fixture.id}`, () => {
+      const resolution = resolveCommandResolutionFromArgv(fixture.argv);
+      expect(resolution?.rawExecutable ?? null).toBe(fixture.expectedRawExecutable);
     });
   }
 });
