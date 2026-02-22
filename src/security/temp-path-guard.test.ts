@@ -2,23 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { listRepoFiles } from "../test-utils/repo-scan.js";
+import { listRuntimeSourceFiles, shouldSkipRuntimeSourcePath } from "../test-utils/repo-scan.js";
 
 const RUNTIME_ROOTS = ["src", "extensions"] as const;
-const SKIP_PATTERNS = [
-  /\.test\.tsx?$/,
-  /\.test-helpers\.tsx?$/,
-  /\.test-utils\.tsx?$/,
-  /\.e2e\.tsx?$/,
-  /\.d\.ts$/,
-  /[\\/](?:__tests__|tests)[\\/]/,
-  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
-];
 const QUICK_TMPDIR_JOIN_PATTERN = /\bpath\.join\s*\(\s*os\.tmpdir\s*\(\s*\)/;
-
-function shouldSkip(relativePath: string): boolean {
-  return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
-}
 
 function isIdentifierNamed(node: ts.Node, name: string): node is ts.Identifier {
   return ts.isIdentifier(node) && node.text === name;
@@ -86,9 +73,9 @@ function hasDynamicTmpdirJoin(source: string, filePath = "fixture.ts"): boolean 
 
 describe("temp path guard", () => {
   it("skips test helper filename variants", () => {
-    expect(shouldSkip("src/commands/test-helpers.ts")).toBe(true);
-    expect(shouldSkip("src/commands/sessions.test-helpers.ts")).toBe(true);
-    expect(shouldSkip("src\\commands\\sessions.test-helpers.ts")).toBe(true);
+    expect(shouldSkipRuntimeSourcePath("src/commands/test-helpers.ts")).toBe(true);
+    expect(shouldSkipRuntimeSourcePath("src/commands/sessions.test-helpers.ts")).toBe(true);
+    expect(shouldSkipRuntimeSourcePath("src\\commands\\sessions.test-helpers.ts")).toBe(true);
   });
 
   it("detects dynamic and ignores static fixtures", () => {
@@ -117,16 +104,12 @@ describe("temp path guard", () => {
     const repoRoot = process.cwd();
     const offenders: string[] = [];
 
-    const files = await listRepoFiles(repoRoot, {
+    const files = await listRuntimeSourceFiles(repoRoot, {
       roots: RUNTIME_ROOTS,
       extensions: [".ts", ".tsx"],
-      skipHiddenDirectories: true,
     });
     for (const file of files) {
       const relativePath = path.relative(repoRoot, file);
-      if (shouldSkip(relativePath)) {
-        continue;
-      }
       const source = await fs.readFile(file, "utf-8");
       if (!QUICK_TMPDIR_JOIN_PATTERN.test(source)) {
         continue;

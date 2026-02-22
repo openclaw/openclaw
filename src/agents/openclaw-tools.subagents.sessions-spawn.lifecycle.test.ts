@@ -289,40 +289,10 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   });
 
   it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    let agentCallCount = 0;
-
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        agentCallCount += 1;
-        return {
-          runId: `run-${agentCallCount}`,
-          status: "accepted",
-          acceptedAt: 5000 + agentCallCount,
-        };
-      }
-      if (request.method === "agent.wait") {
-        const params = request.params as { runId?: string } | undefined;
-        return {
-          runId: params?.runId ?? "run-1",
-          status: "timeout",
-          startedAt: 6000,
-          endedAt: 7000,
-        };
-      }
-      if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "still working" }],
-            },
-          ],
-        };
-      }
-      return {};
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      chatHistoryText: "still working",
+      agentWaitResult: { status: "timeout", startedAt: 6000, endedAt: 7000 },
     });
 
     const tool = await getSessionsSpawnTool({
@@ -340,9 +310,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       runId: "run-1",
     });
 
-    await waitFor(() => calls.filter((call) => call.method === "agent").length >= 2);
+    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
 
-    const mainAgentCall = calls
+    const mainAgentCall = ctx.calls
       .filter((call) => call.method === "agent")
       .find((call) => {
         const params = call.params as { lane?: string } | undefined;
@@ -355,40 +325,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   });
 
   it("sessions_spawn announces with requester accountId", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    let agentCallCount = 0;
-    let childRunId: string | undefined;
-
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        agentCallCount += 1;
-        const runId = `run-${agentCallCount}`;
-        const params = request.params as { lane?: string; sessionKey?: string } | undefined;
-        if (params?.lane === "subagent") {
-          childRunId = runId;
-        }
-        return {
-          runId,
-          status: "accepted",
-          acceptedAt: 4000 + agentCallCount,
-        };
-      }
-      if (request.method === "agent.wait") {
-        const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
-        return {
-          runId: params?.runId ?? "run-1",
-          status: "ok",
-          startedAt: 1000,
-          endedAt: 2000,
-        };
-      }
-      if (request.method === "sessions.delete" || request.method === "sessions.patch") {
-        return { ok: true };
-      }
-      return {};
-    });
+    const ctx = setupSessionsSpawnGatewayMock({});
 
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
@@ -406,13 +343,14 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       runId: "run-1",
     });
 
-    if (!childRunId) {
+    const child = ctx.getChild();
+    if (!child.runId) {
       throw new Error("missing child runId");
     }
     vi.useFakeTimers();
     try {
       emitAgentEvent({
-        runId: childRunId,
+        runId: child.runId,
         stream: "lifecycle",
         data: {
           phase: "end",
@@ -426,7 +364,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       vi.useRealTimers();
     }
 
-    const agentCalls = calls.filter((call) => call.method === "agent");
+    const agentCalls = ctx.calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
     const announceParams = agentCalls[1]?.params as
       | { accountId?: string; channel?: string; deliver?: boolean }

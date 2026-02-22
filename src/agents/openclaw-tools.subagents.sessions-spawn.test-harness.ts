@@ -8,6 +8,7 @@ export type AgentWaitCall = { runId?: string; timeoutMs?: number };
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;
   includeChatHistory?: boolean;
+  chatHistoryText?: string;
   onAgentSubagentSpawn?: (params: unknown) => void;
   onSessionsPatch?: (params: unknown) => void;
   onSessionsDelete?: (params: unknown) => void;
@@ -137,7 +138,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
         messages: [
           {
             role: "assistant",
-            content: [{ type: "text", text: "done" }],
+            content: [{ type: "text", text: setupOpts.chatHistoryText ?? "done" }],
           },
         ],
       };
