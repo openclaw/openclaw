@@ -34,8 +34,8 @@ const {
 
 describe("agent runner helpers", () => {
   beforeEach(() => {
-    hoisted.loadSessionStoreMock.mockReset();
-    hoisted.scheduleFollowupDrainMock.mockReset();
+    hoisted.loadSessionStoreMock.mockClear();
+    hoisted.scheduleFollowupDrainMock.mockClear();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
