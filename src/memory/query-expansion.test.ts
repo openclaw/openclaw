@@ -143,6 +143,22 @@ describe("extractKeywords", () => {
     expect(keywords).not.toContain("onde");
   });
 
+  it("extracts keywords from Arabic conversational query", () => {
+    const keywords = extractKeywords("بالأمس ناقشنا استراتيجية النشر");
+    expect(keywords).toContain("ناقشنا");
+    expect(keywords).toContain("استراتيجية");
+    expect(keywords).toContain("النشر");
+    expect(keywords).not.toContain("بالأمس");
+  });
+
+  it("filters Arabic question stop words", () => {
+    const keywords = extractKeywords("كيف متى أين ماذا");
+    expect(keywords).not.toContain("كيف");
+    expect(keywords).not.toContain("متى");
+    expect(keywords).not.toContain("أين");
+    expect(keywords).not.toContain("ماذا");
+  });
+
   it("handles empty query", () => {
     expect(extractKeywords("")).toEqual([]);
     expect(extractKeywords("   ")).toEqual([]);

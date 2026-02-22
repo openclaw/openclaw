@@ -262,6 +262,68 @@ const STOP_WORDS_PT = new Set([
   "ajuda",
 ]);
 
+const STOP_WORDS_AR = new Set([
+  // Articles and connectors
+  "ال",
+  "و",
+  "أو",
+  "لكن",
+  "ثم",
+  "بل",
+  // Pronouns / references
+  "أنا",
+  "نحن",
+  "هو",
+  "هي",
+  "هم",
+  "هذا",
+  "هذه",
+  "ذلك",
+  "تلك",
+  "هنا",
+  "هناك",
+  // Common prepositions
+  "من",
+  "إلى",
+  "الى",
+  "في",
+  "على",
+  "عن",
+  "مع",
+  "بين",
+  "ل",
+  "ب",
+  "ك",
+  // Common auxiliaries / vague verbs
+  "كان",
+  "كانت",
+  "يكون",
+  "تكون",
+  "صار",
+  "أصبح",
+  "يمكن",
+  "ممكن",
+  // Time references (vague)
+  "بالأمس",
+  "امس",
+  "اليوم",
+  "غدا",
+  "الآن",
+  "قبل",
+  "بعد",
+  "مؤخرا",
+  // Question/request words
+  "لماذا",
+  "كيف",
+  "ماذا",
+  "متى",
+  "أين",
+  "هل",
+  "من فضلك",
+  "فضلا",
+  "ساعد",
+]);
+
 const STOP_WORDS_KO = new Set([
   // Particles (조사)
   "은",
@@ -669,6 +731,7 @@ export function extractKeywords(query: string): string[] {
       STOP_WORDS_EN.has(token) ||
       STOP_WORDS_ES.has(token) ||
       STOP_WORDS_PT.has(token) ||
+      STOP_WORDS_AR.has(token) ||
       STOP_WORDS_ZH.has(token) ||
       STOP_WORDS_KO.has(token) ||
       STOP_WORDS_JA.has(token)
