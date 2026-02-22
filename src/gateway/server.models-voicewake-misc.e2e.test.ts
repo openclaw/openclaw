@@ -187,10 +187,11 @@ describe("gateway server models + voicewake", () => {
       expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
       expect(initial.payload?.config?.routes).toEqual([]);
 
-      const changedP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
-        ws,
-        (o) => o.type === "event" && o.event === "voicewake.routing.changed",
-      );
+      const changedP = onceMessage<{
+        type: "event";
+        event: string;
+        payload?: Record<string, unknown> | null;
+      }>(ws, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
 
       const setRes = await rpcReq<{
         config?: { routes?: Array<{ trigger?: string; target?: unknown }>; updatedAtMs?: number };
@@ -241,10 +242,11 @@ describe("gateway server models + voicewake", () => {
     await withTempHome(async () => {
       const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
       await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-      const firstEventP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
-        nodeWs,
-        (o) => o.type === "event" && o.event === "voicewake.routing.changed",
-      );
+      const firstEventP = onceMessage<{
+        type: "event";
+        event: string;
+        payload?: Record<string, unknown> | null;
+      }>(nodeWs, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
       await connectOk(nodeWs, {
         role: "node",
         client: {
@@ -261,10 +263,11 @@ describe("gateway server models + voicewake", () => {
         (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
       ).toEqual([]);
 
-      const broadcastP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
-        nodeWs,
-        (o) => o.type === "event" && o.event === "voicewake.routing.changed",
-      );
+      const broadcastP = onceMessage<{
+        type: "event";
+        event: string;
+        payload?: Record<string, unknown> | null;
+      }>(nodeWs, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
 
       const setRes = await rpcReq(ws, "voicewake.routing.set", {
         config: {
