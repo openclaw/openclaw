@@ -16,6 +16,7 @@ class SerialAdapter:
         self._port = port
         self._baudrate = int(baudrate)
         self._serial: Optional[Any] = None
+        self._read_buffer = b""
 
     def connect(self) -> bool:
         """Open the serial port."""
@@ -25,6 +26,7 @@ class SerialAdapter:
             raise RuntimeError("pyserial is not available")
         try:
             self._serial = serial.Serial(self._port, self._baudrate, timeout=1)
+            self._read_buffer = b""
         except Exception as exc:
             raise RuntimeError(f"Failed to open serial port: {self._port}") from exc
         return True
@@ -37,18 +39,27 @@ class SerialAdapter:
             self._serial.close()
         finally:
             self._serial = None
+            self._read_buffer = b""
 
-    def read(self) -> Dict[str, Any]:
-        """Read one JSON line and return as a dict."""
+    def read(self) -> Optional[Dict[str, Any]]:
+        """Read one JSON line and return it as a dict, or None if incomplete."""
         if self._serial is None:
             raise RuntimeError("Serial not connected")
-        line = self._serial.readline()
-        if not line:
-            return {}
-        if isinstance(line, bytes):
-            text = line.decode("utf-8").strip()
-        else:
-            text = str(line).strip()
+        chunk = self._serial.readline()
+        if not chunk:
+            return None
+        if not isinstance(chunk, bytes):
+            raise TypeError("serial.readline() must return bytes")
+
+        self._read_buffer += chunk
+        if b"\n" not in self._read_buffer:
+            return None
+
+        line, self._read_buffer = self._read_buffer.split(b"\n", 1)
+        text = line.decode("utf-8").strip()
+        if not text:
+            return None
+
         payload = json.loads(text)
         if not isinstance(payload, dict):
             raise ValueError("Expected JSON object")

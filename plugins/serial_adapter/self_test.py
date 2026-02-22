@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List
+from typing import List
 
 try:
     from plugins.serial_adapter.plugin import SerialAdapter
@@ -33,12 +33,24 @@ class _FakeSerial:
 
 def run_self_test() -> None:
     adapter = SerialAdapter("mock", 9600)
-    fake = _FakeSerial([b"{\"value\":1}\n"])
+    fake = _FakeSerial([b"{\"va", b"lue\":1}\n", b"", b"{}\n"])
     adapter._serial = fake  # type: ignore[attr-defined]
 
+    if adapter.read() is not None:
+        raise RuntimeError("read() should return None for partial frames")
+
     payload = adapter.read()
+    if payload is None:
+        raise RuntimeError("read() should return payload for complete frame")
     if payload.get("value") != 1:
         raise RuntimeError("read() did not return expected payload")
+
+    if adapter.read() is not None:
+        raise RuntimeError("read() should return None on timeout/empty reads")
+
+    empty_payload = adapter.read()
+    if empty_payload != {}:
+        raise RuntimeError("read() should return empty JSON object when received")
 
     adapter.write({"value": 1})
     if not fake.writes or b'"value":1' not in fake.writes[0]:
