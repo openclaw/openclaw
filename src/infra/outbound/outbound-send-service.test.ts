@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
+  getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
 }));
 
 vi.mock("../../channels/plugins/message-actions.js", () => ({
@@ -15,6 +16,11 @@ vi.mock("./message.js", () => ({
   sendPoll: (...args: unknown[]) => mocks.sendPoll(...args),
 }));
 
+vi.mock("../../media/local-roots.js", () => ({
+  getAgentScopedMediaLocalRoots: (...args: unknown[]) =>
+    mocks.getAgentScopedMediaLocalRoots(...args),
+}));
+
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
@@ -22,6 +28,7 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
+    mocks.getAgentScopedMediaLocalRoots.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -81,6 +88,37 @@ describe("executeSendAction", () => {
 
     expect(result.handledBy).toBe("plugin");
     expect(mocks.sendPoll).not.toHaveBeenCalled();
+  });
+
+  it("passes agent-scoped media local roots to plugin dispatch", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      ok: true,
+      value: { messageId: "msg-plugin" },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello" },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRoots).toHaveBeenCalledWith({}, "agent-1");
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaLocalRoots: ["/tmp/agent-roots"],
+      }),
+    );
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
