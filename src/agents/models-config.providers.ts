@@ -662,90 +662,176 @@ export function buildNvidiaProvider(): ProviderConfig {
 
 const HANZO_API_BASE_URL = "https://api.hanzo.ai/v1";
 
-/** Build the Hanzo Cloud provider with Zen + family of models via api.hanzo.ai gateway. */
+/** Build the Hanzo Cloud provider with Zen3/Zen4 + third-party models via api.hanzo.ai gateway. */
 export function buildHanzoCloudProvider(): ProviderConfig {
   return {
     baseUrl: HANZO_API_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     models: [
-      // Zen — Hanzo's native model family
+      // -----------------------------------------------------------------------
+      // Zen4 — Latest generation (flagship)
+      // -----------------------------------------------------------------------
       {
-        id: "zen-1",
-        name: "Zen 1",
+        id: "zen4",
+        name: "Zen4 Flagship",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-        contextWindow: 200000,
+        cost: { input: 3, output: 9.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 202000,
         maxTokens: 16384,
       },
       {
-        id: "zen-1-mini",
-        name: "Zen 1 Mini",
+        id: "zen4-pro",
+        name: "Zen4 Pro",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-        contextWindow: 200000,
+        cost: { input: 2.7, output: 2.7, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131000,
         maxTokens: 16384,
       },
-      // Anthropic Claude (via Hanzo gateway)
+      {
+        id: "zen4-max",
+        name: "Zen4 Max",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 3.6, output: 3.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131000,
+        maxTokens: 16384,
+      },
+      {
+        id: "zen4-mini",
+        name: "Zen4 Mini",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0.6, output: 0.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 40000,
+        maxTokens: 8192,
+      },
+      {
+        id: "zen4-ultra",
+        name: "Zen4 Ultra",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 3, output: 9.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 202000,
+        maxTokens: 16384,
+      },
+      {
+        id: "zen4-thinking",
+        name: "Zen4 Thinking",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 2.7, output: 2.7, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131000,
+        maxTokens: 16384,
+      },
+      // -----------------------------------------------------------------------
+      // Zen4 — Coder variants
+      // -----------------------------------------------------------------------
+      {
+        id: "zen4-coder",
+        name: "Zen4 Coder",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 3.6, output: 3.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262000,
+        maxTokens: 16384,
+      },
+      {
+        id: "zen4-coder-flash",
+        name: "Zen4 Coder Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 1.5, output: 1.5, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262000,
+        maxTokens: 16384,
+      },
+      {
+        id: "zen4-coder-pro",
+        name: "Zen4 Coder Pro",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 4.5, output: 4.5, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262000,
+        maxTokens: 16384,
+      },
+      // -----------------------------------------------------------------------
+      // Zen3 — Multimodal / specialty
+      // -----------------------------------------------------------------------
+      {
+        id: "zen3-omni",
+        name: "Zen3 Omni",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 1.8, output: 6.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 202000,
+        maxTokens: 16384,
+      },
+      {
+        id: "zen3-vl",
+        name: "Zen3 VL",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0.45, output: 1.8, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131000,
+        maxTokens: 8192,
+      },
+      {
+        id: "zen3-nano",
+        name: "Zen3 Nano",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0.3, output: 0.3, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 40000,
+        maxTokens: 4096,
+      },
+      // -----------------------------------------------------------------------
+      // Third-party models (via Hanzo gateway — unified billing)
+      // -----------------------------------------------------------------------
       {
         id: "claude-opus-4-6",
         name: "Claude Opus 4.6",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-        contextWindow: 200000,
+        cost: { input: 6, output: 30, cacheRead: 0.6, cacheWrite: 7.5 },
+        contextWindow: 1000000,
         maxTokens: 32000,
       },
       {
-        id: "claude-sonnet-4-5-20250929",
-        name: "Claude Sonnet 4.5",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-        contextWindow: 200000,
+        cost: { input: 3.6, output: 18, cacheRead: 0.36, cacheWrite: 4.5 },
+        contextWindow: 1000000,
         maxTokens: 16384,
       },
       {
-        id: "claude-haiku-4-5-20251001",
+        id: "claude-haiku-4-5",
         name: "Claude Haiku 4.5",
         reasoning: false,
         input: ["text", "image"],
-        cost: { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+        cost: { input: 1.2, output: 6, cacheRead: 0.12, cacheWrite: 1.5 },
         contextWindow: 200000,
         maxTokens: 8192,
       },
-      // OpenAI (via Hanzo gateway — OpenAI-compatible)
       {
-        id: "gpt-5.2",
-        name: "GPT 5.2",
-        api: "openai-completions" as const,
+        id: "gpt-5",
+        name: "GPT-5",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
-        contextWindow: 128000,
+        cost: { input: 1.5, output: 12, cacheRead: 0.15, cacheWrite: 0 },
+        contextWindow: 400000,
         maxTokens: 16384,
       },
       {
-        id: "gpt-5.1",
-        name: "GPT 5.1",
-        api: "openai-completions" as const,
+        id: "gpt-5-mini",
+        name: "GPT-5 Mini",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 2.5, output: 10, cacheRead: 0.25, cacheWrite: 2.5 },
-        contextWindow: 128000,
+        cost: { input: 0.3, output: 2.4, cacheRead: 0.03, cacheWrite: 0 },
+        contextWindow: 400000,
         maxTokens: 16384,
-      },
-      // Google Gemini (via Hanzo gateway)
-      {
-        id: "gemini-3-pro",
-        name: "Gemini 3 Pro",
-        api: "openai-completions" as const,
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 1.25, output: 5, cacheRead: 0.125, cacheWrite: 1.25 },
-        contextWindow: 2000000,
-        maxTokens: 65536,
       },
     ],
   };

@@ -12,9 +12,13 @@ let defaultWarnState: WarnState = { warned: false };
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Hanzo Zen — default model family
-  zen: "hanzo/zen-1",
-  "zen-mini": "hanzo/zen-1-mini",
+  // Hanzo Zen — default model family (zen3/zen4)
+  zen: "hanzo/zen4",
+  "zen-pro": "hanzo/zen4-pro",
+  "zen-max": "hanzo/zen4-max",
+  "zen-mini": "hanzo/zen4-mini",
+  "zen-coder": "hanzo/zen4-coder",
+  "zen-thinking": "hanzo/zen4-thinking",
 
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-4-6",

@@ -7,6 +7,8 @@ services:
     envVars:
       - key: PORT
         value: "8080"
+      - key: HANZO_API_KEY
+        sync: false
       - key: SETUP_PASSWORD
         sync: false
       - key: BOT_STATE_DIR

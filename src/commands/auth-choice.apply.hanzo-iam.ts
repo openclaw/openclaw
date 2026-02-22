@@ -241,10 +241,10 @@ export async function applyAuthChoiceHanzoIam(
     await params.prompter.note(
       [
         "Hanzo Cloud connected. You now have access to:",
-        "  - Anthropic Claude (Opus, Sonnet, Haiku)",
-        "  - OpenAI GPT (5.2, 5.1, 5-nano)",
-        "  - Google Gemini (3 Pro, Flash)",
-        "  - Qwen 3, GLM 4.7, and 100+ more models",
+        "  - Zen4 (flagship, pro, max, mini, coder, thinking, ultra)",
+        "  - Zen3 (omni, vl, nano, embedding)",
+        "  - Claude (Opus, Sonnet, Haiku) via unified billing",
+        "  - GPT-5, Gemini, and 300+ more models",
         "",
         `API endpoint: ${HANZO_API_BASE_URL}`,
       ].join("\n"),
