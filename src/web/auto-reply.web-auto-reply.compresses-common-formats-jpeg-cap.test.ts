@@ -16,6 +16,8 @@ installWebAutoReplyTestHomeHooks();
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
   type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
+  const SMALL_MEDIA_CAP_MB = 0.1;
+  const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
 
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
@@ -37,7 +39,12 @@ describe("web auto-reply", () => {
 
     return {
       reply,
-      dispatch: async (id = "msg1") => {
+      dispatch: async (
+        id = "msg1",
+        overrides?: Partial<
+          Pick<WebInboundMessage, "from" | "conversationId" | "to" | "accountId" | "chatId">
+        >,
+      ) => {
         await capturedOnMessage?.({
           body: "hello",
           from: "+1",
@@ -46,6 +53,7 @@ describe("web auto-reply", () => {
           accountId: "default",
           chatType: "direct",
           chatId: "+1",
+          ...overrides,
           id,
           sendComposing,
           reply,
@@ -143,39 +151,87 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
-    const width = 1150;
-    const height = 1150;
+    const width = 360;
+    const height = 360;
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
-    for (const fmt of formats) {
-      const big = await fmt.make(sharedRaw, { width, height });
-      expect(big.length).toBeGreaterThan(1 * 1024 * 1024);
-      await expectCompressedImageWithinCap({
-        mediaUrl: `https://example.com/big.${fmt.name}`,
-        mime: fmt.mime,
-        image: big,
-        messageId: `msg-${fmt.name}`,
+    const renderedFormats = await Promise.all(
+      formats.map(async (fmt) => ({
+        ...fmt,
+        image: await fmt.make(sharedRaw, { width, height }),
+      })),
+    );
+
+    await withMediaCap(SMALL_MEDIA_CAP_MB, async () => {
+      const sendMedia = vi.fn();
+      const { reply, dispatch } = await setupSingleInboundMessage({
+        resolverValue: {
+          text: "hi",
+          mediaUrl: "https://example.com/big.image",
+        },
+        sendMedia,
       });
-    }
+      let fetchIndex = 0;
+
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        const matched =
+          renderedFormats[Math.min(fetchIndex, renderedFormats.length - 1)] ?? renderedFormats[0];
+        fetchIndex += 1;
+        const { image, mime } = matched;
+        return {
+          ok: true,
+          body: true,
+          arrayBuffer: async () =>
+            image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
+          headers: { get: () => mime },
+          status: 200,
+        } as unknown as Response;
+      });
+
+      try {
+        for (const [index, fmt] of renderedFormats.entries()) {
+          expect(fmt.image.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
+          const beforeCalls = sendMedia.mock.calls.length;
+          await dispatch(`msg-${fmt.name}-${index}`, {
+            from: `+1${index}`,
+            conversationId: `conv-${index}`,
+            chatId: `conv-${index}`,
+          });
+          expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
+          const payload = sendMedia.mock.calls[beforeCalls]?.[0] as {
+            image: Buffer;
+            caption?: string;
+            mimetype?: string;
+          };
+          expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
+          expect(payload.mimetype).toBe("image/jpeg");
+        }
+        expect(sendMedia).toHaveBeenCalledTimes(renderedFormats.length);
+        expect(reply).not.toHaveBeenCalled();
+      } finally {
+        fetchMock.mockRestore();
+      }
+    });
   });
 
   it("honors mediaMaxMb from config", async () => {
     const bigPng = await sharp({
       create: {
-        width: 1200,
-        height: 1200,
+        width: 256,
+        height: 256,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },
     })
       .png({ compressionLevel: 0 })
       .toBuffer();
-    expect(bigPng.length).toBeGreaterThan(1 * 1024 * 1024);
+    expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
     await expectCompressedImageWithinCap({
       mediaUrl: "https://example.com/big.png",
       mime: "image/png",
       image: bigPng,
       messageId: "msg1",
+      mediaMaxMb: SMALL_MEDIA_CAP_MB,
     });
   });
   it("falls back to text when media is unsupported", async () => {
