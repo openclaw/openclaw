@@ -40,9 +40,20 @@ function buildInjectedWorkspaceFiles(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
+  // Guard against malformed hook-injected files (e.g. using `filePath` instead of `path`).
+  // A single undefined path would otherwise crash all agents on every message.
+  const validInjectedFiles = params.injectedFiles.filter((f) => {
+    if (!f.path) {
+      console.warn(
+        `[buildInjectedWorkspaceFiles] Skipping injected file "${f.name ?? "(unnamed)"}" — missing required \`path\` property`,
+      );
+      return false;
+    }
+    return true;
+  });
+  const injectedByPath = new Map(validInjectedFiles.map((f) => [f.path, f.content]));
   const injectedByBaseName = new Map<string, string>();
-  for (const file of params.injectedFiles) {
+  for (const file of validInjectedFiles) {
     const normalizedPath = file.path.replace(/\\/g, "/");
     const baseName = path.posix.basename(normalizedPath);
     if (!injectedByBaseName.has(baseName)) {
