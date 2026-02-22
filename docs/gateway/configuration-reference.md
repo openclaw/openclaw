@@ -161,7 +161,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         maxDelayMs: 30000,
         jitter: 0.1,
       },
-      network: { autoSelectFamily: false },
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
       webhookSecret: "secret",
