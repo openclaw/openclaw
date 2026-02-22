@@ -295,6 +295,8 @@ export type MemorySearchConfig = {
   fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /** Number of embedding dimensions (Matryoshka support). When set, requests truncated vectors from compatible providers (OpenAI, Voyage, Gemini). */
+  dimensions?: number;
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */
