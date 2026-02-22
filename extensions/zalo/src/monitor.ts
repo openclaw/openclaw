@@ -2,10 +2,12 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
 import {
+  createDedupeCache,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTarget,
   resolveSenderCommandAuthorization,
   resolveWebhookPath,
   resolveWebhookTargets,
@@ -91,7 +93,10 @@ type WebhookTarget = {
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimits = new Map<string, WebhookRateLimitState>();
-const recentWebhookEvents = new Map<string, number>();
+const recentWebhookEvents = createDedupeCache({
+  ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
+  maxSize: 5000,
+});
 const webhookStatusCounters = new Map<string, number>();
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
@@ -140,22 +145,7 @@ function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
     return false;
   }
   const key = `${update.event_name}:${messageId}`;
-  const seenAt = recentWebhookEvents.get(key);
-  recentWebhookEvents.set(key, nowMs);
-
-  if (seenAt && nowMs - seenAt < ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
-    return true;
-  }
-
-  if (recentWebhookEvents.size > 5000) {
-    for (const [eventKey, timestamp] of recentWebhookEvents) {
-      if (nowMs - timestamp >= ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
-        recentWebhookEvents.delete(eventKey);
-      }
-    }
-  }
-
-  return false;
+  return recentWebhookEvents.check(key, nowMs);
 }
 
 function recordWebhookStatus(
@@ -195,20 +185,22 @@ export async function handleZaloWebhookRequest(
   }
 
   const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matching = targets.filter((entry) => timingSafeEquals(entry.secret, headerToken));
-  if (matching.length === 0) {
+  const matchedTarget = resolveSingleWebhookTarget(targets, (entry) =>
+    timingSafeEquals(entry.secret, headerToken),
+  );
+  if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
     recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
     return true;
   }
-  if (matching.length > 1) {
+  if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
     recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
     return true;
   }
-  const target = matching[0];
+  const target = matchedTarget.target;
   const path = req.url ?? "<unknown>";
   const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
   const nowMs = Date.now();
@@ -444,7 +436,7 @@ async function handleImageMessage(
   if (photo) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo, maxBytes });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,

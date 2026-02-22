@@ -11,13 +11,11 @@ import {
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
-  SAFE_BIN_GENERIC_PROFILE,
   SAFE_BIN_PROFILES,
   type SafeBinProfile,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
-
 export function normalizeSafeBins(entries?: string[]): Set<string> {
   if (!Array.isArray(entries)) {
     return new Set();
@@ -42,7 +40,6 @@ export function isSafeBinUsage(params: {
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
-  safeBinGenericProfile?: SafeBinProfile;
   isTrustedSafeBinPathFn?: typeof isTrustedSafeBinPath;
 }): boolean {
   // Windows host exec uses PowerShell, which has different parsing/expansion rules.
@@ -76,8 +73,10 @@ export function isSafeBinUsage(params: {
   }
   const argv = params.argv.slice(1);
   const safeBinProfiles = params.safeBinProfiles ?? SAFE_BIN_PROFILES;
-  const genericSafeBinProfile = params.safeBinGenericProfile ?? SAFE_BIN_GENERIC_PROFILE;
-  const profile = safeBinProfiles[execName] ?? genericSafeBinProfile;
+  const profile = safeBinProfiles[execName];
+  if (!profile) {
+    return false;
+  }
   return validateSafeBinArgv(argv, profile);
 }
 
@@ -94,6 +93,7 @@ function evaluateSegments(
   params: {
     allowlist: ExecAllowlistEntry[];
     safeBins: Set<string>;
+    safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
     cwd?: string;
     platform?: string | null;
     trustedSafeBinDirs?: ReadonlySet<string>;
@@ -123,6 +123,7 @@ function evaluateSegments(
       argv: segment.argv,
       resolution: segment.resolution,
       safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
     });
@@ -148,6 +149,7 @@ export function evaluateExecAllowlist(params: {
   analysis: ExecCommandAnalysis;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
@@ -166,6 +168,7 @@ export function evaluateExecAllowlist(params: {
       const result = evaluateSegments(chainSegments, {
         allowlist: params.allowlist,
         safeBins: params.safeBins,
+        safeBinProfiles: params.safeBinProfiles,
         cwd: params.cwd,
         platform: params.platform,
         trustedSafeBinDirs: params.trustedSafeBinDirs,
@@ -185,6 +188,7 @@ export function evaluateExecAllowlist(params: {
   const result = evaluateSegments(params.analysis.segments, {
     allowlist: params.allowlist,
     safeBins: params.safeBins,
+    safeBinProfiles: params.safeBinProfiles,
     cwd: params.cwd,
     platform: params.platform,
     trustedSafeBinDirs: params.trustedSafeBinDirs,
@@ -206,6 +210,148 @@ export type ExecAllowlistAnalysis = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+const SHELL_WRAPPER_EXECUTABLES = new Set([
+  "ash",
+  "bash",
+  "cmd",
+  "cmd.exe",
+  "dash",
+  "fish",
+  "ksh",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+  "sh",
+  "zsh",
+]);
+
+function normalizeExecutableName(name: string | undefined): string {
+  return (name ?? "").trim().toLowerCase();
+}
+
+function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
+  const candidates = [
+    normalizeExecutableName(segment.resolution?.executableName),
+    normalizeExecutableName(segment.resolution?.rawExecutable),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (SHELL_WRAPPER_EXECUTABLES.has(candidate)) {
+      return true;
+    }
+    const base = candidate.split(/[\\/]/).pop();
+    if (base && SHELL_WRAPPER_EXECUTABLES.has(base)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function extractShellInlineCommand(argv: string[]): string | null {
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (!token) {
+      continue;
+    }
+    const lower = token.toLowerCase();
+    if (lower === "--") {
+      break;
+    }
+    if (
+      lower === "-c" ||
+      lower === "--command" ||
+      lower === "-command" ||
+      lower === "/c" ||
+      lower === "/k"
+    ) {
+      const next = argv[i + 1]?.trim();
+      return next ? next : null;
+    }
+    if (/^-[^-]*c[^-]*$/i.test(token)) {
+      const commandIndex = lower.indexOf("c");
+      const inline = token.slice(commandIndex + 1).trim();
+      if (inline) {
+        return inline;
+      }
+      const next = argv[i + 1]?.trim();
+      return next ? next : null;
+    }
+  }
+  return null;
+}
+
+function collectAllowAlwaysPatterns(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+  depth: number;
+  out: Set<string>;
+}) {
+  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+  if (!candidatePath) {
+    return;
+  }
+  if (!isShellWrapperSegment(params.segment)) {
+    params.out.add(candidatePath);
+    return;
+  }
+  if (params.depth >= 3) {
+    return;
+  }
+  const inlineCommand = extractShellInlineCommand(params.segment.argv);
+  if (!inlineCommand) {
+    return;
+  }
+  const nested = analyzeShellCommand({
+    command: inlineCommand,
+    cwd: params.cwd,
+    env: params.env,
+    platform: params.platform,
+  });
+  if (!nested.ok) {
+    return;
+  }
+  for (const nestedSegment of nested.segments) {
+    collectAllowAlwaysPatterns({
+      segment: nestedSegment,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      depth: params.depth + 1,
+      out: params.out,
+    });
+  }
+}
+
+/**
+ * Derive persisted allowlist patterns for an "allow always" decision.
+ * When a command is wrapped in a shell (for example `zsh -lc "<cmd>"`),
+ * persist the inner executable(s) rather than the shell binary.
+ */
+export function resolveAllowAlwaysPatterns(params: {
+  segments: ExecCommandSegment[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): string[] {
+  const patterns = new Set<string>();
+  for (const segment of params.segments) {
+    collectAllowAlwaysPatterns({
+      segment,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      depth: 0,
+      out: patterns,
+    });
+  }
+  return Array.from(patterns);
+}
+
 /**
  * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
  */
@@ -213,6 +359,7 @@ export function evaluateShellAllowlist(params: {
   command: string;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   trustedSafeBinDirs?: ReadonlySet<string>;
@@ -243,6 +390,7 @@ export function evaluateShellAllowlist(params: {
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
       cwd: params.cwd,
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
@@ -278,6 +426,7 @@ export function evaluateShellAllowlist(params: {
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
       cwd: params.cwd,
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,

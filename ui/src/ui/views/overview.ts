@@ -1,9 +1,22 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { t, i18n, type Locale } from "../../i18n/index.ts";
+import type { EventLogEntry } from "../app-events.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
-import { formatNextRun } from "../presenter.ts";
+import { icons } from "../icons.ts";
 import type { UiSettings } from "../storage.ts";
+import type {
+  AttentionItem,
+  CronJob,
+  CronStatus,
+  SessionsListResult,
+  SessionsUsageResult,
+  SkillStatusReport,
+} from "../types.ts";
+import { renderOverviewAttention } from "./overview-attention.ts";
+import { renderOverviewCards } from "./overview-cards.ts";
+import { renderOverviewEventLog } from "./overview-event-log.ts";
+import { renderOverviewLogTail } from "./overview-log-tail.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -16,11 +29,24 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  // New dashboard data
+  usageResult: SessionsUsageResult | null;
+  sessionsResult: SessionsListResult | null;
+  skillsReport: SkillStatusReport | null;
+  cronJobs: CronJob[];
+  cronStatus: CronStatus | null;
+  attentionItems: AttentionItem[];
+  eventLog: EventLogEntry[];
+  overviewLogLines: string[];
+  streamMode: boolean;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onConnect: () => void;
   onRefresh: () => void;
+  onNavigate: (tab: string) => void;
+  onRefreshLogs: () => void;
+  onToggleStreamMode: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
@@ -33,7 +59,7 @@ export function renderOverview(props: OverviewProps) {
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tick = snapshot?.policy?.tickIntervalMs
-    ? `${snapshot.policy.tickIntervalMs}ms`
+    ? `${(snapshot.policy.tickIntervalMs / 1000).toFixed(snapshot.policy.tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
     : t("common.na");
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
@@ -135,7 +161,7 @@ export function renderOverview(props: OverviewProps) {
       <div class="card">
         <div class="card-title">${t("overview.access.title")}</div>
         <div class="card-sub">${t("overview.access.subtitle")}</div>
-        <div class="form-grid" style="margin-top: 16px;">
+        <div class="form-grid ${props.streamMode ? "redacted" : ""}" style="margin-top: 16px;">
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
             <input
@@ -154,6 +180,8 @@ export function renderOverview(props: OverviewProps) {
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
                   <input
+                    type="password"
+                    autocomplete="off"
                     .value=${props.settings.token}
                     @input=${(e: Event) => {
                       const v = (e.target as HTMLInputElement).value;
@@ -210,6 +238,36 @@ export function renderOverview(props: OverviewProps) {
             isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
           }</span>
         </div>
+        ${
+          !props.connected
+            ? html`
+                <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px;">
+                  <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px;">${t("overview.connection.title")}</div>
+                  <ol class="muted" style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.8;">
+                    <li>${t("overview.connection.step1")}
+                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">openclaw gateway run</div>
+                    </li>
+                    <li>${t("overview.connection.step2")}
+                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">openclaw dashboard --no-open</div>
+                    </li>
+                    <li>${t("overview.connection.step3")}</li>
+                    <li>${t("overview.connection.step4")}
+                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">openclaw doctor --generate-gateway-token</div>
+                    </li>
+                  </ol>
+                  <div class="muted" style="font-size: 12px; margin-top: 10px;">
+                    ${t("overview.connection.docsHint")}
+                    <a
+                      class="session-link"
+                      href="https://docs.openclaw.ai/web/dashboard"
+                      target="_blank"
+                      rel="noreferrer"
+                    >${t("overview.connection.docsLink")}</a>
+                  </div>
+                </div>
+              `
+            : nothing
+        }
       </div>
 
       <div class="card">
@@ -253,45 +311,47 @@ export function renderOverview(props: OverviewProps) {
       </div>
     </section>
 
-    <section class="grid grid-cols-3" style="margin-top: 18px;">
-      <div class="card stat-card">
-        <div class="stat-label">${t("overview.stats.instances")}</div>
-        <div class="stat-value">${props.presenceCount}</div>
-        <div class="muted">${t("overview.stats.instancesHint")}</div>
-      </div>
-      <div class="card stat-card">
-        <div class="stat-label">${t("overview.stats.sessions")}</div>
-        <div class="stat-value">${props.sessionsCount ?? t("common.na")}</div>
-        <div class="muted">${t("overview.stats.sessionsHint")}</div>
-      </div>
-      <div class="card stat-card">
-        <div class="stat-label">${t("overview.stats.cron")}</div>
-        <div class="stat-value">
-          ${props.cronEnabled == null ? t("common.na") : props.cronEnabled ? t("common.enabled") : t("common.disabled")}
-        </div>
-        <div class="muted">${t("overview.stats.cronNext", { time: formatNextRun(props.cronNext) })}</div>
-      </div>
-    </section>
+    ${
+      props.streamMode
+        ? html`<div class="callout ov-stream-banner" style="margin-top: 18px;">
+          <span class="nav-item__icon">${icons.radio}</span>
+          ${t("overview.streamMode.active")}
+          <button class="btn btn--sm" style="margin-left: auto;" @click=${() => props.onToggleStreamMode()}>
+            ${t("overview.streamMode.disable")}
+          </button>
+        </div>`
+        : nothing
+    }
 
-    <section class="card" style="margin-top: 18px;">
-      <div class="card-title">${t("overview.notes.title")}</div>
-      <div class="card-sub">${t("overview.notes.subtitle")}</div>
-      <div class="note-grid" style="margin-top: 14px;">
-        <div>
-          <div class="note-title">${t("overview.notes.tailscaleTitle")}</div>
-          <div class="muted">
-            ${t("overview.notes.tailscaleText")}
-          </div>
-        </div>
-        <div>
-          <div class="note-title">${t("overview.notes.sessionTitle")}</div>
-          <div class="muted">${t("overview.notes.sessionText")}</div>
-        </div>
-        <div>
-          <div class="note-title">${t("overview.notes.cronTitle")}</div>
-          <div class="muted">${t("overview.notes.cronText")}</div>
-        </div>
-      </div>
-    </section>
+    <div class="ov-section-divider"></div>
+
+    ${renderOverviewCards({
+      usageResult: props.usageResult,
+      sessionsResult: props.sessionsResult,
+      skillsReport: props.skillsReport,
+      cronJobs: props.cronJobs,
+      cronStatus: props.cronStatus,
+      presenceCount: props.presenceCount,
+      redacted: props.streamMode,
+      onNavigate: props.onNavigate,
+    })}
+
+    ${renderOverviewAttention({ items: props.attentionItems })}
+
+    <div class="ov-section-divider"></div>
+
+    <div class="ov-bottom-grid" style="margin-top: 18px;">
+      ${renderOverviewEventLog({
+        events: props.eventLog,
+        redacted: props.streamMode,
+      })}
+
+      ${renderOverviewLogTail({
+        lines: props.overviewLogLines,
+        redacted: props.streamMode,
+        onRefreshLogs: props.onRefreshLogs,
+      })}
+    </div>
+
   `;
 }

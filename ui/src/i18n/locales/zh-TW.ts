@@ -12,6 +12,7 @@ export const zh_TW: TranslationMap = {
     na: "不適用",
     docs: "文檔",
     resources: "資源",
+    search: "搜尋",
   },
   nav: {
     chat: "聊天",
@@ -20,6 +21,7 @@ export const zh_TW: TranslationMap = {
     settings: "設置",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
+    resize: "調整側邊欄大小",
   },
   tabs: {
     agents: "代理",
@@ -37,19 +39,19 @@ export const zh_TW: TranslationMap = {
     logs: "日誌",
   },
   subtitles: {
-    agents: "管理代理工作區、工具和身份。",
-    overview: "網關狀態、入口點和快速健康讀取。",
-    channels: "管理頻道和設置。",
-    instances: "來自已連接客戶端和節點的在線信號。",
-    sessions: "檢查活動會話並調整每個會話的默認設置。",
-    usage: "監控 API 使用情況和成本。",
-    cron: "安排喚醒和重複的代理運行。",
-    skills: "管理技能可用性和 API 密鑰注入。",
-    nodes: "配對設備、功能和命令公開。",
-    chat: "用於快速干預的直接網關聊天會話。",
-    config: "安全地編輯 ~/.openclaw/openclaw.json。",
-    debug: "網關快照、事件和手動 RPC 調用。",
-    logs: "網關文件日志的實時追蹤。",
+    agents: "工作區、工具、身份。",
+    overview: "狀態、入口點、健康。",
+    channels: "頻道和設置。",
+    instances: "已連接客戶端和節點。",
+    sessions: "活動會話和默認設置。",
+    usage: "API 使用情況和成本。",
+    cron: "喚醒和重複運行。",
+    skills: "技能和 API 密鑰。",
+    nodes: "配對設備和命令。",
+    chat: "網關聊天，快速干預。",
+    config: "編輯 openclaw.json。",
+    debug: "快照、事件、RPC。",
+    logs: "實時網關日誌。",
   },
   overview: {
     access: {
@@ -98,6 +100,47 @@ export const zh_TW: TranslationMap = {
       hint: "此頁面為 HTTP，因此瀏覽器阻止設備標識。請使用 HTTPS (Tailscale Serve) 或在網關主機上打開 {url}。",
       stayHttp: "如果您必須保持 HTTP，請設置 {config} (僅限令牌)。",
     },
+    connection: {
+      title: "如何連接",
+      step1: "在主機上啟動閘道：",
+      step2: "取得帶令牌的儀表板 URL：",
+      step3: "將 WebSocket URL 和令牌貼到上方，或直接開啟帶令牌的 URL。",
+      step4: "或產生可重複使用的令牌：",
+      docsHint: "如需遠端存取，建議使用 Tailscale Serve。",
+      docsLink: "查看文件 →",
+    },
+    cards: {
+      cost: "費用",
+      skills: "技能",
+      recentSessions: "最近會話",
+    },
+    attention: {
+      title: "注意事項",
+    },
+    eventLog: {
+      title: "事件日誌",
+    },
+    logTail: {
+      title: "閘道日誌",
+    },
+    quickActions: {
+      newSession: "新建會話",
+      automation: "自動化",
+      refreshAll: "全部刷新",
+      terminal: "終端",
+    },
+    streamMode: {
+      active: "串流模式 — 數據已隱藏",
+      disable: "禁用",
+    },
+    palette: {
+      placeholder: "輸入指令…",
+      noResults: "無結果",
+    },
+  },
+  login: {
+    subtitle: "閘道儀表板",
+    passwordPlaceholder: "可選",
   },
   chat: {
     disconnected: "已斷開與網關的連接。",

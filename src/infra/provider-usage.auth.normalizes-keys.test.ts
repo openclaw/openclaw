@@ -174,7 +174,9 @@ describe("resolveProviderAuths key normalization", () => {
     );
   });
 
-  it("falls back to legacy .pi auth file for zai keys", async () => {
+  it("falls back to legacy .pi auth file for zai keys even after os.homedir() is primed", async () => {
+    // Prime os.homedir() to simulate long-lived workers that may have touched it before HOME changes.
+    os.homedir();
     await withSuiteHome(
       async (home) => {
         await writeLegacyPiAuth(

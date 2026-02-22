@@ -1,5 +1,16 @@
 import { normalizeE164 } from "../../../utils.js";
 
+function appendNormalizedUnique(entries: Iterable<string>, seen: Set<string>, ordered: string[]) {
+  for (const entry of entries) {
+    const normalized = normalizeE164(entry) ?? entry;
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+}
+
 export function noteGroupMember(
   groupMemberNames: Map<string, Map<string, string>>,
   conversationId: string,
@@ -31,27 +42,10 @@ export function formatGroupMembers(params: {
   const seen = new Set<string>();
   const ordered: string[] = [];
   if (participants?.length) {
-    for (const entry of participants) {
-      if (!entry) {
-        continue;
-      }
-      const normalized = normalizeE164(entry) ?? entry;
-      if (!normalized || seen.has(normalized)) {
-        continue;
-      }
-      seen.add(normalized);
-      ordered.push(normalized);
-    }
+    appendNormalizedUnique(participants, seen, ordered);
   }
   if (roster) {
-    for (const entry of roster.keys()) {
-      const normalized = normalizeE164(entry) ?? entry;
-      if (!normalized || seen.has(normalized)) {
-        continue;
-      }
-      seen.add(normalized);
-      ordered.push(normalized);
-    }
+    appendNormalizedUnique(roster.keys(), seen, ordered);
   }
   if (ordered.length === 0 && fallbackE164) {
     const normalized = normalizeE164(fallbackE164) ?? fallbackE164;

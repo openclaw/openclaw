@@ -1,7 +1,7 @@
 const KEY = "openclaw.control.settings.v1";
 
 import { isSupportedLocale } from "../i18n/index.ts";
-import type { ThemeMode } from "./theme.ts";
+import { VALID_THEMES, type ThemeMode } from "./theme.ts";
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -13,6 +13,7 @@ export type UiSettings = {
   chatShowThinking: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
+  navWidth: number; // Sidebar width when expanded (180–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
 };
@@ -28,11 +29,12 @@ export function loadSettings(): UiSettings {
     token: "",
     sessionKey: "main",
     lastActiveSessionKey: "main",
-    theme: "system",
+    theme: "dark",
     chatFocusMode: false,
     chatShowThinking: true,
     splitRatio: 0.6,
     navCollapsed: false,
+    navWidth: 220,
     navGroupsCollapsed: {},
   };
 
@@ -57,10 +59,9 @@ export function loadSettings(): UiSettings {
           ? parsed.lastActiveSessionKey.trim()
           : (typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()) ||
             defaults.lastActiveSessionKey,
-      theme:
-        parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
-          ? parsed.theme
-          : defaults.theme,
+      theme: VALID_THEMES.has(parsed.theme as ThemeMode)
+        ? (parsed.theme as ThemeMode)
+        : defaults.theme,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
@@ -75,6 +76,10 @@ export function loadSettings(): UiSettings {
           : defaults.splitRatio,
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
+      navWidth:
+        typeof parsed.navWidth === "number" && parsed.navWidth >= 180 && parsed.navWidth <= 400
+          ? parsed.navWidth
+          : defaults.navWidth,
       navGroupsCollapsed:
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed

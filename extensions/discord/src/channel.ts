@@ -22,6 +22,8 @@ import {
   resolveDefaultDiscordAccountId,
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -130,8 +132,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "open";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.discord !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       const guildEntries = account.config.guilds ?? {};
       const guildsConfigured = Object.keys(guildEntries).length > 0;
       const channelAllowlistConfigured = guildsConfigured;

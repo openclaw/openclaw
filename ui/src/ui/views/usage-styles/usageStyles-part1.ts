@@ -1,18 +1,4 @@
 export const usageStylesPart1 = `
-  .usage-page-header {
-    margin: 4px 0 12px;
-  }
-  .usage-page-title {
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    margin-bottom: 4px;
-  }
-  .usage-page-subtitle {
-    font-size: 13px;
-    color: var(--muted);
-    margin: 0 0 12px;
-  }
   /* ===== FILTERS & HEADER ===== */
   .usage-filters-inline {
     display: flex;
@@ -54,16 +40,16 @@ export const usageStylesPart1 = `
     align-items: center;
     gap: 6px;
     padding: 4px 10px;
-    background: rgba(255, 77, 77, 0.1);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
     border-radius: 4px;
     font-size: 12px;
-    color: #ff4d4d;
+    color: var(--accent);
   }
   .usage-refresh-indicator::before {
     content: "";
     width: 10px;
     height: 10px;
-    border: 2px solid #ff4d4d;
+    border: 2px solid var(--accent);
     border-top-color: transparent;
     border-radius: 50%;
     animation: usage-spin 0.6s linear infinite;
@@ -161,36 +147,36 @@ export const usageStylesPart1 = `
     border-color: var(--border-strong);
   }
   .usage-primary-btn {
-    background: #ff4d4d;
+    background: var(--accent);
     color: #fff;
-    border-color: #ff4d4d;
+    border-color: var(--accent);
     box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
   }
   .btn.usage-primary-btn {
-    background: #ff4d4d !important;
-    border-color: #ff4d4d !important;
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
     color: #fff !important;
   }
   .usage-primary-btn:hover {
-    background: #e64545;
-    border-color: #e64545;
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
   }
   .btn.usage-primary-btn:hover {
-    background: #e64545 !important;
-    border-color: #e64545 !important;
+    background: var(--accent-strong) !important;
+    border-color: var(--accent-strong) !important;
   }
   .usage-primary-btn:disabled {
-    background: rgba(255, 77, 77, 0.18);
-    border-color: rgba(255, 77, 77, 0.3);
-    color: #ff4d4d;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--accent);
     box-shadow: none;
     cursor: default;
     opacity: 1;
   }
   .usage-primary-btn[disabled] {
-    background: rgba(255, 77, 77, 0.18) !important;
-    border-color: rgba(255, 77, 77, 0.3) !important;
-    color: #ff4d4d !important;
+    background: color-mix(in srgb, var(--accent) 18%, transparent) !important;
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent) !important;
+    color: var(--accent) !important;
     opacity: 1 !important;
   }
   .usage-secondary-btn {
@@ -533,8 +519,8 @@ export const usageStylesPart1 = `
     border-radius: 8px;
     padding: 10px;
     color: var(--text);
-    background: rgba(255, 77, 77, 0.08);
-    border: 1px solid rgba(255, 77, 77, 0.2);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -554,14 +540,14 @@ export const usageStylesPart1 = `
   .usage-hour-cell {
     height: 28px;
     border-radius: 6px;
-    background: rgba(255, 77, 77, 0.1);
-    border: 1px solid rgba(255, 77, 77, 0.2);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
     cursor: pointer;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
   .usage-hour-cell.selected {
-    border-color: rgba(255, 77, 77, 0.8);
-    box-shadow: 0 0 0 2px rgba(255, 77, 77, 0.2);
+    border-color: color-mix(in srgb, var(--accent) 80%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
   }
   .usage-hour-labels {
     display: grid;
@@ -584,8 +570,8 @@ export const usageStylesPart1 = `
     width: 14px;
     height: 10px;
     border-radius: 4px;
-    background: rgba(255, 77, 77, 0.15);
-    border: 1px solid rgba(255, 77, 77, 0.2);
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   }
   .usage-calendar-labels {
     display: grid;
@@ -603,8 +589,8 @@ export const usageStylesPart1 = `
   .usage-calendar-cell {
     height: 18px;
     border-radius: 4px;
-    border: 1px solid rgba(255, 77, 77, 0.2);
-    background: rgba(255, 77, 77, 0.08);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
   .usage-calendar-cell.empty {
     background: transparent;

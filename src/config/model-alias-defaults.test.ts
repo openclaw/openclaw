@@ -104,4 +104,43 @@ describe("applyModelDefaults", () => {
     expect(model?.contextWindow).toBe(32768);
     expect(model?.maxTokens).toBe(32768);
   });
+
+  it("defaults anthropic provider and model api to anthropic-messages", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://relay.example.com/api",
+            apiKey: "cr_xxxx",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const provider = next.models?.providers?.anthropic;
+    const model = provider?.models?.[0];
+
+    expect(provider?.api).toBe("anthropic-messages");
+    expect(model?.api).toBe("anthropic-messages");
+  });
+
+  it("propagates provider api to models when model api is missing", () => {
+    const cfg = buildProxyProviderConfig();
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+    expect(model?.api).toBe("openai-completions");
+  });
 });

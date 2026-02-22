@@ -44,6 +44,9 @@ Welcome to the lobster tank! 🦞
 - **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
+- **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
+  - GitHub: [@onutc](https://github.com/onutc), [@osolmaz](https://github.com/osolmaz) · X: [@onusoz](https://x.com/onusoz)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!

@@ -195,6 +195,7 @@ Groups:
 
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
 - `channels.signal.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+- Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## How it works (behavior)
 

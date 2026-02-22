@@ -25,6 +25,7 @@ import {
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
+import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -50,6 +51,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
+
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
@@ -208,6 +210,35 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       ...(msg as unknown as Record<string, unknown>),
       content: [{ type: "text", text: prefix }, ...user.content],
     } as AgentMessage);
+  }
+  return touched ? out : messages;
+}
+
+function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
+  let latestCompactionSummaryIndex = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === "compactionSummary") {
+      latestCompactionSummaryIndex = i;
+    }
+  }
+  if (latestCompactionSummaryIndex <= 0) {
+    return messages;
+  }
+
+  const out = [...messages];
+  let touched = false;
+  for (let i = 0; i < latestCompactionSummaryIndex; i += 1) {
+    const candidate = out[i] as (AgentMessage & { usage?: unknown }) | undefined;
+    if (!candidate || candidate.role !== "assistant") {
+      continue;
+    }
+    if (!candidate.usage || typeof candidate.usage !== "object") {
+      continue;
+    }
+    const candidateRecord = candidate as unknown as Record<string, unknown>;
+    const { usage: _droppedUsage, ...rest } = candidateRecord;
+    out[i] = rest as unknown as AgentMessage;
+    touched = true;
   }
   return touched ? out : messages;
 }
@@ -424,6 +455,7 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  allowedToolNames?: Iterable<string>;
   config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
@@ -450,14 +482,21 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
-    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const sanitizedThinking = policy.sanitizeThinkingSignatures
+    ? sanitizeAntigravityThinkingBlocks(droppedThinking)
+    : droppedThinking;
+  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking, {
+    allowedToolNames: params.allowedToolNames,
+  });
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedCompactionUsage =
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -472,8 +511,8 @@ export async function sanitizeSessionHistory(params: {
       })
     : false;
   const sanitizedOpenAI = isOpenAIResponsesApi
-    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-    : sanitizedToolResults;
+    ? downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage)
+    : sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

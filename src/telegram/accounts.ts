@@ -1,14 +1,29 @@
+import util from "node:util";
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveTelegramToken } from "./token.js";
 
+const log = createSubsystemLogger("telegram/accounts");
+
+function formatDebugArg(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Error) {
+    return value.stack ?? value.message;
+  }
+  return util.inspect(value, { colors: false, depth: null, compact: true, breakLength: Infinity });
+}
+
 const debugAccounts = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS)) {
-    console.warn("[telegram:accounts]", ...args);
+    const parts = args.map((arg) => formatDebugArg(arg));
+    log.warn(parts.join(" ").trim());
   }
 };
 

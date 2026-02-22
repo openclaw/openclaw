@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
@@ -13,9 +13,7 @@ describe("runCommandWithTimeout", () => {
   });
 
   it("merges custom env with process.env", async () => {
-    const envSnapshot = captureEnv(["OPENCLAW_BASE_ENV"]);
-    process.env.OPENCLAW_BASE_ENV = "base";
-    try {
+    await withEnvAsync({ OPENCLAW_BASE_ENV: "base" }, async () => {
       const result = await runCommandWithTimeout(
         [
           process.execPath,
@@ -31,14 +29,12 @@ describe("runCommandWithTimeout", () => {
       expect(result.code).toBe(0);
       expect(result.stdout).toBe("base|ok");
       expect(result.termination).toBe("exit");
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 120)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 60)"],
       {
         timeoutMs: 1_000,
         noOutputTimeoutMs: 35,
@@ -72,7 +68,7 @@ describe("runCommandWithTimeout", () => {
 
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 120)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 60)"],
       {
         timeoutMs: 15,
       },

@@ -464,7 +464,8 @@ async function ensureDmComponentAuthorized(params: {
     return true;
   }
 
-  const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+  const storeAllowFrom =
+    dmPolicy === "allowlist" ? [] : await readChannelAllowFromStore("discord").catch(() => []);
   const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
   const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
   const allowMatch = allowList
@@ -887,6 +888,7 @@ async function dispatchDiscordComponentEvent(params: {
           rest: interaction.client.rest,
           runtime,
           replyToId,
+          replyToMode,
           textLimit,
           maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
           tableMode,

@@ -1,21 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEmbeddedRunPayloads } from "./payloads.js";
-
-type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
-
-function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
-  return buildEmbeddedRunPayloads({
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    sessionKey: "session:telegram",
-    inlineToolResultsAllowed: false,
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    toolResultFormat: "plain",
-    ...overrides,
-  });
-}
+import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("suppresses exec tool errors when verbose mode is off", () => {
@@ -33,10 +17,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "on",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Exec");
-    expect(payloads[0]?.text).toContain("command failed");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      detail: "command failed",
+    });
   });
 
   it("keeps non-exec mutating tool failures visible", () => {

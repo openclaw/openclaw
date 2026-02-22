@@ -3,6 +3,8 @@ import {
   DEFAULT_ACCOUNT_ID,
   LineConfigSchema,
   processLineMessage,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
@@ -161,9 +163,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = (cfg.channels?.defaults as { groupPolicy?: string } | undefined)
-        ?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.line !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }

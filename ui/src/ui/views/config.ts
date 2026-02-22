@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
@@ -22,6 +23,7 @@ export type ConfigProps = {
   searchQuery: string;
   activeSection: string | null;
   activeSubsection: string | null;
+  streamMode: boolean;
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
@@ -383,6 +385,44 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
+const SENSITIVE_KEY_RE = /token|password|secret|api.?key/i;
+const SENSITIVE_KEY_WHITELIST_RE =
+  /maxtokens|maxoutputtokens|maxinputtokens|maxcompletiontokens|contexttokens|totaltokens|tokencount|tokenlimit|tokenbudget|passwordfile/i;
+
+function countSensitiveValues(formValue: Record<string, unknown> | null): number {
+  if (!formValue) {
+    return 0;
+  }
+  let count = 0;
+  function walk(obj: unknown, key?: string) {
+    if (obj == null) {
+      return;
+    }
+    if (typeof obj === "object" && !Array.isArray(obj)) {
+      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+        walk(v, k);
+      }
+    } else if (Array.isArray(obj)) {
+      for (const item of obj) {
+        walk(item);
+      }
+    } else if (
+      key &&
+      typeof obj === "string" &&
+      SENSITIVE_KEY_RE.test(key) &&
+      !SENSITIVE_KEY_WHITELIST_RE.test(key)
+    ) {
+      if (obj.trim() && !/^\$\{[^}]*\}$/.test(obj.trim())) {
+        count++;
+      }
+    }
+  }
+  walk(formValue);
+  return count;
+}
+
+let rawRevealed = false;
+
 export function renderConfig(props: ConfigProps) {
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const analysis = analyzeConfigSchema(props.schema);
@@ -649,6 +689,32 @@ export function renderConfig(props: ConfigProps) {
                       : nothing
                   }
                 </div>
+                ${
+                  props.activeSection === "env"
+                    ? html`
+                      <button
+                        class="config-env-peek-btn"
+                        title="Toggle value visibility"
+                        @click=${(e: Event) => {
+                          const btn = e.currentTarget as HTMLElement;
+                          const content = btn
+                            .closest(".config-main")
+                            ?.querySelector(".config-content");
+                          if (content) {
+                            content.classList.toggle("config-env-values--visible");
+                          }
+                          btn.classList.toggle("config-env-peek-btn--active");
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        Peek
+                      </button>
+                    `
+                    : nothing
+                }
               </div>
             `
             : nothing
@@ -682,7 +748,7 @@ export function renderConfig(props: ConfigProps) {
         }
 
         <!-- Form content -->
-        <div class="config-content">
+        <div class="config-content ${props.activeSection === "env" ? "config-env-values--blurred" : ""}">
           ${
             props.formMode === "form"
               ? html`
@@ -716,16 +782,43 @@ export function renderConfig(props: ConfigProps) {
                     : nothing
                 }
               `
-              : html`
-                <label class="field config-raw-field">
-                  <span>Raw JSON5</span>
-                  <textarea
-                    .value=${props.raw}
-                    @input=${(e: Event) =>
-                      props.onRawChange((e.target as HTMLTextAreaElement).value)}
-                  ></textarea>
-                </label>
-              `
+              : (() => {
+                  const sensitiveCount = countSensitiveValues(props.formValue);
+                  const blurred = sensitiveCount > 0 && (props.streamMode || !rawRevealed);
+                  return html`
+                    <label class="field config-raw-field">
+                      <span style="display:flex;align-items:center;gap:8px;">
+                        Raw JSON5
+                        ${
+                          sensitiveCount > 0
+                            ? html`
+                              <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
+                              <button
+                                class="btn btn--icon ${blurred ? "" : "active"}"
+                                style="width:28px;height:28px;padding:0;"
+                                title=${blurred ? "Reveal sensitive values" : "Hide sensitive values"}
+                                aria-label="Toggle raw config redaction"
+                                aria-pressed=${!blurred}
+                                @click=${() => {
+                                  rawRevealed = !rawRevealed;
+                                  props.onRawChange(props.raw);
+                                }}
+                              >
+                                ${blurred ? icons.eyeOff : icons.eye}
+                              </button>
+                            `
+                            : nothing
+                        }
+                      </span>
+                      <textarea
+                        class="${blurred ? "config-raw-redacted" : ""}"
+                        .value=${props.raw}
+                        @input=${(e: Event) =>
+                          props.onRawChange((e.target as HTMLTextAreaElement).value)}
+                      ></textarea>
+                    </label>
+                  `;
+                })()
           }
         </div>
 
