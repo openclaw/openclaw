@@ -107,7 +107,10 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   if (settings.level === "silent") {
     return false;
   }
-  return levelToMinLevel(level) <= levelToMinLevel(settings.level);
+  // A log entry should be emitted when its severity is >= the configured threshold.
+  // tslog uses ascending IDs (debug=2 < info=3 < warn=4), so the entry's
+  // minLevel value must be >= the settings threshold.
+  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {

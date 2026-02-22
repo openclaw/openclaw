@@ -30,7 +30,9 @@ function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boo
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  // Emit when the entry's severity (current) meets or exceeds the threshold (min).
+  // tslog ascending IDs: trace=1 < debug=2 < info=3 < warn=4 < error=5 < fatal=6.
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
