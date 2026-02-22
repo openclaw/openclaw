@@ -98,6 +98,13 @@ const LINE_RULES: LineRule[] = [
     pattern: /stratum\+tcp|stratum\+ssl|coinhive|cryptonight|xmrig/i,
   },
   {
+    ruleId: "dynamic-code-execution-vm",
+    severity: "critical",
+    message: "Node.js vm module code execution detected",
+    pattern: /\bvm\.(runInNewContext|runInThisContext|compileFunction)\s*\(|\bnew\s+vm\.Script\b/,
+    requiresContext: /["'](?:node:)?vm["']/,
+  },
+  {
     ruleId: "suspicious-network",
     severity: "warn",
     message: "WebSocket connection to non-standard port",
@@ -113,7 +120,7 @@ const SOURCE_RULES: SourceRule[] = [
     severity: "warn",
     message: "File read combined with network send — possible data exfiltration",
     pattern: /readFileSync|readFile/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    requiresContext: /\bfetch\b|method:\s*["']POST|\.post\s*\(|http\.request/i,
   },
   {
     ruleId: "obfuscated-code",
@@ -133,7 +140,7 @@ const SOURCE_RULES: SourceRule[] = [
     message:
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    requiresContext: /\bfetch\b|method:\s*["']POST|\.post\s*\(|http\.request/i,
   },
 ];
 
