@@ -51,17 +51,19 @@ describe("withExtractedArchiveRoot", () => {
   });
 
   it("extracts archive and passes root directory to callback", async () => {
+    const tmpRoot = path.join(path.sep, "tmp", "openclaw-install-flow");
+    const archivePath = path.join(path.sep, "tmp", "plugin.tgz");
+    const extractDir = path.join(tmpRoot, "extract");
+    const packageRoot = path.join(extractDir, "package");
     const withTempDirSpy = vi
       .spyOn(installSource, "withTempDir")
-      .mockImplementation(async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"));
+      .mockImplementation(async (_prefix, fn) => await fn(tmpRoot));
     const extractSpy = vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
-    const resolveRootSpy = vi
-      .spyOn(archive, "resolvePackedRootDir")
-      .mockResolvedValue("/tmp/openclaw-install-flow/extract/package");
+    const resolveRootSpy = vi.spyOn(archive, "resolvePackedRootDir").mockResolvedValue(packageRoot);
 
     const onExtracted = vi.fn(async (rootDir: string) => ({ ok: true as const, rootDir }));
     const result = await withExtractedArchiveRoot({
-      archivePath: "/tmp/plugin.tgz",
+      archivePath,
       tempDirPrefix: "openclaw-plugin-",
       timeoutMs: 1000,
       onExtracted,
@@ -70,14 +72,14 @@ describe("withExtractedArchiveRoot", () => {
     expect(withTempDirSpy).toHaveBeenCalledWith("openclaw-plugin-", expect.any(Function));
     expect(extractSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        archivePath: "/tmp/plugin.tgz",
+        archivePath,
       }),
     );
-    expect(resolveRootSpy).toHaveBeenCalledWith("/tmp/openclaw-install-flow/extract");
-    expect(onExtracted).toHaveBeenCalledWith("/tmp/openclaw-install-flow/extract/package");
+    expect(resolveRootSpy).toHaveBeenCalledWith(extractDir);
+    expect(onExtracted).toHaveBeenCalledWith(packageRoot);
     expect(result).toEqual({
       ok: true,
-      rootDir: "/tmp/openclaw-install-flow/extract/package",
+      rootDir: packageRoot,
     });
   });
 
