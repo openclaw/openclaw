@@ -180,21 +180,17 @@ describe("trigger handling", () => {
 
   it("uses the target agent model for native /status", async () => {
     await withTempHome(async (home) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
-          },
-          list: [{ id: "coding", model: "minimax/MiniMax-M2.1" }],
+      const cfg = makeCfg(home) as unknown as OpenClawConfig;
+      cfg.agents = {
+        ...cfg.agents,
+        list: [{ id: "coding", model: "minimax/MiniMax-M2.1" }],
+      };
+      cfg.channels = {
+        ...cfg.channels,
+        telegram: {
+          allowFrom: ["*"],
         },
-        channels: {
-          telegram: {
-            allowFrom: ["*"],
-          },
-        },
-        session: { store: join(home, "sessions.json") },
-      } as unknown as OpenClawConfig;
+      };
 
       const res = await getReplyFromConfig(
         {
