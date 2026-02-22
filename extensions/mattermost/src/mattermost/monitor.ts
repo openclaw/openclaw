@@ -264,6 +264,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           fetchImpl: fetchWithAuth,
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
+          ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
         });
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,

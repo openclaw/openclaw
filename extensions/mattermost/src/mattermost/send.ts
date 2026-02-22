@@ -4,6 +4,7 @@ import {
   createMattermostClient,
   createMattermostDirectChannel,
   createMattermostPost,
+  fetchMattermostChannel,
   fetchMattermostMe,
   fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl,
@@ -26,7 +27,8 @@ export type MattermostSendResult = {
 
 type MattermostTarget =
   | { kind: "channel"; id: string }
-  | { kind: "user"; id?: string; username?: string };
+  | { kind: "user"; id?: string; username?: string }
+  | { kind: "unknown"; id: string };
 
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
@@ -81,7 +83,7 @@ function parseMattermostTarget(raw: string): MattermostTarget {
     }
     return { kind: "user", username };
   }
-  return { kind: "channel", id: trimmed };
+  return { kind: "unknown", id: trimmed };
 }
 
 async function resolveBotUser(baseUrl: string, token: string): Promise<MattermostUser> {
@@ -118,23 +120,41 @@ async function resolveTargetChannelId(params: {
   baseUrl: string;
   token: string;
 }): Promise<string> {
-  if (params.target.kind === "channel") {
-    return params.target.id;
+  const { target, baseUrl, token } = params;
+  if (target.kind === "channel") {
+    return target.id;
   }
-  const userId = params.target.id
-    ? params.target.id
-    : await resolveUserIdByUsername({
-        baseUrl: params.baseUrl,
-        token: params.token,
-        username: params.target.username ?? "",
-      });
-  const botUser = await resolveBotUser(params.baseUrl, params.token);
+
   const client = createMattermostClient({
-    baseUrl: params.baseUrl,
-    botToken: params.token,
+    baseUrl,
+    botToken: token,
   });
-  const channel = await createMattermostDirectChannel(client, [botUser.id, userId]);
-  return channel.id;
+
+  if (target.kind === "unknown") {
+    try {
+      const channel = await fetchMattermostChannel(client, target.id);
+      if (channel && channel.id) {
+        return channel.id;
+      }
+    } catch (e) {
+      // Ignored: fallback to treating it as a user
+    }
+  }
+
+  const resolvedUserId =
+    target.kind === "user" && target.id
+      ? target.id
+      : target.kind === "unknown" && target.id
+        ? target.id
+        : await resolveUserIdByUsername({
+            baseUrl,
+            token,
+            username: (target.kind === "user" ? target.username : "") ?? "",
+          });
+
+  const botUser = await resolveBotUser(baseUrl, token);
+  const directChannel = await createMattermostDirectChannel(client, [botUser.id, resolvedUserId]);
+  return directChannel.id;
 }
 
 export async function sendMessageMattermost(
