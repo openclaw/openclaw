@@ -86,6 +86,23 @@ describe("resolveSessionResetPolicy", () => {
       expect(groupPolicy.mode).toBe("daily");
     });
   });
+
+  it('disables automatic reset when mode is "off"', () => {
+    const sessionCfg = {
+      reset: {
+        mode: "off" as const,
+        idleMinutes: 1,
+      },
+    } as unknown as SessionConfig;
+
+    const policy = resolveSessionResetPolicy({
+      sessionCfg,
+      resetType: "direct",
+    });
+
+    expect(policy.mode).toBe("off");
+    expect(policy.idleMinutes).toBeUndefined();
+  });
 });
 
 describe("session store lock (Promise chain mutex)", () => {

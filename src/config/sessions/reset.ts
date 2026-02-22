@@ -2,7 +2,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "daily" | "idle" | "off";
 export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {
@@ -114,6 +114,10 @@ export function resolveSessionResetPolicy(params: {
     }
   } else if (mode === "idle") {
     idleMinutes = DEFAULT_IDLE_MINUTES;
+  }
+
+  if (mode === "off") {
+    return { mode, atHour, idleMinutes: undefined };
   }
 
   return { mode, atHour, idleMinutes };
