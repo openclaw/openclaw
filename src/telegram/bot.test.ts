@@ -425,6 +425,56 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("Ada");
   });
 
+  it("propagates forwarded origin from external_reply targets", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Thoughts?",
+        date: 1736380800,
+        external_reply: {
+          message_id: 9003,
+          text: "forwarded text",
+          from: { first_name: "Ada" },
+          quote: {
+            text: "forwarded snippet",
+          },
+          forward_origin: {
+            type: "user",
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+            date: 500,
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.ReplyToForwardedFrom).toBe("Bob Smith (@bobsmith)");
+    expect(payload.ReplyToForwardedFromType).toBe("user");
+    expect(payload.ReplyToForwardedFromId).toBe("999");
+    expect(payload.ReplyToForwardedFromUsername).toBe("bobsmith");
+    expect(payload.ReplyToForwardedFromTitle).toBe("Bob Smith");
+    expect(payload.ReplyToForwardedDate).toBe(500000);
+    expect(payload.Body).toContain(
+      "[Forwarded from Bob Smith (@bobsmith) at 1970-01-01T00:08:20.000Z]",
+    );
+  });
+
   it("accepts group replies to the bot without explicit mention when requireMention is enabled", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

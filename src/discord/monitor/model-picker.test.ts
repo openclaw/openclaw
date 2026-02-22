@@ -1,7 +1,6 @@
 import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
-import type { ModelsProviderData } from "../../auto-reply/reply/commands-models.js";
 import * as modelsCommandModule from "../../auto-reply/reply/commands-models.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -20,21 +19,7 @@ import {
   renderDiscordModelPickerRecentsView,
   toDiscordModelPickerMessagePayload,
 } from "./model-picker.js";
-
-function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
-  const byProvider = new Map<string, Set<string>>();
-  for (const [provider, models] of Object.entries(entries)) {
-    byProvider.set(provider, new Set(models));
-  }
-  return {
-    byProvider,
-    providers: Object.keys(entries).toSorted(),
-    resolvedDefault: {
-      provider: Object.keys(entries)[0] ?? "openai",
-      model: entries[Object.keys(entries)[0]]?.[0] ?? "gpt-4o",
-    },
-  };
-}
+import { createModelsProviderData } from "./model-picker.test-utils.js";
 
 type SerializedComponent = {
   type: number;
@@ -53,6 +38,26 @@ function extractContainerRows(components?: SerializedComponent[]): SerializedCom
   return (container.components ?? []).filter(
     (component) => component.type === Number(ComponentType.ActionRow),
   );
+}
+
+function renderModelsViewRows(
+  params: Parameters<typeof renderDiscordModelPickerModelsView>[0],
+): SerializedComponent[] {
+  const rendered = renderDiscordModelPickerModelsView(params);
+  const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    components?: SerializedComponent[];
+  };
+  return extractContainerRows(payload.components);
+}
+
+function renderRecentsViewRows(
+  params: Parameters<typeof renderDiscordModelPickerRecentsView>[0],
+): SerializedComponent[] {
+  const rendered = renderDiscordModelPickerRecentsView(params);
+  const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    components?: SerializedComponent[];
+  };
+  return extractContainerRows(payload.components);
 }
 
 describe("loadDiscordModelPickerData", () => {
@@ -467,7 +472,7 @@ describe("Discord model picker rendering", () => {
       anthropic: ["claude-sonnet-4-5"],
     });
 
-    const rendered = renderDiscordModelPickerModelsView({
+    const rows = renderModelsViewRows({
       command: "model",
       userId: "42",
       data,
@@ -477,12 +482,6 @@ describe("Discord model picker rendering", () => {
       currentModel: "openai/gpt-4o",
       quickModels: ["openai/gpt-4o", "anthropic/claude-sonnet-4-5"],
     });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     const buttonRow = rows[2];
     const buttons = buttonRow?.components ?? [];
     expect(buttons).toHaveLength(4);
@@ -497,7 +496,7 @@ describe("Discord model picker rendering", () => {
       openai: ["gpt-4.1", "gpt-4o"],
     });
 
-    const rendered = renderDiscordModelPickerModelsView({
+    const rows = renderModelsViewRows({
       command: "model",
       userId: "42",
       data,
@@ -506,12 +505,6 @@ describe("Discord model picker rendering", () => {
       providerPage: 1,
       currentModel: "openai/gpt-4o",
     });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     const buttonRow = rows[2];
     const buttons = buttonRow?.components ?? [];
     expect(buttons).toHaveLength(3);
@@ -532,19 +525,13 @@ describe("Discord model picker recents view", () => {
 
     // Default is openai/gpt-4.1 (first key in entries).
     // Neither quickModel matches, so no deduping — 1 default + 2 recents + 1 back = 4 rows.
-    const rendered = renderDiscordModelPickerRecentsView({
+    const rows = renderRecentsViewRows({
       command: "model",
       userId: "42",
       data,
       quickModels: ["openai/gpt-4o", "anthropic/claude-sonnet-4-5"],
       currentModel: "openai/gpt-4o",
     });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     expect(rows).toHaveLength(4);
 
     // First row: default model button (slot 1).
@@ -577,19 +564,13 @@ describe("Discord model picker recents view", () => {
       openai: ["gpt-4o"],
     });
 
-    const rendered = renderDiscordModelPickerRecentsView({
+    const rows = renderRecentsViewRows({
       command: "model",
       userId: "42",
       data,
       quickModels: ["openai/gpt-4o"],
       currentModel: "openai/gpt-4o",
     });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     const defaultBtn = rows[0]?.components?.[0] as { label?: string };
     expect(defaultBtn?.label).toContain("(default)");
   });
@@ -600,19 +581,13 @@ describe("Discord model picker recents view", () => {
       anthropic: ["claude-sonnet-4-5"],
     });
     // Default is openai/gpt-4o (first key). quickModels contains the default.
-    const rendered = renderDiscordModelPickerRecentsView({
+    const rows = renderRecentsViewRows({
       command: "model",
       userId: "42",
       data,
       quickModels: ["openai/gpt-4o", "anthropic/claude-sonnet-4-5"],
       currentModel: "openai/gpt-4o",
     });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     // 1 default + 1 deduped recent + 1 back = 3 rows (openai/gpt-4o not shown twice)
     expect(rows).toHaveLength(3);
 

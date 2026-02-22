@@ -56,6 +56,7 @@ export const ConnectParamsSchema = Type.Object(
       Type.Object(
         {
           token: Type.Optional(Type.String()),
+          deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
         },
         { additionalProperties: false },

@@ -43,6 +43,32 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 1_500) => {
   );
 };
 
+async function getDiscordGroupSpawnTool() {
+  return await getSessionsSpawnTool({
+    agentSessionKey: "discord:group:req",
+    agentChannel: "discord",
+  });
+}
+
+async function executeSpawnAndExpectAccepted(params: {
+  tool: Awaited<ReturnType<typeof getSessionsSpawnTool>>;
+  callId: string;
+  cleanup?: "delete" | "keep";
+  label?: string;
+}) {
+  const result = await params.tool.execute(params.callId, {
+    task: "do thing",
+    runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    ...(params.cleanup ? { cleanup: params.cleanup } : {}),
+    ...(params.label ? { label: params.label } : {}),
+  });
+  expect(result.details).toMatchObject({
+    status: "accepted",
+    runId: "run-1",
+  });
+  return result;
+}
+
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -92,14 +118,10 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentChannel: "whatsapp",
     });
 
-    const result = await tool.execute("call2", {
-      task: "do thing",
-      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call2",
       label: "my-task",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
     });
 
     const child = ctx.getChild();
@@ -154,19 +176,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       }),
     });
 
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "discord:group:req",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call1", {
-      task: "do thing",
-      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    const tool = await getDiscordGroupSpawnTool();
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call1",
       cleanup: "delete",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
     });
 
     const child = ctx.getChild();
@@ -240,19 +254,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
     });
 
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "discord:group:req",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call1b", {
-      task: "do thing",
-      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    const tool = await getDiscordGroupSpawnTool();
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call1b",
       cleanup: "delete",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
     });
 
     const child = ctx.getChild();
@@ -295,19 +301,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentWaitResult: { status: "timeout", startedAt: 6000, endedAt: 7000 },
     });
 
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "discord:group:req",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-timeout", {
-      task: "do thing",
-      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    const tool = await getDiscordGroupSpawnTool();
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call-timeout",
       cleanup: "keep",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
     });
 
     await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
@@ -333,14 +331,10 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentAccountId: "kev",
     });
 
-    const result = await tool.execute("call-announce-account", {
-      task: "do thing",
-      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call-announce-account",
       cleanup: "keep",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
     });
 
     const child = ctx.getChild();

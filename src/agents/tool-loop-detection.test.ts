@@ -45,6 +45,36 @@ function recordSuccessfulCall(
   });
 }
 
+function recordRepeatedSuccessfulCalls(params: {
+  state: SessionState;
+  toolName: string;
+  toolParams: unknown;
+  result: unknown;
+  count: number;
+  startIndex?: number;
+}) {
+  const startIndex = params.startIndex ?? 0;
+  for (let i = 0; i < params.count; i += 1) {
+    recordSuccessfulCall(
+      params.state,
+      params.toolName,
+      params.toolParams,
+      params.result,
+      startIndex + i,
+    );
+  }
+}
+
+function createNoProgressPollFixture(sessionId: string) {
+  return {
+    params: { action: "poll", sessionId },
+    result: {
+      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+      details: { status: "running", aggregated: "steady" },
+    },
+  };
+}
+
 function recordSuccessfulPingPongCalls(params: {
   state: SessionState;
   readParams: { path: string };
@@ -248,11 +278,7 @@ describe("tool-loop-detection", () => {
 
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-custom" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
+      const { params, result } = createNoProgressPollFixture("sess-custom");
       const config: ToolLoopDetectionConfig = {
         enabled: true,
         warningThreshold: 2,
@@ -264,17 +290,27 @@ describe("tool-loop-detection", () => {
         },
       };
 
-      for (let i = 0; i < 2; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: 2,
+      });
       const warningResult = detectToolCallLoop(state, "process", params, config);
       expect(warningResult.stuck).toBe(true);
       if (warningResult.stuck) {
         expect(warningResult.level).toBe("warning");
       }
 
-      recordSuccessfulCall(state, "process", params, result, 2);
-      recordSuccessfulCall(state, "process", params, result, 3);
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: 2,
+        startIndex: 2,
+      });
       const criticalResult = detectToolCallLoop(state, "process", params, config);
       expect(criticalResult.stuck).toBe(true);
       if (criticalResult.stuck) {
@@ -285,11 +321,7 @@ describe("tool-loop-detection", () => {
 
     it("can disable specific detectors", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-no-detectors" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
+      const { params, result } = createNoProgressPollFixture("sess-no-detectors");
       const config: ToolLoopDetectionConfig = {
         enabled: true,
         detectors: {
@@ -299,9 +331,13 @@ describe("tool-loop-detection", () => {
         },
       };
 
-      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
 
       const loopResult = detectToolCallLoop(state, "process", params, config);
       expect(loopResult.stuck).toBe(false);
@@ -309,15 +345,14 @@ describe("tool-loop-detection", () => {
 
     it("warns for known polling no-progress loops", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-1" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
-
-      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
+      const { params, result } = createNoProgressPollFixture("sess-1");
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: WARNING_THRESHOLD,
+      });
 
       const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
@@ -330,15 +365,14 @@ describe("tool-loop-detection", () => {
 
     it("blocks known polling no-progress loops at critical threshold", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-1" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
-
-      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
+      const { params, result } = createNoProgressPollFixture("sess-1");
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
 
       const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);

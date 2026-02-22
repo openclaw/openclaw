@@ -96,55 +96,55 @@
   --radius-full: 9999px;
 }
 
-/* ─── Theme: light (Docs) — Warm Editorial Dark ─── */
+/* ─── Theme: light — Luxe Cream & Coral ─── */
 
 :root[data-theme="light"] {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --vscode-bg: #0e0c0e;
-  --vscode-sidebar: #131012;
-  --vscode-panel: #161214;
-  --vscode-panel-border: rgba(255, 255, 255, 0.06);
-  --vscode-surface: #1a1618;
-  --vscode-hover: #201c1e;
-  --vscode-contrast: #080608;
-  --vscode-text: #d5d0cf;
-  --vscode-muted: #7a7472;
-  --vscode-subtle: #4a4442;
-  --vscode-ghost: #1a1616;
-  --vscode-accent: #ca3a29;
-  --vscode-accent-alpha: rgba(202, 58, 41, 0.14);
-  --vscode-selection: #3d1418;
-  --vscode-success: #00d4aa;
-  --vscode-danger: #ca3a29;
+  --vscode-bg: #faf7f2;
+  --vscode-sidebar: #f5f0e8;
+  --vscode-panel: #fffef9;
+  --vscode-panel-border: rgba(26, 22, 20, 0.08);
+  --vscode-surface: #fffef9;
+  --vscode-hover: #f0ebe3;
+  --vscode-contrast: #f0ebe3;
+  --vscode-text: #1a1614;
+  --vscode-muted: #6b5d54;
+  --vscode-subtle: #9c8f84;
+  --vscode-ghost: #ebe6df;
+  --vscode-accent: #c73526;
+  --vscode-accent-alpha: rgba(199, 53, 38, 0.12);
+  --vscode-selection: rgba(199, 53, 38, 0.18);
+  --vscode-success: #0d9b7a;
+  --vscode-danger: #c73526;
 
-  --kn-claw: #ca3a29;
-  --kn-claw-bright: #fd8e2e;
-  --kn-claw-dim: rgba(202, 58, 41, 0.12);
-  --kn-claw-ember: #fb9231;
-  --kn-claw-deep: #9a2d1f;
-  --kn-ocean: #0e0c0e;
-  --kn-ocean-bright: #201c1e;
-  --kn-ocean-mid: #161214;
-  --kn-ocean-dim: rgba(14, 12, 14, 0.8);
-  --kn-ocean-deep: #0e0c0e;
-  --kn-silver: #8a7e72;
-  --kn-silver-bright: #c0b4a8;
-  --kn-silver-dim: rgba(138, 126, 114, 0.12);
-  --kn-bioluminescence: #00d4aa;
-  --kn-warm-dark: #1a1416;
-  --kn-void: #1a1416;
+  --kn-claw: #c73526;
+  --kn-claw-bright: #e85a4a;
+  --kn-claw-dim: rgba(199, 53, 38, 0.14);
+  --kn-claw-ember: #d94a3a;
+  --kn-claw-deep: #9a2a1e;
+  --kn-ocean: #faf7f2;
+  --kn-ocean-bright: #fffef9;
+  --kn-ocean-mid: #f5f0e8;
+  --kn-ocean-dim: rgba(250, 247, 242, 0.9);
+  --kn-ocean-deep: #f0ebe3;
+  --kn-silver: #6b5d54;
+  --kn-silver-bright: #1a1614;
+  --kn-silver-dim: rgba(107, 93, 84, 0.12);
+  --kn-bioluminescence: #0d9b7a;
+  --kn-warm-dark: #1a1614;
+  --kn-void: #ebe6df;
 
-  --glass-blur: 0px;
-  --glass-saturate: 100%;
-  --glass-bg: rgba(22, 18, 20, 0.95);
-  --glass-bg-elevated: rgba(26, 22, 24, 0.96);
-  --glass-border: rgba(255, 255, 255, 0.06);
-  --glass-border-hover: rgba(202, 58, 41, 0.25);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --glass-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
-  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --glass-blur: 12px;
+  --glass-saturate: 110%;
+  --glass-bg: rgba(255, 254, 249, 0.88);
+  --glass-bg-elevated: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(26, 22, 20, 0.1);
+  --glass-border-hover: rgba(199, 53, 38, 0.35);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --glass-shadow-sm: 0 2px 12px rgba(26, 22, 20, 0.06), 0 1px 3px rgba(26, 22, 20, 0.04);
+  --glass-shadow-md: 0 8px 32px rgba(26, 22, 20, 0.08), 0 2px 8px rgba(26, 22, 20, 0.04);
+  --glass-shadow-lg: 0 20px 56px rgba(26, 22, 20, 0.12), 0 4px 16px rgba(26, 22, 20, 0.06);
 
   --radius-xs: 4px;
   --radius-sm: 8px;
@@ -491,6 +491,16 @@
   --agent-tab-hover-bg: var(--vscode-accent-alpha);
 }
 
+/* Light theme semantic overrides (accent buttons need dark text) */
+:root[data-theme="light"] {
+  --card-highlight: rgba(255, 255, 255, 0.85);
+  --accent-foreground: #ffffff;
+  --primary-foreground: #ffffff;
+  --destructive-foreground: #ffffff;
+  --focus-offset-color: var(--bg);
+  --grid-line: rgba(26, 22, 20, 0.06);
+}
+
 /* ─── Accessibility: High Contrast ─── */
 
 @media (prefers-contrast: more) {
@@ -711,6 +721,20 @@ select {
 }
 
 :root[data-theme="fieldmanual"] body::after {
+  display: none;
+}
+
+/* ─── light — Luxe Cream ambient gradient ─── */
+
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(ellipse 90% 60% at 50% -15%, rgba(199, 53, 38, 0.04) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 40%, rgba(13, 155, 122, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 15% 80%, rgba(199, 53, 38, 0.02) 0%, transparent 45%),
+    var(--bg);
+}
+
+:root[data-theme="light"] body::after {
   display: none;
 }
 

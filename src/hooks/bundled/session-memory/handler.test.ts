@@ -133,6 +133,33 @@ async function createSessionMemoryWorkspace(params?: {
   return { tempDir, sessionsDir, activeSessionFile };
 }
 
+async function loadMemoryFromActiveSessionPointer(params: {
+  tempDir: string;
+  activeSessionFile: string;
+}): Promise<string> {
+  const { memoryContent } = await runNewWithPreviousSessionEntry({
+    tempDir: params.tempDir,
+    previousSessionEntry: {
+      sessionId: "test-123",
+      sessionFile: params.activeSessionFile,
+    },
+  });
+  return memoryContent;
+}
+
+function expectMemoryConversation(params: {
+  memoryContent: string;
+  user: string;
+  assistant: string;
+  absent?: string;
+}) {
+  expect(params.memoryContent).toContain(`user: ${params.user}`);
+  expect(params.memoryContent).toContain(`assistant: ${params.assistant}`);
+  if (params.absent) {
+    expect(params.memoryContent).not.toContain(params.absent);
+  }
+}
+
 describe("session-memory hook", () => {
   it("skips non-command events", async () => {
     const tempDir = await makeTempWorkspace("openclaw-session-memory-");
@@ -415,17 +442,17 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const { memoryContent } = await runNewWithPreviousSessionEntry({
+    const memoryContent = await loadMemoryFromActiveSessionPointer({
       tempDir,
-      previousSessionEntry: {
-        sessionId: "test-123",
-        sessionFile: activeSessionFile!,
-      },
+      activeSessionFile: activeSessionFile!,
     });
 
-    expect(memoryContent).toContain("user: Newest rotated transcript");
-    expect(memoryContent).toContain("assistant: Newest summary");
-    expect(memoryContent).not.toContain("Older rotated transcript");
+    expectMemoryConversation({
+      memoryContent,
+      user: "Newest rotated transcript",
+      assistant: "Newest summary",
+      absent: "Older rotated transcript",
+    });
   });
 
   it("prefers active transcript when it is non-empty even with reset candidates", async () => {
@@ -448,17 +475,17 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const { memoryContent } = await runNewWithPreviousSessionEntry({
+    const memoryContent = await loadMemoryFromActiveSessionPointer({
       tempDir,
-      previousSessionEntry: {
-        sessionId: "test-123",
-        sessionFile: activeSessionFile!,
-      },
+      activeSessionFile: activeSessionFile!,
     });
 
-    expect(memoryContent).toContain("user: Active transcript message");
-    expect(memoryContent).toContain("assistant: Active transcript summary");
-    expect(memoryContent).not.toContain("Reset fallback message");
+    expectMemoryConversation({
+      memoryContent,
+      user: "Active transcript message",
+      assistant: "Active transcript summary",
+      absent: "Reset fallback message",
+    });
   });
 
   it("handles empty session files gracefully", async () => {

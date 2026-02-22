@@ -68,6 +68,8 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return { ...mod, resolveExecApprovals: () => approvals };
 });
 
+const { createOpenClawCodingTools } = await import("./pi-tools.js");
+
 type ExecToolResult = {
   content: Array<{ type: string; text?: string }>;
   details?: { status?: string };
@@ -90,7 +92,6 @@ async function createSafeBinsExecTool(params: {
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   files?: Array<{ name: string; contents: string }>;
 }): Promise<{ tmpDir: string; execTool: ExecTool }> {
-  const { createOpenClawCodingTools } = await import("./pi-tools.js");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
   for (const file of params.files ?? []) {
     fs.writeFileSync(path.join(tmpDir, file.name), file.contents, "utf8");

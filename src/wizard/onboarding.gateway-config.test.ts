@@ -43,6 +43,20 @@ describe("configureGatewayForOnboarding", () => {
     };
   }
 
+  function createQuickstartGateway(authMode: "token" | "password") {
+    return {
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback" as const,
+      authMode,
+      tailscaleMode: "off" as const,
+      token: undefined,
+      password: undefined,
+      customBindHost: undefined,
+      tailscaleResetOnExit: false,
+    };
+  }
+
   it("generates a token when the prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
 
@@ -57,17 +71,7 @@ describe("configureGatewayForOnboarding", () => {
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("token"),
       prompter,
       runtime,
     });
@@ -97,17 +101,7 @@ describe("configureGatewayForOnboarding", () => {
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "password",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("password"),
       prompter,
       runtime,
     });

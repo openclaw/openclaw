@@ -116,21 +116,21 @@ export const usageStylesPart2 = `
   .daily-chart-header {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: space-between;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
 
   /* ===== DAILY BAR CHART ===== */
   .daily-chart {
-    margin-top: 12px;
+    margin-top: 8px;
   }
   .daily-chart-bars {
     display: flex;
     align-items: flex-end;
     height: 200px;
     gap: 4px;
-    padding: 8px 4px 36px;
+    padding: 4px 4px 30px;
   }
   .daily-bar-wrapper {
     flex: 1;
@@ -666,21 +666,21 @@ export const usageStylesPart2 = `
     line-height: 1.5;
   }
 
-  /* ===== TWO COLUMN LAYOUT ===== */
+  /* ===== TWO ROWS: Daily+Breakdown, Sessions (each scrollable) ===== */
   .usage-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
-    margin-top: 18px;
-    align-items: stretch;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    gap: 14px;
+    margin-top: 14px;
   }
-  .usage-grid-left {
-    display: flex;
-    flex-direction: column;
-  }
+  .usage-grid-left,
   .usage-grid-right {
     display: flex;
     flex-direction: column;
+    max-height: 360px;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   
   /* ===== LEFT CARD (Daily + Breakdown) ===== */
@@ -697,6 +697,6 @@ export const usageStylesPart2 = `
   .usage-left-card .sessions-panel-title {
     font-weight: 600;
     font-size: 14px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
 `;

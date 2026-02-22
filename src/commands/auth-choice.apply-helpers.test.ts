@@ -35,6 +35,36 @@ function createPrompter(params?: {
   } as unknown as WizardPrompter;
 }
 
+function createPromptSpies(params?: { confirmResult?: boolean; textResult?: string }) {
+  const confirm = vi.fn(async () => params?.confirmResult ?? true);
+  const note = vi.fn(async () => undefined);
+  const text = vi.fn(async () => params?.textResult ?? "prompt-key");
+  return { confirm, note, text };
+}
+
+async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; textResult: string }) {
+  process.env.MINIMAX_API_KEY = "env-key";
+  delete process.env.MINIMAX_OAUTH_TOKEN;
+
+  const { confirm, text } = createPromptSpies({
+    confirmResult: params.confirmResult,
+    textResult: params.textResult,
+  });
+  const setCredential = vi.fn(async () => undefined);
+
+  const result = await ensureApiKeyFromEnvOrPrompt({
+    provider: "minimax",
+    envLabel: "MINIMAX_API_KEY",
+    promptMessage: "Enter key",
+    normalize: (value) => value.trim(),
+    validate: () => undefined,
+    prompter: createPrompter({ confirm, text }),
+    setCredential,
+  });
+
+  return { result, setCredential, confirm, text };
+}
+
 afterEach(() => {
   restoreMinimaxEnv();
   vi.restoreAllMocks();
@@ -96,21 +126,9 @@ describe("maybeApplyApiKeyFromOption", () => {
 
 describe("ensureApiKeyFromEnvOrPrompt", () => {
   it("uses env credential when user confirms", async () => {
-    process.env.MINIMAX_API_KEY = "env-key";
-    delete process.env.MINIMAX_OAUTH_TOKEN;
-
-    const confirm = vi.fn(async () => true);
-    const text = vi.fn(async () => "prompt-key");
-    const setCredential = vi.fn(async () => undefined);
-
-    const result = await ensureApiKeyFromEnvOrPrompt({
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      promptMessage: "Enter key",
-      normalize: (value) => value.trim(),
-      validate: () => undefined,
-      prompter: createPrompter({ confirm, text }),
-      setCredential,
+    const { result, setCredential, text } = await runEnsureMinimaxApiKeyFlow({
+      confirmResult: true,
+      textResult: "prompt-key",
     });
 
     expect(result).toBe("env-key");
@@ -119,21 +137,9 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 
   it("falls back to prompt when env is declined", async () => {
-    process.env.MINIMAX_API_KEY = "env-key";
-    delete process.env.MINIMAX_OAUTH_TOKEN;
-
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async () => "  prompted-key  ");
-    const setCredential = vi.fn(async () => undefined);
-
-    const result = await ensureApiKeyFromEnvOrPrompt({
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      promptMessage: "Enter key",
-      normalize: (value) => value.trim(),
-      validate: () => undefined,
-      prompter: createPrompter({ confirm, text }),
-      setCredential,
+    const { result, setCredential, text } = await runEnsureMinimaxApiKeyFlow({
+      confirmResult: false,
+      textResult: "  prompted-key  ",
     });
 
     expect(result).toBe("prompted-key");
@@ -148,9 +154,10 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
 
 describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
   it("uses opts token and skips note/env/prompt", async () => {
-    const confirm = vi.fn(async () => true);
-    const note = vi.fn(async () => undefined);
-    const text = vi.fn(async () => "prompt-key");
+    const { confirm, note, text } = createPromptSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureApiKeyFromOptionEnvOrPrompt({
@@ -179,9 +186,10 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     delete process.env.MINIMAX_OAUTH_TOKEN;
     process.env.MINIMAX_API_KEY = "env-key";
 
-    const confirm = vi.fn(async () => true);
-    const note = vi.fn(async () => undefined);
-    const text = vi.fn(async () => "prompt-key");
+    const { confirm, note, text } = createPromptSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureApiKeyFromOptionEnvOrPrompt({

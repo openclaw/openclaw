@@ -47,6 +47,7 @@ describe("workspace bootstrap file caching", () => {
   it("invalidates cache when mtime changes", async () => {
     const content1 = "# Initial content";
     const content2 = "# Updated content";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
 
     await writeWorkspaceFile({
       dir: workspaceDir,
@@ -58,15 +59,15 @@ describe("workspace bootstrap file caching", () => {
     const agentsFile1 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile1, content1);
 
-    // Wait a bit to ensure mtime will be different
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
     // Modify the file
     await writeWorkspaceFile({
       dir: workspaceDir,
       name: DEFAULT_AGENTS_FILENAME,
       content: content2,
     });
+    // Some filesystems have coarse mtime precision; bump it explicitly.
+    const bumpedTime = new Date(Date.now() + 1_000);
+    await fs.utimes(filePath, bumpedTime, bumpedTime);
 
     // Second load should detect the change and return new content
     const agentsFile2 = await loadAgentsFile(workspaceDir);

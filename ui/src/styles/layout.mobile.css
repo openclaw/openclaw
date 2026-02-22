@@ -2,60 +2,10 @@
    Mobile Layout
    =========================================== */
 
-/* Tablet: Horizontal nav */
+/* Tablet: keep side nav vertical, narrow sidebar */
 @media (max-width: 1100px) {
-  .sidebar {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .sidebar-header {
-    display: none;
-  }
-
-  .sidebar-footer {
-    display: none;
-  }
-
-  .sidebar-nav {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    gap: 4px;
-    padding: 10px 14px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .sidebar-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .nav-group {
-    display: contents;
-  }
-
-  .nav-group__items {
-    display: contents;
-  }
-
-  .nav-group__label {
-    display: none;
-  }
-
-  .nav-group--collapsed .nav-group__items {
-    display: contents;
-  }
-
-  .nav-item {
-    padding: 8px 14px;
-    font-size: 13px;
-    border-radius: var(--radius-md);
-    white-space: nowrap;
-    flex-shrink: 0;
+  .shell {
+    --shell-nav-width: 200px;
   }
 }
 
@@ -64,6 +14,7 @@
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
+    --shell-nav-width: 180px;
   }
 
   /* Topbar */
@@ -140,14 +91,31 @@
     flex-shrink: 0;
   }
 
-  /* Content */
+  /* Content — compact header on chat, hide on other tabs */
   .content-header {
+    height: 64px;
+    min-height: 64px;
+    padding: 12px 0;
+    /* This controls the height of the content header on mobile */
+    max-height: 64px;
+    margin-top: 24px;
+  }
+
+  .content:not(.content--chat) .content-header {
+    display: none;
+  }
+
+  .content--chat .page-title {
+    font-size: 16px;
+  }
+
+  .content--chat .page-sub {
     display: none;
   }
 
   .content {
-    padding: 4px 4px 16px;
-    gap: 12px;
+    padding: 4px 6px 12px;
+    gap: 10px;
   }
 
   /* Cards */
@@ -212,10 +180,14 @@
   }
 
   /* Chat */
+  .chat-agent-bar {
+    padding: 2px 6px;
+  }
+
   .chat-header {
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 6px;
   }
 
   .chat-header__left {
@@ -233,40 +205,60 @@
   }
 
   .chat-thread {
-    margin-top: 8px;
-    padding: 12px 8px;
+    margin-top: 6px;
+    padding: 10px 6px;
   }
 
   .chat-msg {
-    max-width: 90%;
+    max-width: 92%;
   }
 
   .chat-bubble {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: var(--radius-md);
   }
 
   .chat-compose {
-    gap: 8px;
+    gap: 6px;
   }
 
   .chat-compose__field textarea {
-    min-height: 60px;
-    padding: 8px 10px;
+    min-height: 52px;
+    padding: 6px 10px;
     border-radius: var(--radius-md);
     font-size: 14px;
+  }
+
+  .agent-chat__input {
+    margin: 0 8px 10px;
+  }
+
+  .agent-chat__toolbar {
+    padding: 4px 8px;
+  }
+
+  .agent-chat__input-btn,
+  .agent-chat__toolbar .btn-ghost {
+    width: 28px;
+    height: 28px;
+  }
+
+  .agent-chat__input-btn svg,
+  .agent-chat__toolbar .btn-ghost svg {
+    width: 14px;
+    height: 14px;
   }
 
   /* Log stream */
   .log-stream {
     border-radius: var(--radius-md);
-    max-height: 380px;
+    max-height: 320px;
   }
 
   .log-row {
     grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
+    gap: 2px;
+    padding: 6px;
   }
 
   .log-time {
@@ -282,7 +274,15 @@
   }
 
   .log-message {
-    font-size: 12px;
+    font-size: 11px;
+    word-break: break-word;
+  }
+
+  .ov-log-tail-content {
+    max-height: 200px;
+    font-size: 10px;
+    padding: 8px;
+    line-height: 1.5;
   }
 
   /* Lists */
@@ -306,18 +306,10 @@
     font-size: 11px;
   }
 
-  .theme-toggle {
-    height: 28px;
-  }
-
-  .theme-btn svg {
-    width: 12px;
-    height: 12px;
-  }
-
-  .theme-icon {
-    width: 12px;
-    height: 12px;
+  .theme-select {
+    height: 26px;
+    min-width: 78px;
+    font-size: 11px;
   }
 }
 
@@ -380,12 +372,9 @@
     padding: 3px 6px;
   }
 
-  .theme-toggle {
-    height: 26px;
-  }
-
-  .theme-icon {
-    width: 11px;
-    height: 11px;
+  .theme-select {
+    height: 24px;
+    min-width: 72px;
+    font-size: 10px;
   }
 }

@@ -20,6 +20,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -60,6 +61,15 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+
+function isMediaSizeLimitError(err: unknown): boolean {
+  const errMsg = String(err);
+  return errMsg.includes("exceeds") && errMsg.includes("MB limit");
+}
+
+function isRecoverableMediaGroupError(err: unknown): boolean {
+  return err instanceof MediaFetchError || isMediaSizeLimitError(err);
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -104,13 +114,32 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const FORWARD_BURST_DEBOUNCE_MS = 80;
+  type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
     debounceKey: string | null;
+    debounceLane: TelegramDebounceLane;
     botUsername?: string;
+  };
+  const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
+    const forwardMeta = msg as {
+      forward_origin?: unknown;
+      forward_from?: unknown;
+      forward_from_chat?: unknown;
+      forward_sender_name?: unknown;
+      forward_date?: unknown;
+    };
+    return (forwardMeta.forward_origin ??
+      forwardMeta.forward_from ??
+      forwardMeta.forward_from_chat ??
+      forwardMeta.forward_sender_name ??
+      forwardMeta.forward_date)
+      ? "forward"
+      : "default";
   };
   const buildSyntheticTextMessage = (params: {
     base: Message;
@@ -138,16 +167,19 @@ export const registerTelegramHandlers = ({
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
+    resolveDebounceMs: (entry) =>
+      entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
-      if (entry.allMedia.length > 0) {
-        return false;
-      }
       const text = entry.msg.text ?? entry.msg.caption ?? "";
-      if (!text.trim()) {
+      const hasText = text.trim().length > 0;
+      if (hasText && hasControlCommand(text, cfg, { botUsername: entry.botUsername })) {
         return false;
       }
-      return !hasControlCommand(text, cfg, { botUsername: entry.botUsername });
+      if (entry.debounceLane === "forward") {
+        return true;
+      }
+      return entry.allMedia.length === 0 && hasText;
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -162,7 +194,8 @@ export const registerTelegramHandlers = ({
         .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) {
+      const combinedMedia = entries.flatMap((entry) => entry.allMedia);
+      if (!combinedText.trim() && combinedMedia.length === 0) {
         return;
       }
       const first = entries[0];
@@ -175,7 +208,7 @@ export const registerTelegramHandlers = ({
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
       await processMessage(
         buildSyntheticContext(baseCtx, syntheticMessage),
-        [],
+        combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
       );
@@ -270,7 +303,18 @@ export const registerTelegramHandlers = ({
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        let media;
+        try {
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        } catch (mediaErr) {
+          if (!isRecoverableMediaGroupError(mediaErr)) {
+            throw mediaErr;
+          }
+          runtime.log?.(
+            warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
+          );
+          continue;
+        }
         if (media) {
           allMedia.push({
             path: media.path,
@@ -663,8 +707,7 @@ export const registerTelegramHandlers = ({
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
     } catch (mediaErr) {
-      const errMsg = String(mediaErr);
-      if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
+      if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
@@ -676,10 +719,19 @@ export const registerTelegramHandlers = ({
               }),
           }).catch(() => {});
         }
-        logger.warn({ chatId, error: errMsg }, oversizeLogMessage);
+        logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         return;
       }
-      throw mediaErr;
+      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+            reply_to_message_id: msg.message_id,
+          }),
+      }).catch(() => {});
+      return;
     }
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
@@ -702,8 +754,9 @@ export const registerTelegramHandlers = ({
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationKey =
       resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
+    const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}`
+      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
       : null;
     await inboundDebouncer.enqueue({
       ctx,
@@ -711,6 +764,7 @@ export const registerTelegramHandlers = ({
       allMedia,
       storeAllowFrom,
       debounceKey,
+      debounceLane,
       botUsername: ctx.me?.username,
     });
   };

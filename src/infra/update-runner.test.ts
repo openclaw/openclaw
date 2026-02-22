@@ -123,32 +123,34 @@ describe("runGatewayUpdate", () => {
     return uiIndexPath;
   }
 
-  function buildStableTagResponses(stableTag: string): Record<string, CommandResponse> {
+  function buildStableTagResponses(
+    stableTag: string,
+    options?: { additionalTags?: string[] },
+  ): Record<string, CommandResponse> {
+    const tagOutput = [stableTag, ...(options?.additionalTags ?? [])].join("\n");
     return {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
+      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
     };
   }
 
-  async function removeControlUiAssets() {
-    await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
+  function buildGitWorktreeProbeResponses(options?: { status?: string; branch?: string }) {
+    return {
+      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
+      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: options?.branch ?? "main" },
+      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: {
+        stdout: options?.status ?? "",
+      },
+    } satisfies Record<string, CommandResponse>;
   }
 
-  async function runWithRunner(
-    runner: (argv: string[]) => Promise<CommandResult>,
-    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
-  ) {
-    return runGatewayUpdate({
-      cwd: options?.cwd ?? tempDir,
-      runCommand: async (argv, _runOptions) => runner(argv),
-      timeoutMs: 5000,
-      ...(options?.channel ? { channel: options.channel } : {}),
-      ...(options?.tag ? { tag: options.tag } : {}),
-    });
+  async function removeControlUiAssets() {
+    await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
   }
 
   async function runWithCommand(
@@ -164,6 +166,13 @@ describe("runGatewayUpdate", () => {
     });
   }
 
+  async function runWithRunner(
+    runner: (argv: string[]) => Promise<CommandResult>,
+    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+  ) {
+    return runWithCommand(runner, options);
+  }
+
   async function seedGlobalPackageRoot(pkgRoot: string, version = "1.0.0") {
     await fs.mkdir(pkgRoot, { recursive: true });
     await fs.writeFile(
@@ -176,10 +185,7 @@ describe("runGatewayUpdate", () => {
   it("skips git update when worktree is dirty", async () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
-      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
-      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: " M README.md" },
+      ...buildGitWorktreeProbeResponses({ status: " M README.md" }),
     });
 
     const result = await runWithRunner(runner);
@@ -192,10 +198,7 @@ describe("runGatewayUpdate", () => {
   it("aborts rebase on failure", async () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
-      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
-      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
+      ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
         stdout: "origin/main",
       },
@@ -252,14 +255,7 @@ describe("runGatewayUpdate", () => {
     const stableTag = "v1.0.1-1";
     const betaTag = "v1.0.0-beta.2";
     const { runner, calls } = createRunner({
-      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
-      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: {
-        stdout: `${stableTag}\n${betaTag}\n`,
-      },
-      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      ...buildStableTagResponses(stableTag, { additionalTags: [betaTag] }),
       "pnpm install": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
@@ -472,12 +468,7 @@ describe("runGatewayUpdate", () => {
 
     const stableTag = "v1.0.1-1";
     const { runner } = createRunner({
-      [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
-      [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
-      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
-      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      ...buildStableTagResponses(stableTag),
       "pnpm install": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },

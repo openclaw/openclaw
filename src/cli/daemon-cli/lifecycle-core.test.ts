@@ -47,7 +47,14 @@ describe("runServiceRestart token drift", () => {
 
   beforeEach(() => {
     runtimeLogs.length = 0;
-    loadConfig.mockClear();
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
@@ -74,6 +81,32 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings?.[0]).toContain("gateway install --force");
+  });
+
+  it("uses env-first token precedence when checking drift", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
+    });
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      checkTokenDrift: true,
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
+    expect(payload.warnings).toBeUndefined();
   });
 
   it("skips drift warning when disabled", async () => {

@@ -81,6 +81,46 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+async function runConfigureWithHarness(params: {
+  harness: ReturnType<typeof createPrompterHarness>;
+  cfg?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["cfg"];
+  runtime?: RuntimeEnv;
+  options?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["options"];
+  accountOverrides?: Parameters<typeof whatsappOnboardingAdapter.configure>[0]["accountOverrides"];
+  shouldPromptAccountIds?: boolean;
+  forceAllowFrom?: boolean;
+}) {
+  return await whatsappOnboardingAdapter.configure({
+    cfg: params.cfg ?? {},
+    runtime: params.runtime ?? createRuntime(),
+    prompter: params.harness.prompter,
+    options: params.options ?? {},
+    accountOverrides: params.accountOverrides ?? {},
+    shouldPromptAccountIds: params.shouldPromptAccountIds ?? false,
+    forceAllowFrom: params.forceAllowFrom ?? false,
+  });
+}
+
+function createSeparatePhoneHarness(params: { selectValues: string[]; textValues?: string[] }) {
+  return createPrompterHarness({
+    confirmValues: [false],
+    selectValues: params.selectValues,
+    textValues: params.textValues,
+  });
+}
+
+async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues?: string[] }) {
+  pathExistsMock.mockResolvedValue(true);
+  const harness = createSeparatePhoneHarness({
+    selectValues: params.selectValues,
+    textValues: params.textValues,
+  });
+  const result = await runConfigureWithHarness({
+    harness,
+  });
+  return { harness, result };
+}
+
 describe("whatsappOnboardingAdapter.configure", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -96,13 +136,8 @@ describe("whatsappOnboardingAdapter.configure", () => {
       textValues: ["+1 (555) 555-0123"],
     });
 
-    const result = await whatsappOnboardingAdapter.configure({
-      cfg: {},
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
+    const result = await runConfigureWithHarness({
+      harness,
       forceAllowFrom: true,
     });
 
@@ -119,20 +154,8 @@ describe("whatsappOnboardingAdapter.configure", () => {
   });
 
   it("supports disabled DM policy for separate-phone setup", async () => {
-    pathExistsMock.mockResolvedValue(true);
-    const harness = createPrompterHarness({
-      confirmValues: [false],
+    const { harness, result } = await runSeparatePhoneFlow({
       selectValues: ["separate", "disabled"],
-    });
-
-    const result = await whatsappOnboardingAdapter.configure({
-      cfg: {},
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.whatsapp?.selfChatMode).toBe(false);
@@ -142,21 +165,9 @@ describe("whatsappOnboardingAdapter.configure", () => {
   });
 
   it("normalizes allowFrom entries when list mode is selected", async () => {
-    pathExistsMock.mockResolvedValue(true);
-    const harness = createPrompterHarness({
-      confirmValues: [false],
+    const { result } = await runSeparatePhoneFlow({
       selectValues: ["separate", "allowlist", "list"],
       textValues: ["+1 (555) 555-0123, +15555550123, *"],
-    });
-
-    const result = await whatsappOnboardingAdapter.configure({
-      cfg: {},
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.whatsapp?.selfChatMode).toBe(false);
@@ -172,14 +183,8 @@ describe("whatsappOnboardingAdapter.configure", () => {
       textValues: ["+1 (555) 111-2222"],
     });
 
-    const result = await whatsappOnboardingAdapter.configure({
-      cfg: {},
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
+    const result = await runConfigureWithHarness({
+      harness,
     });
 
     expect(result.cfg.channels?.whatsapp?.selfChatMode).toBe(true);
@@ -189,12 +194,12 @@ describe("whatsappOnboardingAdapter.configure", () => {
 
   it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {
     pathExistsMock.mockResolvedValue(true);
-    const harness = createPrompterHarness({
-      confirmValues: [false],
+    const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "open"],
     });
 
-    const result = await whatsappOnboardingAdapter.configure({
+    const result = await runConfigureWithHarness({
+      harness,
       cfg: {
         channels: {
           whatsapp: {
@@ -202,12 +207,6 @@ describe("whatsappOnboardingAdapter.configure", () => {
           },
         },
       },
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.whatsapp?.selfChatMode).toBe(false);
@@ -225,14 +224,9 @@ describe("whatsappOnboardingAdapter.configure", () => {
     });
     const runtime = createRuntime();
 
-    await whatsappOnboardingAdapter.configure({
-      cfg: {},
+    await runConfigureWithHarness({
+      harness,
       runtime,
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(loginWebMock).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID);
@@ -240,19 +234,12 @@ describe("whatsappOnboardingAdapter.configure", () => {
 
   it("skips relink note when already linked and relink is declined", async () => {
     pathExistsMock.mockResolvedValue(true);
-    const harness = createPrompterHarness({
-      confirmValues: [false],
+    const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });
 
-    await whatsappOnboardingAdapter.configure({
-      cfg: {},
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
+    await runConfigureWithHarness({
+      harness,
     });
 
     expect(loginWebMock).not.toHaveBeenCalled();
@@ -264,19 +251,12 @@ describe("whatsappOnboardingAdapter.configure", () => {
 
   it("shows follow-up login command note when not linked and linking is skipped", async () => {
     pathExistsMock.mockResolvedValue(false);
-    const harness = createPrompterHarness({
-      confirmValues: [false],
+    const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });
 
-    await whatsappOnboardingAdapter.configure({
-      cfg: {},
-      runtime: createRuntime(),
-      prompter: harness.prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
+    await runConfigureWithHarness({
+      harness,
     });
 
     expect(harness.note).toHaveBeenCalledWith(

@@ -1,18 +1,4 @@
 export const usageStylesPart1 = `
-  .usage-page-header {
-    margin: 4px 0 12px;
-  }
-  .usage-page-title {
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    margin-bottom: 4px;
-  }
-  .usage-page-subtitle {
-    font-size: 13px;
-    color: var(--muted);
-    margin: 0 0 12px;
-  }
   /* ===== FILTERS & HEADER ===== */
   .usage-filters-inline {
     display: flex;

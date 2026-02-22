@@ -160,6 +160,7 @@ export const TelegramAccountSchemaBase = z
     network: z
       .object({
         autoSelectFamily: z.boolean().optional(),
+        dnsResultOrder: z.enum(["ipv4first", "verbatim"]).optional(),
       })
       .strict()
       .optional(),
@@ -168,6 +169,7 @@ export const TelegramAccountSchemaBase = z
     webhookSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     webhookHost: z.string().optional(),
+    webhookPort: z.number().int().positive().optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),

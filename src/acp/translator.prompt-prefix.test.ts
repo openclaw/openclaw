@@ -14,6 +14,12 @@ function createConnection(): AgentSideConnection {
 
 describe("acp prompt cwd prefix", () => {
   async function runPromptWithCwd(cwd: string) {
+    const pinnedHome = os.homedir();
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousHome = process.env.HOME;
+    delete process.env.OPENCLAW_HOME;
+    process.env.HOME = pinnedHome;
+
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
       sessionId: "session-1",
@@ -36,14 +42,27 @@ describe("acp prompt cwd prefix", () => {
       prefixCwd: true,
     });
 
-    await expect(
-      agent.prompt({
-        sessionId: "session-1",
-        prompt: [{ type: "text", text: "hello" }],
-        _meta: {},
-      } as unknown as PromptRequest),
-    ).rejects.toThrow("stop-after-send");
-    return requestSpy;
+    try {
+      await expect(
+        agent.prompt({
+          sessionId: "session-1",
+          prompt: [{ type: "text", text: "hello" }],
+          _meta: {},
+        } as unknown as PromptRequest),
+      ).rejects.toThrow("stop-after-send");
+      return requestSpy;
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
   }
 
   it("redacts home directory in prompt prefix", async () => {

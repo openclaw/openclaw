@@ -5,6 +5,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -432,6 +433,21 @@ export async function runCronIsolatedAgentTurn(params: {
   cronSession.sessionEntry.systemSent = true;
   await persistSessionEntry();
 
+  // Resolve auth profile for the session, mirroring the inbound auto-reply path
+  // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
+  // auth which may not match the configured auth-profiles, causing 401 errors.
+  const authProfileId = await resolveSessionAuthProfileOverride({
+    cfg: cfgWithAgentDefaults,
+    provider,
+    agentDir,
+    sessionEntry: cronSession.sessionEntry,
+    sessionStore: cronSession.store,
+    sessionKey: agentSessionKey,
+    storePath: cronSession.storePath,
+    isNewSession: cronSession.isNewSession,
+  });
+  const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
+
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
@@ -490,6 +506,8 @@ export async function runCronIsolatedAgentTurn(params: {
           lane: params.lane ?? "cron",
           provider: providerOverride,
           model: modelOverride,
+          authProfileId,
+          authProfileIdSource,
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
@@ -611,8 +629,7 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
-    if (!resolvedDelivery.channel) {
-      const message = "cron delivery channel is missing";
+    const failOrWarnMissingDeliveryField = (message: string) => {
       if (!deliveryBestEffort) {
         return withRunSession({
           status: "error",
@@ -624,20 +641,12 @@ export async function runCronIsolatedAgentTurn(params: {
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+    };
+    if (!resolvedDelivery.channel) {
+      return failOrWarnMissingDeliveryField("cron delivery channel is missing");
     }
     if (!resolvedDelivery.to) {
-      const message = "cron delivery target is missing";
-      if (!deliveryBestEffort) {
-        return withRunSession({
-          status: "error",
-          error: message,
-          summary,
-          outputText,
-          ...telemetry,
-        });
-      }
-      logWarn(`[cron:${params.job.id}] ${message}`);
-      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+      return failOrWarnMissingDeliveryField("cron delivery target is missing");
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
@@ -744,7 +753,7 @@ export async function runCronIsolatedAgentTurn(params: {
         return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+        return withRunSession({ status: "ok", summary, outputText, delivered: true, ...telemetry });
       }
       try {
         const didAnnounce = await runSubagentAnnounceFlow({

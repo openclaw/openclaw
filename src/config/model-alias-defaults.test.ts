@@ -137,28 +137,7 @@ describe("applyModelDefaults", () => {
   });
 
   it("propagates provider api to models when model api is missing", () => {
-    const cfg = {
-      models: {
-        providers: {
-          myproxy: {
-            baseUrl: "https://proxy.example/v1",
-            apiKey: "sk-test",
-            api: "openai-completions",
-            models: [
-              {
-                id: "gpt-5.2",
-                name: "GPT-5.2",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = buildProxyProviderConfig();
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];

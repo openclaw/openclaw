@@ -111,6 +111,13 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "google") {
     return normalizeGoogleModelId(model);
   }
+  // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
+  // "openrouter/<name>" as the model ID sent to the API. Models from external
+  // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
+  // are passed through as-is (#12924).
+  if (provider === "openrouter" && !model.includes("/")) {
+    return `openrouter/${model}`;
+  }
   return model;
 }
 
@@ -520,6 +527,21 @@ export function resolveThinkingDefault(params: {
     return "low";
   }
   return "off";
+}
+
+/** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
+export function resolveReasoningDefault(params: {
+  provider: string;
+  model: string;
+  catalog?: ModelCatalogEntry[];
+}): "on" | "off" {
+  const key = modelKey(params.provider, params.model);
+  const candidate = params.catalog?.find(
+    (entry) =>
+      (entry.provider === params.provider && entry.id === params.model) ||
+      (entry.provider === key && entry.id === params.model),
+  );
+  return candidate?.reasoning === true ? "on" : "off";
 }
 
 /**

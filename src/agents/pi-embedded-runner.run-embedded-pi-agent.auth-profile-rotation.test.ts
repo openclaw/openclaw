@@ -188,14 +188,31 @@ async function readUsageStats(agentDir: string) {
   return stored.usageStats ?? {};
 }
 
-async function expectProfileP2UsageUpdated(agentDir: string) {
-  const usageStats = await readUsageStats(agentDir);
-  expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
-}
-
 async function expectProfileP2UsageUnchanged(agentDir: string) {
   const usageStats = await readUsageStats(agentDir);
   expect(usageStats["openai:p2"]?.lastUsed).toBe(2);
+}
+
+async function runAutoPinnedRotationCase(params: {
+  errorMessage: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  runEmbeddedAttemptMock.mockClear();
+  return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+    await writeAuthStore(agentDir);
+    mockFailedThenSuccessfulAttempt(params.errorMessage);
+    await runAutoPinnedOpenAiTurn({
+      agentDir,
+      workspaceDir,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    const usageStats = await readUsageStats(agentDir);
+    return { usageStats };
+  });
 }
 
 function mockSingleSuccessfulAttempt() {
@@ -314,21 +331,19 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     ] as const;
 
     for (const testCase of cases) {
-      runEmbeddedAttemptMock.mockClear();
-      await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-        await writeAuthStore(agentDir);
-        mockFailedThenSuccessfulAttempt(testCase.errorMessage);
-        await runAutoPinnedOpenAiTurn({
-          agentDir,
-          workspaceDir,
-          sessionKey: testCase.sessionKey,
-          runId: testCase.runId,
-        });
-
-        expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-        await expectProfileP2UsageUpdated(agentDir);
-      });
+      const { usageStats } = await runAutoPinnedRotationCase(testCase);
+      expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     }
+  });
+
+  it("rotates on timeout without cooling down the timed-out profile", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: "request ended without sending any chunks",
+      sessionKey: "agent:test:timeout-no-cooldown",
+      runId: "run:timeout-no-cooldown",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
   });
 
   it("does not rotate for compaction timeouts", async () => {

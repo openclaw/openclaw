@@ -269,7 +269,7 @@ export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) 
   }
   const root = document.documentElement;
   root.dataset.theme = resolved;
-  root.style.colorScheme = "dark";
+  root.style.colorScheme = resolved === "light" ? "light" : "dark";
 }
 
 export function syncTabWithLocation(host: SettingsHost, replace: boolean) {

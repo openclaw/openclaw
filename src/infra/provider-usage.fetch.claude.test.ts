@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+  toRequestUrl,
+} from "../test-utils/provider-usage-fetch.js";
 import { fetchClaudeUsage } from "./provider-usage.fetch.claude.js";
 
 const MISSING_SCOPE_MESSAGE = "missing scope requirement user:profile";
@@ -27,9 +31,17 @@ function createScopeFallbackFetch(handler: (url: string) => Promise<Response> | 
 type ScopeFallbackFetch = ReturnType<typeof createScopeFallbackFetch>;
 
 async function expectMissingScopeWithoutFallback(mockFetch: ScopeFallbackFetch) {
+  // Use explicit non-session values so this stays deterministic even when worker env contains
+  // real Claude session variables from other suites.
+  vi.stubEnv("CLAUDE_AI_SESSION_KEY", "missing-session-key");
+  vi.stubEnv("CLAUDE_WEB_SESSION_KEY", "missing-session-key");
+  vi.stubEnv("CLAUDE_WEB_COOKIE", "foo=bar");
+
   const result = await fetchClaudeUsage("token", 5000, mockFetch);
   expectMissingScopeError(result);
-  expect(mockFetch).toHaveBeenCalledTimes(1);
+  const calledUrls = mockFetch.mock.calls.map(([input]) => toRequestUrl(input));
+  expect(calledUrls.length).toBeGreaterThan(0);
+  expect(calledUrls.every((url) => url.includes("/api/oauth/usage"))).toBe(true);
 }
 
 function makeOrgAResponse() {

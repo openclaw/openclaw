@@ -1,6 +1,7 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isLocalishHost,
   isPrivateOrLoopbackAddress,
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
@@ -20,6 +21,28 @@ describe("resolveHostName", () => {
     ] as const;
     for (const testCase of cases) {
       expect(resolveHostName(testCase.input), testCase.input).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("isLocalishHost", () => {
+  it("accepts loopback and tailscale serve/funnel host headers", () => {
+    const accepted = [
+      "localhost",
+      "127.0.0.1:18789",
+      "[::1]:18789",
+      "[::ffff:127.0.0.1]:18789",
+      "gateway.tailnet.ts.net",
+    ];
+    for (const host of accepted) {
+      expect(isLocalishHost(host), host).toBe(true);
+    }
+  });
+
+  it("rejects non-local hosts", () => {
+    const rejected = ["example.com", "192.168.1.10", "203.0.113.5:18789"];
+    for (const host of rejected) {
+      expect(isLocalishHost(host), host).toBe(false);
     }
   });
 });
@@ -80,6 +103,11 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.42.0.59", proxies)).toBe(true); // CIDR match
       expect(isTrustedProxyAddress("172.19.5.100", proxies)).toBe(true); // CIDR match
       expect(isTrustedProxyAddress("10.43.0.1", proxies)).toBe(false); // no match
+    });
+
+    it("supports IPv6 CIDR notation", () => {
+      expect(isTrustedProxyAddress("2001:db8::1234", ["2001:db8::/32"])).toBe(true);
+      expect(isTrustedProxyAddress("2001:db9::1234", ["2001:db8::/32"])).toBe(false);
     });
   });
 

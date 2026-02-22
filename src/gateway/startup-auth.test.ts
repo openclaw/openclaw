@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 
 const mocks = vi.hoisted(() => ({
   writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -62,11 +63,12 @@ describe("ensureGatewayStartupAuth", () => {
     expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
     expect(result.persistedGeneratedToken).toBe(true);
     expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(result.generatedToken);
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persisted = mocks.writeConfigFile.mock.calls[0]?.[0];
-    expect(persisted?.gateway?.auth?.mode).toBe("token");
-    expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
+    expectGeneratedTokenPersistedToGatewayAuth({
+      generatedToken: result.generatedToken,
+      authToken: result.auth.token,
+      persistedConfig: mocks.writeConfigFile.mock.calls[0]?.[0],
+    });
   });
 
   it("does not generate when token already exists", async () => {

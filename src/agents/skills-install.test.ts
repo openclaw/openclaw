@@ -3,9 +3,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempWorkspace } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
-
-const runCommandWithTimeoutMock = vi.fn();
-const scanDirectoryWithSummaryMock = vi.fn();
+import {
+  runCommandWithTimeoutMock,
+  scanDirectoryWithSummaryMock,
+} from "./skills-install.test-mocks.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),

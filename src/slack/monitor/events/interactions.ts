@@ -99,6 +99,11 @@ type SlackModalEventBase = {
 };
 
 type SlackModalInteractionKind = "view_submission" | "view_closed";
+type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
+type RegisterSlackModalHandler = (
+  matcher: RegExp,
+  handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
+) => void;
 
 function readOptionValues(options: unknown): string[] | undefined {
   if (!Array.isArray(options)) {
@@ -483,6 +488,24 @@ function emitSlackModalLifecycleEvent(params: {
   });
 }
 
+function registerModalLifecycleHandler(params: {
+  register: RegisterSlackModalHandler;
+  matcher: RegExp;
+  ctx: SlackMonitorContext;
+  interactionType: SlackModalInteractionKind;
+  contextPrefix: "slack:interaction:view" | "slack:interaction:view-closed";
+}) {
+  params.register(params.matcher, async ({ ack, body }: SlackModalEventHandlerArgs) => {
+    await ack();
+    emitSlackModalLifecycleEvent({
+      ctx: params.ctx,
+      body: body as SlackModalBody,
+      interactionType: params.interactionType,
+      contextPrefix: params.contextPrefix,
+    });
+  });
+}
+
 export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
   if (typeof ctx.app.action !== "function") {
@@ -646,27 +669,20 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
   if (typeof ctx.app.view !== "function") {
     return;
   }
+  const modalMatcher = new RegExp(`^${OPENCLAW_ACTION_PREFIX}`);
 
   // Handle OpenClaw modal submissions with callback_ids scoped by our prefix.
-  ctx.app.view(
-    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
-    async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
-      await ack();
-      emitSlackModalLifecycleEvent({
-        ctx,
-        body: body as SlackModalBody,
-        interactionType: "view_submission",
-        contextPrefix: "slack:interaction:view",
-      });
-    },
-  );
+  registerModalLifecycleHandler({
+    register: (matcher, handler) => ctx.app.view(matcher, handler),
+    matcher: modalMatcher,
+    ctx,
+    interactionType: "view_submission",
+    contextPrefix: "slack:interaction:view",
+  });
 
   const viewClosed = (
     ctx.app as unknown as {
-      viewClosed?: (
-        matcher: RegExp,
-        handler: (args: { ack: () => Promise<void>; body: unknown }) => Promise<void>,
-      ) => void;
+      viewClosed?: RegisterSlackModalHandler;
     }
   ).viewClosed;
   if (typeof viewClosed !== "function") {
@@ -674,16 +690,11 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
   }
 
   // Handle modal close events so agent workflows can react to cancelled forms.
-  viewClosed(
-    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
-    async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
-      await ack();
-      emitSlackModalLifecycleEvent({
-        ctx,
-        body: body as SlackModalBody,
-        interactionType: "view_closed",
-        contextPrefix: "slack:interaction:view-closed",
-      });
-    },
-  );
+  registerModalLifecycleHandler({
+    register: viewClosed,
+    matcher: modalMatcher,
+    ctx,
+    interactionType: "view_closed",
+    contextPrefix: "slack:interaction:view-closed",
+  });
 }

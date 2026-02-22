@@ -1,26 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createEditorSubmitHandler,
-  createSubmitBurstCoalescer,
-  shouldEnableWindowsGitBashPasteFallback,
-} from "./tui.js";
-
-function createSubmitHarness() {
-  const editor = {
-    setText: vi.fn(),
-    addToHistory: vi.fn(),
-  };
-  const handleCommand = vi.fn();
-  const sendMessage = vi.fn();
-  const handleBangLine = vi.fn();
-  const onSubmit = createEditorSubmitHandler({
-    editor,
-    handleCommand,
-    sendMessage,
-    handleBangLine,
-  });
-  return { editor, handleCommand, sendMessage, handleBangLine, onSubmit };
-}
+import { createSubmitHarness } from "./tui-submit-test-helpers.js";
+import { createSubmitBurstCoalescer, shouldEnableWindowsGitBashPasteFallback } from "./tui.js";
 
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {

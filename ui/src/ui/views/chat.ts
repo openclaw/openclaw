@@ -21,6 +21,7 @@ import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
+import { agentLogoUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -93,6 +94,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  basePath?: string;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -137,9 +139,6 @@ let slashMenuIndex = 0;
 let searchOpen = false;
 let searchQuery = "";
 let pinnedExpanded = false;
-let voiceActive = false;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let recognition: any = null;
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
@@ -361,52 +360,6 @@ function tokenEstimate(draft: string): string | null {
   return `~${Math.ceil(draft.length / 4)} tokens`;
 }
 
-function startVoice(props: ChatProps, requestUpdate: () => void): void {
-  const SR =
-    (window as unknown as Record<string, unknown>).webkitSpeechRecognition ??
-    (window as unknown as Record<string, unknown>).SpeechRecognition;
-  if (!SR) {
-    return;
-  }
-  const rec = new (SR as new () => Record<string, unknown>)();
-  rec.continuous = false;
-  rec.interimResults = true;
-  rec.lang = "en-US";
-  rec.onresult = (event: Record<string, unknown>) => {
-    let transcript = "";
-    const results = (
-      event as { results: { length: number; [i: number]: { 0: { transcript: string } } } }
-    ).results;
-    for (let i = 0; i < results.length; i++) {
-      transcript += results[i][0].transcript;
-    }
-    props.onDraftChange(transcript);
-  };
-  (rec as unknown as EventTarget).addEventListener("end", () => {
-    voiceActive = false;
-    recognition = null;
-    requestUpdate();
-  });
-  (rec as unknown as EventTarget).addEventListener("error", () => {
-    voiceActive = false;
-    recognition = null;
-    requestUpdate();
-  });
-  (rec as { start: () => void }).start();
-  recognition = rec;
-  voiceActive = true;
-  requestUpdate();
-}
-
-function stopVoice(requestUpdate: () => void): void {
-  if (recognition && typeof recognition.stop === "function") {
-    recognition.stop();
-  }
-  recognition = null;
-  voiceActive = false;
-  requestUpdate();
-}
-
 function exportMarkdown(props: ChatProps): void {
   const history = Array.isArray(props.messages) ? props.messages : [];
   if (history.length === 0) {
@@ -432,7 +385,7 @@ function exportMarkdown(props: ChatProps): void {
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
   const avatar = props.assistantAvatar ?? props.assistantAvatarUrl;
-  const initials = name.slice(0, 2).toUpperCase();
+  const logoUrl = agentLogoUrl(props.basePath ?? "");
 
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
@@ -440,11 +393,11 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       ${
         avatar
           ? html`<img src=${avatar} alt=${name} style="width:56px; height:56px; border-radius:50%; object-fit:cover;" />`
-          : html`<div class="agent-chat__avatar">${initials}</div>`
+          : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="OpenClaw" /></div>`
       }
       <h2>${name}</h2>
       <div class="agent-chat__badges">
-        <span class="agent-chat__badge">${icons.spark} Ready to chat</span>
+        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
       </div>
       <p class="agent-chat__hint">
         Type a message below &middot; <kbd>/</kbd> for commands
@@ -604,10 +557,6 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
 
-  const hasVoice =
-    typeof (window as unknown as Record<string, unknown>).webkitSpeechRecognition !== "undefined" ||
-    typeof (window as unknown as Record<string, unknown>).SpeechRecognition !== "undefined";
-
   const placeholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
@@ -663,7 +612,7 @@ export function renderChat(props: ChatProps) {
             `;
           }
           if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity);
+            return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
           }
           if (item.kind === "stream") {
             return renderStreamingGroup(
@@ -671,6 +620,7 @@ export function renderChat(props: ChatProps) {
               item.startedAt,
               props.onOpenSidebar,
               assistantIdentity,
+              props.basePath,
             );
           }
           if (item.kind === "group") {
@@ -682,6 +632,7 @@ export function renderChat(props: ChatProps) {
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
+              basePath: props.basePath,
               onDelete: () => {
                 deleted.delete(item.key);
                 requestUpdate();
@@ -808,8 +759,6 @@ export function renderChat(props: ChatProps) {
       ${renderSearchBar(requestUpdate)}
       ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      ${renderAgentBar(props)}
-
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
         <div
           class="chat-main"
@@ -930,39 +879,13 @@ export function renderChat(props: ChatProps) {
               ${icons.paperclip}
             </button>
 
-            ${
-              hasVoice
-                ? html`
-                  <button
-                    class="agent-chat__input-btn ${voiceActive ? "agent-chat__input-btn--active" : ""}"
-                    @click=${() => {
-                      if (voiceActive) {
-                        stopVoice(requestUpdate);
-                      } else {
-                        startVoice(props, requestUpdate);
-                      }
-                    }}
-                    title="Voice input"
-                  >
-                    ${voiceActive ? icons.micOff : icons.mic}
-                  </button>
-                `
-                : nothing
-            }
+            ${nothing /* mic hidden for now */}
 
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
           <div class="agent-chat__toolbar-right">
-            <button class="btn-ghost" @click=${() => {
-              searchOpen = !searchOpen;
-              if (!searchOpen) {
-                searchQuery = "";
-              }
-              requestUpdate();
-            }} title="Search (Cmd+F)">
-              ${icons.search}
-            </button>
+            ${nothing /* search hidden for now */}
             <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
               ${icons.download}
             </button>
@@ -994,83 +917,6 @@ export function renderChat(props: ChatProps) {
         </div>
       </div>
     </section>
-  `;
-}
-
-function renderAgentBar(props: ChatProps) {
-  const agents = props.agentsList?.agents ?? [];
-  if (agents.length <= 1 && !props.sessions?.sessions?.length) {
-    return nothing;
-  }
-
-  // Filter sessions for current agent
-  const agentSessions = (props.sessions?.sessions ?? []).filter((s) => {
-    const key = s.key ?? "";
-    return (
-      key.includes(`:${props.currentAgentId}:`) || key.startsWith(`agent:${props.currentAgentId}:`)
-    );
-  });
-
-  return html`
-    <div class="chat-agent-bar">
-      <div class="chat-agent-bar__left">
-        ${
-          agents.length > 1
-            ? html`
-            <select
-              class="chat-agent-select"
-              .value=${props.currentAgentId}
-              @change=${(e: Event) => props.onAgentChange((e.target as HTMLSelectElement).value)}
-            >
-              ${agents.map(
-                (a) => html`
-                <option value=${a.id} ?selected=${a.id === props.currentAgentId}>
-                  ${a.identity?.name || a.name || a.id}
-                </option>
-              `,
-              )}
-            </select>
-          `
-            : html`<span class="chat-agent-bar__name">${agents[0]?.identity?.name || agents[0]?.name || props.currentAgentId}</span>`
-        }
-        ${
-          agentSessions.length > 0
-            ? html`
-            <details class="chat-sessions-panel">
-              <summary class="chat-sessions-summary">
-                ${icons.fileText}
-                <span>Sessions (${agentSessions.length})</span>
-              </summary>
-              <div class="chat-sessions-list">
-                ${agentSessions.map(
-                  (s) => html`
-                  <button
-                    class="chat-session-item ${s.key === props.sessionKey ? "chat-session-item--active" : ""}"
-                    @click=${() => props.onSessionSelect?.(s.key)}
-                  >
-                    <span class="chat-session-item__name">${s.displayName || s.label || s.key}</span>
-                    <span class="chat-session-item__meta muted">${s.model ?? ""}</span>
-                  </button>
-                `,
-                )}
-              </div>
-            </details>
-          `
-            : nothing
-        }
-      </div>
-      <div class="chat-agent-bar__right">
-        ${
-          props.onNavigateToAgent
-            ? html`
-            <button class="btn-ghost btn-ghost--sm" @click=${() => props.onNavigateToAgent?.()} title="Agent settings">
-              ${icons.settings}
-            </button>
-          `
-            : nothing
-        }
-      </div>
-    </div>
   `;
 }
 

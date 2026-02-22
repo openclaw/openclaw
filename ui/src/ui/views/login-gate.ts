@@ -30,16 +30,15 @@ export function renderLoginGate(state: AppViewState) {
             />
           </label>
           <label class="field">
-            <span>${t("overview.access.token")}</span>
+            <span>${t("overview.access.password")}</span>
             <input
               type="password"
               .value=${state.password}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
                 state.password = v;
-                state.applySettings({ ...state.settings, token: v });
               }}
-              placeholder="${t("login.tokenPlaceholder")}"
+              placeholder="${t("login.passwordPlaceholder")}"
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key === "Enter") {
                   state.connect();

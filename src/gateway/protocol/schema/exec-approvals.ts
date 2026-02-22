@@ -12,22 +12,20 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ExecApprovalsDefaultsSchema = Type.Object(
-  {
-    security: Type.Optional(Type.String()),
-    ask: Type.Optional(Type.String()),
-    askFallback: Type.Optional(Type.String()),
-    autoAllowSkills: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
+const ExecApprovalsPolicyFields = {
+  security: Type.Optional(Type.String()),
+  ask: Type.Optional(Type.String()),
+  askFallback: Type.Optional(Type.String()),
+  autoAllowSkills: Type.Optional(Type.Boolean()),
+};
+
+export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields, {
+  additionalProperties: false,
+});
 
 export const ExecApprovalsAgentSchema = Type.Object(
   {
-    security: Type.Optional(Type.String()),
-    ask: Type.Optional(Type.String()),
-    askFallback: Type.Optional(Type.String()),
-    autoAllowSkills: Type.Optional(Type.Boolean()),
+    ...ExecApprovalsPolicyFields,
     allowlist: Type.Optional(Type.Array(ExecApprovalsAllowlistEntrySchema)),
   },
   { additionalProperties: false },

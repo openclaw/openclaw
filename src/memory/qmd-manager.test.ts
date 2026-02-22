@@ -1519,10 +1519,26 @@ describe("QmdMemoryManager", () => {
       return createMockChild();
     });
 
+    const nativeSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof timeout === "number" && timeout >= 500) {
+        return nativeSetTimeout(handler, 1, ...args);
+      }
+      return nativeSetTimeout(handler, timeout, ...args);
+    }) as typeof globalThis.setTimeout);
+
     const { manager } = await createManager({ mode: "full" });
 
-    expect(updateCalls).toBe(2);
-    await manager.close();
+    try {
+      expect(updateCalls).toBe(2);
+      await manager.close();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("scopes by channel for agent-prefixed session keys", async () => {

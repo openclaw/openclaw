@@ -42,6 +42,48 @@ const getInflightMap = (context: GatewayRequestContext) => {
   return inflight;
 };
 
+async function resolveRequestedChannel(params: {
+  requestChannel: unknown;
+  unsupportedMessage: (input: string) => string;
+  rejectWebchatAsInternalOnly?: boolean;
+}): Promise<
+  | {
+      cfg: ReturnType<typeof loadConfig>;
+      channel: string;
+    }
+  | {
+      error: ReturnType<typeof errorShape>;
+    }
+> {
+  const channelInput =
+    typeof params.requestChannel === "string" ? params.requestChannel : undefined;
+  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  if (channelInput && !normalizedChannel) {
+    const normalizedInput = channelInput.trim().toLowerCase();
+    if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
+      return {
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+        ),
+      };
+    }
+    return {
+      error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
+    };
+  }
+  const cfg = loadConfig();
+  let channel = normalizedChannel;
+  if (!channel) {
+    try {
+      channel = (await resolveMessageChannelSelection({ cfg })).channel;
+    } catch (err) {
+      return { error: errorShape(ErrorCodes.INVALID_REQUEST, String(err)) };
+    }
+  }
+  return { cfg, channel };
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   send: async ({ params, respond, context }) => {
     const p = params;
@@ -104,38 +146,16 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const channelInput = typeof request.channel === "string" ? request.channel : undefined;
-    const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
-    if (channelInput && !normalizedChannel) {
-      const normalizedInput = channelInput.trim().toLowerCase();
-      if (normalizedInput === "webchat") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-          ),
-        );
-        return;
-      }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channelInput}`),
-      );
+    const resolvedChannel = await resolveRequestedChannel({
+      requestChannel: request.channel,
+      unsupportedMessage: (input) => `unsupported channel: ${input}`,
+      rejectWebchatAsInternalOnly: true,
+    });
+    if ("error" in resolvedChannel) {
+      respond(false, undefined, resolvedChannel.error);
       return;
     }
-    const cfg = loadConfig();
-    let channel = normalizedChannel;
-    if (!channel) {
-      try {
-        channel = (await resolveMessageChannelSelection({ cfg })).channel;
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
-      }
-    }
+    const { cfg, channel } = resolvedChannel;
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
@@ -322,26 +342,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const to = request.to.trim();
-    const channelInput = typeof request.channel === "string" ? request.channel : undefined;
-    const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
-    if (channelInput && !normalizedChannel) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channelInput}`),
-      );
+    const resolvedChannel = await resolveRequestedChannel({
+      requestChannel: request.channel,
+      unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
+    });
+    if ("error" in resolvedChannel) {
+      respond(false, undefined, resolvedChannel.error);
       return;
     }
-    const cfg = loadConfig();
-    let channel = normalizedChannel;
-    if (!channel) {
-      try {
-        channel = (await resolveMessageChannelSelection({ cfg })).channel;
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
-      }
-    }
+    const { cfg, channel } = resolvedChannel;
     if (typeof request.durationSeconds === "number" && channel !== "telegram") {
       respond(
         false,

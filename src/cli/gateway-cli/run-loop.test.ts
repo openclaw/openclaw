@@ -90,7 +90,77 @@ function createRuntimeWithExitSignal(exitCallOrder?: string[]) {
   return { runtime, exited };
 }
 
+type GatewayCloseFn = (...args: unknown[]) => Promise<void>;
+type LoopRuntime = {
+  log: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  exit: (code: number) => void;
+};
+
+function createSignaledStart(close: GatewayCloseFn) {
+  let resolveStarted: (() => void) | null = null;
+  const started = new Promise<void>((resolve) => {
+    resolveStarted = resolve;
+  });
+  const start = vi.fn(async () => {
+    resolveStarted?.();
+    return { close };
+  });
+  return { start, started };
+}
+
+async function runLoopWithStart(params: { start: ReturnType<typeof vi.fn>; runtime: LoopRuntime }) {
+  vi.resetModules();
+  const { runGatewayLoop } = await import("./run-loop.js");
+  const loopPromise = runGatewayLoop({
+    start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+    runtime: params.runtime,
+  });
+  return { loopPromise };
+}
+
+async function waitForStart(started: Promise<void>) {
+  await started;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe("runGatewayLoop", () => {
+  it("exits 0 on SIGTERM after graceful close", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const close = vi.fn(async () => {});
+      let resolveStarted: (() => void) | null = null;
+      const started = new Promise<void>((resolve) => {
+        resolveStarted = resolve;
+      });
+      const start = vi.fn(async () => {
+        resolveStarted?.();
+        return { close };
+      });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+
+      vi.resetModules();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const _loopPromise = runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+
+      await started;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      process.emit("SIGTERM");
+
+      await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
   it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
 
@@ -185,15 +255,7 @@ describe("runGatewayLoop", () => {
       });
 
       const close = vi.fn(async () => {});
-      let resolveStarted: (() => void) | null = null;
-      const started = new Promise<void>((resolve) => {
-        resolveStarted = resolve;
-      });
-
-      const start = vi.fn(async () => {
-        resolveStarted?.();
-        return { close };
-      });
+      const { start, started } = createSignaledStart(close);
 
       const exitCallOrder: string[] = [];
       const { runtime, exited } = createRuntimeWithExitSignal(exitCallOrder);
@@ -201,15 +263,9 @@ describe("runGatewayLoop", () => {
         exitCallOrder.push("lockRelease");
       });
 
-      vi.resetModules();
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const _loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-      });
+      const { loopPromise: _loopPromise } = await runLoopWithStart({ start, runtime });
 
-      await started;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await waitForStart(started);
 
       process.emit("SIGUSR1");
 
@@ -236,26 +292,13 @@ describe("runGatewayLoop", () => {
       });
 
       const close = vi.fn(async () => {});
-      let resolveStarted: (() => void) | null = null;
-      const started = new Promise<void>((resolve) => {
-        resolveStarted = resolve;
-      });
-      const start = vi.fn(async () => {
-        resolveStarted?.();
-        return { close };
-      });
+      const { start, started } = createSignaledStart(close);
 
       const { runtime, exited } = createRuntimeWithExitSignal();
 
-      vi.resetModules();
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const _loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-      });
+      const { loopPromise: _loopPromise } = await runLoopWithStart({ start, runtime });
 
-      await started;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await waitForStart(started);
       process.emit("SIGUSR1");
 
       await expect(exited).resolves.toBe(1);

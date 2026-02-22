@@ -1,81 +1,289 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { listRuntimeSourceFiles, shouldSkipRuntimeSourcePath } from "../test-utils/repo-scan.js";
 
-const RUNTIME_ROOTS = ["src", "extensions"] as const;
-const QUICK_TMPDIR_JOIN_PATTERN = /\bpath\.join\s*\(\s*os\.tmpdir\s*\(\s*\)/;
+const RUNTIME_ROOTS = ["src", "extensions"];
+const SKIP_PATTERNS = [
+  /\.test\.tsx?$/,
+  /\.test-helpers\.tsx?$/,
+  /\.test-utils\.tsx?$/,
+  /\.test-harness\.tsx?$/,
+  /\.e2e\.tsx?$/,
+  /\.d\.ts$/,
+  /[\\/](?:__tests__|tests)[\\/]/,
+  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
+];
 
-function isIdentifierNamed(node: ts.Node, name: string): node is ts.Identifier {
-  return ts.isIdentifier(node) && node.text === name;
+function shouldSkip(relativePath: string): boolean {
+  return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
 }
 
-function isPathJoinCall(expr: ts.LeftHandSideExpression): boolean {
-  return (
-    ts.isPropertyAccessExpression(expr) &&
-    expr.name.text === "join" &&
-    isIdentifierNamed(expr.expression, "path")
-  );
+function stripCommentsForScan(input: string): string {
+  return input.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
-function isOsTmpdirCall(node: ts.Expression): boolean {
-  return (
-    ts.isCallExpression(node) &&
-    node.arguments.length === 0 &&
-    ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === "tmpdir" &&
-    isIdentifierNamed(node.expression.expression, "os")
-  );
+function findMatchingParen(source: string, openIndex: number): number {
+  let depth = 1;
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  for (let i = openIndex + 1; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
 }
 
-function isDynamicTemplateSegment(node: ts.Expression): boolean {
-  return ts.isTemplateExpression(node);
+function splitTopLevelArguments(source: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      current += ch;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "(") {
+      parenDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === ")") {
+      if (parenDepth > 0) {
+        parenDepth -= 1;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === "]") {
+      if (bracketDepth > 0) {
+        bracketDepth -= 1;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === "}") {
+      if (braceDepth > 0) {
+        braceDepth -= 1;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      out.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) {
+    out.push(current.trim());
+  }
+  return out;
+}
+
+function isOsTmpdirExpression(argument: string): boolean {
+  return /^os\s*\.\s*tmpdir\s*\(\s*\)$/u.test(argument.trim());
 }
 
 function mightContainDynamicTmpdirJoin(source: string): boolean {
-  return source.includes("path.join") && source.includes("os.tmpdir") && source.includes("`");
+  return (
+    source.includes("path") &&
+    source.includes("join") &&
+    source.includes("tmpdir") &&
+    source.includes("${")
+  );
 }
 
-function hasDynamicTmpdirJoin(source: string, filePath = "fixture.ts"): boolean {
+function hasDynamicTmpdirJoin(source: string): boolean {
   if (!mightContainDynamicTmpdirJoin(source)) {
     return false;
   }
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+
+  const scanSource = stripCommentsForScan(source);
+  const joinPattern = /path\s*\.\s*join\s*\(/gu;
+  let match: RegExpExecArray | null = joinPattern.exec(scanSource);
+  while (match) {
+    const openParenIndex = scanSource.indexOf("(", match.index);
+    if (openParenIndex !== -1) {
+      const closeParenIndex = findMatchingParen(scanSource, openParenIndex);
+      if (closeParenIndex !== -1) {
+        const argsSource = scanSource.slice(openParenIndex + 1, closeParenIndex);
+        const args = splitTopLevelArguments(argsSource);
+        if (args.length >= 2 && isOsTmpdirExpression(args[0])) {
+          for (const arg of args.slice(1)) {
+            const trimmed = arg.trim();
+            if (trimmed.startsWith("`") && trimmed.includes("${")) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    match = joinPattern.exec(scanSource);
+  }
+  return false;
+}
+
+async function listTsFiles(dir: string): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...(await listTsFiles(fullPath)));
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (fullPath.endsWith(".ts") || fullPath.endsWith(".tsx")) {
+      out.push(fullPath);
+    }
+  }
+  return out;
+}
+
+function parsePathList(stdout: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    out.add(path.resolve(trimmed));
+  }
+  return out;
+}
+
+function prefilterLikelyTmpdirJoinFiles(roots: readonly string[]): Set<string> | null {
+  const commonArgs = [
+    "--files-with-matches",
+    "--glob",
+    "*.ts",
+    "--glob",
+    "*.tsx",
+    "--glob",
+    "!**/*.test.ts",
+    "--glob",
+    "!**/*.test.tsx",
+    "--glob",
+    "!**/*.e2e.ts",
+    "--glob",
+    "!**/*.e2e.tsx",
+    "--glob",
+    "!**/*.d.ts",
+    "--glob",
+    "!**/*test-helpers*.ts",
+    "--glob",
+    "!**/*test-helpers*.tsx",
+    "--glob",
+    "!**/*test-utils*.ts",
+    "--glob",
+    "!**/*test-utils*.tsx",
+    "--glob",
+    "!**/*test-harness*.ts",
+    "--glob",
+    "!**/*test-harness*.tsx",
+    "--no-messages",
+  ];
+  const strictDynamicCall = spawnSync(
+    "rg",
+    [
+      ...commonArgs,
+      "-P",
+      "-U",
+      "(?s)path\\s*\\.\\s*join\\s*\\(\\s*os\\s*\\.\\s*tmpdir\\s*\\([^`]*`",
+      ...roots,
+    ],
+    { encoding: "utf8" },
   );
-  let found = false;
+  if (
+    !strictDynamicCall.error &&
+    (strictDynamicCall.status === 0 || strictDynamicCall.status === 1)
+  ) {
+    return parsePathList(strictDynamicCall.stdout);
+  }
 
-  const visit = (node: ts.Node): void => {
-    if (found) {
-      return;
-    }
-    if (
-      ts.isCallExpression(node) &&
-      isPathJoinCall(node.expression) &&
-      node.arguments.length >= 2 &&
-      isOsTmpdirCall(node.arguments[0]) &&
-      node.arguments.slice(1).some((arg) => isDynamicTemplateSegment(arg))
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
-  return found;
+  const candidateCall = spawnSync(
+    "rg",
+    [...commonArgs, "path\\s*\\.\\s*join\\s*\\(\\s*os\\s*\\.\\s*tmpdir\\s*\\(", ...roots],
+    { encoding: "utf8" },
+  );
+  if (candidateCall.error || (candidateCall.status !== 0 && candidateCall.status !== 1)) {
+    return null;
+  }
+  return parsePathList(candidateCall.stdout);
 }
 
 describe("temp path guard", () => {
   it("skips test helper filename variants", () => {
-    expect(shouldSkipRuntimeSourcePath("src/commands/test-helpers.ts")).toBe(true);
-    expect(shouldSkipRuntimeSourcePath("src/commands/sessions.test-helpers.ts")).toBe(true);
-    expect(shouldSkipRuntimeSourcePath("src\\commands\\sessions.test-helpers.ts")).toBe(true);
+    expect(shouldSkip("src/commands/test-helpers.ts")).toBe(true);
+    expect(shouldSkip("src/commands/sessions.test-helpers.ts")).toBe(true);
+    expect(shouldSkip("src\\commands\\sessions.test-helpers.ts")).toBe(true);
   });
 
   it("detects dynamic and ignores static fixtures", () => {
@@ -103,22 +311,39 @@ describe("temp path guard", () => {
   it("blocks dynamic template path.join(os.tmpdir(), ...) in runtime source files", async () => {
     const repoRoot = process.cwd();
     const offenders: string[] = [];
-
-    const files = await listRuntimeSourceFiles(repoRoot, {
-      roots: RUNTIME_ROOTS,
-      extensions: [".ts", ".tsx"],
-    });
-    for (const file of files) {
-      const relativePath = path.relative(repoRoot, file);
-      const source = await fs.readFile(file, "utf-8");
-      if (!QUICK_TMPDIR_JOIN_PATTERN.test(source)) {
-        continue;
+    const scanRoots = RUNTIME_ROOTS.map((root) => path.join(repoRoot, root));
+    const rgPrefiltered = prefilterLikelyTmpdirJoinFiles(scanRoots);
+    const prefilteredByRoot = new Map<string, string[]>();
+    if (rgPrefiltered) {
+      for (const file of rgPrefiltered) {
+        for (const absRoot of scanRoots) {
+          if (file.startsWith(absRoot + path.sep)) {
+            const bucket = prefilteredByRoot.get(absRoot) ?? [];
+            bucket.push(file);
+            prefilteredByRoot.set(absRoot, bucket);
+            break;
+          }
+        }
       }
-      if (hasDynamicTmpdirJoin(source, relativePath)) {
-        offenders.push(relativePath);
+    }
+
+    for (const root of RUNTIME_ROOTS) {
+      const absRoot = path.join(repoRoot, root);
+      const files = rgPrefiltered
+        ? (prefilteredByRoot.get(absRoot) ?? [])
+        : await listTsFiles(absRoot);
+      for (const file of files) {
+        const relativePath = path.relative(repoRoot, file);
+        if (shouldSkip(relativePath)) {
+          continue;
+        }
+        const source = await fs.readFile(file, "utf8");
+        if (hasDynamicTmpdirJoin(source, relativePath)) {
+          offenders.push(relativePath);
+        }
       }
     }
 
     expect(offenders).toEqual([]);
-  }, 240_000);
+  });
 });
