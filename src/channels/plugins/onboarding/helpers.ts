@@ -1,4 +1,7 @@
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { DmPolicy } from "../../../config/types.js";
 import { promptAccountId as promptAccountIdSdk } from "../../../plugin-sdk/onboarding.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
 
@@ -20,6 +23,123 @@ export function mergeAllowFromEntries(
 ): string[] {
   const merged = [...(current ?? []), ...additions].map((v) => String(v).trim()).filter(Boolean);
   return [...new Set(merged)];
+}
+
+export function splitOnboardingEntries(raw: string): string[] {
+  return raw
+    .split(/[\n,;]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function normalizeAllowFromEntries(
+  entries: Array<string | number>,
+  normalizeEntry?: (value: string) => string | null | undefined,
+): string[] {
+  const normalized = entries
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
+    .map((entry) => {
+      if (entry === "*") {
+        return "*";
+      }
+      if (!normalizeEntry) {
+        return entry;
+      }
+      const value = normalizeEntry(entry);
+      return typeof value === "string" ? value.trim() : "";
+    })
+    .filter(Boolean);
+  return [...new Set(normalized)];
+}
+
+export function resolveOnboardingAccountId(params: {
+  accountId?: string;
+  defaultAccountId: string;
+}): string {
+  return params.accountId?.trim() ? normalizeAccountId(params.accountId) : params.defaultAccountId;
+}
+
+export async function resolveAccountIdForConfigure(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  label: string;
+  accountOverride?: string;
+  shouldPromptAccountIds: boolean;
+  listAccountIds: (cfg: OpenClawConfig) => string[];
+  defaultAccountId: string;
+}): Promise<string> {
+  const override = params.accountOverride?.trim();
+  let accountId = override ? normalizeAccountId(override) : params.defaultAccountId;
+  if (params.shouldPromptAccountIds && !override) {
+    accountId = await promptAccountId({
+      cfg: params.cfg,
+      prompter: params.prompter,
+      label: params.label,
+      currentId: accountId,
+      listAccountIds: params.listAccountIds,
+      defaultAccountId: params.defaultAccountId,
+    });
+  }
+  return accountId;
+}
+
+export function setAccountAllowFromForChannel(params: {
+  cfg: OpenClawConfig;
+  channel: "imessage" | "signal";
+  accountId: string;
+  allowFrom: string[];
+}): OpenClawConfig {
+  const { cfg, channel, accountId, allowFrom } = params;
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        [channel]: {
+          ...cfg.channels?.[channel],
+          allowFrom,
+        },
+      },
+    };
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      [channel]: {
+        ...cfg.channels?.[channel],
+        accounts: {
+          ...cfg.channels?.[channel]?.accounts,
+          [accountId]: {
+            ...cfg.channels?.[channel]?.accounts?.[accountId],
+            allowFrom,
+          },
+        },
+      },
+    },
+  };
+}
+
+export function setChannelDmPolicyWithAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: "imessage" | "signal";
+  dmPolicy: DmPolicy;
+}): OpenClawConfig {
+  const { cfg, channel, dmPolicy } = params;
+  const allowFrom =
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.[channel]?.allowFrom) : undefined;
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      [channel]: {
+        ...cfg.channels?.[channel],
+        dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
+      },
+    },
+  };
 }
 
 type AllowFromResolution = {
