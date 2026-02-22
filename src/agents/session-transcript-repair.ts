@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
-type ToolCallBlock = {
+type RawToolCallBlock = {
   type?: unknown;
   id?: unknown;
   name?: unknown;
@@ -9,7 +9,14 @@ type ToolCallBlock = {
   arguments?: unknown;
 };
 
-function isToolCallBlock(block: unknown): block is ToolCallBlock {
+type ToolCallBlock = {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+function isToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
   }
@@ -20,7 +27,7 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
   );
 }
 
-function hasToolCallInput(block: ToolCallBlock): boolean {
+function hasToolCallInput(block: RawToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -31,12 +38,69 @@ function hasNonEmptyStringField(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasToolCallId(block: ToolCallBlock): boolean {
+function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
 }
 
-function hasToolCallName(block: ToolCallBlock): boolean {
+function hasToolCallName(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.name);
+}
+
+function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const rec = value as Record<string, unknown>;
+  const raw = rec.attachments;
+  if (!Array.isArray(raw)) {
+    return value;
+  }
+  const next = raw.map((item) => {
+    if (!item || typeof item !== "object") {
+      return item;
+    }
+    const a = item as Record<string, unknown>;
+    if (!Object.hasOwn(a, "content")) {
+      return item;
+    }
+    const { content: _content, ...rest } = a;
+    return { ...rest, content: "__OPENCLAW_REDACTED__" };
+  });
+  return { ...rec, attachments: next };
+}
+
+function sanitizeToolCallBlock(block: RawToolCallBlock): ToolCallBlock {
+  const name = typeof block.name === "string" ? block.name : undefined;
+  const argCandidate =
+    block.arguments && typeof block.arguments === "object"
+      ? (block.arguments as Record<string, unknown>)
+      : block.input && typeof block.input === "object"
+        ? (block.input as Record<string, unknown>)
+        : {};
+
+  const normalized: ToolCallBlock = {
+    id: typeof block.id === "string" ? block.id : "unknown",
+    type: "toolCall",
+    name: typeof block.name === "string" && block.name ? block.name : "unknown",
+    arguments: argCandidate,
+  };
+
+  if (name !== "sessions_spawn") {
+    return normalized;
+  }
+  // Redact large/sensitive inline attachment content from persisted transcripts.
+  const nextArgs = redactSessionsSpawnAttachmentsArgs(block.arguments);
+  const nextInput = redactSessionsSpawnAttachmentsArgs(block.input);
+  if (nextArgs === block.arguments && nextInput === block.input) {
+    return normalized;
+  }
+  const merged =
+    nextArgs && typeof nextArgs === "object"
+      ? (nextArgs as Record<string, unknown>)
+      : nextInput && typeof nextInput === "object"
+        ? (nextInput as Record<string, unknown>)
+        : normalized.arguments;
+  return { ...normalized, arguments: merged };
 }
 
 function makeMissingToolResult(params: {
@@ -104,6 +168,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
 
     const nextContent = [];
     let droppedInMessage = 0;
+    let messageChanged = false;
 
     for (const block of msg.content) {
       if (
@@ -113,6 +178,16 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         droppedToolCalls += 1;
         droppedInMessage += 1;
         changed = true;
+        messageChanged = true;
+        continue;
+      }
+      if (isToolCallBlock(block)) {
+        const sanitized = sanitizeToolCallBlock(block);
+        if (sanitized !== block) {
+          changed = true;
+          messageChanged = true;
+        }
+        nextContent.push(sanitized);
         continue;
       }
       nextContent.push(block);
@@ -124,6 +199,11 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         changed = true;
         continue;
       }
+      out.push({ ...msg, content: nextContent });
+      continue;
+    }
+
+    if (messageChanged) {
       out.push({ ...msg, content: nextContent });
       continue;
     }
