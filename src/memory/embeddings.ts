@@ -124,12 +124,14 @@ async function createLocalEmbeddingProvider(
     },
     embedBatch: async (texts) => {
       const ctx = await ensureContext();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
+      // Process sequentially to avoid deadlocking node-llama-cpp's
+      // embedding context. Concurrent getEmbeddingFor() calls on the
+      // same context can hang indefinitely. See #7547.
+      const embeddings: number[][] = [];
+      for (const text of texts) {
+        const embedding = await ctx.getEmbeddingFor(text);
+        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+      }
       return embeddings;
     },
   };
