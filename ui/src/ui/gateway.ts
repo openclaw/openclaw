@@ -169,13 +169,13 @@ export class GatewayBrowserClient {
           publicKey: string;
           signature: string;
           signedAt: number;
-          nonce: string | undefined;
+          nonce: string;
         }
       | undefined;
 
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
-      const nonce = this.connectNonce ?? undefined;
+      const nonce = this.connectNonce ?? "";
       const payload = buildDeviceAuthPayload({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
