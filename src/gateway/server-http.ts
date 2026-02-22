@@ -19,7 +19,7 @@ import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { normalizeRateLimitClientIp, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   isLocalDirectRequest,
@@ -222,7 +222,7 @@ export function createHooksRequestHandler(
   const hookAuthFailures = new Map<string, HookAuthFailure>();
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
-    return req.socket?.remoteAddress?.trim() || "unknown";
+    return normalizeRateLimitClientIp(req.socket?.remoteAddress);
   };
 
   const recordHookAuthFailure = (

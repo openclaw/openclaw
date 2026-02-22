@@ -16,7 +16,7 @@
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
-import { isLoopbackAddress } from "./net.js";
+import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +81,14 @@ const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
 // Implementation
 // ---------------------------------------------------------------------------
 
+/**
+ * Canonicalize client IPs used for auth throttling so all call sites
+ * share one representation (including IPv4-mapped IPv6 forms).
+ */
+export function normalizeRateLimitClientIp(ip: string | undefined): string {
+  return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
+}
+
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
@@ -101,7 +109,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function normalizeIp(ip: string | undefined): string {
-    return (ip ?? "").trim() || "unknown";
+    return normalizeRateLimitClientIp(ip);
   }
 
   function resolveKey(
