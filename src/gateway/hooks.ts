@@ -11,11 +11,13 @@ import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.j
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
+const DEFAULT_HOOKS_ALLOWED_CONTENT_TYPES = ["application/json"];
 
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
   maxBodyBytes: number;
+  allowedContentTypes: string[];
   mappings: HookMappingResolved[];
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
@@ -51,6 +53,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
       ? cfg.hooks.maxBodyBytes
       : DEFAULT_HOOKS_MAX_BODY_BYTES;
+  const allowedContentTypes = resolveHookAllowedContentTypes(cfg.hooks?.allowedContentTypes);
   const mappings = resolveHookMappings(cfg.hooks);
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
@@ -79,6 +82,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     basePath: trimmed,
     token,
     maxBodyBytes,
+    allowedContentTypes,
     mappings,
     agentPolicy: {
       defaultAgentId,
@@ -91,6 +95,33 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
+}
+
+function normalizeHookContentType(raw: string): string | null {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+  const typeOnly = trimmed.split(";", 1)[0]?.trim();
+  if (!typeOnly || !typeOnly.includes("/")) {
+    return null;
+  }
+  return typeOnly;
+}
+
+function resolveHookAllowedContentTypes(raw: string[] | undefined): string[] {
+  if (!Array.isArray(raw)) {
+    return [...DEFAULT_HOOKS_ALLOWED_CONTENT_TYPES];
+  }
+  const allowed = new Set<string>();
+  for (const entry of raw) {
+    const normalized = normalizeHookContentType(entry);
+    if (!normalized) {
+      continue;
+    }
+    allowed.add(normalized);
+  }
+  return allowed.size > 0 ? Array.from(allowed) : [...DEFAULT_HOOKS_ALLOWED_CONTENT_TYPES];
 }
 
 function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {

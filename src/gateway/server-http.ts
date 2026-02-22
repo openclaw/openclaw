@@ -91,6 +91,16 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function normalizeRequestContentType(req: IncomingMessage): string | undefined {
+  const raw = req.headers["content-type"];
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof first !== "string") {
+    return undefined;
+  }
+  const typeOnly = first.split(";", 1)[0]?.trim().toLowerCase();
+  return typeOnly || undefined;
+}
+
 function isCanvasPath(pathname: string): boolean {
   return (
     pathname === A2UI_PATH ||
@@ -289,6 +299,15 @@ export function createHooksRequestHandler(
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
+      return true;
+    }
+
+    const contentType = normalizeRequestContentType(req);
+    if (!contentType || !hooksConfig.allowedContentTypes.includes(contentType)) {
+      sendJson(res, 415, {
+        ok: false,
+        error: `unsupported content-type; expected one of: ${hooksConfig.allowedContentTypes.join(", ")}`,
+      });
       return true;
     }
 

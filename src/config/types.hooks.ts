@@ -143,6 +143,8 @@ export type HooksConfig = {
    * Omit or include `*` to allow any agent. Set `[]` to deny all explicit `agentId` routing.
    */
   allowedAgentIds?: string[];
+  /** Accepted request Content-Types for hook ingress (default: ["application/json"]). */
+  allowedContentTypes?: string[];
   maxBodyBytes?: number;
   presets?: string[];
   transformsDir?: string;

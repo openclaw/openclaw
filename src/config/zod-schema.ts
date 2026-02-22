@@ -336,6 +336,7 @@ export const OpenClawSchema = z
         allowRequestSessionKey: z.boolean().optional(),
         allowedSessionKeyPrefixes: z.array(z.string()).optional(),
         allowedAgentIds: z.array(z.string()).optional(),
+        allowedContentTypes: z.array(z.string()).optional(),
         maxBodyBytes: z.number().int().positive().optional(),
         presets: z.array(z.string()).optional(),
         transformsDir: z.string().optional(),

@@ -56,6 +56,22 @@ describe("gateway hooks helpers", () => {
     expect(resolved?.basePath).toBe("/hooks");
     expect(resolved?.token).toBe("secret");
     expect(resolved?.sessionPolicy.allowRequestSessionKey).toBe(false);
+    expect(resolved?.allowedContentTypes).toEqual(["application/json"]);
+  });
+
+  test("resolveHooksConfig normalizes custom allowed content types", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowedContentTypes: [" Application/JSON; charset=utf-8 ", "application/cloudevents+json"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfigOrThrow(cfg);
+    expect(resolved.allowedContentTypes).toEqual([
+      "application/json",
+      "application/cloudevents+json",
+    ]);
   });
 
   test("resolveHooksConfig rejects root path", () => {
