@@ -44,7 +44,7 @@ export class CredentialStore {
     this.resolveSecret = resolveSecret;
 
     for (const entry of config.credentials ?? []) {
-      if (entry.slot && entry.source && entry.pinnedDomains?.length) {
+      if (entry.slot?.trim() && entry.source && entry.pinnedDomains?.length) {
         this.entries.set(entry.slot, entry);
       }
     }
@@ -56,8 +56,14 @@ export class CredentialStore {
    * The returned value must NEVER be exposed to the LLM context.
    * It should only be passed directly to Playwright's fill() method.
    */
-  async resolve(params: { slot: string; currentUrl: string; selector: string }): Promise<string> {
-    const { slot, currentUrl, selector } = params;
+  async resolve(params: {
+    slot: string;
+    currentUrl: string;
+    selector: string;
+    /** Which field to fill: "password" (default), "username", or "totp". */
+    field?: "password" | "username" | "totp";
+  }): Promise<string> {
+    const { slot, currentUrl, selector, field = "password" } = params;
 
     const entry = this.entries.get(slot);
     if (!entry) {
@@ -111,18 +117,26 @@ export class CredentialStore {
       );
     }
 
+    const source = this.pickSource(entry, field);
+    if (!source) {
+      this.recordUse(slot, domainCheck.hostname, selector, false, `no ${field} source configured`);
+      throw new CredentialFirewallError(
+        `Credential "${slot}" has no ${field} source configured.`,
+        "RESOLVE_FAILED",
+        { slot, field },
+      );
+    }
+
     let value: string;
     try {
-      value = await this.resolveSecret(entry.source);
+      value = await this.resolveSecret(source);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.recordUse(slot, domainCheck.hostname, selector, false, `resolve failed: ${msg}`);
       throw new CredentialFirewallError(
         `Failed to resolve credential "${slot}": ${msg}`,
         "RESOLVE_FAILED",
-        {
-          slot,
-        },
+        { slot },
       );
     }
 
@@ -140,6 +154,20 @@ export class CredentialStore {
 
   getAuditLog(): readonly CredentialUseRecord[] {
     return this.auditLog;
+  }
+
+  private pickSource(
+    entry: CredentialEntry,
+    field: "password" | "username" | "totp",
+  ): string | undefined {
+    switch (field) {
+      case "password":
+        return entry.source;
+      case "username":
+        return entry.usernameSource;
+      case "totp":
+        return entry.totpSource;
+    }
   }
 
   private recordUse(
