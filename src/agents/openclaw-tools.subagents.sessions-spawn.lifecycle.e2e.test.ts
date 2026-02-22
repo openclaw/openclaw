@@ -151,7 +151,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("sessions_spawn runs cleanup flow after subagent completion", async () => {
