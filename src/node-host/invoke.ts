@@ -35,6 +35,7 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
+const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
   bins: string[];
@@ -457,6 +458,7 @@ export async function handleInvoke(
     sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, result }) => {
       await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
     },
+    preferMacAppExecHost,
   });
 }
 
