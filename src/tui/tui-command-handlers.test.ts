@@ -66,33 +66,11 @@ describe("tui command handlers", () => {
           resolveSend = resolve;
         }),
     );
-    const addUser = vi.fn();
-    const requestRender = vi.fn();
     const setActivityStatus = vi.fn();
 
-    const { handleCommand } = createCommandHandlers({
-      client: { sendChat } as never,
-      chatLog: { addUser, addSystem: vi.fn() } as never,
-      tui: { requestRender } as never,
-      opts: {},
-      state: {
-        currentSessionKey: "agent:main:main",
-        activeChatRunId: null,
-        sessionInfo: {},
-      } as never,
-      deliverDefault: false,
-      openOverlay: vi.fn(),
-      closeOverlay: vi.fn(),
-      refreshSessionInfo: vi.fn(),
-      loadHistory: vi.fn(),
-      setSession: vi.fn(),
-      refreshAgents: vi.fn(),
-      abortActive: vi.fn(),
+    const { handleCommand, requestRender } = createHarness({
+      sendChat,
       setActivityStatus,
-      formatSessionKey: vi.fn(),
-      applySessionInfoFromPatch: vi.fn(),
-      noteLocalRunId: vi.fn(),
-      requestExit: vi.fn(),
     });
 
     const pending = handleCommand("/context");

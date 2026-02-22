@@ -91,27 +91,33 @@ describe("resolveGatewayDisconnectState", () => {
 });
 
 describe("createBackspaceDeduper", () => {
-  it("suppresses duplicate backspace events within the dedupe window", () => {
-    let now = 1000;
+  function createTimedDedupe(start = 1000) {
+    let now = start;
     const dedupe = createBackspaceDeduper({
       dedupeWindowMs: 8,
       now: () => now,
     });
+    return {
+      dedupe,
+      advance: (deltaMs: number) => {
+        now += deltaMs;
+      },
+    };
+  }
+
+  it("suppresses duplicate backspace events within the dedupe window", () => {
+    const { dedupe, advance } = createTimedDedupe();
 
     expect(dedupe("\x7f")).toBe("\x7f");
-    now += 1;
+    advance(1);
     expect(dedupe("\x08")).toBe("");
   });
 
   it("preserves backspace events outside the dedupe window", () => {
-    let now = 1000;
-    const dedupe = createBackspaceDeduper({
-      dedupeWindowMs: 8,
-      now: () => now,
-    });
+    const { dedupe, advance } = createTimedDedupe();
 
     expect(dedupe("\x7f")).toBe("\x7f");
-    now += 10;
+    advance(10);
     expect(dedupe("\x7f")).toBe("\x7f");
   });
 
