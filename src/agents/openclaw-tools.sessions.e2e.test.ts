@@ -749,7 +749,6 @@ describe("sessions tools", () => {
     expect(details.recent).toHaveLength(1);
     expect(details.text).toContain("active subagents:");
     expect(details.text).toContain("recent (last 30m):");
-    resetSubagentRegistryForTests();
   });
 
   it("subagents list usage separates io tokens from prompt/cache", async () => {
@@ -800,7 +799,6 @@ describe("sessions tools", () => {
       expect(details.text).not.toContain("1.0k io");
     } finally {
       loadSessionStoreSpy.mockRestore();
-      resetSubagentRegistryForTests();
     }
   });
 
@@ -883,7 +881,6 @@ describe("sessions tools", () => {
       expect(trackedRuns[0].endedAt).toBeUndefined();
     } finally {
       loadSessionStoreSpy.mockRestore();
-      resetSubagentRegistryForTests();
     }
   });
 
@@ -928,8 +925,6 @@ describe("sessions tools", () => {
     expect(details.status).toBe("ok");
     expect(details.runId).toBe("run-active");
     expect(details.text).toContain("killed");
-
-    resetSubagentRegistryForTests();
   });
 
   it("subagents kill stops a running run", async () => {
@@ -960,7 +955,6 @@ describe("sessions tools", () => {
     const details = result.details as { status?: string; text?: string };
     expect(details.status).toBe("ok");
     expect(details.text).toContain("killed");
-    resetSubagentRegistryForTests();
   });
 
   it("subagents kill-all cascades through ended parents to active descendants", async () => {
@@ -1011,6 +1005,5 @@ describe("sessions tools", () => {
     const descendants = listSubagentRunsForRequester(endedParentKey);
     const worker = descendants.find((entry) => entry.runId === "run-worker-active");
     expect(worker?.endedAt).toBeTypeOf("number");
-    resetSubagentRegistryForTests();
   });
 });
