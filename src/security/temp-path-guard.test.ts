@@ -136,23 +136,15 @@ function prefilterLikelyTmpdirJoinFiles(root: string): Set<string> | null {
     "!**/*.d.ts",
     "--no-messages",
   ];
-  const joined = spawnSync("rg", [...commonArgs, "path\\.join", root], { encoding: "utf8" });
-  if (joined.error || (joined.status !== 0 && joined.status !== 1)) {
+  const candidateCall = spawnSync(
+    "rg",
+    [...commonArgs, "path\\s*\\.\\s*join\\s*\\(\\s*os\\s*\\.\\s*tmpdir\\s*\\(", root],
+    { encoding: "utf8" },
+  );
+  if (candidateCall.error || (candidateCall.status !== 0 && candidateCall.status !== 1)) {
     return null;
   }
-  const tmpdir = spawnSync("rg", [...commonArgs, "os\\.tmpdir", root], { encoding: "utf8" });
-  if (tmpdir.error || (tmpdir.status !== 0 && tmpdir.status !== 1)) {
-    return null;
-  }
-  const joinMatches = parsePathList(joined.stdout);
-  const tmpdirMatches = parsePathList(tmpdir.stdout);
-  const intersection = new Set<string>();
-  for (const file of joinMatches) {
-    if (tmpdirMatches.has(file)) {
-      intersection.add(file);
-    }
-  }
-  return intersection;
+  return parsePathList(candidateCall.stdout);
 }
 
 describe("temp path guard", () => {
