@@ -233,7 +233,7 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
-describe.concurrent("runEmbeddedPiAgent", () => {
+describe("runEmbeddedPiAgent", () => {
   it("handles prompt error paths without dropping user state", async () => {
     for (const testCase of [
       {
