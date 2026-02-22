@@ -8,9 +8,10 @@ import {
 import {
   applyQueueRuntimeSettings,
   applyQueueDropPolicy,
+  beginQueueDrain,
   buildCollectPrompt,
   clearQueueSummaryState,
-  drainCollectItemIfNeeded,
+  drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
@@ -97,33 +98,35 @@ function getAnnounceQueue(
   return created;
 }
 
+function hasAnnounceCrossChannelItems(items: AnnounceQueueItem[]): boolean {
+  return hasCrossChannelItems(items, (item) => {
+    if (!item.origin) {
+      return {};
+    }
+    if (!item.originKey) {
+      return { cross: true };
+    }
+    return { key: item.originKey };
+  });
+}
+
 function scheduleAnnounceDrain(key: string) {
-  const queue = ANNOUNCE_QUEUES.get(key);
-  if (!queue || queue.draining) {
+  const queue = beginQueueDrain(ANNOUNCE_QUEUES, key);
+  if (!queue) {
     return;
   }
-  queue.draining = true;
   void (async () => {
     try {
-      let forceIndividualCollect = false;
-      while (queue.items.length > 0 || queue.droppedCount > 0) {
+      const collectState = { forceIndividualCollect: false };
+      for (;;) {
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
-          const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
-            if (!item.origin) {
-              return {};
-            }
-            if (!item.originKey) {
-              return { cross: true };
-            }
-            return { key: item.originKey };
-          });
-          const collectDrainResult = await drainCollectItemIfNeeded({
-            forceIndividualCollect,
-            isCrossChannel,
-            setForceIndividualCollect: (next) => {
-              forceIndividualCollect = next;
-            },
+          const collectDrainResult = await drainCollectQueueStep({
+            collectState,
+            isCrossChannel: hasAnnounceCrossChannelItems(queue.items),
             items: queue.items,
             run: async (item) => await queue.send(item),
           });
