@@ -4,6 +4,7 @@ import { createInternalHookEventPayload } from "../../test-utils/internal-hook-e
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { parseRoutingAddress, toCanonicalAddress } from "./dispatch-from-config.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
@@ -414,12 +415,12 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: ctx.From,
+        from: "whatsapp:user:+1000",
         content: "/search hello",
         timestamp: 1710000000000,
         metadata: expect.objectContaining({
           originatingChannel: "Telegram",
-          originatingTo: "telegram:999",
+          originatingTo: "telegram:user:999",
           messageId: "sid-full",
           senderId: "user-1",
           senderName: "Alice",
@@ -430,7 +431,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         channelId: "telegram",
         accountId: "acc-1",
-        conversationId: "telegram:999",
+        conversationId: "telegram:user:999",
       }),
     );
   });
@@ -512,6 +513,89 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("normalizes Discord guild message to canonical discord:channel:id format", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:1467101506506592472",
+      From: "discord:channel:1467101506506592472",
+      To: "channel:1467101506506592472",
+      SenderId: "123456789",
+      SenderName: "TestUser",
+      SenderUsername: "testuser",
+      GroupSpace: "1466669509090869250",
+      GroupChannel: "ops-openclaw",
+      AccountId: "bot-1",
+      Body: "hello",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "discord:channel:1467101506506592472",
+        metadata: expect.objectContaining({
+          to: "discord:channel:1467101506506592472",
+          originatingTo: "discord:channel:1467101506506592472",
+          senderId: "123456789",
+          guildId: "1466669509090869250",
+          channelName: "ops-openclaw",
+        }),
+      }),
+      expect.objectContaining({
+        channelId: "discord",
+        accountId: "bot-1",
+        conversationId: "discord:channel:1467101506506592472",
+      }),
+    );
+  });
+
+  it("normalizes Discord DM to canonical discord:user:id format", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      OriginatingChannel: "discord",
+      OriginatingTo: "user:987654321",
+      From: "discord:987654321",
+      To: "user:987654321",
+      Body: "hello",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "discord:user:987654321",
+        metadata: expect.objectContaining({
+          to: "discord:user:987654321",
+          originatingTo: "discord:user:987654321",
+        }),
+      }),
+      expect.objectContaining({
+        conversationId: "discord:user:987654321",
+      }),
+    );
+  });
+
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -537,5 +621,176 @@ describe("dispatchReplyFromConfig", () => {
         reason: "duplicate",
       }),
     );
+  });
+});
+
+describe("parseRoutingAddress", () => {
+  it("parses provider:kind:id (discord:channel:123)", () => {
+    expect(parseRoutingAddress("discord:channel:123")).toEqual({
+      provider: "discord",
+      kind: "channel",
+      id: "123",
+    });
+  });
+
+  it("parses provider:kind:id (signal:group:abc)", () => {
+    expect(parseRoutingAddress("signal:group:abc123")).toEqual({
+      provider: "signal",
+      kind: "group",
+      id: "abc123",
+    });
+  });
+
+  it("parses provider:id (telegram:999)", () => {
+    expect(parseRoutingAddress("telegram:999")).toEqual({
+      provider: "telegram",
+      id: "999",
+    });
+  });
+
+  it("parses provider:id (whatsapp:+15555550123)", () => {
+    expect(parseRoutingAddress("whatsapp:+15555550123")).toEqual({
+      provider: "whatsapp",
+      id: "+15555550123",
+    });
+  });
+
+  it("parses kind:id (channel:123)", () => {
+    expect(parseRoutingAddress("channel:123")).toEqual({
+      kind: "channel",
+      id: "123",
+    });
+  });
+
+  it("parses kind:id (user:456)", () => {
+    expect(parseRoutingAddress("user:456")).toEqual({
+      kind: "user",
+      id: "456",
+    });
+  });
+
+  it("parses kind:id (group:abc)", () => {
+    expect(parseRoutingAddress("group:abc123")).toEqual({
+      kind: "group",
+      id: "abc123",
+    });
+  });
+
+  it("parses bare id (snowflake)", () => {
+    expect(parseRoutingAddress("1467101506506592472")).toEqual({
+      id: "1467101506506592472",
+    });
+  });
+
+  it("parses bare id with special chars (WhatsApp JID)", () => {
+    expect(parseRoutingAddress("123@g.us")).toEqual({
+      id: "123@g.us",
+    });
+  });
+
+  it("preserves colons in id (matrix room)", () => {
+    expect(parseRoutingAddress("room:!abc:matrix.org")).toEqual({
+      kind: "room",
+      id: "!abc:matrix.org",
+    });
+  });
+
+  it("handles empty string", () => {
+    expect(parseRoutingAddress("")).toEqual({ id: "" });
+  });
+});
+
+describe("toCanonicalAddress", () => {
+  it("builds discord:channel:id from channel: prefix", () => {
+    expect(toCanonicalAddress("channel:123", { provider: "discord" })).toBe("discord:channel:123");
+  });
+
+  it("builds discord:user:id from user: prefix", () => {
+    expect(toCanonicalAddress("user:987", { provider: "discord" })).toBe("discord:user:987");
+  });
+
+  it("preserves already-canonical discord:channel:id", () => {
+    expect(toCanonicalAddress("discord:channel:123", { provider: "discord" })).toBe(
+      "discord:channel:123",
+    );
+  });
+
+  it("builds telegram:user:id for DM", () => {
+    expect(toCanonicalAddress("telegram:999", { provider: "telegram", chatType: "direct" })).toBe(
+      "telegram:user:999",
+    );
+  });
+
+  it("builds telegram:group:id for group", () => {
+    expect(toCanonicalAddress("telegram:999", { provider: "telegram", chatType: "group" })).toBe(
+      "telegram:group:999",
+    );
+  });
+
+  it("builds whatsapp:user:id for DM", () => {
+    expect(
+      toCanonicalAddress("whatsapp:+15555550123", { provider: "whatsapp", chatType: "direct" }),
+    ).toBe("whatsapp:user:+15555550123");
+  });
+
+  it("builds whatsapp:group:id from raw JID", () => {
+    expect(toCanonicalAddress("123@g.us", { provider: "whatsapp", chatType: "group" })).toBe(
+      "whatsapp:group:123@g.us",
+    );
+  });
+
+  it("builds signal:user:id for DM", () => {
+    expect(
+      toCanonicalAddress("signal:+15555550123", { provider: "signal", chatType: "direct" }),
+    ).toBe("signal:user:+15555550123");
+  });
+
+  it("builds signal:group:id from group: prefix", () => {
+    expect(toCanonicalAddress("group:abc123", { provider: "signal" })).toBe("signal:group:abc123");
+  });
+
+  it("builds slack:channel:id from channel: prefix", () => {
+    expect(toCanonicalAddress("channel:C123", { provider: "slack", chatType: "channel" })).toBe(
+      "slack:channel:C123",
+    );
+  });
+
+  it("builds imessage:user:id for DM", () => {
+    expect(
+      toCanonicalAddress("imessage:sender", { provider: "imessage", chatType: "direct" }),
+    ).toBe("imessage:user:sender");
+  });
+
+  it("defaults kind to user when chatType is missing", () => {
+    expect(toCanonicalAddress("telegram:999", { provider: "telegram" })).toBe("telegram:user:999");
+  });
+
+  it("defaults provider to unknown when context is empty", () => {
+    expect(toCanonicalAddress("123456789", {})).toBe("unknown:user:123456789");
+  });
+
+  it("returns undefined for null/undefined", () => {
+    expect(toCanonicalAddress(null, { provider: "discord" })).toBeUndefined();
+    expect(toCanonicalAddress(undefined, { provider: "discord" })).toBeUndefined();
+  });
+
+  it("returns undefined for empty/whitespace string", () => {
+    expect(toCanonicalAddress("", { provider: "discord" })).toBeUndefined();
+    expect(toCanonicalAddress("   ", { provider: "discord" })).toBeUndefined();
+  });
+
+  it("preserves existing canonical format idempotently", () => {
+    expect(
+      toCanonicalAddress("discord:channel:123", { provider: "discord", chatType: "channel" }),
+    ).toBe("discord:channel:123");
+    expect(
+      toCanonicalAddress("telegram:group:999", { provider: "telegram", chatType: "group" }),
+    ).toBe("telegram:group:999");
+    expect(
+      toCanonicalAddress("whatsapp:user:+15555550123", {
+        provider: "whatsapp",
+        chatType: "direct",
+      }),
+    ).toBe("whatsapp:user:+15555550123");
   });
 });

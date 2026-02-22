@@ -19,6 +19,121 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
+/**
+ * Known platform providers in OpenClaw routing addresses.
+ */
+const KNOWN_PROVIDERS: ReadonlySet<string> = new Set([
+  "discord",
+  "telegram",
+  "whatsapp",
+  "slack",
+  "signal",
+  "imessage",
+  "tlon",
+  "matrix",
+  "web",
+]);
+
+/**
+ * Known kind segments in routing addresses.
+ */
+const KNOWN_KINDS: ReadonlySet<string> = new Set(["channel", "user", "group", "room"]);
+
+type ParsedAddress = {
+  provider?: string;
+  kind?: string;
+  id: string;
+};
+
+/**
+ * Parse a raw OpenClaw routing address into its constituent parts.
+ *
+ * Recognized patterns (tested in order):
+ *   `<provider>:<kind>:<id>`  — e.g. `"discord:channel:123"`
+ *   `<provider>:<id>`         — e.g. `"telegram:999"`
+ *   `<kind>:<id>`             — e.g. `"channel:123"`, `"user:456"`
+ *   `<id>`                    — e.g. `"123@g.us"`, bare snowflake
+ */
+export function parseRoutingAddress(raw: string): ParsedAddress {
+  const firstColon = raw.indexOf(":");
+  if (firstColon === -1) {
+    return { id: raw };
+  }
+
+  const head = raw.slice(0, firstColon).toLowerCase();
+  const tail = raw.slice(firstColon + 1);
+
+  if (KNOWN_PROVIDERS.has(head)) {
+    const secondColon = tail.indexOf(":");
+    if (secondColon !== -1) {
+      const head2 = tail.slice(0, secondColon).toLowerCase();
+      const tail2 = tail.slice(secondColon + 1);
+      if (KNOWN_KINDS.has(head2) && tail2) {
+        return { provider: head, kind: head2, id: tail2 };
+      }
+    }
+    if (tail) {
+      return { provider: head, id: tail };
+    }
+    return { id: raw };
+  }
+
+  if (KNOWN_KINDS.has(head) && tail) {
+    return { kind: head, id: tail };
+  }
+
+  return { id: raw };
+}
+
+/** Map ChatType to canonical kind segment. */
+function chatTypeToKind(chatType: string | undefined): string {
+  switch (chatType) {
+    case "channel":
+      return "channel";
+    case "group":
+      return "group";
+    case "direct":
+    default:
+      return "user";
+  }
+}
+
+/**
+ * Convert a raw routing address to canonical `<provider>:<kind>:<id>` format.
+ *
+ * The canonical format ensures consistent identifiers for hook consumers
+ * regardless of which platform or routing path produced the address:
+ *   - `discord:channel:1467101506506592472`
+ *   - `telegram:user:999`
+ *   - `whatsapp:group:123@g.us`
+ *
+ * This mirrors the format used by `resolveGroupSessionKey` in session routing.
+ * Falls back to context (platform provider, chat type) for any missing parts.
+ */
+export function toCanonicalAddress(
+  raw: unknown,
+  context: { provider?: string; chatType?: string },
+): string | undefined {
+  if (raw == null || (typeof raw !== "string" && typeof raw !== "number")) {
+    return undefined;
+  }
+  const trimmed = String(raw).trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = parseRoutingAddress(trimmed);
+  const provider = (parsed.provider || context.provider || "unknown").toLowerCase();
+  const kind = (parsed.kind ?? chatTypeToKind(context.chatType)).toLowerCase();
+  const id = parsed.id;
+
+  if (!id) {
+    return undefined;
+  }
+
+  return `${provider}:${kind}:${id}`;
+}
+
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 
@@ -164,28 +279,36 @@ export async function dispatchReplyFromConfig(params: {
           ? ctx.Body
           : "";
   const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
-  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const canonicalCtx = { provider: channelId, chatType: ctx.ChatType };
+  const conversationId = toCanonicalAddress(
+    ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined,
+    canonicalCtx,
+  );
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
     void hookRunner
       .runMessageReceived(
         {
-          from: ctx.From ?? "",
+          from: ctx.From ? (toCanonicalAddress(ctx.From, canonicalCtx) ?? ctx.From) : "",
           content,
           timestamp,
           metadata: {
-            to: ctx.To,
+            to: ctx.To ? toCanonicalAddress(ctx.To, canonicalCtx) : ctx.To,
             provider: ctx.Provider,
             surface: ctx.Surface,
             threadId: ctx.MessageThreadId,
             originatingChannel: ctx.OriginatingChannel,
-            originatingTo: ctx.OriginatingTo,
+            originatingTo: ctx.OriginatingTo
+              ? toCanonicalAddress(ctx.OriginatingTo, canonicalCtx)
+              : ctx.OriginatingTo,
             messageId: messageIdForHook,
             senderId: ctx.SenderId,
             senderName: ctx.SenderName,
             senderUsername: ctx.SenderUsername,
             senderE164: ctx.SenderE164,
+            guildId: ctx.GroupSpace,
+            channelName: ctx.GroupChannel,
           },
         },
         {
