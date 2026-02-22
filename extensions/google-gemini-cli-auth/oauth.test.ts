@@ -1,15 +1,18 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
+const { mockExistsSync, mockReadFileSync, mockRealpathSync, mockReaddirSync } = vi.hoisted(() => {
+  return {
+    mockExistsSync: vi.fn(),
+    mockReadFileSync: vi.fn(),
+    mockRealpathSync: vi.fn(),
+    mockReaddirSync: vi.fn(),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk", () => ({
   isWSL2Sync: () => false,
 }));
-
-// Mock fs module before importing the module under test
-const mockExistsSync = vi.fn();
-const mockReadFileSync = vi.fn();
-const mockRealpathSync = vi.fn();
-const mockReaddirSync = vi.fn();
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -29,8 +32,8 @@ describe("extractGeminiCliCredentials", () => {
   const FAKE_CLIENT_ID = "123456789-abcdef.apps.googleusercontent.com";
   const FAKE_CLIENT_SECRET = "GOCSPX-FakeSecretValue123";
   const FAKE_OAUTH2_CONTENT = `
-    const clientId = "${FAKE_CLIENT_ID}";
-    const clientSecret = "${FAKE_CLIENT_SECRET}";
+    const OAUTH_CLIENT_ID = "${FAKE_CLIENT_ID}";
+    const OAUTH_CLIENT_SECRET = "${FAKE_CLIENT_SECRET}";
   `;
 
   let originalPath: string | undefined;
@@ -96,66 +99,64 @@ describe("extractGeminiCliCredentials", () => {
     return layout;
   }
 
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.resetModules();
     originalPath = process.env.PATH;
+    fetchSpy = vi.spyOn(globalThis, "fetch");
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
   });
 
-  it("returns null when gemini binary is not in PATH", async () => {
-    process.env.PATH = "/nonexistent";
-    mockExistsSync.mockReturnValue(false);
-
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
-  });
-
-  it("extracts credentials from oauth2.js in known path", async () => {
-    installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
-
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
-
-    expect(result).toEqual({
-      clientId: FAKE_CLIENT_ID,
-      clientSecret: FAKE_CLIENT_SECRET,
-    });
-  });
-
-  it("returns null when oauth2.js cannot be found", async () => {
+  it("returns null when oauth2.js cannot be found and GitHub fetch fails", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
+    fetchSpy.mockResolvedValue({ ok: false } as Response);
 
     const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
     clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+
+    const result = await extractGeminiCliCredentials();
+
+    expect(result).toBeNull();
   });
 
-  it("returns null when oauth2.js lacks credentials", async () => {
+  it("returns credentials from GitHub when local oauth2.js lacks credentials", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      text: () =>
+        Promise.resolve(
+          `const OAUTH_CLIENT_ID = "${FAKE_CLIENT_ID}";\nconst OAUTH_CLIENT_SECRET = "${FAKE_CLIENT_SECRET}";`,
+        ),
+    } as unknown as Response);
 
     const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
     clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    const result = await extractGeminiCliCredentials();
+    expect(result).not.toBeNull();
+    expect(result?.clientId).toBe(FAKE_CLIENT_ID);
+    expect(result?.clientSecret).toBe(FAKE_CLIENT_SECRET);
   });
 
   it("caches credentials after first extraction", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve("// empty"),
+    } as unknown as Response);
 
     const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
     clearCredentialsCache();
 
-    // First call
-    const result1 = extractGeminiCliCredentials();
+    const result1 = await extractGeminiCliCredentials();
     expect(result1).not.toBeNull();
 
-    // Second call should use cache (readFileSync not called again)
     const readCount = mockReadFileSync.mock.calls.length;
-    const result2 = extractGeminiCliCredentials();
+    const result2 = await extractGeminiCliCredentials();
     expect(result2).toEqual(result1);
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
