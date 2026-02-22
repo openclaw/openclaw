@@ -1,6 +1,6 @@
 export const MAX_IMAGE_BYTES = 6 * 1024 * 1024; // 6MB
 export const MAX_AUDIO_BYTES = 16 * 1024 * 1024; // 16MB
-export const MAX_VIDEO_BYTES = 16 * 1024 * 1024; // 16MB
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50MB (Telegram bot API limit; per-channel overrides apply via maxBytes)
 export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024; // 100MB
 
 export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
