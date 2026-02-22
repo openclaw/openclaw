@@ -126,6 +126,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     lastPartial = "";
   };
 
+  /** Discard (delete) the streaming card without finalizing content. */
+  const discardStreaming = async () => {
+    if (streamingStartPromise) {
+      await streamingStartPromise;
+    }
+    await partialUpdateQueue;
+    if (streaming?.isActive()) {
+      await streaming.discard();
+    }
+    streaming = null;
+    streamingStartPromise = null;
+    streamText = "";
+    lastPartial = "";
+  };
+
   /** Send text via streaming, card, or plain message. Returns true if streaming handled it. */
   const sendTextPayload = async (
     text: string,
@@ -204,11 +219,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // replying to the media message (mirrors Telegram's caption-on-media pattern).
         // If all media sends fail, fall back to normal text delivery.
         if (mediaList.length > 0) {
-          // Close streaming card before sending media to ensure proper message ordering.
-          // Also await any pending stream startup to prevent a late card after media.
+          // Discard (delete) any active/pending streaming card before sending media
+          // to avoid duplicate text or stray placeholder cards.
           if (streaming?.isActive() || streamingStartPromise) {
-            streamText = text;
-            await closeStreaming();
+            await discardStreaming();
           }
           let lastMediaMessageId: string | undefined;
           let mediaDelivered = false;
