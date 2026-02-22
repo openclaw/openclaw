@@ -37,6 +37,8 @@ describe("trigger handling", () => {
   it("runs /compact as a gated command", async () => {
     await withTempHome(async (home) => {
       const storePath = join(tmpdir(), `openclaw-session-test-${Date.now()}.json`);
+      const cfg = makeCfg(home);
+      cfg.session = { ...cfg.session, store: storePath };
       mockSuccessfulCompaction();
 
       const res = await getReplyFromConfig(
@@ -47,22 +49,7 @@ describe("trigger handling", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: join(home, "openclaw"),
-            },
-          },
-          channels: {
-            whatsapp: {
-              allowFrom: ["*"],
-            },
-          },
-          session: {
-            store: storePath,
-          },
-        },
+        cfg,
       );
       const text = replyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
