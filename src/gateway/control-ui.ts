@@ -99,6 +99,12 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
