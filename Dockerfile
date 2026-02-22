@@ -16,7 +16,27 @@ RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
-
+    
+# Optional: Install official Docker CLI from Docker's apt repository
+# Enable with: --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1
+ARG OPENCLAW_INSTALL_DOCKER_CLI=""
+RUN if [ "$OPENCLAW_INSTALL_DOCKER_CLI" = "1" ]; then \
+      echo "Installing official docker-ce-cli..." && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
+      install -m 0755 -d /etc/apt/keyrings && \
+      curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+      chmod a+r /etc/apt/keyrings/docker.asc && \
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+        bookworm stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends docker-ce-cli && \
+      rm -rf /var/lib/apt/lists/* && \
+      apt-get clean && \
+      echo "docker-ce-cli installed successfully"; \
+    fi
+    
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
