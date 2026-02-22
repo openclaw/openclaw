@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry } from "./session-files.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildSessionEntry,
+  isIndexableSessionTranscriptFileName,
+  listSessionFilesForAgent,
+} from "./session-files.js";
 
 describe("buildSessionEntry", () => {
   let tmpDir: string;
@@ -12,6 +16,7 @@ describe("buildSessionEntry", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -83,5 +88,38 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
     expect(entry!.lineMap).toEqual([3, 5]);
+  });
+
+  it("identifies indexable transcript file names", () => {
+    expect(isIndexableSessionTranscriptFileName("abc.jsonl")).toBe(true);
+    expect(isIndexableSessionTranscriptFileName("abc.jsonl.reset.2026-02-14T19-44-05.473Z")).toBe(
+      true,
+    );
+    expect(isIndexableSessionTranscriptFileName("abc.jsonl.deleted.2026-02-16T10-46-16.541Z")).toBe(
+      true,
+    );
+    expect(isIndexableSessionTranscriptFileName("abc.jsonl.bak.2026-02-16T10-46-16.541Z")).toBe(
+      false,
+    );
+    expect(isIndexableSessionTranscriptFileName("abc.md")).toBe(false);
+  });
+
+  it("lists active, reset, and deleted transcript files for an agent", async () => {
+    const stateDir = path.join(tmpDir, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(path.join(sessionsDir, "active.jsonl"), "");
+    await fs.writeFile(path.join(sessionsDir, "archived.jsonl.reset.2026-02-14T19-44-05.473Z"), "");
+    await fs.writeFile(path.join(sessionsDir, "pruned.jsonl.deleted.2026-02-16T10-46-16.541Z"), "");
+    await fs.writeFile(path.join(sessionsDir, "ignored.jsonl.bak.2026-02-16T10-46-16.541Z"), "");
+    await fs.writeFile(path.join(sessionsDir, "ignored.md"), "");
+
+    const files = await listSessionFilesForAgent("main");
+    expect(files.map((file) => path.basename(file)).toSorted()).toEqual([
+      "active.jsonl",
+      "archived.jsonl.reset.2026-02-14T19-44-05.473Z",
+      "pruned.jsonl.deleted.2026-02-16T10-46-16.541Z",
+    ]);
   });
 });

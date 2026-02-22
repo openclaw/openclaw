@@ -8,6 +8,7 @@ import {
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -165,6 +166,9 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   const ts = new Date().toISOString().replaceAll(":", "-");
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
+  if (reason === "reset" || reason === "deleted") {
+    emitSessionTranscriptUpdate(archived);
+  }
   return archived;
 }
 

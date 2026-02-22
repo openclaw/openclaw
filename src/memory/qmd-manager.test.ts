@@ -1668,14 +1668,32 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("reuses exported session markdown files when inputs are unchanged", async () => {
+  it("reuses exported session markdown files for active and archived sessions", async () => {
     const writeFileSpy = vi.spyOn(fs, "writeFile");
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const resetSessionFile = path.join(
+      sessionsDir,
+      "session-1.jsonl.reset.2026-02-14T19-44-05.473Z",
+    );
+    const deletedSessionFile = path.join(
+      sessionsDir,
+      "session-2.jsonl.deleted.2026-02-16T10-46-16.541Z",
+    );
     await fs.writeFile(
       sessionFile,
       '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      resetSessionFile,
+      '{"type":"message","message":{"role":"assistant","content":"reset snapshot"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      deletedSessionFile,
+      '{"type":"message","message":{"role":"user","content":"deleted snapshot"}}\n',
       "utf-8",
     );
 
@@ -1698,14 +1716,14 @@ describe("QmdMemoryManager", () => {
     const reasonCount = writeFileSpy.mock.calls.length;
     await manager.sync({ reason: "manual" });
     const firstExportWrites = writeFileSpy.mock.calls.length;
-    expect(firstExportWrites).toBe(reasonCount + 1);
+    expect(firstExportWrites).toBe(reasonCount + 3);
 
     await manager.sync({ reason: "manual" });
     expect(writeFileSpy.mock.calls.length).toBe(firstExportWrites);
 
     await fs.writeFile(
-      sessionFile,
-      '{"type":"message","message":{"role":"user","content":"follow-up update"}}\n',
+      resetSessionFile,
+      '{"type":"message","message":{"role":"assistant","content":"follow-up update"}}\n',
       "utf-8",
     );
     await manager.sync({ reason: "manual" });
