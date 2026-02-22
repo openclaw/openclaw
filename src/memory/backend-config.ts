@@ -8,6 +8,7 @@ import type {
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
+  MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../config/types.memory.js";
 import { resolveUserPath } from "../utils.js";
@@ -50,8 +51,15 @@ export type ResolvedQmdSessionConfig = {
   retentionDays?: number;
 };
 
+export type ResolvedQmdMcporterConfig = {
+  enabled: boolean;
+  serverName: string;
+  startDaemon: boolean;
+};
+
 export type ResolvedQmdConfig = {
   command: string;
+  mcporter: ResolvedQmdMcporterConfig;
   searchMode: MemoryQmdSearchMode;
   collections: ResolvedQmdCollection[];
   sessions: ResolvedQmdSessionConfig;
@@ -79,6 +87,12 @@ const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxInjectedChars: 4_000,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
+const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
+  enabled: false,
+  serverName: "qmd",
+  startDaemon: true,
+};
+
 const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
   default: "deny",
   rules: [
@@ -237,6 +251,27 @@ function resolveCustomPaths(
   return collections;
 }
 
+function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcporterConfig {
+  const parsed: ResolvedQmdMcporterConfig = { ...DEFAULT_QMD_MCPORTER };
+  if (!raw) {
+    return parsed;
+  }
+  if (raw.enabled !== undefined) {
+    parsed.enabled = raw.enabled;
+  }
+  if (typeof raw.serverName === "string" && raw.serverName.trim()) {
+    parsed.serverName = raw.serverName.trim();
+  }
+  if (raw.startDaemon !== undefined) {
+    parsed.startDaemon = raw.startDaemon;
+  }
+  // When enabled, default startDaemon to true.
+  if (parsed.enabled && raw.startDaemon === undefined) {
+    parsed.startDaemon = true;
+  }
+  return parsed;
+}
+
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -283,6 +318,7 @@ export function resolveMemoryBackendConfig(params: {
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
+    mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
     searchMode: resolveSearchMode(qmdCfg?.searchMode),
     collections,
     includeDefaultMemory,

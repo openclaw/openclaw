@@ -27,7 +27,7 @@ openclaw plugins install ./extensions/twitch
 
 Details: [Plugins](/tools/plugin)
 
-## Onboarding
+## Quick setup (beginner)
 
 1. Create a dedicated Twitch account for the bot (or use an existing account).
 2. Generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)

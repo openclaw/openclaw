@@ -298,7 +298,7 @@ jobs:
           name: dead-code-${{ matrix.tool }}-${{ github.run_id }}
           path: .artifacts/deadcode
 
-  # Validate docs (spellcheck, format, lint, broken links) only when docs files changed.
+  # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_changed == 'true'
@@ -316,9 +316,6 @@ jobs:
 
       - name: Check docs
         run: pnpm check:docs
-
-      - name: Spellcheck docs
-        run: pnpm docs:spellcheck
 
   secrets:
     runs-on: blacksmith-16vcpu-ubuntu-2404

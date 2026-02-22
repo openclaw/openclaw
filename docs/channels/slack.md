@@ -21,7 +21,7 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
   </Card>
 </CardGroup>
 
-## Onboarding
+## Quick setup
 
 <Tabs>
   <Tab title="Socket Mode (default)">
@@ -465,13 +465,28 @@ openclaw pairing list slack
 
 OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
 
-By default, streaming is enabled. Disable it per account:
+`channels.slack.streaming` controls live preview behavior:
+
+- `off`: disable live preview streaming.
+- `partial` (default): replace preview text with the latest partial output.
+- `block`: append chunked preview updates.
+- `progress`: show progress status text while generating, then send final text.
+
+`channels.slack.nativeStreaming` controls Slack's native streaming API (`chat.startStream` / `chat.appendStream` / `chat.stopStream`) when `streaming` is `partial` (default: `true`).
+
+Disable native Slack streaming (keep draft preview behavior):
 
 ```yaml
 channels:
   slack:
-    streaming: false
+    streaming: partial
+    nativeStreaming: false
 ```
+
+Legacy keys:
+
+- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
+- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
 
 ### Requirements
 
@@ -487,7 +502,7 @@ channels:
 - Media and non-text payloads fall back to normal delivery.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
-## Configuration
+## Configuration reference pointers
 
 Primary reference:
 
@@ -498,7 +513,7 @@ Primary reference:
   - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Related

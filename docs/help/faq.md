@@ -348,7 +348,7 @@ The wizard opens your browser with a clean (non-tokenized) dashboard URL right a
 
 **Not on localhost:**
 
-- **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy auth (no token).
+- **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no token, assumes trusted gateway host); HTTP APIs still require token/password.
 - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"`, open `http://<tailscale-ip>:18789/`, paste token in dashboard settings.
 - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/` and paste the token in Control UI settings.
 
@@ -1037,6 +1037,26 @@ Token tip: long tasks and sub-agents both consume tokens. If cost is a concern, 
 cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
 Docs: [Sub-agents](/tools/subagents).
+
+### How do thread-bound subagent sessions work on Discord
+
+Use thread bindings. You can bind a Discord thread to a subagent or session target so follow-up messages in that thread stay on that bound session.
+
+Basic flow:
+
+- Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"` for persistent follow-up).
+- Or manually bind with `/focus <target>`.
+- Use `/agents` to inspect binding state.
+- Use `/session ttl <duration|off>` to control auto-unfocus.
+- Use `/unfocus` to detach the thread.
+
+Required config:
+
+- Global defaults: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`.
+- Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`.
+- Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
+
+Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
 
 ### Cron or reminders do not fire What should I check
 

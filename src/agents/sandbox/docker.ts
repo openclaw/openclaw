@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -114,6 +115,8 @@ import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
+const log = createSubsystemLogger("docker");
+
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
 export type ExecDockerOptions = ExecDockerRawOptions;
@@ -143,6 +146,25 @@ export async function readDockerContainerLabel(
     return null;
   }
   return raw;
+}
+
+export async function readDockerContainerEnvVar(
+  containerName: string,
+  envVar: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.startsWith(`${envVar}=`)) {
+      return line.slice(envVar.length + 1);
+    }
+  }
+  return null;
 }
 
 export async function readDockerPort(containerName: string, port: number) {
@@ -272,13 +294,10 @@ export function buildSandboxCreateArgs(params: {
   }
   const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
   if (envSanitization.blocked.length > 0) {
-    console.warn(
-      "[Security] Blocked sensitive environment variables:",
-      envSanitization.blocked.join(", "),
-    );
+    log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
   }
   if (envSanitization.warnings.length > 0) {
-    console.warn("[Security] Suspicious environment variables:", envSanitization.warnings);
+    log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);
   }
   for (const [key, value] of Object.entries(envSanitization.allowed)) {
     args.push("--env", `${key}=${value}`);
