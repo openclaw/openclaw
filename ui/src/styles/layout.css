@@ -842,54 +842,10 @@
   .shell {
     --shell-pad: 12px;
     --shell-gap: 12px;
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
-    grid-template-areas:
-      "topbar"
-      "nav"
-      "content";
-  }
-
-  .sidebar {
-    position: static;
-    max-height: none;
-    display: flex;
-    flex-direction: row;
-    gap: 6px;
-    overflow-x: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .sidebar-header {
-    display: none;
-  }
-
-  .sidebar-footer {
-    display: none;
-  }
-
-  .sidebar-nav {
-    display: flex;
-    flex-direction: row;
-    gap: 6px;
-    padding: 10px 14px;
-    overflow-x: auto;
-  }
-
-  .nav-group {
-    grid-auto-flow: column;
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-    margin-bottom: 0;
-  }
-
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
+    --shell-nav-width: 200px;
   }
 
   .topbar {
-    position: static;
     padding: 12px 14px;
     gap: 10px;
   }
@@ -900,6 +856,11 @@
 
   .topbar-status {
     flex-wrap: nowrap;
+  }
+
+  .grid-cols-2,
+  .grid-cols-3 {
+    grid-template-columns: 1fr;
   }
 
   .table-head,
