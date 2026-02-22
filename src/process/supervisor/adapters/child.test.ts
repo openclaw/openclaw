@@ -54,8 +54,8 @@ describe("createChildAdapter", () => {
   });
 
   beforeEach(() => {
-    spawnWithFallbackMock.mockReset();
-    killProcessTreeMock.mockReset();
+    spawnWithFallbackMock.mockClear();
+    killProcessTreeMock.mockClear();
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
