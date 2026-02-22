@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from plugins.serial_adapter.plugin import SerialAdapter
+try:
+    from plugins.serial_adapter.plugin import SerialAdapter
+except ImportError:
+    import sys
+    import os
+
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from plugins.serial_adapter.plugin import SerialAdapter
 
 
 class _FakeSerial:
