@@ -46,7 +46,7 @@ function isDynamicTemplateSegment(node: ts.Expression): boolean {
 }
 
 function mightContainDynamicTmpdirJoin(source: string): boolean {
-  return source.includes("path.join") && source.includes("os.tmpdir") && source.includes("`");
+  return source.includes("path.join") && source.includes("os.tmpdir") && source.includes("${");
 }
 
 function hasDynamicTmpdirJoin(source: string, filePath = "fixture.ts"): boolean {
