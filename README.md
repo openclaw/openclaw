@@ -32,9 +32,32 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 ## Sponsors
 
-| OpenAI                                                            | Blacksmith                                                                   |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) |
+<table>
+  <tr>
+    <th>OpenAI</th>
+    <th>Blacksmith</th>
+  </tr>
+  <tr>
+    <td>
+      <a href="https://openai.com/">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sponsors/openai.svg">
+          <source media="(prefers-color-scheme: light)" srcset="docs/assets/sponsors/openai-light.svg">
+          <img alt="OpenAI" src="docs/assets/sponsors/openai-light.svg" width="80">
+        </picture>
+      </a>
+    </td>
+    <td>
+      <a href="https://blacksmith.sh/">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sponsors/blacksmith.svg">
+          <source media="(prefers-color-scheme: light)" srcset="docs/assets/sponsors/blacksmith-light.svg">
+          <img alt="Blacksmith" src="docs/assets/sponsors/blacksmith-light.svg" width="250">
+        </picture>
+      </a>
+    </td>
+  </tr>
+</table>
 
 **Subscriptions (OAuth):**
 
