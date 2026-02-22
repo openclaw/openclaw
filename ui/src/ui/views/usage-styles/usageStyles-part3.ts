@@ -2,14 +2,14 @@ export const usageStylesPart3 = `
   
   /* ===== COMPACT DAILY CHART ===== */
   .daily-chart-compact {
-    margin-bottom: 10px;
+    margin-bottom: 16px;
   }
   .daily-chart-compact .sessions-panel-title {
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
   .daily-chart-compact .daily-chart-bars {
     height: 100px;
-    padding-bottom: 18px;
+    padding-bottom: 20px;
   }
   
   /* ===== COMPACT COST BREAKDOWN ===== */
@@ -18,17 +18,13 @@ export const usageStylesPart3 = `
     margin: 0;
     background: transparent;
     border-top: 1px solid var(--border);
-    padding-top: 10px;
+    padding-top: 12px;
   }
   .cost-breakdown-compact .cost-breakdown-header {
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
   .cost-breakdown-compact .cost-breakdown-legend {
-    gap: 10px;
-    margin-top: 8px;
-  }
-  .cost-breakdown-compact .cost-breakdown-total {
-    margin-top: 6px;
+    gap: 12px;
   }
   .cost-breakdown-compact .cost-breakdown-note {
     display: none;
@@ -45,7 +41,7 @@ export const usageStylesPart3 = `
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
   .sessions-card-title {
     font-weight: 600;
@@ -59,8 +55,8 @@ export const usageStylesPart3 = `
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    margin: 6px 0 8px;
+    gap: 12px;
+    margin: 8px 0 10px;
     font-size: 12px;
     color: var(--muted);
   }
