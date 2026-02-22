@@ -5,9 +5,9 @@ import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { sendVoiceMessageDiscord } from "../discord/send.js";
-import * as ssrf from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
+import { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   LocalMediaAccessError,
@@ -126,15 +126,7 @@ describe("web media loading", () => {
   });
 
   beforeAll(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
-    });
+    mockPinnedHostnameResolution();
   });
 
   it("strips MEDIA: prefix before reading local file (including whitespace variants)", async () => {
@@ -238,6 +230,18 @@ describe("web media loading", () => {
     );
 
     fetchMock.mockRestore();
+  });
+
+  it("keeps raw mode when options object sets optimizeImages true", async () => {
+    const { buffer, file } = await createLargeTestJpeg();
+    const cap = Math.max(1, Math.floor(buffer.length * 0.8));
+
+    await expect(
+      loadWebMediaRaw(file, {
+        maxBytes: cap,
+        optimizeImages: true,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
   });
 
   it("uses content-disposition filename when available", async () => {
