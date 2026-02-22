@@ -9,8 +9,15 @@ export const baseTelegramMessageContextConfig = {
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
+  allMedia?: Array<Record<string, unknown>>;
   options?: Record<string, unknown>;
+  cfg?: Record<string, unknown>;
   resolveGroupActivation?: () => boolean | undefined;
+  resolveGroupRequireMention?: () => boolean;
+  resolveTelegramGroupConfig?: () => {
+    groupConfig?: { requireMention?: boolean };
+    topicConfig?: unknown;
+  };
 };
 
 export async function buildTelegramMessageContextForTest(
@@ -27,7 +34,7 @@ export async function buildTelegramMessageContextForTest(
       },
       me: { id: 7, username: "bot" },
     } as never,
-    allMedia: [],
+    allMedia: params.allMedia ?? [],
     storeAllowFrom: [],
     options: params.options ?? {},
     bot: {
@@ -36,7 +43,7 @@ export async function buildTelegramMessageContextForTest(
         setMessageReaction: vi.fn(),
       },
     } as never,
-    cfg: baseTelegramMessageContextConfig,
+    cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
     account: { accountId: "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
@@ -46,10 +53,12 @@ export async function buildTelegramMessageContextForTest(
     ackReactionScope: "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
-    resolveGroupRequireMention: () => false,
-    resolveTelegramGroupConfig: () => ({
-      groupConfig: { requireMention: false },
-      topicConfig: undefined,
-    }),
+    resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),
+    resolveTelegramGroupConfig:
+      params.resolveTelegramGroupConfig ??
+      (() => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      })),
   });
 }

@@ -17,6 +17,11 @@ async function createMessageHandlerAndReplySpy() {
   return { handler, replySpy };
 }
 
+function expectSingleReplyPayload(replySpy: ReturnType<typeof vi.fn>) {
+  expect(replySpy).toHaveBeenCalledTimes(1);
+  return replySpy.mock.calls[0][0] as Record<string, unknown>;
+}
+
 describe("telegram inbound media", () => {
   const _INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
   it(
@@ -40,8 +45,7 @@ describe("telegram inbound media", () => {
         getFile: async () => ({ file_path: "unused" }),
       });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
+      const payload = expectSingleReplyPayload(replySpy);
       expect(payload.Body).toContain("Meet here");
       expect(payload.Body).toContain("48.858844");
       expect(payload.LocationLat).toBe(48.858844);
@@ -72,8 +76,7 @@ describe("telegram inbound media", () => {
         getFile: async () => ({ file_path: "unused" }),
       });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
+      const payload = expectSingleReplyPayload(replySpy);
       expect(payload.Body).toContain("Eiffel Tower");
       expect(payload.LocationName).toBe("Eiffel Tower");
       expect(payload.LocationAddress).toBe("Champ de Mars, Paris");

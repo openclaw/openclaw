@@ -41,6 +41,21 @@ const createEnabledController = (
   return { adapter, calls, controller };
 };
 
+const createSetOnlyController = () => {
+  const calls: { method: string; emoji: string }[] = [];
+  const adapter: StatusReactionAdapter = {
+    setReaction: vi.fn(async (emoji: string) => {
+      calls.push({ method: "set", emoji });
+    }),
+  };
+  const controller = createStatusReactionController({
+    enabled: true,
+    adapter,
+    initialEmoji: "👀",
+  });
+  return { calls, controller };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,19 +260,7 @@ describe("createStatusReactionController", () => {
   });
 
   it("should only call setReaction when adapter lacks removeReaction", async () => {
-    const calls: { method: string; emoji: string }[] = [];
-    const adapter: StatusReactionAdapter = {
-      setReaction: vi.fn(async (emoji: string) => {
-        calls.push({ method: "set", emoji });
-      }),
-      // No removeReaction
-    };
-
-    const controller = createStatusReactionController({
-      enabled: true,
-      adapter,
-      initialEmoji: "👀",
-    });
+    const { calls, controller } = createSetOnlyController();
 
     void controller.setQueued();
     await vi.runAllTimersAsync();
@@ -285,18 +288,7 @@ describe("createStatusReactionController", () => {
   });
 
   it("should handle clear gracefully when adapter lacks removeReaction", async () => {
-    const calls: { method: string; emoji: string }[] = [];
-    const adapter: StatusReactionAdapter = {
-      setReaction: vi.fn(async (emoji: string) => {
-        calls.push({ method: "set", emoji });
-      }),
-    };
-
-    const controller = createStatusReactionController({
-      enabled: true,
-      adapter,
-      initialEmoji: "👀",
-    });
+    const { calls, controller } = createSetOnlyController();
 
     await controller.clear();
 

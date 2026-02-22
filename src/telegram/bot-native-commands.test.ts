@@ -36,6 +36,20 @@ vi.mock("./bot/delivery.js", () => ({
 }));
 
 describe("registerTelegramNativeCommands", () => {
+  type RegisteredCommand = {
+    command: string;
+    description: string;
+  };
+
+  async function waitForRegisteredCommands(
+    setMyCommands: ReturnType<typeof vi.fn>,
+  ): Promise<RegisteredCommand[]> {
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalled();
+    });
+    return setMyCommands.mock.calls[0]?.[0] as RegisteredCommand[];
+  }
+
   beforeEach(() => {
     listSkillCommandsForAgents.mockClear();
     listSkillCommandsForAgents.mockReturnValue([]);
@@ -166,14 +180,7 @@ describe("registerTelegramNativeCommands", () => {
       } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
     });
 
-    await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalled();
-    });
-
-    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
 
@@ -207,14 +214,7 @@ describe("registerTelegramNativeCommands", () => {
       } as TelegramAccountConfig,
     });
 
-    await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalled();
-    });
-
-    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
     expect(registeredCommands.length).toBeGreaterThan(0);
     for (const entry of registeredCommands) {
