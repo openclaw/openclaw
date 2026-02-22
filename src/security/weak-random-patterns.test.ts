@@ -5,6 +5,18 @@ import { describe, expect, it } from "vitest";
 import { listRuntimeSourceFiles, shouldSkipRuntimeSourcePath } from "../test-utils/repo-scan.js";
 
 const SCAN_ROOTS = ["src", "extensions"] as const;
+const RUNTIME_TS_GLOBS = [
+  "*.ts",
+  "!*.test.ts",
+  "!*.test-helpers.ts",
+  "!*.test-utils.ts",
+  "!*.e2e.ts",
+  "!*.d.ts",
+  "!**/__tests__/**",
+  "!**/tests/**",
+  "!**/*test-helpers*.ts",
+  "!**/*test-utils*.ts",
+] as const;
 
 async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]> {
   const rgResult = spawnSync(
@@ -13,8 +25,7 @@ async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]>
       "--line-number",
       "--no-heading",
       "--color=never",
-      "--glob",
-      "*.ts",
+      ...RUNTIME_TS_GLOBS.flatMap((glob) => ["--glob", glob]),
       "Date\\.now.*Math\\.random|Math\\.random.*Date\\.now",
       ...SCAN_ROOTS,
     ],
