@@ -22,6 +22,7 @@ import {
   collectSandboxBrowserHashLabelFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
   collectSmallModelRiskFindings,
   collectSandboxDangerousConfigFindings,
@@ -717,6 +718,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSandboxDockerNoopFindings(cfg));
   findings.push(...collectSandboxDangerousConfigFindings(cfg));
   findings.push(...collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...collectMinimalProfileOverrideFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));

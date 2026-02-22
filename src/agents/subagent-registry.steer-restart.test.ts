@@ -67,8 +67,31 @@ describe("subagent registry steer restarts", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
   };
 
+  const withPendingAgentWait = async <T>(run: () => Promise<T>): Promise<T> => {
+    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    const originalCallGateway = callGateway.getMockImplementation();
+    callGateway.mockImplementation(async (request: unknown) => {
+      const typed = request as { method?: string };
+      if (typed.method === "agent.wait") {
+        return new Promise<unknown>(() => undefined);
+      }
+      if (originalCallGateway) {
+        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
+      }
+      return {};
+    });
+
+    try {
+      return await run();
+    } finally {
+      if (originalCallGateway) {
+        callGateway.mockImplementation(originalCallGateway);
+      }
+    }
+  };
+
   afterEach(async () => {
-    announceSpy.mockReset();
+    announceSpy.mockClear();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockClear();
     lifecycleHandler = undefined;
@@ -135,20 +158,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("defers subagent_ended hook for completion-mode runs until announce delivery resolves", async () => {
-    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
-    const originalCallGateway = callGateway.getMockImplementation();
-    callGateway.mockImplementation(async (request: unknown) => {
-      const typed = request as { method?: string };
-      if (typed.method === "agent.wait") {
-        return new Promise<unknown>(() => undefined);
-      }
-      if (originalCallGateway) {
-        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
-      }
-      return {};
-    });
-
-    try {
+    await withPendingAgentWait(async () => {
       let resolveAnnounce!: (value: boolean) => void;
       announceSpy.mockImplementationOnce(
         () =>
@@ -196,28 +206,11 @@ describe("subagent registry steer restarts", () => {
           requesterSessionKey: "agent:main:main",
         }),
       );
-    } finally {
-      if (originalCallGateway) {
-        callGateway.mockImplementation(originalCallGateway);
-      }
-    }
+    });
   });
 
   it("does not emit subagent_ended on completion for persistent session-mode runs", async () => {
-    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
-    const originalCallGateway = callGateway.getMockImplementation();
-    callGateway.mockImplementation(async (request: unknown) => {
-      const typed = request as { method?: string };
-      if (typed.method === "agent.wait") {
-        return new Promise<unknown>(() => undefined);
-      }
-      if (originalCallGateway) {
-        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
-      }
-      return {};
-    });
-
-    try {
+    await withPendingAgentWait(async () => {
       let resolveAnnounce!: (value: boolean) => void;
       announceSpy.mockImplementationOnce(
         () =>
@@ -259,11 +252,7 @@ describe("subagent registry steer restarts", () => {
       expect(run?.runId).toBe("run-persistent-session");
       expect(run?.cleanupCompletedAt).toBeTypeOf("number");
       expect(run?.endedHookEmittedAt).toBeUndefined();
-    } finally {
-      if (originalCallGateway) {
-        callGateway.mockImplementation(originalCallGateway);
-      }
-    }
+    });
   });
 
   it("clears announce retry state when replacing after steer restart", () => {
@@ -470,66 +459,52 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {
-    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
-    const originalCallGateway = callGateway.getMockImplementation();
-    callGateway.mockImplementation(async (request: unknown) => {
-      const typed = request as { method?: string };
-      if (typed.method === "agent.wait") {
-        return new Promise<unknown>(() => undefined);
+    await withPendingAgentWait(async () => {
+      vi.useFakeTimers();
+      try {
+        announceSpy.mockResolvedValue(false);
+
+        mod.registerSubagentRun({
+          runId: "run-completion-retry",
+          childSessionKey: "agent:main:subagent:completion",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "completion retry",
+          cleanup: "keep",
+          expectsCompletionMessage: true,
+        });
+
+        lifecycleHandler?.({
+          stream: "lifecycle",
+          runId: "run-completion-retry",
+          data: { phase: "end" },
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(announceSpy).toHaveBeenCalledTimes(1);
+        expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(999);
+        expect(announceSpy).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(announceSpy).toHaveBeenCalledTimes(2);
+        expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(2);
+
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(announceSpy).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(announceSpy).toHaveBeenCalledTimes(3);
+        expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(3);
+
+        await vi.advanceTimersByTimeAsync(4_001);
+        expect(announceSpy).toHaveBeenCalledTimes(3);
+        expect(
+          mod.listSubagentRunsForRequester("agent:main:main")[0]?.cleanupCompletedAt,
+        ).toBeTypeOf("number");
+      } finally {
+        vi.useRealTimers();
       }
-      if (originalCallGateway) {
-        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
-      }
-      return {};
     });
-
-    vi.useFakeTimers();
-    try {
-      announceSpy.mockResolvedValue(false);
-
-      mod.registerSubagentRun({
-        runId: "run-completion-retry",
-        childSessionKey: "agent:main:subagent:completion",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "completion retry",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
-
-      lifecycleHandler?.({
-        stream: "lifecycle",
-        runId: "run-completion-retry",
-        data: { phase: "end" },
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(announceSpy).toHaveBeenCalledTimes(1);
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(999);
-      expect(announceSpy).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(announceSpy).toHaveBeenCalledTimes(2);
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(2);
-
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(announceSpy).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(announceSpy).toHaveBeenCalledTimes(3);
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(3);
-
-      await vi.advanceTimersByTimeAsync(4_001);
-      expect(announceSpy).toHaveBeenCalledTimes(3);
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.cleanupCompletedAt).toBeTypeOf(
-        "number",
-      );
-    } finally {
-      if (originalCallGateway) {
-        callGateway.mockImplementation(originalCallGateway);
-      }
-      vi.useRealTimers();
-    }
   });
 
   it("emits subagent_ended when completion cleanup expires with active descendants", async () => {

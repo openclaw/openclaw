@@ -388,6 +388,18 @@ describe("real-world config patterns", () => {
   });
 });
 describe("security: path traversal protection (CWE-22)", () => {
+  function expectRejectedTraversalPaths(
+    cases: ReadonlyArray<{ includePath: string; expectEscapesMessage: boolean }>,
+  ) {
+    for (const testCase of cases) {
+      const obj = { $include: testCase.includePath };
+      expect(() => resolve(obj, {}), testCase.includePath).toThrow(ConfigIncludeError);
+      if (testCase.expectEscapesMessage) {
+        expect(() => resolve(obj, {}), testCase.includePath).toThrow(/escapes config directory/);
+      }
+    }
+  }
+
   describe("absolute path attacks", () => {
     it("rejects absolute path attack variants", () => {
       const cases = [
@@ -397,13 +409,7 @@ describe("security: path traversal protection (CWE-22)", () => {
         { includePath: "/tmp/malicious.json", expectEscapesMessage: false },
         { includePath: "/", expectEscapesMessage: false },
       ] as const;
-      for (const testCase of cases) {
-        const obj = { $include: testCase.includePath };
-        expectResolveIncludeError(() => resolve(obj, {}));
-        if (testCase.expectEscapesMessage) {
-          expectResolveIncludeError(() => resolve(obj, {}), /escapes config directory/);
-        }
-      }
+      expectRejectedTraversalPaths(cases);
     });
   });
 
@@ -416,13 +422,7 @@ describe("security: path traversal protection (CWE-22)", () => {
         { includePath: "../sibling-dir/secret.json", expectEscapesMessage: false },
         { includePath: "/config/../../../etc/passwd", expectEscapesMessage: false },
       ] as const;
-      for (const testCase of cases) {
-        const obj = { $include: testCase.includePath };
-        expectResolveIncludeError(() => resolve(obj, {}));
-        if (testCase.expectEscapesMessage) {
-          expectResolveIncludeError(() => resolve(obj, {}), /escapes config directory/);
-        }
-      }
+      expectRejectedTraversalPaths(cases);
     });
   });
 

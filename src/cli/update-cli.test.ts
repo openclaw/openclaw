@@ -200,6 +200,26 @@ describe("update-cli", () => {
       ...overrides,
     }) as UpdateRunResult;
 
+  const runRestartFallbackScenario = async (params: { daemonInstall: "ok" | "fail" }) => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    if (params.daemonInstall === "fail") {
+      vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
+    } else {
+      vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    }
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runDaemonInstall).toHaveBeenCalledWith({
+      force: true,
+      json: undefined,
+    });
+    expect(runDaemonRestart).toHaveBeenCalled();
+  };
+
   const setupNonInteractiveDowngrade = async () => {
     const tempDir = createCaseDir("openclaw-update");
     setTty(false);
@@ -223,32 +243,32 @@ describe("update-cli", () => {
   };
 
   beforeEach(() => {
-    confirm.mockReset();
-    select.mockReset();
-    vi.mocked(runGatewayUpdate).mockReset();
-    vi.mocked(resolveOpenClawPackageRoot).mockReset();
-    vi.mocked(readConfigFileSnapshot).mockReset();
-    vi.mocked(writeConfigFile).mockReset();
-    vi.mocked(checkUpdateStatus).mockReset();
-    vi.mocked(fetchNpmTagVersion).mockReset();
-    vi.mocked(resolveNpmChannelTag).mockReset();
-    vi.mocked(runCommandWithTimeout).mockReset();
-    vi.mocked(runDaemonRestart).mockReset();
-    vi.mocked(mockedRunDaemonInstall).mockReset();
-    vi.mocked(doctorCommand).mockReset();
-    vi.mocked(defaultRuntime.log).mockReset();
-    vi.mocked(defaultRuntime.error).mockReset();
-    vi.mocked(defaultRuntime.exit).mockReset();
-    readPackageName.mockReset();
-    readPackageVersion.mockReset();
-    resolveGlobalManager.mockReset();
-    serviceLoaded.mockReset();
-    serviceReadRuntime.mockReset();
-    prepareRestartScript.mockReset();
-    runRestartScript.mockReset();
-    inspectPortUsage.mockReset();
-    classifyPortListener.mockReset();
-    formatPortDiagnostics.mockReset();
+    confirm.mockClear();
+    select.mockClear();
+    vi.mocked(runGatewayUpdate).mockClear();
+    vi.mocked(resolveOpenClawPackageRoot).mockClear();
+    vi.mocked(readConfigFileSnapshot).mockClear();
+    vi.mocked(writeConfigFile).mockClear();
+    vi.mocked(checkUpdateStatus).mockClear();
+    vi.mocked(fetchNpmTagVersion).mockClear();
+    vi.mocked(resolveNpmChannelTag).mockClear();
+    vi.mocked(runCommandWithTimeout).mockClear();
+    vi.mocked(runDaemonRestart).mockClear();
+    vi.mocked(mockedRunDaemonInstall).mockClear();
+    vi.mocked(doctorCommand).mockClear();
+    vi.mocked(defaultRuntime.log).mockClear();
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+    readPackageName.mockClear();
+    readPackageVersion.mockClear();
+    resolveGlobalManager.mockClear();
+    serviceLoaded.mockClear();
+    serviceReadRuntime.mockClear();
+    prepareRestartScript.mockClear();
+    runRestartScript.mockClear();
+    inspectPortUsage.mockClear();
+    classifyPortListener.mockClear();
+    formatPortDiagnostics.mockClear();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -312,6 +332,11 @@ describe("update-cli", () => {
     classifyPortListener.mockReturnValue("gateway");
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    vi.mocked(doctorCommand).mockResolvedValue(undefined);
+    confirm.mockResolvedValue(false);
+    select.mockResolvedValue("stable");
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
   });
@@ -547,49 +572,11 @@ describe("update-cli", () => {
   });
 
   it("updateCommand falls back to restart when env refresh install fails", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
-    prepareRestartScript.mockResolvedValue(null);
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-
-    await updateCommand({});
-
-    expect(runDaemonInstall).toHaveBeenCalledWith({
-      force: true,
-      json: undefined,
-    });
-    expect(runDaemonRestart).toHaveBeenCalled();
+    await runRestartFallbackScenario({ daemonInstall: "fail" });
   });
 
   it("updateCommand falls back to restart when no detached restart script is available", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
-    prepareRestartScript.mockResolvedValue(null);
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-
-    await updateCommand({});
-
-    expect(runDaemonInstall).toHaveBeenCalledWith({
-      force: true,
-      json: undefined,
-    });
-    expect(runDaemonRestart).toHaveBeenCalled();
+    await runRestartFallbackScenario({ daemonInstall: "ok" });
   });
 
   it("updateCommand does not refresh service env when --no-restart is set", async () => {

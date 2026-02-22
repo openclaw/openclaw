@@ -25,7 +25,7 @@ describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    spawnMock.mockReset();
+    spawnMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();
   });

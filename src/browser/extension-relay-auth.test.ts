@@ -1,10 +1,29 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   probeAuthenticatedOpenClawRelay,
   resolveRelayAuthTokenForPort,
 } from "./extension-relay-auth.js";
 import { getFreePort } from "./test-port.js";
+
+async function withRelayServer(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  run: (params: { port: number }) => Promise<void>,
+) {
+  const port = await getFreePort();
+  const server = createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.listen(port, "127.0.0.1", () => resolve());
+    server.once("error", reject);
+  });
+  try {
+    const actualPort = (server.address() as AddressInfo).port;
+    await run({ port: actualPort });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
 
 describe("extension-relay-auth", () => {
   const TEST_GATEWAY_TOKEN = "test-gateway-token";
@@ -33,88 +52,73 @@ describe("extension-relay-auth", () => {
   });
 
   it("accepts authenticated openclaw relay probe responses", async () => {
-    const port = await getFreePort();
-    const token = resolveRelayAuthTokenForPort(port);
     let seenToken: string | undefined;
-    const server = createServer((req, res) => {
-      if (!req.url?.startsWith("/json/version")) {
-        res.writeHead(404);
-        res.end("not found");
-        return;
-      }
-      const header = req.headers["x-openclaw-relay-token"];
-      seenToken = Array.isArray(header) ? header[0] : header;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ Browser: "OpenClaw/extension-relay" }));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.listen(port, "127.0.0.1", () => resolve());
-      server.once("error", reject);
-    });
-    try {
-      const ok = await probeAuthenticatedOpenClawRelay({
-        baseUrl: `http://127.0.0.1:${port}`,
-        relayAuthHeader: "x-openclaw-relay-token",
-        relayAuthToken: token,
-      });
-      expect(ok).toBe(true);
-      expect(seenToken).toBe(token);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    await withRelayServer(
+      (req, res) => {
+        if (!req.url?.startsWith("/json/version")) {
+          res.writeHead(404);
+          res.end("not found");
+          return;
+        }
+        const header = req.headers["x-openclaw-relay-token"];
+        seenToken = Array.isArray(header) ? header[0] : header;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ Browser: "OpenClaw/extension-relay" }));
+      },
+      async ({ port }) => {
+        const token = resolveRelayAuthTokenForPort(port);
+        const ok = await probeAuthenticatedOpenClawRelay({
+          baseUrl: `http://127.0.0.1:${port}`,
+          relayAuthHeader: "x-openclaw-relay-token",
+          relayAuthToken: token,
+        });
+        expect(ok).toBe(true);
+        expect(seenToken).toBe(token);
+      },
+    );
   });
 
   it("rejects unauthenticated probe responses", async () => {
-    const port = await getFreePort();
-    const server = createServer((req, res) => {
-      if (!req.url?.startsWith("/json/version")) {
-        res.writeHead(404);
-        res.end("not found");
-        return;
-      }
-      res.writeHead(401);
-      res.end("Unauthorized");
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.listen(port, "127.0.0.1", () => resolve());
-      server.once("error", reject);
-    });
-    try {
-      const ok = await probeAuthenticatedOpenClawRelay({
-        baseUrl: `http://127.0.0.1:${port}`,
-        relayAuthHeader: "x-openclaw-relay-token",
-        relayAuthToken: "irrelevant",
-      });
-      expect(ok).toBe(false);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    await withRelayServer(
+      (req, res) => {
+        if (!req.url?.startsWith("/json/version")) {
+          res.writeHead(404);
+          res.end("not found");
+          return;
+        }
+        res.writeHead(401);
+        res.end("Unauthorized");
+      },
+      async ({ port }) => {
+        const ok = await probeAuthenticatedOpenClawRelay({
+          baseUrl: `http://127.0.0.1:${port}`,
+          relayAuthHeader: "x-openclaw-relay-token",
+          relayAuthToken: "irrelevant",
+        });
+        expect(ok).toBe(false);
+      },
+    );
   });
 
   it("rejects probe responses with wrong browser identity", async () => {
-    const port = await getFreePort();
-    const server = createServer((req, res) => {
-      if (!req.url?.startsWith("/json/version")) {
-        res.writeHead(404);
-        res.end("not found");
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ Browser: "FakeRelay" }));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.listen(port, "127.0.0.1", () => resolve());
-      server.once("error", reject);
-    });
-    try {
-      const ok = await probeAuthenticatedOpenClawRelay({
-        baseUrl: `http://127.0.0.1:${port}`,
-        relayAuthHeader: "x-openclaw-relay-token",
-        relayAuthToken: "irrelevant",
-      });
-      expect(ok).toBe(false);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    await withRelayServer(
+      (req, res) => {
+        if (!req.url?.startsWith("/json/version")) {
+          res.writeHead(404);
+          res.end("not found");
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ Browser: "FakeRelay" }));
+      },
+      async ({ port }) => {
+        const ok = await probeAuthenticatedOpenClawRelay({
+          baseUrl: `http://127.0.0.1:${port}`,
+          relayAuthHeader: "x-openclaw-relay-token",
+          relayAuthToken: "irrelevant",
+        });
+        expect(ok).toBe(false);
+      },
+    );
   });
 });

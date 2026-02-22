@@ -36,6 +36,24 @@ vi.mock("../../../discord/monitor/thread-bindings.js", async (importOriginal) =>
 
 const { discordOutbound } = await import("./discord.js");
 
+function mockBoundThreadManager() {
+  hoisted.getThreadBindingManagerMock.mockReturnValue({
+    getByThreadId: () => ({
+      accountId: "default",
+      channelId: "parent-1",
+      threadId: "thread-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      label: "codex-thread",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+      boundBy: "system",
+      boundAt: Date.now(),
+    }),
+  });
+}
+
 describe("normalizeDiscordOutboundTarget", () => {
   it("normalizes bare numeric IDs to channel: prefix", () => {
     expect(normalizeDiscordOutboundTarget("1470130713209602050")).toEqual({
@@ -71,19 +89,19 @@ describe("normalizeDiscordOutboundTarget", () => {
 
 describe("discordOutbound", () => {
   beforeEach(() => {
-    hoisted.sendMessageDiscordMock.mockReset().mockResolvedValue({
+    hoisted.sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "ch-1",
     });
-    hoisted.sendPollDiscordMock.mockReset().mockResolvedValue({
+    hoisted.sendPollDiscordMock.mockClear().mockResolvedValue({
       messageId: "poll-1",
       channelId: "ch-1",
     });
-    hoisted.sendWebhookMessageDiscordMock.mockReset().mockResolvedValue({
+    hoisted.sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-webhook-1",
       channelId: "thread-1",
     });
-    hoisted.getThreadBindingManagerMock.mockReset().mockReturnValue(null);
+    hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
@@ -110,21 +128,7 @@ describe("discordOutbound", () => {
   });
 
   it("uses webhook persona delivery for bound thread text replies", async () => {
-    hoisted.getThreadBindingManagerMock.mockReturnValue({
-      getByThreadId: () => ({
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        label: "codex-thread",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-        boundBy: "system",
-        boundAt: Date.now(),
-      }),
-    });
+    mockBoundThreadManager();
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
@@ -160,20 +164,7 @@ describe("discordOutbound", () => {
   });
 
   it("falls back to bot send for silent delivery on bound threads", async () => {
-    hoisted.getThreadBindingManagerMock.mockReturnValue({
-      getByThreadId: () => ({
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-        boundBy: "system",
-        boundAt: Date.now(),
-      }),
-    });
+    mockBoundThreadManager();
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
@@ -201,20 +192,7 @@ describe("discordOutbound", () => {
   });
 
   it("falls back to bot send when webhook send fails", async () => {
-    hoisted.getThreadBindingManagerMock.mockReturnValue({
-      getByThreadId: () => ({
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-        boundBy: "system",
-        boundAt: Date.now(),
-      }),
-    });
+    mockBoundThreadManager();
     hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
 
     const result = await discordOutbound.sendText?.({

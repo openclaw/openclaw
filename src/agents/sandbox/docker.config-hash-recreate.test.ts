@@ -126,8 +126,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     spawnState.calls.length = 0;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
-    registryMocks.readRegistry.mockReset();
-    registryMocks.updateRegistry.mockReset();
+    registryMocks.readRegistry.mockClear();
+    registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
   });
 

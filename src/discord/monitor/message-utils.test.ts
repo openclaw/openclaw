@@ -59,8 +59,8 @@ describe("resolveDiscordMessageChannelId", () => {
 
 describe("resolveForwardedMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   it("downloads forwarded attachments", async () => {
@@ -170,8 +170,8 @@ describe("resolveForwardedMediaList", () => {
 
 describe("resolveMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   it("downloads stickers", async () => {

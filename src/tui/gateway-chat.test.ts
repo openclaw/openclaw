@@ -36,10 +36,10 @@ describe("resolveGatewayConnection", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
+    loadConfig.mockClear();
+    resolveGatewayPort.mockClear();
+    pickPrimaryTailnetIPv4.mockClear();
+    pickPrimaryLanIPv4.mockClear();
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     pickPrimaryLanIPv4.mockReturnValue(undefined);
@@ -84,20 +84,21 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it("uses loopback host when local bind is tailnet", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "tailnet" } });
+  it.each([
+    {
+      label: "tailnet",
+      bind: "tailnet",
+      setup: () => pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1"),
+    },
+    {
+      label: "lan",
+      bind: "lan",
+      setup: () => pickPrimaryLanIPv4.mockReturnValue("192.168.1.42"),
+    },
+  ])("uses loopback host when local bind is $label", ({ bind, setup }) => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind } });
     resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
-
-    const result = resolveGatewayConnection({});
-
-    expect(result.url).toBe("ws://127.0.0.1:18800");
-  });
-
-  it("uses loopback host when local bind is lan", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
-    resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+    setup();
 
     const result = resolveGatewayConnection({});
 

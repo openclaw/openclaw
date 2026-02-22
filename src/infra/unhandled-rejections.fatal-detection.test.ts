@@ -37,6 +37,16 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.exit = originalExit;
   });
 
+  function emitUnhandled(reason: unknown): void {
+    process.emit("unhandledRejection", reason, Promise.resolve());
+  }
+
+  function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
+    exitCalls = [];
+    emitUnhandled(reason);
+    expect(exitCalls).toEqual(expected);
+  }
+
   describe("fatal errors", () => {
     it("exits on fatal runtime codes", () => {
       const fatalCases = [
@@ -46,10 +56,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of fatalCases) {
-        exitCalls = [];
-        const err = Object.assign(new Error(message), { code });
-        process.emit("unhandledRejection", err, Promise.resolve());
-        expect(exitCalls).toEqual([1]);
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -67,10 +74,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of configurationCases) {
-        exitCalls = [];
-        const err = Object.assign(new Error(message), { code });
-        process.emit("unhandledRejection", err, Promise.resolve());
-        expect(exitCalls).toEqual([1]);
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -92,9 +96,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ];
 
       for (const transientErr of transientCases) {
-        exitCalls = [];
-        process.emit("unhandledRejection", transientErr, Promise.resolve());
-        expect(exitCalls).toEqual([]);
+        expectExitCodeFromUnhandled(transientErr, []);
       }
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
@@ -106,12 +108,21 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
-      process.emit("unhandledRejection", genericErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([1]);
+      expectExitCodeFromUnhandled(genericErr, [1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
+      );
+    });
+
+    it("does not exit on AbortError and logs suppression warning", () => {
+      const abortErr = new Error("This operation was aborted");
+      abortErr.name = "AbortError";
+
+      expectExitCodeFromUnhandled(abortErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Suppressed AbortError:",
+        expect.stringContaining("This operation was aborted"),
       );
     });
   });
