@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionEntry, SessionManager } from "@mariozechner/pi-coding-agent";
+import { createRequire } from "node:module";
+import type { RedactSensitiveMode } from "../logging/redact.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -8,7 +11,8 @@ import type {
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+
+const requireConfig = createRequire(import.meta.url);
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
@@ -76,6 +80,139 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   return { ...msg, content: newContent } as AgentMessage;
 }
 
+/** Redact options resolved once at guard installation time. */
+type ResolvedRedactOptions = { mode?: RedactSensitiveMode; patterns?: string[] };
+
+/**
+ * Redact text blocks in a content array. Returns `{ changed, content }`.
+ * Shared by message entries and custom_message entries to avoid code duplication.
+ */
+function redactTextBlocks(
+  content: unknown[],
+  options: ResolvedRedactOptions,
+): { changed: boolean; content: unknown[] } {
+  let changed = false;
+  const newContent = content.map((block: unknown) => {
+    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+      return block;
+    }
+    const textBlock = block as TextContent;
+    if (typeof textBlock.text !== "string" || !textBlock.text) {
+      return block;
+    }
+    const redacted = redactSensitiveText(textBlock.text, options);
+    if (redacted === textBlock.text) {
+      return block;
+    }
+    changed = true;
+    return { ...textBlock, text: redacted };
+  });
+  return { changed, content: newContent };
+}
+
+/**
+ * Redact sensitive secrets from a session entry before writing to disk.
+ * Handles three entry shapes:
+ * - Message entries (type: "message"): redacts text blocks in `message.content[]`
+ * - Summary entries (type: "compaction" / "branch_summary"): redacts the `summary` string
+ * - Custom message entries (type: "custom_message"): redacts `content` (string or TextContent[])
+ *
+ * Returns a shallow clone with redacted fields — the original entry is never mutated.
+ * Only `text` properties (strings, immutable) are replaced; other properties
+ * share references with the original, which is safe.
+ *
+ * @param options Pre-resolved redact options (mode + patterns). Resolved once at guard
+ *   installation time to avoid calling `loadConfig()` on every text block.
+ *
+ * @internal Exported for testing and for `openclaw sessions scrub` CLI command.
+ */
+export function redactEntryForPersistence(
+  entry: SessionEntry,
+  options?: ResolvedRedactOptions,
+): SessionEntry {
+  const opts = options ?? {};
+  let result = entry;
+
+  // Redact message.content[] text blocks (covers user, assistant, toolResult messages)
+  const msg = (entry as { message?: unknown }).message;
+  if (msg && typeof msg === "object") {
+    const content = (msg as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const { changed, content: newContent } = redactTextBlocks(content, opts);
+      if (changed) {
+        result = { ...result, message: { ...msg, content: newContent } } as SessionEntry;
+      }
+    }
+  }
+
+  // Redact summary field (covers compaction and branch_summary entries)
+  const summary = (result as { summary?: unknown }).summary;
+  if (typeof summary === "string" && summary) {
+    const redacted = redactSensitiveText(summary, opts);
+    if (redacted !== summary) {
+      result = { ...result, summary: redacted } as SessionEntry;
+    }
+  }
+
+  // Redact custom_message content (extensions inject messages into LLM context)
+  const entryType = (result as { type?: string }).type;
+  if (entryType === "custom_message") {
+    const cmContent = (result as { content?: unknown }).content;
+    if (typeof cmContent === "string" && cmContent) {
+      const redacted = redactSensitiveText(cmContent, opts);
+      if (redacted !== cmContent) {
+        result = { ...result, content: redacted } as SessionEntry;
+      }
+    } else if (Array.isArray(cmContent)) {
+      const { changed, content: newCmContent } = redactTextBlocks(cmContent, opts);
+      if (changed) {
+        result = { ...result, content: newCmContent } as SessionEntry;
+      }
+    }
+  }
+
+  return result;
+}
+
+type ToolCall = { id: string; name?: string };
+
+function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
+  const content = msg.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const toolCalls: ToolCall[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (typeof rec.id !== "string" || !rec.id) {
+      continue;
+    }
+    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
+      toolCalls.push({
+        id: rec.id,
+        name: typeof rec.name === "string" ? rec.name : undefined,
+      });
+    }
+  }
+  return toolCalls;
+}
+
+function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
+  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId) {
+    return toolCallId;
+  }
+  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId) {
+    return toolUseId;
+  }
+  return null;
+}
+
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -114,6 +251,86 @@ export function installSessionToolResultGuard(
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
+  };
+
+  // Resolve redact options lazily per persistence call so that runtime config
+  // changes (e.g., config reload, test mutations) are picked up immediately.
+  const resolveRedactOptions = (): ResolvedRedactOptions => {
+    const opts: ResolvedRedactOptions = {};
+    try {
+      const configModule = requireConfig("../config/config.js") as {
+        loadConfig?: () => { logging?: { redactSensitive?: string; redactPatterns?: string[] } };
+      };
+      const cfg = configModule.loadConfig?.().logging;
+      if (cfg?.redactSensitive) {
+        opts.mode = cfg.redactSensitive as RedactSensitiveMode;
+      }
+      if (cfg?.redactPatterns) {
+        opts.patterns = cfg.redactPatterns;
+      }
+    } catch {
+      // Config not available — use defaults.
+    }
+    return opts;
+  };
+
+  const redactEntry = (entry: SessionEntry) =>
+    redactEntryForPersistence(entry, resolveRedactOptions());
+
+  // Wrap _persist and _rewriteFile to redact secrets at the serialization boundary.
+  // This ensures in-memory entries (used by LLM via buildSessionContext) stay
+  // unredacted while the on-disk JSONL transcript gets secrets masked.
+  //
+  // Instead of replicating upstream logic, we wrap the original methods by
+  // temporarily swapping `fileEntries` with redacted copies during writes.
+  // This preserves all upstream persistence semantics (hasAssistant gating,
+  // bulk-flush logic, etc.) — we only transform the data, not the control flow.
+  //
+  // Cast to access private internals. We intentionally bypass visibility
+  // because we're monkey-patching persistence methods. The intersection with
+  // SessionManager is avoided because tsgo reduces it to `never` when private
+  // properties overlap.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sm = sessionManager as any as {
+    persist: boolean;
+    sessionFile: string | null;
+    flushed: boolean;
+    fileEntries: SessionEntry[];
+    _persist: (entry: SessionEntry) => void;
+    _rewriteFile: () => void;
+    appendMessage: SessionManager["appendMessage"];
+  };
+
+  const originalPersist = sm._persist.bind(sm);
+  const originalRewriteFile = sm._rewriteFile.bind(sm);
+
+  sm._persist = (entry: SessionEntry) => {
+    if (!sm.flushed) {
+      // Bulk-flush path: upstream _persist iterates all fileEntries.
+      // Swap the full array with redacted copies.
+      const original = sm.fileEntries;
+      sm.fileEntries = original.map((e) => redactEntry(e));
+      try {
+        originalPersist(redactEntry(entry));
+      } finally {
+        sm.fileEntries = original;
+      }
+    } else {
+      // Append path: upstream only writes the single entry — O(1).
+      originalPersist(redactEntry(entry));
+    }
+  };
+
+  // Also wrap _rewriteFile which is called during session migration/recovery
+  // and writes fileEntries directly without going through _persist.
+  sm._rewriteFile = () => {
+    const original = sm.fileEntries;
+    sm.fileEntries = original.map((e) => redactEntry(e));
+    try {
+      originalRewriteFile();
+    } finally {
+      sm.fileEntries = original;
+    }
   };
 
   const persistToolResult = (
@@ -206,7 +423,7 @@ export function installSessionToolResultGuard(
 
     const toolCalls =
       nextRole === "assistant"
-        ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
+        ? extractAssistantToolCalls(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     if (allowSyntheticToolResults) {

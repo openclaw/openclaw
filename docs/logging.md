@@ -130,12 +130,17 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 
 ### Redaction
 
-Tool summaries can redact sensitive tokens before they hit the console:
+Sensitive tokens (API keys, passwords, PEM blocks, etc.) are redacted in two places:
+
+- **Console output** — tool summaries are redacted before display.
+- **Session transcripts** — tool result content is redacted at write time, so secrets from exec output, file reads, and other tool results are never persisted to disk in plain text. In-memory entries used by the LLM retain full fidelity for reasoning quality.
+
+Configuration:
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set
 
-Redaction affects **console output only** and does not alter file logs.
+When set to `off`, redaction is disabled everywhere — both console and transcript persistence.
 
 ## Diagnostics + OpenTelemetry
 
