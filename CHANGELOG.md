@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Channels/Config: unify channel preview streaming config handling with a shared resolver and canonical migration path.
 - Discord/Allowlist: canonicalize resolved Discord allowlist names to IDs and split resolution flow for clearer fail-closed behavior.
+- Memory/FTS: add Korean stop-word filtering and particle-aware keyword extraction (including mixed Korean/English stems) for query expansion in FTS-only search mode. (#18899) Thanks @ruypang.
 - iOS/Talk: prefetch TTS segments and suppress expected speech-cancellation errors for smoother talk playback. (#22833) Thanks @ngutman.
 
 ### Breaking
