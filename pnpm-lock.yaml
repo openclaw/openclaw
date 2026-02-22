@@ -299,6 +299,12 @@ importers:
 
   extensions/discord: {}
 
+  extensions/docling-rag:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
