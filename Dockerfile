@@ -19,6 +19,11 @@ RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
 
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
+# Copy extension package.json files for workspace dependency resolution
+COPY --chown=node:node extensions/ ./extensions-tmp/
+RUN mkdir -p extensions && \
+    find extensions-tmp -name 'package.json' -exec sh -c 'dir=$(dirname "$1" | sed "s|extensions-tmp|extensions|"); mkdir -p "$dir" && cp "$1" "$dir/"' _ {} \; && \
+    rm -rf extensions-tmp && chown -R node:node extensions
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 

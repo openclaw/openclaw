@@ -110,6 +110,65 @@ describe("message-normalizer", () => {
 
       expect(result.content[0].args).toEqual({ foo: "bar" });
     });
+
+    it("strips injected memory context from user messages with string content", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: `<relevant-memories>
+The following memories may be relevant to this conversation:
+- User's name is Peter
+- Favorite color is blue
+</relevant-memories>
+
+What is my name?`,
+        timestamp: 1000,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "What is my name?" }]);
+    });
+
+    it("strips injected memory context from user messages with array content", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `<relevant-memories>
+Memories here
+</relevant-memories>
+
+Hello world`,
+          },
+        ],
+        timestamp: 1000,
+      });
+
+      expect(result.content[0].text).toBe("Hello world");
+    });
+
+    it("does not strip memory context from assistant messages", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "The <relevant-memories> tag should stay here</relevant-memories>",
+        timestamp: 1000,
+      });
+
+      expect(result.content[0].text).toBe(
+        "The <relevant-memories> tag should stay here</relevant-memories>",
+      );
+    });
+
+    it("preserves user message without memory context unchanged", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "Just a normal message without memory context",
+        timestamp: 1000,
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Just a normal message without memory context" },
+      ]);
+    });
   });
 
   describe("normalizeRoleForGrouping", () => {

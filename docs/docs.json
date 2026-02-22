@@ -1002,7 +1002,12 @@
               },
               {
                 "group": "Extensions",
-                "pages": ["plugins/community", "plugins/voice-call", "plugins/zalouser"]
+                "pages": [
+                  "plugins/memory-redis",
+                  "plugins/community",
+                  "plugins/voice-call",
+                  "plugins/zalouser"
+                ]
               },
               {
                 "group": "Automation",

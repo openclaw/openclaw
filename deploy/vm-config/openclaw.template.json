@@ -1,0 +1,76 @@
+{
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "agents": {
+    "defaults": {
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "workspace": "__WORKSPACE_PATH__",
+      "model": {
+        "primary": "__PRIMARY_MODEL__"
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "ollama": {
+        "apiKey": "ollama-local",
+        "baseUrl": "__OLLAMA_URL__",
+        "api": "openai-completions",
+        "models": []
+      },
+      "anthropic": {
+        "apiKey": "__ANTHROPIC_API_KEY__",
+        "baseUrl": "https://api.anthropic.com",
+        "models": []
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "__GATEWAY_TOKEN__"
+    },
+    "port": 18789,
+    "bind": "lan",
+    "controlUi": {
+      "allowInsecureAuth": true
+    }
+  },
+  "plugins": {
+    "slots": {
+      "memory": "memory-redis"
+    },
+    "entries": {
+      "memory-redis": {
+        "enabled": true,
+        "config": {
+          "redis": {
+            "url": "redis://openclaw-redis:6379"
+          },
+          "embedding": {
+            "provider": "openai",
+            "baseUrl": "__OLLAMA_URL__",
+            "apiKey": "ollama-local",
+            "model": "nomic-embed-text"
+          },
+          "indexName": "idx:openclaw:memories",
+          "keyPrefix": "openclaw:memory",
+          "autoCapture": true,
+          "autoRecall": true
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.2.3",
+    "lastTouchedAt": "__TIMESTAMP__"
+  }
+}
