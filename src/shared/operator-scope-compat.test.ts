@@ -26,14 +26,21 @@ describe("roleScopesAllow", () => {
     ).toBe(true);
   });
 
-  it("keeps non-read operator scopes explicit", () => {
+  it("treats operator.write as satisfied by write/admin scopes", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.write"],
+        allowedScopes: ["operator.write"],
+      }),
+    ).toBe(true);
     expect(
       roleScopesAllow({
         role: "operator",
         requestedScopes: ["operator.write"],
         allowedScopes: ["operator.admin"],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("uses strict matching for non-operator roles", () => {

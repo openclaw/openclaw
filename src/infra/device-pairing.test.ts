@@ -168,7 +168,7 @@ describe("device pairing tokens", () => {
     expect(mismatch.reason).toBe("token-mismatch");
   });
 
-  test("accepts operator.read requests with an operator.admin token scope", async () => {
+  test("accepts operator.read/operator.write requests with an operator.admin token scope", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
     const paired = await getPairedDevice("device-1", baseDir);
@@ -183,14 +183,14 @@ describe("device pairing tokens", () => {
     });
     expect(readOk.ok).toBe(true);
 
-    const writeMismatch = await verifyDeviceToken({
+    const writeOk = await verifyDeviceToken({
       deviceId: "device-1",
       token,
       role: "operator",
       scopes: ["operator.write"],
       baseDir,
     });
-    expect(writeMismatch).toEqual({ ok: false, reason: "scope-mismatch" });
+    expect(writeOk.ok).toBe(true);
   });
 
   test("treats multibyte same-length token input as mismatch without throwing", async () => {
