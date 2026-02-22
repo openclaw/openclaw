@@ -43,6 +43,7 @@ type CommandHandlerContext = {
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  requestExit: () => void;
 };
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -65,6 +66,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     applySessionInfoFromPatch,
     noteLocalRunId,
     forgetLocalRunId,
+    requestExit,
   } = context;
 
   const setAgent = async (id: string) => {
@@ -451,9 +453,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "exit":
       case "quit":
-        client.stop();
-        tui.stop();
-        process.exit(0);
+        requestExit();
         break;
       default:
         await sendMessage(raw);
