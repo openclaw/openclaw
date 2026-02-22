@@ -337,7 +337,7 @@ describe("trusted-proxy auth", () => {
   const trustedProxyConfig = {
     userHeader: "x-forwarded-user",
     requiredHeaders: ["x-forwarded-proto"],
-    allowUsers: [],
+    allowAll: true,
   };
 
   function authorizeTrustedProxy(options?: {
@@ -431,6 +431,24 @@ describe("trusted-proxy auth", () => {
     expect(res.reason).toBe("trusted_proxy_user_not_allowed");
   });
 
+  it("rejects when allowlist is missing and allowAll is not explicitly enabled", async () => {
+    const res = await authorizeTrustedProxy({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_allowlist_required");
+  });
+
   it("accepts user in allowlist", async () => {
     const res = await authorizeTrustedProxy({
       auth: {
@@ -486,6 +504,7 @@ describe("trusted-proxy auth", () => {
         trustedProxy: {
           userHeader: "x-pomerium-claim-email",
           requiredHeaders: ["x-pomerium-jwt-assertion"],
+          allowAll: true,
         },
       },
       trustedProxies: ["172.17.0.1"],
@@ -508,6 +527,7 @@ describe("trusted-proxy auth", () => {
         allowTailscale: false,
         trustedProxy: {
           userHeader: "x-forwarded-user",
+          allowAll: true,
         },
       },
       headers: {

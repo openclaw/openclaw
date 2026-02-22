@@ -100,11 +100,16 @@ export type GatewayTrustedProxyConfig = {
    */
   requiredHeaders?: string[];
   /**
-   * Optional allowlist of user identities that can access the gateway.
-   * If empty or omitted, all authenticated users from the proxy are allowed.
+   * Allowlist of user identities that can access the gateway.
+   * Required unless allowAll is explicitly set to true.
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Explicitly allow any user authenticated by the proxy.
+   * Use only as an intentional break-glass override.
+   */
+  allowAll?: boolean;
 };
 
 export type GatewayAuthConfig = {

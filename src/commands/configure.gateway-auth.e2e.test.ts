@@ -93,11 +93,12 @@ describe("buildGatewayAuthConfig", () => {
     });
   });
 
-  it("builds trusted-proxy config with only userHeader", () => {
+  it("supports explicit trusted-proxy allowAll override", () => {
     const result = buildGatewayAuthConfig({
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-remote-user",
+        allowAll: true,
       },
     });
 
@@ -105,6 +106,7 @@ describe("buildGatewayAuthConfig", () => {
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-remote-user",
+        allowAll: true,
       },
     });
   });
@@ -119,6 +121,7 @@ describe("buildGatewayAuthConfig", () => {
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-forwarded-user",
+        allowUsers: ["nick@example.com"],
       },
     });
 
@@ -127,6 +130,7 @@ describe("buildGatewayAuthConfig", () => {
       allowTailscale: true,
       trustedProxy: {
         userHeader: "x-forwarded-user",
+        allowUsers: ["nick@example.com"],
       },
     });
   });
@@ -140,6 +144,17 @@ describe("buildGatewayAuthConfig", () => {
     }).toThrow("trustedProxy config is required when mode is trusted-proxy");
   });
 
+  it("throws when trusted-proxy mode omits both allowUsers and allowAll", () => {
+    expect(() => {
+      buildGatewayAuthConfig({
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      });
+    }).toThrow("trustedProxy.allowUsers is required unless trustedProxy.allowAll is true");
+  });
+
   it("drops token and password when switching to trusted-proxy", () => {
     const result = buildGatewayAuthConfig({
       existing: {
@@ -150,6 +165,7 @@ describe("buildGatewayAuthConfig", () => {
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-forwarded-user",
+        allowUsers: ["nick@example.com"],
       },
     });
 
@@ -157,6 +173,7 @@ describe("buildGatewayAuthConfig", () => {
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-forwarded-user",
+        allowUsers: ["nick@example.com"],
       },
     });
     expect(result).not.toHaveProperty("token");

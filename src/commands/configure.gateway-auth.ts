@@ -45,6 +45,7 @@ export function buildGatewayAuthConfig(params: {
     userHeader: string;
     requiredHeaders?: string[];
     allowUsers?: string[];
+    allowAll?: boolean;
   };
 }): GatewayAuthConfig | undefined {
   const allowTailscale = params.existing?.allowTailscale;
@@ -65,6 +66,11 @@ export function buildGatewayAuthConfig(params: {
   if (params.mode === "trusted-proxy") {
     if (!params.trustedProxy) {
       throw new Error("trustedProxy config is required when mode is trusted-proxy");
+    }
+    const allowUsers = params.trustedProxy.allowUsers ?? [];
+    const allowAll = params.trustedProxy.allowAll === true;
+    if (allowUsers.length === 0 && !allowAll) {
+      throw new Error("trustedProxy.allowUsers is required unless trustedProxy.allowAll is true");
     }
     return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
   }

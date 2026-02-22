@@ -54,8 +54,10 @@ Use `trusted-proxy` auth mode when:
         // Optional: headers that MUST be present (proxy verification)
         requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
 
-        // Optional: restrict to specific users (empty = allow all)
+        // Required unless allowAll is explicitly true
         allowUsers: ["nick@example.com", "admin@company.org"],
+        // Optional break-glass override: allow any authenticated proxy user
+        // allowAll: true,
       },
     },
   },
@@ -67,13 +69,14 @@ If `gateway.bind` is `loopback`, include a loopback proxy address in
 
 ### Configuration Reference
 
-| Field                                       | Required | Description                                                                 |
-| ------------------------------------------- | -------- | --------------------------------------------------------------------------- |
-| `gateway.trustedProxies`                    | Yes      | Array of proxy IP addresses to trust. Requests from other IPs are rejected. |
-| `gateway.auth.mode`                         | Yes      | Must be `"trusted-proxy"`                                                   |
-| `gateway.auth.trustedProxy.userHeader`      | Yes      | Header name containing the authenticated user identity                      |
-| `gateway.auth.trustedProxy.requiredHeaders` | No       | Additional headers that must be present for the request to be trusted       |
-| `gateway.auth.trustedProxy.allowUsers`      | No       | Allowlist of user identities. Empty means allow all authenticated users.    |
+| Field                                       | Required | Description                                                                  |
+| ------------------------------------------- | -------- | ---------------------------------------------------------------------------- |
+| `gateway.trustedProxies`                    | Yes      | Array of proxy IP addresses to trust. Requests from other IPs are rejected.  |
+| `gateway.auth.mode`                         | Yes      | Must be `"trusted-proxy"`                                                    |
+| `gateway.auth.trustedProxy.userHeader`      | Yes      | Header name containing the authenticated user identity                       |
+| `gateway.auth.trustedProxy.requiredHeaders` | No       | Additional headers that must be present for the request to be trusted        |
+| `gateway.auth.trustedProxy.allowUsers`      | No       | Allowlist of user identities. Required unless `allowAll` is explicitly true. |
+| `gateway.auth.trustedProxy.allowAll`        | No       | Break-glass override that allows any authenticated proxy user.               |
 
 ## Proxy Setup Examples
 
@@ -91,6 +94,7 @@ Pomerium passes identity in `x-pomerium-claim-email` (or other claim headers) an
       trustedProxy: {
         userHeader: "x-pomerium-claim-email",
         requiredHeaders: ["x-pomerium-jwt-assertion"],
+        allowUsers: ["nick@example.com"],
       },
     },
   },
@@ -124,6 +128,7 @@ Caddy with the `caddy-security` plugin can authenticate users and pass identity 
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-forwarded-user",
+        allowUsers: ["nick@example.com"],
       },
     },
   },
@@ -156,6 +161,7 @@ oauth2-proxy authenticates users and passes identity in `x-auth-request-email`.
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-auth-request-email",
+        allowUsers: ["nick@example.com"],
       },
     },
   },
@@ -188,6 +194,7 @@ location / {
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-forwarded-user",
+        allowUsers: ["nick@example.com"],
       },
     },
   },
@@ -202,7 +209,8 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **trustedProxies is minimal**: Only your actual proxy IPs, not entire subnets
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS
-- [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated
+- [ ] **allowUsers is set** (recommended): Restrict to known users
+- [ ] **allowAll is explicit if needed**: Only set `allowAll: true` when you intentionally want any authenticated proxy user
 
 ## Security Audit
 
@@ -212,7 +220,8 @@ The audit checks for:
 
 - Missing `trustedProxies` configuration
 - Missing `userHeader` configuration
-- Empty `allowUsers` (allows any authenticated user)
+- Missing both `allowUsers` and `allowAll`
+- `allowAll: true` (allows any authenticated user)
 
 ## Troubleshooting
 
@@ -242,6 +251,13 @@ A required header wasn't present. Check:
 ### "trusted_proxy_user_not_allowed"
 
 The user is authenticated but not in `allowUsers`. Either add them or remove the allowlist.
+
+### "trusted_proxy_allowlist_required"
+
+`trustedProxy.allowUsers` is empty and `trustedProxy.allowAll` is not enabled. Set one of:
+
+- `allowUsers: ["user@example.com"]` (recommended)
+- `allowAll: true` (explicit break-glass)
 
 ### WebSocket Still Failing
 

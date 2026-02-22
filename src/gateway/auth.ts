@@ -306,6 +306,13 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
     }
+    const allowUsers = auth.trustedProxy.allowUsers ?? [];
+    const allowAll = auth.trustedProxy.allowAll === true;
+    if (allowUsers.length === 0 && !allowAll) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but trustedProxy.allowUsers is empty (set gateway.auth.trustedProxy.allowUsers or gateway.auth.trustedProxy.allowAll=true)",
+      );
+    }
   }
 }
 
@@ -345,7 +352,11 @@ function authorizeTrustedProxy(params: {
   const user = userHeaderValue.trim();
 
   const allowUsers = trustedProxyConfig.allowUsers ?? [];
-  if (allowUsers.length > 0 && !allowUsers.includes(user)) {
+  const allowAll = trustedProxyConfig.allowAll === true;
+  if (allowUsers.length === 0 && !allowAll) {
+    return { reason: "trusted_proxy_allowlist_required" };
+  }
+  if (!allowAll && !allowUsers.includes(user)) {
     return { reason: "trusted_proxy_user_not_allowed" };
   }
 

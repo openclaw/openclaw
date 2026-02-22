@@ -156,7 +156,7 @@ export async function promptGatewayConfig(
   let gatewayToken: string | undefined;
   let gatewayPassword: string | undefined;
   let trustedProxyConfig:
-    | { userHeader: string; requiredHeaders?: string[]; allowUsers?: string[] }
+    | { userHeader: string; requiredHeaders?: string[]; allowUsers?: string[]; allowAll?: boolean }
     | undefined;
   let trustedProxies: string[] | undefined;
   let next = cfg;
@@ -220,19 +220,41 @@ export async function promptGatewayConfig(
           .filter(Boolean)
       : [];
 
-    const allowUsersRaw = guardCancel(
-      await text({
-        message: "Allowed users (comma-separated, blank = all authenticated users)",
-        placeholder: "nick@example.com,admin@company.com",
-      }),
-      runtime,
-    );
-    const allowUsers = allowUsersRaw
-      ? String(allowUsersRaw)
-          .split(",")
-          .map((u) => u.trim())
-          .filter(Boolean)
-      : [];
+    let allowUsers: string[] = [];
+    let allowAll = false;
+    while (allowUsers.length === 0 && !allowAll) {
+      const allowUsersRaw = guardCancel(
+        await text({
+          message: "Allowed users (comma-separated, recommended)",
+          placeholder: "nick@example.com,admin@company.com",
+        }),
+        runtime,
+      );
+      allowUsers = allowUsersRaw
+        ? String(allowUsersRaw)
+            .split(",")
+            .map((u) => u.trim())
+            .filter(Boolean)
+        : [];
+      if (allowUsers.length > 0) {
+        break;
+      }
+      allowAll = Boolean(
+        guardCancel(
+          await confirm({
+            message: "No allowed users set. Allow all proxy-authenticated users?",
+            initialValue: false,
+          }),
+          runtime,
+        ),
+      );
+      if (!allowAll) {
+        note(
+          "You must set at least one allowed user, or explicitly allow all users.",
+          "Trusted Proxy Auth",
+        );
+      }
+    }
 
     const trustedProxiesRaw = guardCancel(
       await text({
@@ -256,6 +278,7 @@ export async function promptGatewayConfig(
       userHeader: String(userHeader).trim(),
       requiredHeaders: requiredHeaders.length > 0 ? requiredHeaders : undefined,
       allowUsers: allowUsers.length > 0 ? allowUsers : undefined,
+      allowAll: allowAll || undefined,
     };
   }
 
