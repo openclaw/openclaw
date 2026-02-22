@@ -28,6 +28,19 @@ The default workspace layout uses two memory layers:
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
+## Memory tools
+
+OpenClaw exposes two agent-facing tools for these Markdown files:
+
+- `memory_search` — semantic recall over indexed snippets.
+- `memory_get` — targeted read of a specific Markdown file/line range.
+
+`memory_get` now **degrades gracefully when a file doesn't exist** (for example,
+today's daily log before the first write). Both the builtin manager and the QMD
+backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
+handle "nothing recorded yet" and continue their workflow without wrapping the
+tool call in try/catch logic.
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
@@ -139,8 +152,8 @@ out to QMD for retrieval. Key points:
 - Boot refresh now runs in the background by default so chat startup is not
   blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
   blocking behavior.
-- Searches run via `memory.qmd.searchMode` (default `qmd query --json`; also
-  supports `search` and `vsearch`). If the selected mode rejects flags on your
+- Searches run via `memory.qmd.searchMode` (default `qmd search --json`; also
+  supports `vsearch` and `query`). If the selected mode rejects flags on your
   QMD build, OpenClaw retries with `qmd query`. If QMD fails or the binary is
   missing, OpenClaw automatically falls back to the builtin SQLite manager so
   memory tools keep working.
@@ -159,10 +172,6 @@ out to QMD for retrieval. Key points:
     ```bash
     # Pick the same state dir OpenClaw uses
     STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-    if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.openclaw" ] \
-      && [ -z "${OPENCLAW_STATE_DIR:-}" ]; then
-      STATE_DIR="$HOME/.moltbot"
-    fi
 
     export XDG_CONFIG_HOME="$STATE_DIR/agents/main/qmd/xdg-config"
     export XDG_CACHE_HOME="$STATE_DIR/agents/main/qmd/xdg-cache"
@@ -178,8 +187,8 @@ out to QMD for retrieval. Key points:
 **Config surface (`memory.qmd.*`)**
 
 - `command` (default `qmd`): override the executable path.
-- `searchMode` (default `query`): pick which QMD command backs
-  `memory_search` (`query`, `search`, `vsearch`).
+- `searchMode` (default `search`): pick which QMD command backs
+  `memory_search` (`search`, `vsearch`, `query`).
 - `includeDefaultMemory` (default `true`): auto-index `MEMORY.md` + `memory/**/*.md`.
 - `paths[]`: add extra directories/files (`path`, optional `pattern`, optional
   stable `name`).
@@ -193,6 +202,12 @@ out to QMD for retrieval. Key points:
 - `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
   Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
   hits in groups/channels.
+  - `match.keyPrefix` matches the **normalized** session key (lowercased, with any
+    leading `agent:<id>:` stripped). Example: `discord:channel:`.
+  - `match.rawKeyPrefix` matches the **raw** session key (lowercased), including
+    `agent:<id>:`. Example: `agent:main:discord:`.
+  - Legacy: `match.keyPrefix: "agent:..."` is still treated as a raw-key prefix,
+    but prefer `rawKeyPrefix` for clarity.
 - When `scope` denies a search, OpenClaw logs a warning with the derived
   `channel`/`chatType` so empty results are easier to debug.
 - Snippets sourced outside the workspace show up as
@@ -220,7 +235,13 @@ memory: {
     limits: { maxResults: 6, timeoutMs: 4000 },
     scope: {
       default: "deny",
-      rules: [{ action: "allow", match: { chatType: "direct" } }]
+      rules: [
+        { action: "allow", match: { chatType: "direct" } },
+        // Normalized session-key prefix (strips `agent:<id>:`).
+        { action: "deny", match: { keyPrefix: "discord:channel:" } },
+        // Raw session-key prefix (includes `agent:<id>:`).
+        { action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } },
+      ]
     },
     paths: [
       { name: "docs", path: "~/notes", pattern: "**/*.md" }
@@ -388,11 +409,11 @@ But it can be weak at exact, high-signal tokens:
 
 - IDs (`a828e60`, `b3b9895a…`)
 - code symbols (`memorySearch.query.hybrid`)
-- error strings (“sqlite-vec unavailable”)
+- error strings ("sqlite-vec unavailable")
 
 BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
 Hybrid search is the pragmatic middle ground: **use both retrieval signals** so you get
-good results for both “natural language” queries and “needle in a haystack” queries.
+good results for both "natural language" queries and "needle in a haystack" queries.
 
 #### How we merge results (the current design)
 
@@ -415,13 +436,142 @@ Notes:
 
 - `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages.
 - If embeddings are unavailable (or the provider returns a zero-vector), we still run BM25 and return keyword matches.
-- If FTS5 can’t be created, we keep vector-only search (no hard failure).
+- If FTS5 can't be created, we keep vector-only search (no hard failure).
 
-This isn’t “IR-theory perfect”, but it’s simple, fast, and tends to improve recall/precision on real notes.
+This isn't "IR-theory perfect", but it's simple, fast, and tends to improve recall/precision on real notes.
 If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
 (min/max or z-score) before mixing.
 
-Config:
+#### Post-processing pipeline
+
+After merging vector and keyword scores, two optional post-processing stages
+refine the result list before it reaches the agent:
+
+```
+Vector + Keyword → Weighted Merge → Temporal Decay → Sort → MMR → Top-K Results
+```
+
+Both stages are **off by default** and can be enabled independently.
+
+#### MMR re-ranking (diversity)
+
+When hybrid search returns results, multiple chunks may contain similar or overlapping content.
+For example, searching for "home network setup" might return five nearly identical snippets
+from different daily notes that all mention the same router configuration.
+
+**MMR (Maximal Marginal Relevance)** re-ranks the results to balance relevance with diversity,
+ensuring the top results cover different aspects of the query instead of repeating the same information.
+
+How it works:
+
+1. Results are scored by their original relevance (vector + BM25 weighted score).
+2. MMR iteratively selects results that maximize: `λ × relevance − (1−λ) × max_similarity_to_selected`.
+3. Similarity between results is measured using Jaccard text similarity on tokenized content.
+
+The `lambda` parameter controls the trade-off:
+
+- `lambda = 1.0` → pure relevance (no diversity penalty)
+- `lambda = 0.0` → maximum diversity (ignores relevance)
+- Default: `0.7` (balanced, slight relevance bias)
+
+**Example — query: "home network setup"**
+
+Given these memory files:
+
+```
+memory/2026-02-10.md  → "Configured Omada router, set VLAN 10 for IoT devices"
+memory/2026-02-08.md  → "Configured Omada router, moved IoT to VLAN 10"
+memory/2026-02-05.md  → "Set up AdGuard DNS on 192.168.10.2"
+memory/network.md     → "Router: Omada ER605, AdGuard: 192.168.10.2, VLAN 10: IoT"
+```
+
+Without MMR — top 3 results:
+
+```
+1. memory/2026-02-10.md  (score: 0.92)  ← router + VLAN
+2. memory/2026-02-08.md  (score: 0.89)  ← router + VLAN (near-duplicate!)
+3. memory/network.md     (score: 0.85)  ← reference doc
+```
+
+With MMR (λ=0.7) — top 3 results:
+
+```
+1. memory/2026-02-10.md  (score: 0.92)  ← router + VLAN
+2. memory/network.md     (score: 0.85)  ← reference doc (diverse!)
+3. memory/2026-02-05.md  (score: 0.78)  ← AdGuard DNS (diverse!)
+```
+
+The near-duplicate from Feb 8 drops out, and the agent gets three distinct pieces of information.
+
+**When to enable:** If you notice `memory_search` returning redundant or near-duplicate snippets,
+especially with daily notes that often repeat similar information across days.
+
+#### Temporal decay (recency boost)
+
+Agents with daily notes accumulate hundreds of dated files over time. Without decay,
+a well-worded note from six months ago can outrank yesterday's update on the same topic.
+
+**Temporal decay** applies an exponential multiplier to scores based on the age of each result,
+so recent memories naturally rank higher while old ones fade:
+
+```
+decayedScore = score × e^(-λ × ageInDays)
+```
+
+where `λ = ln(2) / halfLifeDays`.
+
+With the default half-life of 30 days:
+
+- Today's notes: **100%** of original score
+- 7 days ago: **~84%**
+- 30 days ago: **50%**
+- 90 days ago: **12.5%**
+- 180 days ago: **~1.6%**
+
+**Evergreen files are never decayed:**
+
+- `MEMORY.md` (root memory file)
+- Non-dated files in `memory/` (e.g., `memory/projects.md`, `memory/network.md`)
+- These contain durable reference information that should always rank normally.
+
+**Dated daily files** (`memory/YYYY-MM-DD.md`) use the date extracted from the filename.
+Other sources (e.g., session transcripts) fall back to file modification time (`mtime`).
+
+**Example — query: "what's Rod's work schedule?"**
+
+Given these memory files (today is Feb 10):
+
+```
+memory/2025-09-15.md  → "Rod works Mon-Fri, standup at 10am, pairing at 2pm"  (148 days old)
+memory/2026-02-10.md  → "Rod has standup at 14:15, 1:1 with Zeb at 14:45"    (today)
+memory/2026-02-03.md  → "Rod started new team, standup moved to 14:15"        (7 days old)
+```
+
+Without decay:
+
+```
+1. memory/2025-09-15.md  (score: 0.91)  ← best semantic match, but stale!
+2. memory/2026-02-10.md  (score: 0.82)
+3. memory/2026-02-03.md  (score: 0.80)
+```
+
+With decay (halfLife=30):
+
+```
+1. memory/2026-02-10.md  (score: 0.82 × 1.00 = 0.82)  ← today, no decay
+2. memory/2026-02-03.md  (score: 0.80 × 0.85 = 0.68)  ← 7 days, mild decay
+3. memory/2025-09-15.md  (score: 0.91 × 0.03 = 0.03)  ← 148 days, nearly gone
+```
+
+The stale September note drops to the bottom despite having the best raw semantic match.
+
+**When to enable:** If your agent has months of daily notes and you find that old,
+stale information outranks recent context. A half-life of 30 days works well for
+daily-note-heavy workflows; increase it (e.g., 90 days) if you reference older notes frequently.
+
+#### Configuration
+
+Both features are configured under `memorySearch.query.hybrid`:
 
 ```json5
 agents: {
@@ -432,13 +582,29 @@ agents: {
           enabled: true,
           vectorWeight: 0.7,
           textWeight: 0.3,
-          candidateMultiplier: 4
+          candidateMultiplier: 4,
+          // Diversity: reduce redundant results
+          mmr: {
+            enabled: true,    // default: false
+            lambda: 0.7       // 0 = max diversity, 1 = max relevance
+          },
+          // Recency: boost newer memories
+          temporalDecay: {
+            enabled: true,    // default: false
+            halfLifeDays: 30  // score halves every 30 days
+          }
         }
       }
     }
   }
 }
 ```
+
+You can enable either feature independently:
+
+- **MMR only** — useful when you have many similar notes but age doesn't matter.
+- **Temporal decay only** — useful when recency matters but your results are already diverse.
+- **Both** — recommended for agents with large, long-running daily note histories.
 
 ### Embedding cache
 
@@ -535,7 +701,7 @@ Notes:
 
 ### Local embedding auto-download
 
-- Default local embedding model: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB).
+- Default local embedding model: `hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB).
 - When `memorySearch.provider = "local"`, `node-llama-cpp` resolves `modelPath`; if the GGUF is missing it **auto-downloads** to the cache (or `local.modelCacheDir` if set), then loads it. Downloads resume on retry.
 - Native build requirement: run `pnpm approve-builds`, pick `node-llama-cpp`, then `pnpm rebuild node-llama-cpp`.
 - Fallback: if local setup fails and `memorySearch.fallback = "openai"`, we automatically switch to remote embeddings (`openai/text-embedding-3-small` unless overridden) and record the reason.

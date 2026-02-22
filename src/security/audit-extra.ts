@@ -11,10 +11,13 @@
 export {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
+  collectGatewayHttpNoAuthFindings,
+  collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
   collectNodeDenyCommandPatternFindings,
+  collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
   collectSecretsInConfigFindings,
   collectSmallModelRiskFindings,
@@ -24,6 +27,7 @@ export {
 
 // Async collectors
 export {
+  collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,

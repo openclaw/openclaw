@@ -176,9 +176,61 @@ import Testing
         #expect(host == "192.168.1.10")
     }
 
-    @Test func normalizeGatewayUrlAddsDefaultPortForWs() {
-        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway")
+    @Test func dashboardURLUsesLocalBasePathInLocalMode() throws {
+        let config: GatewayConnection.Config = (
+            url: try #require(URL(string: "ws://127.0.0.1:18789")),
+            token: nil,
+            password: nil
+        )
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: " control ")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/")
+    }
+
+    @Test func dashboardURLSkipsLocalBasePathInRemoteMode() throws {
+        let config: GatewayConnection.Config = (
+            url: try #require(URL(string: "ws://gateway.example:18789")),
+            token: nil,
+            password: nil
+        )
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .remote,
+            localBasePath: "/local-ui")
+        #expect(url.absoluteString == "http://gateway.example:18789/")
+    }
+
+    @Test func dashboardURLPrefersPathFromConfigURL() throws {
+        let config: GatewayConnection.Config = (
+            url: try #require(URL(string: "wss://gateway.example:443/remote-ui")),
+            token: nil,
+            password: nil
+        )
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .remote,
+            localBasePath: "/local-ui")
+        #expect(url.absoluteString == "https://gateway.example:443/remote-ui/")
+    }
+
+    @Test func normalizeGatewayUrlAddsDefaultPortForLoopbackWs() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
-        #expect(url?.absoluteString == "ws://gateway:18789")
+        #expect(url?.absoluteString == "ws://127.0.0.1:18789")
+    }
+
+    @Test func normalizeGatewayUrlRejectsNonLoopbackWs() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway")
+        #expect(url == nil)
+    }
+
+    @Test func normalizeGatewayUrlRejectsPrefixBypassLoopbackHost() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
+        #expect(url == nil)
     }
 }

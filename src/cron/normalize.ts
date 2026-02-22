@@ -1,9 +1,15 @@
-import type { CronJobCreate, CronJobPatch } from "./types.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import {
+  buildDeliveryFromLegacyPayload,
+  hasLegacyDeliveryHints,
+  stripLegacyDeliveryFields,
+} from "./legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
+import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -56,6 +62,13 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.atMs;
   }
 
+  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+  if (staggerMs !== undefined) {
+    next.staggerMs = staggerMs;
+  } else if ("staggerMs" in next) {
+    delete next.staggerMs;
+  }
+
   return next;
 }
 
@@ -74,10 +87,18 @@ function coercePayload(payload: UnknownRecord) {
   if (!next.kind) {
     const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
     const hasText = typeof next.text === "string" && next.text.trim().length > 0;
+    const hasAgentTurnHint =
+      typeof next.model === "string" ||
+      typeof next.thinking === "string" ||
+      typeof next.timeoutSeconds === "number" ||
+      typeof next.allowUnsafeExternalContent === "boolean";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
+    } else if (hasAgentTurnHint) {
+      // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
+      next.kind = "agentTurn";
     }
   }
   if (typeof next.message === "string") {
@@ -118,7 +139,7 @@ function coercePayload(payload: UnknownRecord) {
   }
   if ("timeoutSeconds" in next) {
     if (typeof next.timeoutSeconds === "number" && Number.isFinite(next.timeoutSeconds)) {
-      next.timeoutSeconds = Math.max(1, Math.floor(next.timeoutSeconds));
+      next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
     } else {
       delete next.timeoutSeconds;
     }
@@ -138,7 +159,7 @@ function coerceDelivery(delivery: UnknownRecord) {
     const mode = delivery.mode.trim().toLowerCase();
     if (mode === "deliver") {
       next.mode = "announce";
-    } else if (mode === "announce" || mode === "none") {
+    } else if (mode === "announce" || mode === "none" || mode === "webhook") {
       next.mode = mode;
     } else {
       delete next.mode;
@@ -163,53 +184,6 @@ function coerceDelivery(delivery: UnknownRecord) {
     }
   }
   return next;
-}
-
-function hasLegacyDeliveryHints(payload: UnknownRecord) {
-  if (typeof payload.deliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.to === "string" && payload.to.trim()) {
-    return true;
-  }
-  return false;
-}
-
-function buildDeliveryFromLegacyPayload(payload: UnknownRecord): UnknownRecord {
-  const deliver = payload.deliver;
-  const mode = deliver === false ? "none" : "announce";
-  const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const next: UnknownRecord = { mode };
-  if (channelRaw) {
-    next.channel = channelRaw;
-  }
-  if (toRaw) {
-    next.to = toRaw;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
-  }
-  return next;
-}
-
-function stripLegacyDeliveryFields(payload: UnknownRecord) {
-  if ("deliver" in payload) {
-    delete payload.deliver;
-  }
-  if ("channel" in payload) {
-    delete payload.channel;
-  }
-  if ("to" in payload) {
-    delete payload.to;
-  }
-  if ("bestEffortDeliver" in payload) {
-    delete payload.bestEffortDeliver;
-  }
 }
 
 function unwrapJob(raw: UnknownRecord) {
@@ -335,6 +309,20 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("sessionKey" in base) {
+    const sessionKey = base.sessionKey;
+    if (sessionKey === null) {
+      next.sessionKey = null;
+    } else if (typeof sessionKey === "string") {
+      const trimmed = sessionKey.trim();
+      if (trimmed) {
+        next.sessionKey = trimmed;
+      } else {
+        delete next.sessionKey;
+      }
+    }
+  }
+
   if ("enabled" in base) {
     const enabled = base.enabled;
     if (typeof enabled === "boolean") {
@@ -439,6 +427,19 @@ export function normalizeCronJobInput(
       !("deleteAfterRun" in next)
     ) {
       next.deleteAfterRun = true;
+    }
+    if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
+      const schedule = next.schedule as UnknownRecord;
+      const explicit = normalizeCronStaggerMs(schedule.staggerMs);
+      if (explicit !== undefined) {
+        schedule.staggerMs = explicit;
+      } else {
+        const expr = typeof schedule.expr === "string" ? schedule.expr : "";
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(expr);
+        if (defaultStaggerMs !== undefined) {
+          schedule.staggerMs = defaultStaggerMs;
+        }
+      }
     }
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";

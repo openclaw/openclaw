@@ -7,19 +7,18 @@ import {
   escapeRegExp,
   formatPairingApproveHint,
   getChatChannelMeta,
-  isWhatsAppGroupJid,
   listWhatsAppAccountIds,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
   looksLikeWhatsAppTargetId,
   migrateBaseNameToDefaultAccount,
-  missingTargetError,
   normalizeAccountId,
   normalizeE164,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
   readStringParam,
   resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppOutboundTarget,
   resolveWhatsAppAccount,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -119,6 +118,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         .filter((entry): entry is string => Boolean(entry))
         .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
         .filter((entry): entry is string => Boolean(entry)),
+    resolveDefaultTo: ({ cfg, accountId }) => {
+      const root = cfg.channels?.whatsapp;
+      const normalized = normalizeAccountId(accountId);
+      const account = root?.accounts?.[normalized];
+      return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
+    },
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -289,45 +294,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     pollMaxOptions: 12,
-    resolveTarget: ({ to, allowFrom, mode }) => {
-      const trimmed = to?.trim() ?? "";
-      const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
-      const hasWildcard = allowListRaw.includes("*");
-      const allowList = allowListRaw
-        .filter((entry) => entry !== "*")
-        .map((entry) => normalizeWhatsAppTarget(entry))
-        .filter((entry): entry is string => Boolean(entry));
-
-      if (trimmed) {
-        const normalizedTo = normalizeWhatsAppTarget(trimmed);
-        if (!normalizedTo) {
-          return {
-            ok: false,
-            error: missingTargetError("WhatsApp", "<E.164|group JID>"),
-          };
-        }
-        if (isWhatsAppGroupJid(normalizedTo)) {
-          return { ok: true, to: normalizedTo };
-        }
-        if (mode === "implicit" || mode === "heartbeat") {
-          if (hasWildcard || allowList.length === 0) {
-            return { ok: true, to: normalizedTo };
-          }
-          if (allowList.includes(normalizedTo)) {
-            return { ok: true, to: normalizedTo };
-          }
-          return {
-            ok: false,
-            error: missingTargetError("WhatsApp", "<E.164|group JID>"),
-          };
-        }
-        return { ok: true, to: normalizedTo };
-      }
-      return {
-        ok: false,
-        error: missingTargetError("WhatsApp", "<E.164|group JID>"),
-      };
-    },
+    resolveTarget: ({ to, allowFrom, mode }) =>
+      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {

@@ -4,6 +4,7 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   isCommandMessage,
+  sanitizeRenderableText,
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
@@ -44,6 +45,24 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("first\nsecond");
   });
 
+  it("preserves internal newlines for string content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: "Line 1\nLine 2\nLine 3",
+    });
+
+    expect(text).toBe("Line 1\nLine 2\nLine 3");
+  });
+
+  it("preserves internal newlines for text blocks", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Line 1\nLine 2\nLine 3" }],
+    });
+
+    expect(text).toBe("Line 1\nLine 2\nLine 3");
+  });
+
   it("places thinking before content when included", () => {
     const text = extractTextFromMessage(
       {
@@ -57,6 +76,74 @@ describe("extractTextFromMessage", () => {
     );
 
     expect(text).toBe("[thinking]\nponder\n\nhello");
+  });
+
+  it("sanitizes ANSI and control chars from string content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: "Hello\x1b[31m red\x1b[0m\x00world",
+    });
+
+    expect(text).toBe("Hello redworld");
+  });
+
+  it("redacts heavily corrupted binary-like lines", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "������������������������" }],
+    });
+
+    expect(text).toBe("[binary data omitted]");
+  });
+
+  it("strips leading inbound metadata blocks for user messages", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "abc123"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Someone"
+}
+\`\`\`
+
+Actual user message`,
+    });
+
+    expect(text).toBe("Actual user message");
+  });
+
+  it("keeps metadata-like blocks for non-user messages", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"abc123"}
+\`\`\`
+
+Assistant body`,
+    });
+
+    expect(text).toContain("Conversation info (untrusted metadata):");
+    expect(text).toContain("Assistant body");
+  });
+
+  it("does not strip metadata-like blocks that are not a leading prefix", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content:
+        'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    });
+
+    expect(text).toBe(
+      'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    );
   });
 });
 
@@ -104,5 +191,46 @@ describe("isCommandMessage", () => {
     expect(isCommandMessage({ command: true })).toBe(true);
     expect(isCommandMessage({ command: false })).toBe(false);
     expect(isCommandMessage({})).toBe(false);
+  });
+});
+
+describe("sanitizeRenderableText", () => {
+  it("breaks very long unbroken tokens to avoid overflow", () => {
+    const input = "a".repeat(140);
+    const sanitized = sanitizeRenderableText(input);
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("breaks moderately long unbroken tokens to protect narrow terminals", () => {
+    const input = "b".repeat(90);
+    const sanitized = sanitizeRenderableText(input);
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("preserves long filesystem paths verbatim for copy safety", () => {
+    const input =
+      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long urls verbatim for copy safety", () => {
+    const input =
+      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long file-like underscore tokens for copy safety", () => {
+    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
   });
 });

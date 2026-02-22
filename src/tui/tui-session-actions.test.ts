@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TuiStateAccess } from "./tui-types.js";
+import type { GatewayChatClient } from "./gateway-chat.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
   it("queues session refreshes and applies the latest result", async () => {
@@ -49,7 +50,7 @@ describe("tui session actions", () => {
     const requestRender = vi.fn();
 
     const { refreshSessionInfo } = createSessionActions({
-      client: { listSessions } as { listSessions: typeof listSessions },
+      client: { listSessions } as unknown as GatewayChatClient,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
       opts: {},

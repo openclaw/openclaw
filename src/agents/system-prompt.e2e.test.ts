@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -8,10 +10,49 @@ describe("buildAgentSystemPrompt", () => {
       ownerNumbers: ["+123", " +456 ", ""],
     });
 
-    expect(prompt).toContain("## User Identity");
+    expect(prompt).toContain("## Authorized Senders");
     expect(prompt).toContain(
-      "Owner numbers: +123, +456. Treat messages from these numbers as the user.",
+      "Authorized senders: +123, +456. These senders are allowlisted; do not assume they are the owner.",
     );
+  });
+
+  it("hashes owner numbers when ownerDisplay is hash", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers: ["+123", "+456", ""],
+      ownerDisplay: "hash",
+    });
+
+    expect(prompt).toContain("## Authorized Senders");
+    expect(prompt).toContain("Authorized senders:");
+    expect(prompt).not.toContain("+123");
+    expect(prompt).not.toContain("+456");
+    expect(prompt).toMatch(/[a-f0-9]{12}/);
+  });
+
+  it("uses a stable, keyed HMAC when ownerDisplaySecret is provided", () => {
+    const secretA = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers: ["+123"],
+      ownerDisplay: "hash",
+      ownerDisplaySecret: "secret-key-A",
+    });
+
+    const secretB = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers: ["+123"],
+      ownerDisplay: "hash",
+      ownerDisplaySecret: "secret-key-B",
+    });
+
+    const lineA = secretA.split("## Authorized Senders")[1]?.split("\n")[1];
+    const lineB = secretB.split("## Authorized Senders")[1]?.split("\n")[1];
+    const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
+    const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
+
+    expect(tokenA).toBeDefined();
+    expect(tokenB).toBeDefined();
+    expect(tokenA).not.toBe(tokenB);
   });
 
   it("omits owner section when numbers are missing", () => {
@@ -19,8 +60,8 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).not.toContain("## User Identity");
-    expect(prompt).not.toContain("Owner numbers:");
+    expect(prompt).not.toContain("## Authorized Senders");
+    expect(prompt).not.toContain("Authorized senders:");
   });
 
   it("omits extended sections in minimal prompt mode", () => {
@@ -37,7 +78,7 @@ describe("buildAgentSystemPrompt", () => {
       ttsHint: "Voice (TTS) is enabled.",
     });
 
-    expect(prompt).not.toContain("## User Identity");
+    expect(prompt).not.toContain("## Authorized Senders");
     expect(prompt).not.toContain("## Skills");
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
@@ -47,6 +88,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
@@ -101,6 +145,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
     expect(prompt).toContain("openclaw gateway restart");
     expect(prompt).toContain("Do not invent commands");
+  });
+
+  it("marks system message blocks as internal and not user-visible", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("`[System Message] ...` blocks are internal context");
+    expect(prompt).toContain("are not user-visible by default");
+    expect(prompt).toContain("reports completed cron/subagent work");
+    expect(prompt).toContain("rewrite it in your normal assistant voice");
+  });
+
+  it("guides subagent workflows to avoid polling loops", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
+    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
+    expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
   it("lists available tools when provided", () => {
@@ -340,7 +407,21 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
-    expect(prompt).toContain("respond with ONLY: NO_REPLY");
+    expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("includes inline button style guidance when runtime supports inline buttons", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
   it("includes runtime provider capabilities when present", () => {
@@ -418,12 +499,21 @@ describe("buildAgentSystemPrompt", () => {
       sandboxInfo: {
         enabled: true,
         workspaceDir: "/tmp/sandbox",
+        containerWorkspaceDir: "/workspace",
         workspaceAccess: "ro",
         agentWorkspaceMount: "/agent",
         elevated: { allowed: true, defaultLevel: "on" },
       },
     });
 
+    expect(prompt).toContain("Your working directory is: /workspace");
+    expect(prompt).toContain(
+      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw. For bash/exec commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
+    );
+    expect(prompt).toContain("Sandbox container workdir: /workspace");
+    expect(prompt).toContain(
+      "Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): /tmp/sandbox",
+    );
     expect(prompt).toContain("You are running in a sandboxed runtime");
     expect(prompt).toContain("Sub-agents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
@@ -441,5 +531,97 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+});
+
+describe("buildSubagentSystemPrompt", () => {
+  it("includes sub-agent spawning guidance for depth-1 orchestrator when maxSpawnDepth >= 2", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("## Sub-Agent Spawning");
+    expect(prompt).toContain("You CAN spawn your own sub-agents");
+    expect(prompt).toContain("sessions_spawn");
+    expect(prompt).toContain("`subagents` tool");
+    expect(prompt).toContain("announce their results back to you automatically");
+    expect(prompt).toContain("Do NOT repeatedly poll `subagents list`");
+  });
+
+  it("does not include spawning guidance for depth-1 leaf when maxSpawnDepth == 1", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 1,
+    });
+
+    expect(prompt).not.toContain("## Sub-Agent Spawning");
+    expect(prompt).not.toContain("You CAN spawn");
+  });
+
+  it("includes leaf worker note for depth-2 sub-sub-agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc:subagent:def",
+      task: "leaf task",
+      childDepth: 2,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("## Sub-Agent Spawning");
+    expect(prompt).toContain("leaf worker");
+    expect(prompt).toContain("CANNOT spawn further sub-agents");
+  });
+
+  it("uses 'parent orchestrator' label for depth-2 agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc:subagent:def",
+      task: "leaf task",
+      childDepth: 2,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("spawned by the parent orchestrator");
+    expect(prompt).toContain("reported to the parent orchestrator");
+  });
+
+  it("uses 'main agent' label for depth-1 agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "orchestrator task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("spawned by the main agent");
+    expect(prompt).toContain("reported to the main agent");
+  });
+
+  it("includes recovery guidance for compacted/truncated tool output", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "investigate logs",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("[compacted: tool output removed to free context]");
+    expect(prompt).toContain("[truncated: output exceeded context limit]");
+    expect(prompt).toContain("offset/limit");
+    expect(prompt).toContain("instead of full-file `cat`");
+  });
+
+  it("defaults to depth 1 and maxSpawnDepth 1 when not provided", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "basic task",
+    });
+
+    // Should not include spawning guidance (default maxSpawnDepth is 1, depth 1 is leaf)
+    expect(prompt).not.toContain("## Sub-Agent Spawning");
+    expect(prompt).toContain("spawned by the main agent");
   });
 });

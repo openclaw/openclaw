@@ -18,6 +18,13 @@ export default defineConfig([
     platform: "node",
   },
   {
+    // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
+    entry: "src/cli/daemon-cli.ts",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/infra/warning-filter.ts",
     env,
     fixedExtension: false,
@@ -25,6 +32,13 @@ export default defineConfig([
   },
   {
     entry: "src/plugin-sdk/index.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
+    entry: "src/plugin-sdk/account-id.ts",
     outDir: "dist/plugin-sdk",
     env,
     fixedExtension: false,

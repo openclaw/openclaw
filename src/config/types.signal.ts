@@ -42,6 +42,8 @@ export type SignalAccountConfig = {
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for Signal group senders (E.164). */
   groupAllowFrom?: Array<string | number>;
   /**

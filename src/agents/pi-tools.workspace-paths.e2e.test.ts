@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
@@ -101,7 +102,10 @@ describe("workspace path resolution", () => {
 
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      const tools = createOpenClawCodingTools({ workspaceDir, exec: { host: "gateway" } });
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        exec: { host: "gateway", ask: "off", security: "full" },
+      });
       const execTool = tools.find((tool) => tool.name === "exec");
       expect(execTool).toBeDefined();
 
@@ -124,7 +128,10 @@ describe("workspace path resolution", () => {
   it("lets exec workdir override the workspace default", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-override-", async (overrideDir) => {
-        const tools = createOpenClawCodingTools({ workspaceDir, exec: { host: "gateway" } });
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          exec: { host: "gateway", ask: "off", security: "full" },
+        });
         const execTool = tools.find((tool) => tool.name === "exec");
         expect(execTool).toBeDefined();
 
@@ -151,29 +158,13 @@ describe("sandboxed workspace paths", () => {
   it("uses sandbox workspace for relative read/write/edit", async () => {
     await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
       await withTempDir("openclaw-workspace-", async (workspaceDir) => {
-        const sandbox = {
-          enabled: true,
-          sessionKey: "sandbox:test",
+        const sandbox = createPiToolsSandboxContext({
           workspaceDir: sandboxDir,
           agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw",
-          containerName: "openclaw-sbx-test",
-          containerWorkdir: "/workspace",
+          workspaceAccess: "rw" as const,
           fsBridge: createHostSandboxFsBridge(sandboxDir),
-          docker: {
-            image: "openclaw-sandbox:bookworm-slim",
-            containerPrefix: "openclaw-sbx-",
-            workdir: "/workspace",
-            readOnlyRoot: true,
-            tmpfs: [],
-            network: "none",
-            user: "1000:1000",
-            capDrop: ["ALL"],
-            env: { LANG: "C.UTF-8" },
-          },
           tools: { allow: [], deny: [] },
-          browserAllowHostControl: false,
-        };
+        });
 
         const testFile = "sandbox.txt";
         await fs.writeFile(path.join(sandboxDir, testFile), "sandbox read", "utf8");

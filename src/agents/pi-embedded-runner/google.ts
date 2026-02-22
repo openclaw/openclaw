@@ -1,13 +1,14 @@
+import { EventEmitter } from "node:events";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
-import { EventEmitter } from "node:events";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
@@ -18,10 +19,13 @@ import {
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
   sanitizeToolCallInputs,
+  stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
+import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -47,6 +51,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
+
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
@@ -98,6 +103,12 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
       const candidate =
         rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
       if (!isValidAntigravitySignature(candidate)) {
+        // Preserve reasoning content as plain text when signatures are invalid/missing.
+        // Antigravity Claude rejects unsigned thinking blocks, but dropping them loses context.
+        const thinkingText = (block as { thinking?: unknown }).thinking;
+        if (typeof thinkingText === "string" && thinkingText.trim()) {
+          nextContent.push({ type: "text", text: thinkingText } as AssistantContentBlock);
+        }
         contentChanged = true;
         continue;
       }
@@ -244,7 +255,11 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
+  // AND Claude models.  This field does not support JSON Schema keywords such as
+  // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
+  // for every provider that routes through this path.
+  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -406,30 +421,12 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
-function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
-      out.push(msg);
-      continue;
-    }
-    if (!("details" in msg)) {
-      out.push(msg);
-      continue;
-    }
-    const { details: _details, ...rest } = msg as unknown as Record<string, unknown>;
-    touched = true;
-    out.push(rest as unknown as AgentMessage);
-  }
-  return touched ? out : messages;
-}
-
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -452,11 +449,15 @@ export async function sanitizeSessionHistory(params: {
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
-    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
+  const sanitizedThinking = policy.sanitizeThinkingSignatures
+    ? sanitizeAntigravityThinkingBlocks(droppedThinking)
+    : droppedThinking;
   const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
@@ -475,10 +476,9 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+    : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

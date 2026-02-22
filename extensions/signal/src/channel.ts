@@ -1,6 +1,9 @@
 import {
   applyAccountNameToChannelSection,
+  buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
+  collectStatusIssuesFromLastError,
+  createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -100,6 +103,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         .filter(Boolean)
         .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
         .filter(Boolean),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -249,35 +254,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     },
   },
   status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "signal",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
+    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
     buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
+      ...buildBaseChannelStatusSummary(snapshot),
       baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),

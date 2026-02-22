@@ -1,30 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
+import {
+  ANTHROPIC_CFG,
+  ANTHROPIC_STORE,
+} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
 
 describe("resolveAuthProfileOrder", () => {
-  const store: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      "anthropic:default": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-default",
-      },
-      "anthropic:work": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-work",
-      },
-    },
-  };
-  const cfg = {
-    auth: {
-      profiles: {
-        "anthropic:default": { provider: "anthropic", mode: "api_key" },
-        "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      },
-    },
-  };
+  const store = ANTHROPIC_STORE;
+  const cfg = ANTHROPIC_CFG;
 
   it("uses stored profiles when no config exists", () => {
     const order = resolveAuthProfileOrder({
@@ -65,6 +48,74 @@ describe("resolveAuthProfileOrder", () => {
       provider: "minimax",
     });
     expect(order).toEqual(["minimax:prod"]);
+  });
+  it("falls back to stored provider profiles when config profile ids drift", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:user@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai-codex",
+    });
+    expect(order).toEqual(["openai-codex:user@example.com"]);
+  });
+  it("does not bypass explicit ids when the configured profile exists but is invalid", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "token",
+            },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "token",
+            provider: "openai-codex",
+            token: "expired-token",
+            expires: Date.now() - 1_000,
+          },
+          "openai-codex:user@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai-codex",
+    });
+    expect(order).toEqual([]);
   });
   it("drops explicit order entries that belong to another provider", () => {
     const order = resolveAuthProfileOrder({

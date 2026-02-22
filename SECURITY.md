@@ -39,11 +39,32 @@ Reports without reproduction steps, demonstrated impact, and remediation advice 
 OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
 The best way to help the project right now is by sending PRs.
 
+## Maintainers: GHSA Updates via CLI
+
+When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (or newer). Without it, some fields (notably CVSS) may not persist even if the request returns 200.
+
 ## Out of Scope
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
+- Deployments where mutually untrusted/adversarial operators share one gateway host and config
 - Prompt injection attacks
+
+## Deployment Assumptions
+
+OpenClaw security guidance assumes:
+
+- The host where OpenClaw runs is within a trusted OS/admin boundary.
+- Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
+- A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
+
+## Plugin Trust Boundary
+
+Plugins/extensions are loaded **in-process** with the Gateway and are treated as trusted code.
+
+- Plugins can execute with the same OS privileges as the OpenClaw process.
+- Runtime helpers (for example `runtime.system.runCommandWithTimeout`) are convenience APIs, not a sandbox boundary.
+- Only install plugins you trust, and prefer `plugins.allow` to pin explicit trusted plugin ids.
 
 ## Operational Guidance
 
@@ -51,9 +72,26 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 
 - `https://docs.openclaw.ai/gateway/security`
 
+### Tool filesystem hardening
+
+- `tools.exec.applyPatch.workspaceOnly: true` (recommended): keeps `apply_patch` writes/deletes within the configured workspace directory.
+- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory.
+- Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
+
 ### Web Interface Safety
 
-OpenClaw's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
+OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for **local use only**.
+
+- Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
+  - Config: `gateway.bind="loopback"` (default).
+  - CLI: `openclaw gateway run --bind loopback`.
+- Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
+  - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
+  - Expected routes: `/__openclaw__/canvas/`, `/__openclaw__/a2ui/`.
+  - This deployment model alone is not a security vulnerability.
+- Do **not** expose it to the public internet (no direct bind to `0.0.0.0`, no public reverse proxy). It is not hardened for public exposure.
+- If you need remote access, prefer an SSH tunnel or Tailscale serve/funnel (so the Gateway still binds to loopback), plus strong Gateway auth.
+- The Gateway HTTP surface includes the canvas host (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`). Treat canvas content as sensitive/untrusted and avoid exposing it beyond loopback unless you understand the risk.
 
 ## Runtime Requirements
 

@@ -1,12 +1,19 @@
 import type { startGatewayServer } from "../../gateway/server.js";
-import type { defaultRuntime } from "../../runtime.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
+  markGatewaySigusr1RestartHandled,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getActiveTaskCount, waitForActiveTasks } from "../../process/command-queue.js";
+import {
+  getActiveTaskCount,
+  resetAllLanes,
+  waitForActiveTasks,
+} from "../../process/command-queue.js";
+import { createRestartIterationHook } from "../../process/restart-recovery.js";
+import type { defaultRuntime } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -76,8 +83,26 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
-          shuttingDown = false;
-          restartResolver?.();
+          const respawn = restartGatewayProcessWithFreshPid();
+          if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+            const modeLabel =
+              respawn.mode === "spawned"
+                ? `spawned pid ${respawn.pid ?? "unknown"}`
+                : "supervisor restart";
+            gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+            cleanupSignals();
+            params.runtime.exit(0);
+          } else {
+            if (respawn.mode === "failed") {
+              gatewayLog.warn(
+                `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+              );
+            } else {
+              gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
+            }
+            shuttingDown = false;
+            restartResolver?.();
+          }
         } else {
           cleanupSignals();
           params.runtime.exit(0);
@@ -99,10 +124,11 @@ export async function runGatewayLoop(params: {
     const authorized = consumeGatewaySigusr1RestartAuthorization();
     if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
       gatewayLog.warn(
-        "SIGUSR1 restart ignored (not authorized; enable commands.restart or use gateway tool).",
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
       return;
     }
+    markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
 
@@ -111,10 +137,21 @@ export async function runGatewayLoop(params: {
   process.on("SIGUSR1", onSigusr1);
 
   try {
+    const onIteration = createRestartIterationHook(() => {
+      // After an in-process restart (SIGUSR1), reset command-queue lane state.
+      // Interrupted tasks from the previous lifecycle may have left `active`
+      // counts elevated (their finally blocks never ran), permanently blocking
+      // new work from draining. This must happen here — at the restart
+      // coordinator level — rather than inside individual subsystem init
+      // functions, to avoid surprising cross-cutting side effects.
+      resetAllLanes();
+    });
+
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      onIteration();
       server = await params.start();
       await new Promise<void>((resolve) => {
         restartResolver = resolve;

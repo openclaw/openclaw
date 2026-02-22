@@ -1,15 +1,20 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { URL } from "node:url";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
-import { MediaStreamHandler } from "./media-stream.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -23,6 +28,7 @@ export class VoiceCallWebhookServer {
   private manager: CallManager;
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
+  private staleCallReaperInterval: ReturnType<typeof setInterval> | null = null;
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -146,6 +152,17 @@ export class VoiceCallWebhookServer {
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
+        // Auto-end call when media stream disconnects to prevent stuck calls.
+        // Without this, calls can remain active indefinitely after the stream closes.
+        const disconnectedCall = this.manager.getCallByProviderCallId(callId);
+        if (disconnectedCall) {
+          console.log(
+            `[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`,
+          );
+          void this.manager.endCall(disconnectedCall.callId).catch((err) => {
+            console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
+          });
+        }
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).unregisterCallStream(callId);
         }
@@ -195,14 +212,51 @@ export class VoiceCallWebhookServer {
           console.log(`[voice-call] Media stream WebSocket on ws://${bind}:${port}${streamPath}`);
         }
         resolve(url);
+
+        // Start the stale call reaper if configured
+        this.startStaleCallReaper();
       });
     });
+  }
+
+  /**
+   * Start a periodic reaper that ends calls older than the configured threshold.
+   * Catches calls stuck in unexpected states (e.g., notify-mode calls that never
+   * receive a terminal webhook from the provider).
+   */
+  private startStaleCallReaper(): void {
+    const maxAgeSeconds = this.config.staleCallReaperSeconds;
+    if (!maxAgeSeconds || maxAgeSeconds <= 0) {
+      return;
+    }
+
+    const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds
+    const maxAgeMs = maxAgeSeconds * 1000;
+
+    this.staleCallReaperInterval = setInterval(() => {
+      const now = Date.now();
+      for (const call of this.manager.getActiveCalls()) {
+        const age = now - call.startedAt;
+        if (age > maxAgeMs) {
+          console.log(
+            `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
+          );
+          void this.manager.endCall(call.callId).catch((err) => {
+            console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
+          });
+        }
+      }
+    }, CHECK_INTERVAL_MS);
   }
 
   /**
    * Stop the webhook server.
    */
   async stop(): Promise<void> {
+    if (this.staleCallReaperInterval) {
+      clearInterval(this.staleCallReaperInterval);
+      this.staleCallReaperInterval = null;
+    }
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => {
@@ -244,9 +298,14 @@ export class VoiceCallWebhookServer {
     try {
       body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES);
     } catch (err) {
-      if (err instanceof Error && err.message === "PayloadTooLarge") {
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
         res.end("Payload Too Large");
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        res.statusCode = 408;
+        res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
         return;
       }
       throw err;
@@ -303,42 +362,7 @@ export class VoiceCallWebhookServer {
     maxBytes: number,
     timeoutMs = 30_000,
   ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      let done = false;
-      const finish = (fn: () => void) => {
-        if (done) {
-          return;
-        }
-        done = true;
-        clearTimeout(timer);
-        fn();
-      };
-
-      const timer = setTimeout(() => {
-        finish(() => {
-          const err = new Error("Request body timeout");
-          req.destroy(err);
-          reject(err);
-        });
-      }, timeoutMs);
-
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      req.on("data", (chunk: Buffer) => {
-        totalBytes += chunk.length;
-        if (totalBytes > maxBytes) {
-          finish(() => {
-            req.destroy();
-            reject(new Error("PayloadTooLarge"));
-          });
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on("end", () => finish(() => resolve(Buffer.concat(chunks).toString("utf-8"))));
-      req.on("error", (err) => finish(() => reject(err)));
-      req.on("close", () => finish(() => reject(new Error("Connection closed"))));
-    });
+    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
   }
 
   /**

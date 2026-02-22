@@ -24,6 +24,7 @@ import {
 import {
   type ActionGate,
   jsonResult,
+  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -37,6 +38,35 @@ function readParentIdParam(params: Record<string, unknown>): string | null | und
     return null;
   }
   return readStringParam(params, "parentId");
+}
+
+type DiscordRoleMutation = (params: {
+  guildId: string;
+  userId: string;
+  roleId: string;
+}) => Promise<unknown>;
+type DiscordRoleMutationWithAccount = (
+  params: {
+    guildId: string;
+    userId: string;
+    roleId: string;
+  },
+  options: { accountId: string },
+) => Promise<unknown>;
+
+async function runRoleMutation(params: {
+  accountId?: string;
+  values: Record<string, unknown>;
+  mutate: DiscordRoleMutation & DiscordRoleMutationWithAccount;
+}) {
+  const guildId = readStringParam(params.values, "guildId", { required: true });
+  const userId = readStringParam(params.values, "userId", { required: true });
+  const roleId = readStringParam(params.values, "roleId", { required: true });
+  if (params.accountId) {
+    await params.mutate({ guildId, userId, roleId }, { accountId: params.accountId });
+    return;
+  }
+  await params.mutate({ guildId, userId, roleId });
 }
 
 export async function handleDiscordGuildAction(
@@ -157,36 +187,14 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("roles", false)) {
         throw new Error("Discord role changes are disabled.");
       }
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
-      const userId = readStringParam(params, "userId", {
-        required: true,
-      });
-      const roleId = readStringParam(params, "roleId", { required: true });
-      if (accountId) {
-        await addRoleDiscord({ guildId, userId, roleId }, { accountId });
-      } else {
-        await addRoleDiscord({ guildId, userId, roleId });
-      }
+      await runRoleMutation({ accountId, values: params, mutate: addRoleDiscord });
       return jsonResult({ ok: true });
     }
     case "roleRemove": {
       if (!isActionEnabled("roles", false)) {
         throw new Error("Discord role changes are disabled.");
       }
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
-      const userId = readStringParam(params, "userId", {
-        required: true,
-      });
-      const roleId = readStringParam(params, "roleId", { required: true });
-      if (accountId) {
-        await removeRoleDiscord({ guildId, userId, roleId }, { accountId });
-      } else {
-        await removeRoleDiscord({ guildId, userId, roleId });
-      }
+      await runRoleMutation({ accountId, values: params, mutate: removeRoleDiscord });
       return jsonResult({ ok: true });
     }
     case "channelInfo": {
@@ -327,6 +335,7 @@ export async function handleDiscordGuildAction(
       const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
         integer: true,
       });
+      const availableTags = parseAvailableTags(params.availableTags);
       const channel = accountId
         ? await editChannelDiscord(
             {
@@ -340,6 +349,7 @@ export async function handleDiscordGuildAction(
               archived,
               locked,
               autoArchiveDuration: autoArchiveDuration ?? undefined,
+              availableTags,
             },
             { accountId },
           )
@@ -354,6 +364,7 @@ export async function handleDiscordGuildAction(
             archived,
             locked,
             autoArchiveDuration: autoArchiveDuration ?? undefined,
+            availableTags,
           });
       return jsonResult({ ok: true, channel });
     }

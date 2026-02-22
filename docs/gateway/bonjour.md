@@ -94,11 +94,18 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `gatewayPort=<port>` (Gateway WS + HTTP)
 - `gatewayTls=1` (only when TLS is enabled)
 - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
-- `canvasPort=<port>` (only when the canvas host is enabled; default `18793`)
+- `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
 - `sshPort=<port>` (defaults to 22 when not overridden)
 - `transport=gateway`
 - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint)
 - `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
+
+Security notes:
+
+- Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
+- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
+- iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
 
 ## Debugging on macOS
 

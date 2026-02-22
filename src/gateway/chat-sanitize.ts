@@ -1,52 +1,7 @@
-const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
-const ENVELOPE_CHANNELS = [
-  "WebChat",
-  "WhatsApp",
-  "Telegram",
-  "Signal",
-  "Slack",
-  "Discord",
-  "Google Chat",
-  "iMessage",
-  "Teams",
-  "Matrix",
-  "Zalo",
-  "Zalo Personal",
-  "BlueBubbles",
-];
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 
-const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
-
-function looksLikeEnvelopeHeader(header: string): boolean {
-  if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
-    return true;
-  }
-  if (/\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/.test(header)) {
-    return true;
-  }
-  return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
-}
-
-export function stripEnvelope(text: string): string {
-  const match = text.match(ENVELOPE_PREFIX);
-  if (!match) {
-    return text;
-  }
-  const header = match[1] ?? "";
-  if (!looksLikeEnvelopeHeader(header)) {
-    return text;
-  }
-  return text.slice(match[0].length);
-}
-
-function stripMessageIdHints(text: string): string {
-  if (!text.includes("[message_id:")) {
-    return text;
-  }
-  const lines = text.split(/\r?\n/);
-  const filtered = lines.filter((line) => !MESSAGE_ID_LINE.test(line));
-  return filtered.length === lines.length ? text : filtered.join("\n");
-}
+export { stripEnvelope };
 
 function stripEnvelopeFromContent(content: unknown[]): { content: unknown[]; changed: boolean } {
   let changed = false;
@@ -58,7 +13,7 @@ function stripEnvelopeFromContent(content: unknown[]): { content: unknown[]; cha
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadata(entry.text)));
     if (stripped === entry.text) {
       return item;
     }
@@ -85,7 +40,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   const next: Record<string, unknown> = { ...entry };
 
   if (typeof entry.content === "string") {
-    const stripped = stripMessageIdHints(stripEnvelope(entry.content));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadata(entry.content)));
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -97,7 +52,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const stripped = stripMessageIdHints(stripEnvelope(entry.text));
+    const stripped = stripMessageIdHints(stripEnvelope(stripInboundMetadata(entry.text)));
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;

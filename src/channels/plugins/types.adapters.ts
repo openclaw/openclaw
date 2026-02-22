@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {
   ChannelAccountSnapshot,
@@ -62,6 +63,10 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  resolveDefaultTo?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string | undefined;
 };
 
 export type ChannelGroupAdapter = {
@@ -75,11 +80,14 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
+  silent?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

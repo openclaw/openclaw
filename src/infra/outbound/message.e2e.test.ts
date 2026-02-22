@@ -1,37 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import { createIMessageTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-const loadMessage = async () => await import("./message.js");
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { sendMessage, sendPoll } from "./message.js";
 
-const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
-  const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
+const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
   setActivePluginRegistry(registry);
 };
 
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
   randomIdempotencyKey: () => "idem-1",
 }));
 
 describe("sendMessage channel normalization", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     callGatewayMock.mockReset();
-    vi.resetModules();
-    await setRegistry(emptyRegistry);
+    setRegistry(emptyRegistry);
   });
 
-  afterEach(async () => {
-    await setRegistry(emptyRegistry);
+  afterEach(() => {
+    setRegistry(emptyRegistry);
   });
 
   it("normalizes Teams alias", async () => {
-    const { sendMessage } = await loadMessage();
     const sendMSTeams = vi.fn(async () => ({
       messageId: "m1",
       conversationId: "c1",
     }));
-    await setRegistry(
+    setRegistry(
       createTestRegistry([
         {
           pluginId: "msteams",
@@ -56,9 +57,8 @@ describe("sendMessage channel normalization", () => {
   });
 
   it("normalizes iMessage alias", async () => {
-    const { sendMessage } = await loadMessage();
     const sendIMessage = vi.fn(async () => ({ messageId: "i1" }));
-    await setRegistry(
+    setRegistry(
       createTestRegistry([
         {
           pluginId: "imessage",
@@ -81,25 +81,28 @@ describe("sendMessage channel normalization", () => {
 });
 
 describe("sendMessage replyToId threading", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     callGatewayMock.mockReset();
-    vi.resetModules();
-    await setRegistry(emptyRegistry);
+    setRegistry(emptyRegistry);
   });
 
-  afterEach(async () => {
-    await setRegistry(emptyRegistry);
+  afterEach(() => {
+    setRegistry(emptyRegistry);
   });
 
-  it("passes replyToId through to the outbound adapter", async () => {
-    const { sendMessage } = await loadMessage();
+  const setupMattermostCapture = () => {
     const capturedCtx: Record<string, unknown>[] = [];
     const plugin = createMattermostLikePlugin({
       onSendText: (ctx) => {
         capturedCtx.push(ctx);
       },
     });
-    await setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    return capturedCtx;
+  };
+
+  it("passes replyToId through to the outbound adapter", async () => {
+    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
@@ -114,14 +117,7 @@ describe("sendMessage replyToId threading", () => {
   });
 
   it("passes threadId through to the outbound adapter", async () => {
-    const { sendMessage } = await loadMessage();
-    const capturedCtx: Record<string, unknown>[] = [];
-    const plugin = createMattermostLikePlugin({
-      onSendText: (ctx) => {
-        capturedCtx.push(ctx);
-      },
-    });
-    await setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
@@ -137,20 +133,18 @@ describe("sendMessage replyToId threading", () => {
 });
 
 describe("sendPoll channel normalization", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     callGatewayMock.mockReset();
-    vi.resetModules();
-    await setRegistry(emptyRegistry);
+    setRegistry(emptyRegistry);
   });
 
-  afterEach(async () => {
-    await setRegistry(emptyRegistry);
+  afterEach(() => {
+    setRegistry(emptyRegistry);
   });
 
   it("normalizes Teams alias for polls", async () => {
-    const { sendPoll } = await loadMessage();
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
-    await setRegistry(
+    setRegistry(
       createTestRegistry([
         {
           pluginId: "msteams",
@@ -176,6 +170,56 @@ describe("sendPoll channel normalization", () => {
     };
     expect(call?.params?.channel).toBe("msteams");
     expect(result.channel).toBe("msteams");
+  });
+});
+
+describe("gateway url override hardening", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+    setRegistry(emptyRegistry);
+  });
+
+  afterEach(() => {
+    setRegistry(emptyRegistry);
+  });
+
+  it("drops gateway url overrides in backend mode (SSRF hardening)", async () => {
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost",
+          source: "test",
+          plugin: {
+            ...createMattermostLikePlugin({ onSendText: () => {} }),
+            outbound: { deliveryMode: "gateway" },
+          },
+        },
+      ]),
+    );
+
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "hi",
+      channel: "mattermost",
+      gateway: {
+        url: "ws://169.254.169.254:80/latest/meta-data/",
+        token: "t",
+        timeoutMs: 5000,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientDisplayName: "agent",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: undefined,
+        token: "t",
+        timeoutMs: 5000,
+      }),
+    );
   });
 });
 

@@ -35,6 +35,8 @@ import type {
 } from "./agents-models-skills.js";
 import type {
   ChannelsLogoutParamsSchema,
+  TalkConfigParamsSchema,
+  TalkConfigResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
@@ -64,6 +66,7 @@ import type {
 import type {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
+  DevicePairRemoveParamsSchema,
   DevicePairRejectParamsSchema,
   DeviceTokenRevokeParamsSchema,
   DeviceTokenRotateParamsSchema,
@@ -108,6 +111,7 @@ import type {
   NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import type { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import type {
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
@@ -157,6 +161,8 @@ export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
+export type PushTestParams = Static<typeof PushTestParamsSchema>;
+export type PushTestResult = Static<typeof PushTestResultSchema>;
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
@@ -180,6 +186,8 @@ export type WizardNextResult = Static<typeof WizardNextResultSchema>;
 export type WizardStartResult = Static<typeof WizardStartResultSchema>;
 export type WizardStatusResult = Static<typeof WizardStatusResultSchema>;
 export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
+export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
+export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
 export type ChannelsStatusParams = Static<typeof ChannelsStatusParamsSchema>;
 export type ChannelsStatusResult = Static<typeof ChannelsStatusResultSchema>;
 export type ChannelsLogoutParams = Static<typeof ChannelsLogoutParamsSchema>;
@@ -230,6 +238,7 @@ export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsS
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
+export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
 export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
 export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
