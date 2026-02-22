@@ -124,4 +124,55 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
+
+  it("tightens sensitive file permissions when repairs are accepted", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const configPath = path.join(stateDir, "openclaw.json");
+    const envPath = path.join(stateDir, ".env");
+    const logsDir = path.join(stateDir, "logs");
+    const logPath = path.join(logsDir, "openclaw.log");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => process.env.HOME ?? "",
+    );
+    const transcriptPath = path.join(sessionsDir, "main-session.jsonl");
+    const rotatedTranscriptPath = path.join(sessionsDir, "main-session.jsonl.reset.1");
+
+    fs.writeFileSync(configPath, "{}\n", "utf-8");
+    fs.writeFileSync(envPath, "OPENCLAW_GATEWAY_TOKEN=test-token\n", "utf-8");
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.writeFileSync(logPath, "log\n", "utf-8");
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(rotatedTranscriptPath, '{"type":"session"}\n', "utf-8");
+
+    fs.chmodSync(stateDir, 0o755);
+    fs.chmodSync(configPath, 0o644);
+    fs.chmodSync(envPath, 0o644);
+    fs.chmodSync(logPath, 0o644);
+    fs.chmodSync(transcriptPath, 0o644);
+    fs.chmodSync(rotatedTranscriptPath, 0o644);
+
+    const confirmSkipInNonInteractive = vi.fn(async () => true);
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive }, configPath);
+
+    expect(fs.statSync(stateDir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(envPath).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(rotatedTranscriptPath).mode & 0o777).toBe(0o600);
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("sensitive state file(s)"),
+      }),
+    );
+  });
 });
