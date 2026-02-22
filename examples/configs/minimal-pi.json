@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "description": "Minimal config for Raspberry Pi 4 (2GB RAM)",
+    "platform": "Raspberry Pi 4 (2GB RAM)",
+    "provider": "AWS Bedrock",
+    "focus": "Memory efficiency"
+  },
+  "models": {
+    "bedrockDiscovery": {
+      "enabled": true,
+      "region": "us-east-1",
+      "providerFilter": ["anthropic"],
+      "refreshInterval": 7200
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+      },
+      "maxConcurrent": 1,
+      "subagents": {
+        "maxConcurrent": 2
+      },
+      "compaction": {
+        "mode": "aggressive"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "streamMode": "partial"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "localhost"
+  }
+}
