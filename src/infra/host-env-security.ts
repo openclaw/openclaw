@@ -4,6 +4,7 @@ const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 type HostEnvSecurityPolicy = {
   blockedKeys: string[];
+  blockedOverrideKeys?: string[];
   blockedPrefixes: string[];
 };
 
@@ -15,7 +16,26 @@ export const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze(
 export const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze(
   HOST_ENV_SECURITY_POLICY.blockedPrefixes.map((prefix) => prefix.toUpperCase()),
 );
+export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze(
+  (HOST_ENV_SECURITY_POLICY.blockedOverrideKeys ?? []).map((key) => key.toUpperCase()),
+);
+export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+  "TERM",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_MESSAGES",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+]);
 export const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
+export const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(
+  HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES,
+);
+export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
+  HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
+);
 
 export function normalizeEnvVarKey(
   rawKey: string,
@@ -41,6 +61,14 @@ export function isDangerousHostEnvVarName(rawKey: string): boolean {
     return true;
   }
   return HOST_DANGEROUS_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+}
+
+export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
+  const key = normalizeEnvVarKey(rawKey);
+  if (!key) {
+    return false;
+  }
+  return HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(key.toUpperCase());
 }
 
 export function sanitizeHostExecEnv(params?: {
@@ -82,11 +110,39 @@ export function sanitizeHostExecEnv(params?: {
     if (blockPathOverrides && upper === "PATH") {
       continue;
     }
-    if (isDangerousHostEnvVarName(upper)) {
+    if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
       continue;
     }
     merged[key] = value;
   }
 
   return merged;
+}
+
+export function sanitizeSystemRunEnvOverrides(params?: {
+  overrides?: Record<string, string> | null;
+  shellWrapper?: boolean;
+}): Record<string, string> | undefined {
+  const overrides = params?.overrides ?? undefined;
+  if (!overrides) {
+    return undefined;
+  }
+  if (!params?.shellWrapper) {
+    return overrides;
+  }
+  const filtered: Record<string, string> = {};
+  for (const [rawKey, value] of Object.entries(overrides)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (!HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(key.toUpperCase())) {
+      continue;
+    }
+    filtered[key] = value;
+  }
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
 }

@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  PROCESS_TEST_NO_OUTPUT_TIMEOUT_MS,
+  PROCESS_TEST_SCRIPT_DELAY_MS,
+  PROCESS_TEST_TIMEOUT_MS,
+} from "../test-timeouts.js";
 import { createProcessSupervisor } from "./supervisor.js";
 
 describe("process supervisor", () => {
@@ -9,7 +14,7 @@ describe("process supervisor", () => {
       backendId: "test",
       mode: "child",
       argv: [process.execPath, "-e", 'process.stdout.write("ok")'],
-      timeoutMs: 2_500,
+      timeoutMs: PROCESS_TEST_TIMEOUT_MS.long,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -24,9 +29,13 @@ describe("process supervisor", () => {
       sessionId: "s1",
       backendId: "test",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
-      timeoutMs: 1_000,
-      noOutputTimeoutMs: 20,
+      argv: [
+        process.execPath,
+        "-e",
+        `setTimeout(() => {}, ${PROCESS_TEST_SCRIPT_DELAY_MS.silentProcess})`,
+      ],
+      timeoutMs: PROCESS_TEST_TIMEOUT_MS.standard,
+      noOutputTimeoutMs: PROCESS_TEST_NO_OUTPUT_TIMEOUT_MS.supervisor,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -42,8 +51,12 @@ describe("process supervisor", () => {
       backendId: "test",
       scopeKey: "scope:a",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
-      timeoutMs: 1_000,
+      argv: [
+        process.execPath,
+        "-e",
+        `setTimeout(() => {}, ${PROCESS_TEST_SCRIPT_DELAY_MS.silentProcess})`,
+      ],
+      timeoutMs: PROCESS_TEST_TIMEOUT_MS.standard,
       stdinMode: "pipe-open",
     });
 
@@ -54,7 +67,7 @@ describe("process supervisor", () => {
       replaceExistingScope: true,
       mode: "child",
       argv: [process.execPath, "-e", 'process.stdout.write("new")'],
-      timeoutMs: 2_500,
+      timeoutMs: PROCESS_TEST_TIMEOUT_MS.long,
       stdinMode: "pipe-closed",
     });
 
@@ -71,8 +84,12 @@ describe("process supervisor", () => {
       sessionId: "s-timeout",
       backendId: "test",
       mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
-      timeoutMs: 1,
+      argv: [
+        process.execPath,
+        "-e",
+        `setTimeout(() => {}, ${PROCESS_TEST_SCRIPT_DELAY_MS.silentProcess})`,
+      ],
+      timeoutMs: PROCESS_TEST_TIMEOUT_MS.tiny,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -88,7 +105,7 @@ describe("process supervisor", () => {
       backendId: "test",
       mode: "child",
       argv: [process.execPath, "-e", 'process.stdout.write("streamed")'],
-      timeoutMs: 2_500,
+      timeoutMs: PROCESS_TEST_TIMEOUT_MS.long,
       stdinMode: "pipe-closed",
       captureOutput: false,
       onStdout: (chunk) => {

@@ -24,9 +24,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 beforeEach(() => {
   vi.useRealTimers();
-  sendMock.mockReset().mockResolvedValue(undefined);
-  updateLastRouteMock.mockReset();
-  dispatchMock.mockReset().mockImplementation(async (params: unknown) => {
+  sendMock.mockClear().mockResolvedValue(undefined);
+  updateLastRouteMock.mockClear();
+  dispatchMock.mockClear().mockImplementation(async (params: unknown) => {
     if (
       typeof params === "object" &&
       params !== null &&
@@ -55,9 +55,9 @@ beforeEach(() => {
     }
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  loadConfigMock.mockReset().mockReturnValue({});
+  readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+  loadConfigMock.mockClear().mockReturnValue({});
   __resetDiscordChannelInfoCacheForTest();
 });
 

@@ -96,6 +96,14 @@ export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolea
   return info.private_api;
 }
 
+export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
+  return status === true;
+}
+
+export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
+  return isBlueBubblesPrivateApiStatusEnabled(getCachedBlueBubblesPrivateApiStatus(accountId));
+}
+
 /**
  * Parse macOS version string (e.g., "15.0.1" or "26.0") into major version number.
  */

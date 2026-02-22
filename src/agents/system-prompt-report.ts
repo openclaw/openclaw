@@ -40,26 +40,34 @@ function buildInjectedWorkspaceFiles(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
+  const injectedByPath = new Map<string, string>();
   const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
-    const normalizedPath = file.path.replace(/\\/g, "/");
+    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    if (!pathValue) {
+      continue;
+    }
+    if (!injectedByPath.has(pathValue)) {
+      injectedByPath.set(pathValue, file.content);
+    }
+    const normalizedPath = pathValue.replace(/\\/g, "/");
     const baseName = path.posix.basename(normalizedPath);
     if (!injectedByBaseName.has(baseName)) {
       injectedByBaseName.set(baseName, file.content);
     }
   }
   return params.bootstrapFiles.map((file) => {
+    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
-      injectedByPath.get(file.path) ??
+      (pathValue ? injectedByPath.get(pathValue) : undefined) ??
       injectedByPath.get(file.name) ??
       injectedByBaseName.get(file.name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
       name: file.name,
-      path: file.path,
+      path: pathValue || file.name,
       missing: file.missing,
       rawChars,
       injectedChars,

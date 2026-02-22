@@ -90,12 +90,12 @@ export async function resolveSandboxedMediaSource(params: {
       throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
     }
   }
-  const resolved = path.resolve(resolveSandboxInputPath(candidate, params.sandboxRoot));
-  const tmpDir = path.resolve(os.tmpdir());
-  const candidateIsAbsolute = path.isAbsolute(expandPath(candidate));
-  if (candidateIsAbsolute && isPathInside(tmpDir, resolved)) {
-    await assertNoSymlinkEscape(path.relative(tmpDir, resolved), tmpDir);
-    return resolved;
+  const tmpMediaPath = await resolveAllowedTmpMediaPath({
+    candidate,
+    sandboxRoot: params.sandboxRoot,
+  });
+  if (tmpMediaPath) {
+    return tmpMediaPath;
   }
   const sandboxResult = await assertSandboxPath({
     filePath: candidate,
@@ -103,6 +103,23 @@ export async function resolveSandboxedMediaSource(params: {
     root: params.sandboxRoot,
   });
   return sandboxResult.resolved;
+}
+
+async function resolveAllowedTmpMediaPath(params: {
+  candidate: string;
+  sandboxRoot: string;
+}): Promise<string | undefined> {
+  const candidateIsAbsolute = path.isAbsolute(expandPath(params.candidate));
+  if (!candidateIsAbsolute) {
+    return undefined;
+  }
+  const resolved = path.resolve(resolveSandboxInputPath(params.candidate, params.sandboxRoot));
+  const tmpDir = path.resolve(os.tmpdir());
+  if (!isPathInside(tmpDir, resolved)) {
+    return undefined;
+  }
+  await assertNoSymlinkEscape(path.relative(tmpDir, resolved), tmpDir);
+  return resolved;
 }
 
 async function assertNoSymlinkEscape(

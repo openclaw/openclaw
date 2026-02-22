@@ -6,6 +6,19 @@ import {
   repairToolUseResultPairing,
 } from "./session-transcript-repair.js";
 
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+function getAssistantToolCallBlocks(messages: AgentMessage[]) {
+  const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
+  if (!assistant || !Array.isArray(assistant.content)) {
+    return [] as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
+  }
+  return assistant.content.filter((block) => {
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
+  }) as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
+}
+
 describe("sanitizeToolUseResultPairing", () => {
   const buildDuplicateToolResultInput = (opts?: {
     middleMessage?: unknown;
@@ -229,16 +242,57 @@ describe("sanitizeToolCallInputs", () => {
     ] as unknown as AgentMessage[];
 
     const out = sanitizeToolCallInputs(input);
-    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCalls = Array.isArray(assistant.content)
-      ? assistant.content.filter((block) => {
-          const type = (block as { type?: unknown }).type;
-          return typeof type === "string" && ["toolCall", "toolUse", "functionCall"].includes(type);
-        })
-      : [];
+    const toolCalls = getAssistantToolCallBlocks(out);
 
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_ok");
+  });
+
+  it("drops tool calls with malformed or overlong names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_bad_chars",
+            name: 'toolu_01abc <|tool_call_argument_begin|> {"command"',
+            arguments: {},
+          },
+          {
+            type: "toolUse",
+            id: "call_too_long",
+            name: `read_${"x".repeat(80)}`,
+            input: {},
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("drops unknown tool names when an allowlist is provided", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_unknown", name: "write", arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
   });
 
   it("keeps valid tool calls and preserves text blocks", () => {

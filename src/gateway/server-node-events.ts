@@ -471,6 +471,15 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKey) {
         return;
       }
+
+      // Respect tools.exec.notifyOnExit setting (default: true)
+      // When false, skip system event notifications for node exec events.
+      const cfg = loadConfig();
+      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
+      if (!notifyOnExit) {
+        return;
+      }
+
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";
       const exitCode =

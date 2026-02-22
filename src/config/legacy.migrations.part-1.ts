@@ -227,43 +227,39 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         entry: Record<string, unknown>;
         pathPrefix: string;
       }) => {
+        const migrateCommonStreamingMode = (
+          resolveMode: (entry: Record<string, unknown>) => string,
+        ) => {
+          const hasLegacyStreamMode = params.entry.streamMode !== undefined;
+          const legacyStreaming = params.entry.streaming;
+          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
+            return false;
+          }
+          const resolved = resolveMode(params.entry);
+          params.entry.streaming = resolved;
+          if (hasLegacyStreamMode) {
+            delete params.entry.streamMode;
+            changes.push(
+              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
+            );
+          }
+          if (typeof legacyStreaming === "boolean") {
+            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
+          }
+          return true;
+        };
+
         const hasLegacyStreamMode = params.entry.streamMode !== undefined;
         const legacyStreaming = params.entry.streaming;
         const legacyNativeStreaming = params.entry.nativeStreaming;
 
         if (params.provider === "telegram") {
-          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
-            return;
-          }
-          const resolved = resolveTelegramPreviewStreamMode(params.entry);
-          params.entry.streaming = resolved;
-          if (hasLegacyStreamMode) {
-            delete params.entry.streamMode;
-            changes.push(
-              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-            );
-          }
-          if (typeof legacyStreaming === "boolean") {
-            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-          }
+          migrateCommonStreamingMode(resolveTelegramPreviewStreamMode);
           return;
         }
 
         if (params.provider === "discord") {
-          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
-            return;
-          }
-          const resolved = resolveDiscordPreviewStreamMode(params.entry);
-          params.entry.streaming = resolved;
-          if (hasLegacyStreamMode) {
-            delete params.entry.streamMode;
-            changes.push(
-              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-            );
-          }
-          if (typeof legacyStreaming === "boolean") {
-            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-          }
+          migrateCommonStreamingMode(resolveDiscordPreviewStreamMode);
           return;
         }
 

@@ -1,51 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  resetMemoryToolMockState,
+  setMemoryBackend,
+  setMemoryReadFileImpl,
+  setMemorySearchImpl,
+  type MemoryReadParams,
+} from "../../../test/helpers/memory-tool-manager-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
-
-let backend: "builtin" | "qmd" = "builtin";
-let searchImpl: () => Promise<unknown[]> = async () => [
-  {
-    path: "MEMORY.md",
-    startLine: 5,
-    endLine: 7,
-    score: 0.9,
-    snippet: "@@ -5,3 @@\nAssistant: noted",
-    source: "memory" as const,
-  },
-];
-type MemoryReadParams = { relPath: string; from?: number; lines?: number };
-type MemoryReadResult = { text: string; path: string };
-let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
-  text: "",
-  path: params.relPath,
-});
-
-const stubManager = {
-  search: vi.fn(async () => await searchImpl()),
-  readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
-  status: () => ({
-    backend,
-    files: 1,
-    chunks: 1,
-    dirty: false,
-    workspaceDir: "/workspace",
-    dbPath: "/workspace/.memory/index.sqlite",
-    provider: "builtin",
-    model: "builtin",
-    requestedProvider: "builtin",
-    sources: ["memory" as const],
-    sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
-  }),
-  sync: vi.fn(),
-  probeVectorAvailability: vi.fn(async () => true),
-  close: vi.fn(),
-};
-
-vi.mock("../../memory/index.js", () => {
-  return {
-    getMemorySearchManager: async () => ({ manager: stubManager }),
-  };
-});
-
 import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
 
 function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
@@ -53,24 +14,25 @@ function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
 }
 
 beforeEach(() => {
-  backend = "builtin";
-  searchImpl = async () => [
-    {
-      path: "MEMORY.md",
-      startLine: 5,
-      endLine: 7,
-      score: 0.9,
-      snippet: "@@ -5,3 @@\nAssistant: noted",
-      source: "memory" as const,
-    },
-  ];
-  readFileImpl = async (params: MemoryReadParams) => ({ text: "", path: params.relPath });
-  vi.clearAllMocks();
+  resetMemoryToolMockState({
+    backend: "builtin",
+    searchImpl: async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 5,
+        endLine: 7,
+        score: 0.9,
+        snippet: "@@ -5,3 @@\nAssistant: noted",
+        source: "memory" as const,
+      },
+    ],
+    readFileImpl: async (params: MemoryReadParams) => ({ text: "", path: params.relPath }),
+  });
 });
 
 describe("memory search citations", () => {
   it("appends source information when citations are enabled", async () => {
-    backend = "builtin";
+    setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "on" },
       agents: { list: [{ id: "main", default: true }] },
@@ -86,7 +48,7 @@ describe("memory search citations", () => {
   });
 
   it("leaves snippet untouched when citations are off", async () => {
-    backend = "builtin";
+    setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "off" },
       agents: { list: [{ id: "main", default: true }] },
@@ -102,7 +64,7 @@ describe("memory search citations", () => {
   });
 
   it("clamps decorated snippets to qmd injected budget", async () => {
-    backend = "qmd";
+    setMemoryBackend("qmd");
     const cfg = asOpenClawConfig({
       memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
       agents: { list: [{ id: "main", default: true }] },
@@ -117,7 +79,7 @@ describe("memory search citations", () => {
   });
 
   it("honors auto mode for direct chats", async () => {
-    backend = "builtin";
+    setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "auto" },
       agents: { list: [{ id: "main", default: true }] },
@@ -135,7 +97,7 @@ describe("memory search citations", () => {
   });
 
   it("suppresses citations for auto mode in group chats", async () => {
-    backend = "builtin";
+    setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "auto" },
       agents: { list: [{ id: "main", default: true }] },
@@ -155,9 +117,9 @@ describe("memory search citations", () => {
 
 describe("memory tools", () => {
   it("does not throw when memory_search fails (e.g. embeddings 429)", async () => {
-    searchImpl = async () => {
+    setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
-    };
+    });
 
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemorySearchTool({ config: cfg });
@@ -178,9 +140,9 @@ describe("memory tools", () => {
   });
 
   it("does not throw when memory_get fails", async () => {
-    readFileImpl = async (_params: MemoryReadParams) => {
+    setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
       throw new Error("path required");
-    };
+    });
 
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemoryGetTool({ config: cfg });
@@ -199,9 +161,9 @@ describe("memory tools", () => {
   });
 
   it("returns empty text without error when file does not exist (ENOENT)", async () => {
-    readFileImpl = async (_params: MemoryReadParams) => {
+    setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
       return { text: "", path: "memory/2026-02-19.md" };
-    };
+    });
 
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemoryGetTool({ config: cfg });

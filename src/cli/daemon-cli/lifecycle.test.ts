@@ -56,11 +56,11 @@ vi.mock("./lifecycle-core.js", () => ({
 describe("runDaemonRestart health checks", () => {
   beforeEach(() => {
     vi.resetModules();
-    service.readCommand.mockReset();
-    service.restart.mockReset();
-    runServiceRestart.mockReset();
-    waitForGatewayHealthyRestart.mockReset();
-    terminateStaleGatewayPids.mockReset();
+    service.readCommand.mockClear();
+    service.restart.mockClear();
+    runServiceRestart.mockClear();
+    waitForGatewayHealthyRestart.mockClear();
+    terminateStaleGatewayPids.mockClear();
     renderRestartDiagnostics.mockClear();
     resolveGatewayPort.mockClear();
     loadConfig.mockClear();

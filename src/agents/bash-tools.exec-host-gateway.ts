@@ -11,8 +11,10 @@ import {
   minSecurity,
   recordAllowlistUse,
   requiresExecApproval,
+  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
+import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import {
@@ -35,6 +37,7 @@ export type ProcessGatewayAllowlistParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   safeBins: Set<string>;
+  safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   agentId?: string;
   sessionKey?: string;
   scopeKey?: string;
@@ -68,6 +71,7 @@ export async function processGatewayAllowlist(
     command: params.command,
     allowlist: approvals.allowlist,
     safeBins: params.safeBins,
+    safeBinProfiles: params.safeBinProfiles,
     cwd: params.workdir,
     env: params.env,
     platform: process.platform,
@@ -153,8 +157,13 @@ export async function processGatewayAllowlist(
       } else if (decision === "allow-always") {
         approvedByAsk = true;
         if (hostSecurity === "allowlist") {
-          for (const segment of allowlistEval.segments) {
-            const pattern = segment.resolution?.resolvedPath ?? "";
+          const patterns = resolveAllowAlwaysPatterns({
+            segments: allowlistEval.segments,
+            cwd: params.workdir,
+            env: params.env,
+            platform: process.platform,
+          });
+          for (const pattern of patterns) {
             if (pattern) {
               addAllowlistEntry(approvals.file, params.agentId, pattern);
             }

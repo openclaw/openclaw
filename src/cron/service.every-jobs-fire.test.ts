@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
@@ -7,6 +5,7 @@ import {
   createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
+  writeCronStoreSnapshot,
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
@@ -120,44 +119,35 @@ describe("CronService interval/cron jobs fire on time", () => {
     const requestHeartbeatNow = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
         {
-          version: 1,
-          jobs: [
-            {
-              id: "legacy-every",
-              name: "legacy every",
-              enabled: true,
-              createdAtMs: nowMs,
-              updatedAtMs: nowMs,
-              schedule: { kind: "every", everyMs: 120_000 },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "sf-tick" },
-              state: { nextRunAtMs: nowMs + 120_000 },
-            },
-            {
-              id: "minute-cron",
-              name: "minute cron",
-              enabled: true,
-              createdAtMs: nowMs,
-              updatedAtMs: nowMs,
-              schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "minute-tick" },
-              state: { nextRunAtMs: nowMs + 60_000 },
-            },
-          ],
+          id: "legacy-every",
+          name: "legacy every",
+          enabled: true,
+          createdAtMs: nowMs,
+          updatedAtMs: nowMs,
+          schedule: { kind: "every", everyMs: 120_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "sf-tick" },
+          state: { nextRunAtMs: nowMs + 120_000 },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+        {
+          id: "minute-cron",
+          name: "minute cron",
+          enabled: true,
+          createdAtMs: nowMs,
+          updatedAtMs: nowMs,
+          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "minute-tick" },
+          state: { nextRunAtMs: nowMs + 60_000 },
+        },
+      ],
+    });
 
     const cron = new CronService({
       storePath: store.storePath,

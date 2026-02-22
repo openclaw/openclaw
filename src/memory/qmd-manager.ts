@@ -31,6 +31,7 @@ import type {
   ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
 import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
+import { extractKeywords } from "./query-expansion.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -40,8 +41,44 @@ const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
+const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
+const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+
+function hasHanScript(value: string): boolean {
+  return HAN_SCRIPT_RE.test(value);
+}
+
+function normalizeHanBm25Query(query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed || !hasHanScript(trimmed)) {
+    return trimmed;
+  }
+  const keywords = extractKeywords(trimmed);
+  const normalizedKeywords: string[] = [];
+  const seen = new Set<string>();
+  for (const keyword of keywords) {
+    const token = keyword.trim();
+    if (!token || seen.has(token)) {
+      continue;
+    }
+    const includesHan = hasHanScript(token);
+    // Han unigrams are usually too broad for BM25 and can drown signal.
+    if (includesHan && Array.from(token).length < 2) {
+      continue;
+    }
+    if (!includesHan && token.length < 2) {
+      continue;
+    }
+    seen.add(token);
+    normalizedKeywords.push(token);
+    if (normalizedKeywords.length >= QMD_BM25_HAN_KEYWORD_LIMIT) {
+      break;
+    }
+  }
+  return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
+}
 
 async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
   const previous = qmdEmbedQueueTail;
@@ -71,6 +108,13 @@ type SessionExporterConfig = {
 type ListedCollection = {
   path?: string;
   pattern?: string;
+};
+
+type ManagedCollection = {
+  name: string;
+  path: string;
+  pattern: string;
+  kind: "memory" | "custom" | "sessions";
 };
 
 type QmdManagerMode = "full" | "status";
@@ -269,6 +313,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       // ignore; older qmd versions might not support list --json.
     }
 
+    await this.migrateLegacyUnscopedCollections(existing);
+
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
       if (listed && !this.shouldRebindCollection(collection, listed)) {
@@ -295,6 +341,61 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private async migrateLegacyUnscopedCollections(
+    existing: Map<string, ListedCollection>,
+  ): Promise<void> {
+    for (const collection of this.qmd.collections) {
+      if (existing.has(collection.name)) {
+        continue;
+      }
+      const legacyName = this.deriveLegacyCollectionName(collection.name);
+      if (!legacyName) {
+        continue;
+      }
+      const listedLegacy = existing.get(legacyName);
+      if (!listedLegacy) {
+        continue;
+      }
+      if (!this.canMigrateLegacyCollection(collection, listedLegacy)) {
+        log.debug(
+          `qmd legacy collection migration skipped for ${legacyName} (path/pattern mismatch)`,
+        );
+        continue;
+      }
+      try {
+        await this.removeCollection(legacyName);
+        existing.delete(legacyName);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!this.isCollectionMissingError(message)) {
+          log.warn(`qmd collection remove failed for ${legacyName}: ${message}`);
+        }
+      }
+    }
+  }
+
+  private deriveLegacyCollectionName(scopedName: string): string | null {
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!scopedName.endsWith(agentSuffix)) {
+      return null;
+    }
+    const legacyName = scopedName.slice(0, -agentSuffix.length).trim();
+    return legacyName || null;
+  }
+
+  private canMigrateLegacyCollection(
+    collection: ManagedCollection,
+    listedLegacy: ListedCollection,
+  ): boolean {
+    if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
+      return false;
+    }
+    if (typeof listedLegacy.pattern === "string" && listedLegacy.pattern !== collection.pattern) {
+      return false;
+    }
+    return true;
   }
 
   private async ensureCollectionPath(collection: {
@@ -336,10 +437,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private shouldRebindCollection(
-    collection: { kind: string; path: string; pattern: string },
-    listed: ListedCollection,
-  ): boolean {
+  private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
     if (!listed.path) {
       // Older qmd versions may only return names from `collection list --json`.
       // Rebind managed collections so stale path bindings cannot survive upgrades.
@@ -1667,10 +1765,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     limit: number,
   ): string[] {
+    const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
-      return ["query", query, "--json", "-n", String(limit)];
+      return ["query", normalizedQuery, "--json", "-n", String(limit)];
     }
-    return [command, query, "--json", "-n", String(limit)];
+    return [command, normalizedQuery, "--json", "-n", String(limit)];
   }
 }
 

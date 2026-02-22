@@ -141,7 +141,7 @@ describe("applyMediaUnderstanding", () => {
 
   beforeEach(() => {
     mockedResolveApiKey.mockClear();
-    mockedFetchRemoteMedia.mockReset();
+    mockedFetchRemoteMedia.mockClear();
     mockedFetchRemoteMedia.mockResolvedValue({
       buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
       contentType: "audio/ogg",
@@ -629,6 +629,38 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(false);
     expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
+  it("does not reclassify PDF attachments as text/plain", async () => {
+    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "report.pdf",
+      content: pseudoPdf,
+    });
+
+    const cfg: OpenClawConfig = {
+      ...createMediaDisabledConfig(),
+      gateway: {
+        http: {
+          endpoints: {
+            responses: {
+              files: { allowedMimes: ["text/plain"] },
+            },
+          },
+        },
+      },
+    };
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+      cfg,
+    });
+
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:file>");
     expect(ctx.Body).not.toContain("<file");
   });
 
