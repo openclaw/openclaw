@@ -36,6 +36,22 @@ describe("system run command helpers", () => {
     );
   });
 
+  test("extractShellCommandFromArgv unwraps known dispatch wrappers before shell wrappers", () => {
+    expect(extractShellCommandFromArgv(["/usr/bin/nice", "/bin/bash", "-lc", "echo hi"])).toBe(
+      "echo hi",
+    );
+    expect(
+      extractShellCommandFromArgv([
+        "/usr/bin/timeout",
+        "--signal=TERM",
+        "5",
+        "zsh",
+        "-lc",
+        "echo hi",
+      ]),
+    ).toBe("echo hi");
+  });
+
   test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {
     expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
