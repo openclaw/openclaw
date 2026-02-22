@@ -612,28 +612,46 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const index = Array.isArray(list)
+                    ? list.findIndex(
+                        (entry) =>
+                          entry &&
+                          typeof entry === "object" &&
+                          "id" in entry &&
+                          (entry as { id?: string }).id === agentId,
+                      )
+                    : -1;
+
+                  let basePath: Array<string | number>;
+                  let existingModel: unknown;
+                  let isDefaultFallback = false;
+
+                  if (index >= 0) {
+                    basePath = ["agents", "list", index, "model"];
+                    existingModel = (list![index] as { model?: unknown }).model;
+                  } else if (agentId === state.agentsList?.defaultId) {
+                    basePath = ["agents", "defaults", "model"];
+                    existingModel = (configValue as { agents?: { defaults?: { model?: unknown } } })
+                      .agents?.defaults?.model;
+                    isDefaultFallback = true;
+                  } else {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
+
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const entry = list[index] as { model?: unknown };
-                  const existing = entry?.model;
-                  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+
+                  const fallbacks =
+                    existingModel && typeof existingModel === "object" && !Array.isArray(existingModel)
+                      ? (existingModel as { fallbacks?: unknown }).fallbacks
+                      : undefined;
+
+                  if (
+                    isDefaultFallback ||
+                    (existingModel && typeof existingModel === "object" && !Array.isArray(existingModel))
+                  ) {
                     const next = {
                       primary: modelId,
                       ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
@@ -648,29 +666,43 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const index = Array.isArray(list)
+                    ? list.findIndex(
+                        (entry) =>
+                          entry &&
+                          typeof entry === "object" &&
+                          "id" in entry &&
+                          (entry as { id?: string }).id === agentId,
+                      )
+                    : -1;
+
+                  let basePath: Array<string | number>;
+                  let existingModel: unknown;
+                  let isDefaultFallback = false;
+
+                  if (index >= 0) {
+                    basePath = ["agents", "list", index, "model"];
+                    existingModel = (list![index] as { model?: unknown }).model;
+                  } else if (agentId === state.agentsList?.defaultId) {
+                    basePath = ["agents", "defaults", "model"];
+                    existingModel = (configValue as { agents?: { defaults?: { model?: unknown } } })
+                      .agents?.defaults?.model;
+                    isDefaultFallback = true;
+                  } else {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
                   const resolvePrimary = () => {
-                    if (typeof existing === "string") {
-                      return existing.trim() || null;
+                    if (typeof existingModel === "string") {
+                      return existingModel.trim() || null;
                     }
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const primary = (existing as { primary?: unknown }).primary;
+                    if (
+                      existingModel &&
+                      typeof existingModel === "object" &&
+                      !Array.isArray(existingModel)
+                    ) {
+                      const primary = (existingModel as { primary?: unknown }).primary;
                       if (typeof primary === "string") {
                         const trimmed = primary.trim();
                         return trimmed || null;
@@ -678,10 +710,15 @@ export function renderApp(state: AppViewState) {
                     }
                     return null;
                   };
+
                   const primary = resolvePrimary();
                   if (normalized.length === 0) {
                     if (primary) {
-                      updateConfigFormValue(state, basePath, primary);
+                      if (isDefaultFallback) {
+                        updateConfigFormValue(state, basePath, { primary });
+                      } else {
+                        updateConfigFormValue(state, basePath, primary);
+                      }
                     } else {
                       removeConfigFormValue(state, basePath);
                     }
