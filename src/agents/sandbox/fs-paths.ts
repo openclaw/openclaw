@@ -94,7 +94,7 @@ export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] 
     {
       hostRoot: path.resolve(sandbox.workspaceDir),
       containerRoot: normalizeContainerPath(sandbox.containerWorkdir),
-      writable: sandbox.workspaceAccess === "rw",
+      writable: sandbox.workspaceAccess !== "ro",
       source: "workspace",
     },
   ];
