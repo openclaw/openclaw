@@ -204,6 +204,27 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
   };
 }
 
+function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) {
+  const watcher = createWatcherMock();
+  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  const onHotReload = vi.fn(async () => {});
+  const onRestart = vi.fn();
+  const log = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+  const reloader = startGatewayConfigReloader({
+    initialConfig: { gateway: { reload: { debounceMs: 0 } } },
+    readSnapshot,
+    onHotReload,
+    onRestart,
+    log,
+    watchPath: "/tmp/openclaw.json",
+  });
+  return { watcher, onHotReload, onRestart, log, reloader };
+}
+
 describe("startGatewayConfigReloader", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -215,9 +236,6 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("retries missing snapshots and reloads once config file reappears", async () => {
-    const watcher = createWatcherMock();
-    vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
-
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(makeSnapshot({ exists: false, raw: null, hash: "missing-1" }))
@@ -230,23 +248,7 @@ describe("startGatewayConfigReloader", () => {
           hash: "next-1",
         }),
       );
-
-    const onHotReload = vi.fn(async () => {});
-    const onRestart = vi.fn();
-    const log = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    const reloader = startGatewayConfigReloader({
-      initialConfig: { gateway: { reload: { debounceMs: 0 } } },
-      readSnapshot,
-      onHotReload,
-      onRestart,
-      log,
-      watchPath: "/tmp/openclaw.json",
-    });
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
 
     watcher.emit("unlink");
     await vi.runOnlyPendingTimersAsync();
@@ -262,29 +264,10 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("caps missing-file retries and skips reload after retry budget is exhausted", async () => {
-    const watcher = createWatcherMock();
-    vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
-
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValue(makeSnapshot({ exists: false, raw: null, hash: "missing" }));
-
-    const onHotReload = vi.fn(async () => {});
-    const onRestart = vi.fn();
-    const log = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    const reloader = startGatewayConfigReloader({
-      initialConfig: { gateway: { reload: { debounceMs: 0 } } },
-      readSnapshot,
-      onHotReload,
-      onRestart,
-      log,
-      watchPath: "/tmp/openclaw.json",
-    });
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
 
     watcher.emit("unlink");
     await vi.runAllTimersAsync();

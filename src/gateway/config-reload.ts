@@ -286,6 +286,73 @@ export function startGatewayConfigReloader(opts: {
   const schedule = () => {
     scheduleAfter(settings.debounceMs);
   };
+  const queueRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
+    if (restartQueued) {
+      return;
+    }
+    restartQueued = true;
+    opts.onRestart(plan, nextConfig);
+  };
+
+  const handleMissingSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
+    if (snapshot.exists) {
+      missingConfigRetries = 0;
+      return false;
+    }
+    if (missingConfigRetries < MISSING_CONFIG_MAX_RETRIES) {
+      missingConfigRetries += 1;
+      opts.log.info(
+        `config reload retry (${missingConfigRetries}/${MISSING_CONFIG_MAX_RETRIES}): config file not found`,
+      );
+      scheduleAfter(MISSING_CONFIG_RETRY_DELAY_MS);
+      return true;
+    }
+    opts.log.warn("config reload skipped (config file not found)");
+    return true;
+  };
+
+  const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
+    if (snapshot.valid) {
+      return false;
+    }
+    const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
+    opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    return true;
+  };
+
+  const applySnapshot = async (nextConfig: OpenClawConfig) => {
+    const changedPaths = diffConfigPaths(currentConfig, nextConfig);
+    currentConfig = nextConfig;
+    settings = resolveGatewayReloadSettings(nextConfig);
+    if (changedPaths.length === 0) {
+      return;
+    }
+
+    opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
+    const plan = buildGatewayReloadPlan(changedPaths);
+    if (settings.mode === "off") {
+      opts.log.info("config reload disabled (gateway.reload.mode=off)");
+      return;
+    }
+    if (settings.mode === "restart") {
+      queueRestart(plan, nextConfig);
+      return;
+    }
+    if (plan.restartGateway) {
+      if (settings.mode === "hot") {
+        opts.log.warn(
+          `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
+            ", ",
+          )})`,
+        );
+        return;
+      }
+      queueRestart(plan, nextConfig);
+      return;
+    }
+
+    await opts.onHotReload(plan, nextConfig);
+  };
 
   const runReload = async () => {
     if (stopped) {
@@ -302,62 +369,13 @@ export function startGatewayConfigReloader(opts: {
     }
     try {
       const snapshot = await opts.readSnapshot();
-      if (!snapshot.exists) {
-        if (missingConfigRetries < MISSING_CONFIG_MAX_RETRIES) {
-          missingConfigRetries += 1;
-          opts.log.info(
-            `config reload retry (${missingConfigRetries}/${MISSING_CONFIG_MAX_RETRIES}): config file not found`,
-          );
-          scheduleAfter(MISSING_CONFIG_RETRY_DELAY_MS);
-          return;
-        }
-        opts.log.warn("config reload skipped (config file not found)");
+      if (handleMissingSnapshot(snapshot)) {
         return;
       }
-      missingConfigRetries = 0;
-      if (!snapshot.valid) {
-        const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
-        opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+      if (handleInvalidSnapshot(snapshot)) {
         return;
       }
-      const nextConfig = snapshot.config;
-      const changedPaths = diffConfigPaths(currentConfig, nextConfig);
-      currentConfig = nextConfig;
-      settings = resolveGatewayReloadSettings(nextConfig);
-      if (changedPaths.length === 0) {
-        return;
-      }
-
-      opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
-      const plan = buildGatewayReloadPlan(changedPaths);
-      if (settings.mode === "off") {
-        opts.log.info("config reload disabled (gateway.reload.mode=off)");
-        return;
-      }
-      if (settings.mode === "restart") {
-        if (!restartQueued) {
-          restartQueued = true;
-          opts.onRestart(plan, nextConfig);
-        }
-        return;
-      }
-      if (plan.restartGateway) {
-        if (settings.mode === "hot") {
-          opts.log.warn(
-            `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
-              ", ",
-            )})`,
-          );
-          return;
-        }
-        if (!restartQueued) {
-          restartQueued = true;
-          opts.onRestart(plan, nextConfig);
-        }
-        return;
-      }
-
-      await opts.onHotReload(plan, nextConfig);
+      await applySnapshot(snapshot.config);
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
