@@ -109,8 +109,16 @@ function createChatContext(): Pick<
     dedupe: new Map(),
     registerToolEventRecipient: vi.fn(),
     logGateway: {
-      warn: vi.fn(),
+      subsystem: "test",
+      isEnabled: () => false,
+      trace: vi.fn(),
       debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
     } as GatewayRequestContext["logGateway"],
   };
 }
