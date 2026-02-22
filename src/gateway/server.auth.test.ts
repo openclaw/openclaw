@@ -1166,6 +1166,72 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
+  test("auto-approves loopback scope upgrades for control ui clients", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-token-scope-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const buildDevice = (scopes: string[], nonce: string) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: CONTROL_UI_CLIENT.id,
+        clientMode: CONTROL_UI_CLIENT.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+        nonce,
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: devicePublicKey,
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce,
+      };
+    };
+    const seeded = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: devicePublicKey,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: CONTROL_UI_CLIENT.id,
+      clientMode: CONTROL_UI_CLIENT.mode,
+      displayName: "loopback-control-ui-upgrade",
+      platform: CONTROL_UI_CLIENT.platform,
+    });
+    await approveDevicePairing(seeded.request.requestId);
+
+    ws.close();
+
+    const ws2 = await openWs(port, { origin: originForPort(port) });
+    const nonce2 = await readConnectChallengeNonce(ws2);
+    const upgraded = await connectReq(ws2, {
+      token: "secret",
+      scopes: ["operator.admin"],
+      client: { ...CONTROL_UI_CLIENT },
+      device: buildDevice(["operator.admin"], nonce2),
+    });
+    expect(upgraded.ok).toBe(true);
+    const pending = await listDevicePairing();
+    expect(pending.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    const updated = await getPairedDevice(identity.deviceId);
+    expect(updated?.tokens?.operator?.scopes).toContain("operator.admin");
+
+    ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("still requires node pairing while operator shared auth succeeds for the same device", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
