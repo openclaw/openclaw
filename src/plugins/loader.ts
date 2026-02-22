@@ -331,6 +331,27 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
+/**
+ * Resolve the jiti filesystem cache directory by walking up from the given
+ * module path to find `node_modules/.cache/jiti`. Returns the path if found,
+ * or `undefined` to let jiti fall back to its default (typically /tmp/jiti).
+ */
+function resolveJitiFsCacheDir(modulePath: string): string | undefined {
+  let cursor = path.dirname(modulePath);
+  for (let i = 0; i < 6; i += 1) {
+    const nodeModules = path.join(cursor, "node_modules");
+    if (fs.existsSync(nodeModules)) {
+      return path.join(nodeModules, ".cache", "jiti");
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return undefined;
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -396,9 +417,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    // Resolve the filesystem cache directory explicitly. jiti's auto-detection
+    // breaks when the first argument is a file:// URL (path.resolve doesn't
+    // understand URL schemes), causing it to fall back to /tmp/jiti which is
+    // ephemeral in Docker. Using a fixed path under node_modules ensures the
+    // cache can be pre-warmed during docker build.
+    const modulePath = fileURLToPath(import.meta.url);
+    const jitiCacheDir = resolveJitiFsCacheDir(modulePath);
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      ...(jitiCacheDir ? { fsCache: jitiCacheDir } : {}),
       ...(pluginSdkAlias || pluginSdkAccountIdAlias
         ? {
             alias: {

@@ -234,7 +234,69 @@ const routeModelsStatus: RouteSpec = {
   },
 };
 
+const routeGatewayRun: RouteSpec = {
+  match: (path) => path[0] === "gateway" && (path.length === 1 || path[1] === "run"),
+  run: async (argv) => {
+    // Validate all value flags: null means flag present but missing its argument.
+    const portRaw = getFlagValue(argv, "--port");
+    if (portRaw === null) {
+      return false;
+    }
+    const bindRaw = getFlagValue(argv, "--bind");
+    if (bindRaw === null) {
+      return false;
+    }
+    const tokenRaw = getFlagValue(argv, "--token");
+    if (tokenRaw === null) {
+      return false;
+    }
+    const authRaw = getFlagValue(argv, "--auth");
+    if (authRaw === null) {
+      return false;
+    }
+    const passwordRaw = getFlagValue(argv, "--password");
+    if (passwordRaw === null) {
+      return false;
+    }
+    const tailscaleRaw = getFlagValue(argv, "--tailscale");
+    if (tailscaleRaw === null) {
+      return false;
+    }
+    const wsLogRaw = getFlagValue(argv, "--ws-log");
+    if (wsLogRaw === null) {
+      return false;
+    }
+    const rawStreamPathRaw = getFlagValue(argv, "--raw-stream-path");
+    if (rawStreamPathRaw === null) {
+      return false;
+    }
+
+    const { runGatewayCommand } = await import("../gateway-cli/run.js");
+    await runGatewayCommand({
+      port: portRaw,
+      bind: bindRaw,
+      token: tokenRaw,
+      auth: authRaw,
+      password: passwordRaw,
+      tailscale: tailscaleRaw,
+      tailscaleResetOnExit: hasFlag(argv, "--tailscale-reset-on-exit"),
+      allowUnconfigured: hasFlag(argv, "--allow-unconfigured"),
+      force: hasFlag(argv, "--force"),
+      verbose: hasFlag(argv, "--verbose"),
+      claudeCliLogs: hasFlag(argv, "--claude-cli-logs"),
+      wsLog: wsLogRaw,
+      compact: hasFlag(argv, "--compact"),
+      rawStream: hasFlag(argv, "--raw-stream"),
+      rawStreamPath: rawStreamPathRaw,
+      dev: hasFlag(argv, "--dev"),
+      reset: hasFlag(argv, "--reset"),
+    });
+    return true;
+  },
+};
+
 const routes: RouteSpec[] = [
+  routeGatewayRun,
   routeHealth,
   routeStatus,
   routeSessions,
