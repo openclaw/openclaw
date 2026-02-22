@@ -8,7 +8,7 @@ import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  isRequesterSpawnedSessionVisible,
+  isResolvedSessionVisibleToRequester,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
@@ -183,17 +183,18 @@ export function createSessionsHistoryTool(opts?: {
       const resolvedKey = resolvedSession.key;
       const displayKey = resolvedSession.displayKey;
       const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-      if (restrictToSpawned && !resolvedViaSessionId && resolvedKey !== effectiveRequesterKey) {
-        const ok = await isRequesterSpawnedSessionVisible({
-          requesterSessionKey: effectiveRequesterKey,
-          targetSessionKey: resolvedKey,
+
+      const visible = await isResolvedSessionVisibleToRequester({
+        requesterSessionKey: effectiveRequesterKey,
+        targetSessionKey: resolvedKey,
+        restrictToSpawned,
+        resolvedViaSessionId,
+      });
+      if (!visible) {
+        return jsonResult({
+          status: "forbidden",
+          error: `Session not visible from this sandboxed agent session: ${sessionKeyParam}`,
         });
-        if (!ok) {
-          return jsonResult({
-            status: "forbidden",
-            error: `Session not visible from this sandboxed agent session: ${sessionKeyParam}`,
-          });
-        }
       }
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
