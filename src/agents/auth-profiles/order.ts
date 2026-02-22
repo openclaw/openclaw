@@ -128,10 +128,21 @@ export function resolveAuthProfileOrder(params: {
     return ordered;
   }
 
-  // Otherwise, use round-robin: sort by lastUsed (oldest first)
-  // preferredProfile goes first if specified (for explicit user choice)
-  // lastGood is NOT prioritized - that would defeat round-robin
+  // Sort by type preference (oauth > token > api_key), then by lastUsed (oldest first).
   const sorted = orderProfilesByMode(deduped, store);
+
+  // Prioritize lastGood profile when no explicit order is set.
+  // This avoids wasting attempts on exhausted profiles, especially
+  // when cooldown detection is unreliable (e.g. Gemini).
+  // If lastGood is in cooldown it stays deprioritized.
+  const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
+  if (lastGood && sorted.includes(lastGood) && !isProfileInCooldown(store, lastGood)) {
+    const reordered = [lastGood, ...sorted.filter((e) => e !== lastGood)];
+    if (preferredProfile && reordered.includes(preferredProfile)) {
+      return [preferredProfile, ...reordered.filter((e) => e !== preferredProfile)];
+    }
+    return reordered;
+  }
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
     return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
