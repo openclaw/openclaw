@@ -85,6 +85,7 @@ export function resolveTranscriptPolicy(params: {
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
   const isMistral = isMistralModel({ provider, modelId });
+  const isOllama = params.modelApi === "ollama";
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
     modelId.toLowerCase().includes("gemini");
@@ -101,15 +102,16 @@ export function resolveTranscriptPolicy(params: {
   // Drop these blocks at send-time to keep sessions usable.
   const dropThinkingBlocks = isCopilotClaude;
 
-  const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
+  const needsNonImageSanitize =
+    isGoogle || isAnthropic || isMistral || isOpenRouterGemini || isOllama;
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
+  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic || isOllama;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
+  const repairToolUseResultPairing = isGoogle || isAnthropic || isOllama;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }
     : undefined;
@@ -127,6 +129,6 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
-    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic || isOllama),
   };
 }

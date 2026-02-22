@@ -34,6 +34,11 @@ import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
+  createOllamaStreamFn,
+  ensureOllamaApiRegistered,
+  OLLAMA_NATIVE_BASE_URL,
+} from "../ollama-stream.js";
+import {
   ensureSessionHeader,
   validateAnthropicTurns,
   validateGeminiTurns,
@@ -580,6 +585,19 @@ export async function compactEmbeddedPiSessionDirect(
         resourceLoader,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
+
+      // Ollama native API: register "ollama" in the SDK's API provider
+      // registry so that completeSimple() (used by session.compact()) can
+      // reach the native /api/chat endpoint (#20652, #11828).
+      if (model.api === "ollama") {
+        ensureOllamaApiRegistered();
+        const providerConfig = params.config?.models?.providers?.[model.provider];
+        const modelBaseUrl = typeof model.baseUrl === "string" ? model.baseUrl.trim() : "";
+        const providerBaseUrl =
+          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
+        const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
+        session.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      }
 
       try {
         const prior = await sanitizeSessionHistory({
