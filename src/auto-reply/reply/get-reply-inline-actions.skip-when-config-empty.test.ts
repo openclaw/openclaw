@@ -17,8 +17,6 @@ const { handleInlineActions } = await import("./get-reply-inline-actions.js");
 
 describe("handleInlineActions", () => {
   it("skips whatsapp replies when config is empty and From !== To", async () => {
-    handleCommandsMock.mockReset();
-
     const typing: TypingController = {
       onReplyStart: async () => {},
       startTypingLoop: async () => {},

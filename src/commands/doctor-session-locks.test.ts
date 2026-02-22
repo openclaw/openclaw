@@ -17,7 +17,7 @@ describe("noteSessionLockHealth", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(async () => {
-    note.mockReset();
+    note.mockClear();
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-locks-"));
     process.env.OPENCLAW_STATE_DIR = root;
