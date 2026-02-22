@@ -270,64 +270,6 @@
   --radius-full: 0px;
 }
 
-/* ─── Theme: openai — Crimson Glassmorphic ─── */
-
-:root[data-theme="openai"] {
-  color-scheme: dark;
-
-  --vscode-bg: #0c0606;
-  --vscode-sidebar: #100808;
-  --vscode-panel: #140a0a;
-  --vscode-panel-border: rgba(202, 58, 41, 0.12);
-  --vscode-surface: #1a0e0e;
-  --vscode-hover: #221414;
-  --vscode-contrast: #060202;
-  --vscode-text: #e8d8d4;
-  --vscode-muted: #8a6a64;
-  --vscode-subtle: #4a3430;
-  --vscode-ghost: #1a0e0e;
-  --vscode-accent: #ca3a29;
-  --vscode-accent-alpha: rgba(202, 58, 41, 0.18);
-  --vscode-selection: #7d261c;
-  --vscode-success: #fd8e2e;
-  --vscode-danger: #ca3a29;
-
-  --kn-claw: #ca3a29;
-  --kn-claw-bright: #ff4e41;
-  --kn-claw-dim: rgba(202, 58, 41, 0.15);
-  --kn-claw-ember: #fd8e2e;
-  --kn-claw-deep: #9a2d1f;
-  --kn-ocean: #0c0606;
-  --kn-ocean-bright: #221414;
-  --kn-ocean-mid: #140a0a;
-  --kn-ocean-dim: rgba(12, 6, 6, 0.8);
-  --kn-ocean-deep: #0c0606;
-  --kn-silver: #8a6a64;
-  --kn-silver-bright: #c0a49c;
-  --kn-silver-dim: rgba(138, 106, 100, 0.12);
-  --kn-bioluminescence: #fd8e2e;
-  --kn-warm-dark: #221016;
-  --kn-void: #221016;
-
-  --glass-blur: 14px;
-  --glass-saturate: 130%;
-  --glass-bg: rgba(20, 10, 10, 0.78);
-  --glass-bg-elevated: rgba(26, 14, 14, 0.85);
-  --glass-border: rgba(202, 58, 41, 0.12);
-  --glass-border-hover: rgba(202, 58, 41, 0.4);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --glass-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 4px rgba(202, 58, 41, 0.08);
-  --glass-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(202, 58, 41, 0.1);
-  --glass-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 24px rgba(202, 58, 41, 0.12);
-
-  --radius-xs: 4px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-full: 9999px;
-}
-
 /* ─── Theme: clawdash — Chrome Metallic ─── */
 
 :root[data-theme="clawdash"] {
@@ -395,7 +337,6 @@
 :root[data-theme="light"],
 :root[data-theme="openknot"],
 :root[data-theme="fieldmanual"],
-:root[data-theme="openai"],
 :root[data-theme="clawdash"] {
   /* Core surfaces */
   --bg: var(--vscode-bg);
@@ -770,19 +711,6 @@ select {
 }
 
 :root[data-theme="fieldmanual"] body::after {
-  display: none;
-}
-
-/* ─── openai — Crimson atmosphere ─── */
-
-:root[data-theme="openai"] body {
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -5%, rgba(202, 58, 41, 0.12) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 60% 20%, rgba(253, 142, 46, 0.04) 0%, transparent 50%),
-    var(--bg);
-}
-
-:root[data-theme="openai"] body::after {
   display: none;
 }
 
