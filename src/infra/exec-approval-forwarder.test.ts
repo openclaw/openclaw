@@ -24,6 +24,16 @@ function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
   return firstCall?.payloads?.[0]?.text ?? "";
 }
 
+function getFirstDeliveryPayload(
+  deliver: ReturnType<typeof vi.fn>,
+): Record<string, unknown> | undefined {
+  return (
+    deliver.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string; channelData?: Record<string, unknown> }> }
+      | undefined
+  )?.payloads?.[0];
+}
+
 const TARGETS_CFG = {
   approvals: {
     exec: {
@@ -142,5 +152,25 @@ describe("exec approval forwarder", () => {
     });
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
+  });
+
+  it("adds Telegram inline approval buttons when forwarding requests", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await forwarder.handleRequested(baseRequest);
+
+    const payload = getFirstDeliveryPayload(deliver);
+    expect(payload?.channelData).toEqual({
+      telegram: {
+        buttons: [
+          [
+            { text: "✅ Allow Once", callback_data: "/approve req-1 allow-once" },
+            { text: "🔒 Always Allow", callback_data: "/approve req-1 allow-always" },
+            { text: "❌ Deny", callback_data: "/approve req-1 deny" },
+          ],
+        ],
+      },
+    });
   });
 });

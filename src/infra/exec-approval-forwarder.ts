@@ -7,6 +7,7 @@ import type {
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { TelegramInlineButtons } from "../telegram/button-types.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
   ExecApprovalDecision,
@@ -146,6 +147,16 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   return lines.join("\n");
 }
 
+function buildApprovalButtons(approvalId: string): TelegramInlineButtons {
+  return [
+    [
+      { text: "✅ Allow Once", callback_data: `/approve ${approvalId} allow-once` },
+      { text: "🔒 Always Allow", callback_data: `/approve ${approvalId} allow-always` },
+      { text: "❌ Deny", callback_data: `/approve ${approvalId} deny` },
+    ],
+  ];
+}
+
 function decisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -202,6 +213,7 @@ async function deliverToTargets(params: {
   targets: ForwardTarget[];
   text: string;
   deliver: typeof deliverOutboundPayloads;
+  approvalId?: string;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -219,7 +231,15 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [
+          {
+            text: params.text,
+            channelData:
+              channel === "telegram" && params.approvalId
+                ? { telegram: { buttons: buildApprovalButtons(params.approvalId) } }
+                : undefined,
+          },
+        ],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -303,6 +323,7 @@ export function createExecApprovalForwarder(
       cfg,
       targets: filteredTargets,
       text,
+      approvalId: request.id,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     });
