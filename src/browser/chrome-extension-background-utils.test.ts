@@ -11,8 +11,22 @@ type BackgroundUtilsModule = {
 };
 
 const require = createRequire(import.meta.url);
+const BACKGROUND_UTILS_MODULE = "../../assets/chrome-extension/background-utils.js";
+
+async function loadBackgroundUtils(): Promise<BackgroundUtilsModule> {
+  try {
+    return require(BACKGROUND_UTILS_MODULE) as BackgroundUtilsModule;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("Unexpected token 'export'")) {
+      throw error;
+    }
+    return (await import(BACKGROUND_UTILS_MODULE)) as BackgroundUtilsModule;
+  }
+}
+
 const { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } =
-  require("../../assets/chrome-extension/background-utils.js") as BackgroundUtilsModule;
+  await loadBackgroundUtils();
 
 describe("chrome extension background utils", () => {
   it("builds websocket url with encoded gateway token", () => {
