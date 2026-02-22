@@ -129,31 +129,21 @@ async function waitForStart(started: Promise<void>) {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function createSignaledLoopHarness(exitCallOrder?: string[]) {
+  const close = vi.fn(async () => {});
+  const { start, started } = createSignaledStart(close);
+  const { runtime, exited } = createRuntimeWithExitSignal(exitCallOrder);
+  const { loopPromise } = await runLoopWithStart({ start, runtime });
+  await waitForStart(started);
+  return { close, start, runtime, exited, loopPromise };
+}
+
 describe("runGatewayLoop", () => {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async () => {
-      const close = vi.fn(async () => {});
-      let resolveStarted: (() => void) | null = null;
-      const started = new Promise<void>((resolve) => {
-        resolveStarted = resolve;
-      });
-      const start = vi.fn(async () => {
-        resolveStarted?.();
-        return { close };
-      });
-      const { runtime, exited } = createRuntimeWithExitSignal();
-
-      vi.resetModules();
-      const { runGatewayLoop } = await import("./run-loop.js");
-      const _loopPromise = runGatewayLoop({
-        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-      });
-
-      await started;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      const { close, runtime, exited } = await createSignaledLoopHarness();
 
       process.emit("SIGTERM");
 
@@ -259,18 +249,11 @@ describe("runGatewayLoop", () => {
         pid: 9999,
       });
 
-      const close = vi.fn(async () => {});
-      const { start, started } = createSignaledStart(close);
-
       const exitCallOrder: string[] = [];
-      const { runtime, exited } = createRuntimeWithExitSignal(exitCallOrder);
+      const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
       lockRelease.mockImplementation(async () => {
         exitCallOrder.push("lockRelease");
       });
-
-      const { loopPromise: _loopPromise } = await runLoopWithStart({ start, runtime });
-
-      await waitForStart(started);
 
       process.emit("SIGUSR1");
 
@@ -329,14 +312,7 @@ describe("runGatewayLoop", () => {
         mode: "disabled",
       });
 
-      const close = vi.fn(async () => {});
-      const { start, started } = createSignaledStart(close);
-
-      const { runtime, exited } = createRuntimeWithExitSignal();
-
-      const { loopPromise: _loopPromise } = await runLoopWithStart({ start, runtime });
-
-      await waitForStart(started);
+      const { start, exited } = await createSignaledLoopHarness();
       process.emit("SIGUSR1");
 
       await expect(exited).resolves.toBe(1);
