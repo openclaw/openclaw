@@ -20,6 +20,7 @@ export type MemoryQmdConfig = {
   update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
+  weights?: Record<string, number>;
 };
 
 export type MemoryQmdMcporterConfig = {
