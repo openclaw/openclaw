@@ -121,7 +121,13 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[] },
+    event: {
+      prompt: string;
+      messages: unknown[];
+      modelId?: string;
+      provider?: string;
+      contextWindowTokens?: number;
+    },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
@@ -184,6 +190,9 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  modelId?: string;
+  provider?: string;
+  contextWindowTokens?: number;
 }): Promise<PluginHookBeforePromptBuildResult> {
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
@@ -191,6 +200,9 @@ export async function resolvePromptBuildHookResult(params: {
           {
             prompt: params.prompt,
             messages: params.messages,
+            modelId: params.modelId,
+            provider: params.provider,
+            contextWindowTokens: params.contextWindowTokens,
           },
           params.hookCtx,
         )
@@ -222,6 +234,8 @@ export async function resolvePromptBuildHookResult(params: {
     prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
       .filter((value): value is string => Boolean(value))
       .join("\n\n"),
+    modelOverride: promptBuildResult?.modelOverride,
+    providerOverride: promptBuildResult?.providerOverride,
   };
 }
 
@@ -613,7 +627,24 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
       });
 
-      // Sets compaction/pruning runtime state and returns extension factories
+      // Compute hookAgentId early so it's available for buildEmbeddedExtensionFactories.
+      const hookAgentId =
+        typeof params.agentId === "string" && params.agentId.trim()
+          ? normalizeAgentId(params.agentId)
+          : resolveSessionAgentIds({
+              sessionKey: params.sessionKey,
+              config: params.config,
+            }).sessionAgentId;
+
+      const hookCtx = {
+        agentId: hookAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+      };
+
+      // Sets compaction/pruning/context-hooks runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
@@ -621,6 +652,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        hookCtx,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -980,15 +1012,6 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Hook runner was already obtained earlier before tool creation
-      const hookAgentId =
-        typeof params.agentId === "string" && params.agentId.trim()
-          ? normalizeAgentId(params.agentId)
-          : resolveSessionAgentIds({
-              sessionKey: params.sessionKey,
-              config: params.config,
-            }).sessionAgentId;
-
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       try {
@@ -997,26 +1020,74 @@ export async function runEmbeddedAttempt(
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
-        const hookCtx = {
-          agentId: hookAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageProvider ?? undefined,
-        };
-        const hookResult = await resolvePromptBuildHookResult({
+        const promptBuildResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+          modelId: params.modelId,
+          provider: params.provider,
+          contextWindowTokens:
+            params.model?.contextWindow ?? params.model?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
         });
+        const hookResult = promptBuildResult;
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
+          }
+        }
+
+        // Dynamic per-call model routing (env-based, takes precedence over plugin hooks).
+        const { installDynamicModelRouter } = await import("../../model-router/index.js");
+        const routerResult = await installDynamicModelRouter({
+          activeSession,
+          sessionManager,
+          provider: params.provider,
+          modelId: params.modelId,
+          agentDir,
+          config: params.config,
+        });
+
+        if (!routerResult.installed) {
+          // Fall back to static per-turn routing from plugin hooks.
+          if (promptBuildResult?.modelOverride) {
+            const { resolveModel } = await import("../model.js");
+            const routedProvider = promptBuildResult.providerOverride ?? params.provider;
+            const routedResult = resolveModel(
+              routedProvider,
+              promptBuildResult.modelOverride,
+              agentDir,
+              params.config,
+            );
+            if (routedResult.model) {
+              const routedModel = routedResult.model;
+              const originalStreamFn = activeSession.agent.streamFn;
+              activeSession.agent.streamFn = (_model, ...rest) =>
+                originalStreamFn(routedModel, ...rest);
+
+              // Update context-hooks runtime so before_context_send sees the routed model.
+              const { getContextHooksRuntime } =
+                await import("../../pi-extensions/context-hooks/runtime.js");
+              const contextHooksRuntime = getContextHooksRuntime(sessionManager);
+              if (contextHooksRuntime) {
+                contextHooksRuntime.modelId = promptBuildResult.modelOverride;
+                contextHooksRuntime.provider = routedProvider;
+                contextHooksRuntime.contextWindowTokens =
+                  routedModel.contextWindow ?? routedModel.maxTokens ?? DEFAULT_CONTEXT_TOKENS;
+              }
+
+              log.debug(
+                `hooks: model routed from ${params.provider}/${params.modelId} to ${routedProvider}/${promptBuildResult.modelOverride}`,
+              );
+            } else {
+              log.warn(
+                `hooks: modelOverride "${promptBuildResult.modelOverride}" could not be resolved, using original model`,
+              );
+            }
           }
         }
 

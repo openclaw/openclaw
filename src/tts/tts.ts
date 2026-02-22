@@ -73,6 +73,13 @@ const TELEGRAM_OUTPUT = {
   voiceCompatible: true,
 };
 
+const WHATSAPP_OUTPUT = {
+  openai: "opus" as const,
+  elevenlabs: "opus_48000_64",
+  extension: ".opus",
+  voiceCompatible: true,
+};
+
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
@@ -483,6 +490,9 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId === "telegram") {
     return TELEGRAM_OUTPUT;
+  }
+  if (channelId === "whatsapp") {
+    return WHATSAPP_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
@@ -911,7 +921,8 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
+    const shouldVoice =
+      (channelId === "telegram" || channelId === "whatsapp") && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,
