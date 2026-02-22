@@ -232,7 +232,7 @@ function validateConfigObjectWithPluginsBase(
     return registryInfo;
   };
 
-  const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS]);
+  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {

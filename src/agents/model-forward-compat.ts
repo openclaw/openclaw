@@ -1,8 +1,8 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelRegistry } from "./pi-model-discovery.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
-import type { ModelRegistry } from "./pi-model-discovery.js";
 
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -26,6 +26,12 @@ const ANTIGRAVITY_OPUS_THINKING_TEMPLATE_MODEL_IDS = [
   "claude-opus-4-5-thinking",
   "claude-opus-4.5-thinking",
 ] as const;
+const ANTIGRAVITY_GEMINI_31_PRO_HIGH_MODEL_ID = "gemini-3-1-pro-high";
+const ANTIGRAVITY_GEMINI_31_PRO_DOT_HIGH_MODEL_ID = "gemini-3.1-pro-high";
+const ANTIGRAVITY_GEMINI_31_PRO_LOW_MODEL_ID = "gemini-3-1-pro-low";
+const ANTIGRAVITY_GEMINI_31_PRO_DOT_LOW_MODEL_ID = "gemini-3.1-pro-low";
+const ANTIGRAVITY_GEMINI_31_PRO_HIGH_TEMPLATE_MODEL_IDS = ["gemini-3-pro-high"] as const;
+const ANTIGRAVITY_GEMINI_31_PRO_LOW_TEMPLATE_MODEL_IDS = ["gemini-3-pro-low"] as const;
 
 export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   {
@@ -38,6 +44,17 @@ export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   {
     id: ANTIGRAVITY_OPUS_46_MODEL_ID,
     templatePrefixes: ["google-antigravity/claude-opus-4-5", "google-antigravity/claude-opus-4.5"],
+  },
+] as const;
+
+export const ANTIGRAVITY_GEMINI_31_FORWARD_COMPAT_CANDIDATES = [
+  {
+    id: ANTIGRAVITY_GEMINI_31_PRO_HIGH_MODEL_ID,
+    templatePrefixes: ["google-antigravity/gemini-3-pro-high"],
+  },
+  {
+    id: ANTIGRAVITY_GEMINI_31_PRO_LOW_MODEL_ID,
+    templatePrefixes: ["google-antigravity/gemini-3-pro-low"],
   },
 ] as const;
 
@@ -278,6 +295,40 @@ function resolveAntigravityOpus46ForwardCompatModel(
   });
 }
 
+function resolveAntigravityGemini31ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "google-antigravity") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  const isGemini31High =
+    lower === ANTIGRAVITY_GEMINI_31_PRO_HIGH_MODEL_ID ||
+    lower === ANTIGRAVITY_GEMINI_31_PRO_DOT_HIGH_MODEL_ID;
+  const isGemini31Low =
+    lower === ANTIGRAVITY_GEMINI_31_PRO_LOW_MODEL_ID ||
+    lower === ANTIGRAVITY_GEMINI_31_PRO_DOT_LOW_MODEL_ID;
+  if (!isGemini31High && !isGemini31Low) {
+    return undefined;
+  }
+
+  const templateIds = isGemini31High
+    ? [...ANTIGRAVITY_GEMINI_31_PRO_HIGH_TEMPLATE_MODEL_IDS]
+    : [...ANTIGRAVITY_GEMINI_31_PRO_LOW_TEMPLATE_MODEL_IDS];
+
+  return cloneFirstTemplateModel({
+    normalizedProvider,
+    trimmedModelId,
+    templateIds,
+    modelRegistry,
+  });
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -288,6 +339,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveAntigravityGemini31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

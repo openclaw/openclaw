@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./config.js";
 
 describe("config schema regressions", () => {
   it("accepts nested telegram groupPolicy overrides", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: {
         telegram: {
           groups: {
@@ -24,7 +24,7 @@ describe("config schema regressions", () => {
   });
 
   it('accepts memorySearch fallback "voyage"', () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       agents: {
         defaults: {
           memorySearch: {
@@ -38,7 +38,7 @@ describe("config schema regressions", () => {
   });
 
   it("accepts safe iMessage remoteHost", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: {
         imessage: {
           remoteHost: "bot@gateway-host",
@@ -50,7 +50,7 @@ describe("config schema regressions", () => {
   });
 
   it("rejects unsafe iMessage remoteHost", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: {
         imessage: {
           remoteHost: "bot@gateway-host -oProxyCommand=whoami",
@@ -65,7 +65,7 @@ describe("config schema regressions", () => {
   });
 
   it("accepts iMessage attachment root patterns", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: {
         imessage: {
           attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
@@ -77,8 +77,22 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts modelByChannel overrides", () => {
+    const res = validateConfigObjectWithPlugins({
+      channels: {
+        modelByChannel: {
+          telegram: {
+            "123456789": "gpt-4o",
+          },
+        },
+      },
+      agents: { list: [{ id: "pi" }] },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects relative iMessage attachment roots", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: {
         imessage: {
           attachmentRoots: ["./attachments"],
