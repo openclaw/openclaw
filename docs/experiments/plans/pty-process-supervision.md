@@ -159,7 +159,7 @@ Unit tests:
 
 E2E targets:
 
-- `pnpm test:e2e src/agents/cli-runner.e2e.test.ts`
+- `pnpm vitest src/agents/cli-runner.test.ts`
 - `pnpm vitest run src/agents/bash-tools.exec.pty-fallback.test.ts src/agents/bash-tools.exec.background-abort.test.ts src/agents/bash-tools.process.send-keys.test.ts`
 
 Typecheck note:
