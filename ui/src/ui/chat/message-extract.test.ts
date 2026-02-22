@@ -25,6 +25,31 @@ describe("extractTextCached", () => {
   });
 });
 
+describe("extractText strips reply tags", () => {
+  it("strips [[reply_to_current]] from assistant string content", () => {
+    const message = { role: "assistant", content: "[[reply_to_current]] Hello" };
+    expect(extractText(message)).toBe("Hello");
+  });
+
+  it("strips [[reply_to:<id>]] from assistant array content", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to:msg-123]] Hello" }],
+    };
+    expect(extractText(message)).toBe("Hello");
+  });
+
+  it("does not strip reply tags from user messages", () => {
+    const message = { role: "user", content: "[[reply_to_current]] Hello" };
+    expect(extractText(message)).toContain("[[reply_to_current]]");
+  });
+
+  it("strips [[reply_to_current]] from assistant text field", () => {
+    const message = { role: "assistant", text: "[[reply_to_current]] World" };
+    expect(extractText(message)).toBe("World");
+  });
+});
+
 describe("extractThinkingCached", () => {
   it("matches extractThinking output", () => {
     const message = {
