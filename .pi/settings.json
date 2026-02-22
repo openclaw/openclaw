@@ -1,0 +1,7 @@
+{
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 90000,
+    "keepRecentTokens": 6000
+  }
+}

@@ -82,6 +82,24 @@ describe("applyModelDefaults", () => {
     );
   });
 
+  it("assigns gemini-3.1 alias to gemini-3.1-pro-preview", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-pro-preview"]?.alias).toBe(
+      "gemini-3.1",
+    );
+  });
+
   it("fills missing model provider defaults", () => {
     const cfg = buildProxyProviderConfig();
 

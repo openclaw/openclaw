@@ -280,6 +280,72 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
     });
 }
 
+// ---------------------------------------------------------------------------
+// Gemini 3.1 thinking-level fix
+// ---------------------------------------------------------------------------
+// pi-ai's streamSimpleGoogleGeminiCli gates thinking-level mode on
+//   model.id.includes("3-pro") || model.id.includes("3-flash")
+// but "gemini-3.1-pro-preview" does NOT match "3-pro".  This causes Gemini 3.1
+// to fall through to the budget-based path (for Gemini 2.5).  The Google API
+// expects `thinkingLevel` (not `thinkingBudget`) for Gemini 3.x models.
+//
+// The wrapper intercepts the request payload via onPayload and replaces
+// thinkingBudget with the correct thinkingLevel.
+
+const GEMINI_CLI_31_PATTERN = /^gemini-3\.1-/;
+
+/** @internal Exported for testing */
+export function isGeminiCli31Model(modelId: string): boolean {
+  return GEMINI_CLI_31_PATTERN.test(modelId);
+}
+
+/**
+ * Map a token budget back to Gemini 3 Pro thinking levels.
+ * pi-ai's default budgets: minimal=1024, low=2048, medium=8192, high=16384.
+ * For 3-pro models, pi-ai maps: minimal/low → LOW, medium/high → HIGH.
+ *
+ * @internal Exported for testing
+ */
+export function geminiCliBudgetToThinkingLevel(budget: number): string {
+  return budget <= 2048 ? "LOW" : "HIGH";
+}
+
+type GeminiCliPayload = {
+  model?: string;
+  request?: {
+    generationConfig?: {
+      thinkingConfig?: {
+        includeThoughts?: boolean;
+        thinkingBudget?: number;
+        thinkingLevel?: string;
+      };
+    };
+  };
+};
+
+function createGeminiCli31ThinkingLevelWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!isGeminiCli31Model(model.id)) {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const p = payload as GeminiCliPayload | undefined;
+        const tc = p?.request?.generationConfig?.thinkingConfig;
+        if (tc && tc.thinkingBudget !== undefined) {
+          tc.thinkingLevel = geminiCliBudgetToThinkingLevel(tc.thinkingBudget);
+          delete tc.thinkingBudget;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
@@ -366,6 +432,15 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
+  }
+
+  // Fix Gemini 3.1 thinking level: pi-ai only recognises "3-pro"/"3-flash" in
+  // the model id for level-based thinking.  Gemini 3.1 ids ("3.1-pro") miss
+  // that check and get budget-based config instead.  This wrapper patches the
+  // request payload to use thinkingLevel.
+  if (provider === "google-gemini-cli" && isGeminiCli31Model(modelId)) {
+    log.debug(`applying Gemini 3.1 thinking-level fix for ${provider}/${modelId}`);
+    agent.streamFn = createGeminiCli31ThinkingLevelWrapper(agent.streamFn);
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.

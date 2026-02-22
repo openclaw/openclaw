@@ -3,6 +3,7 @@ export type ModelApi =
   | "openai-responses"
   | "anthropic-messages"
   | "google-generative-ai"
+  | "google-gemini-cli"
   | "github-copilot"
   | "bedrock-converse-stream"
   | "ollama";
