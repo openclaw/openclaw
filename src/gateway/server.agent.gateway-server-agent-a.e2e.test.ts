@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -95,22 +96,15 @@ const createStubChannelPlugin = (params: {
   label: string;
   resolveAllowFrom?: (cfg: Record<string, unknown>) => string[];
 }): ChannelPlugin => ({
-  id: params.id,
-  meta: {
+  ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-    resolveAllowFrom: params.resolveAllowFrom
-      ? ({ cfg }) => params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
-      : undefined,
-  },
+    config: {
+      resolveAllowFrom: params.resolveAllowFrom
+        ? ({ cfg }) => params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
+        : undefined,
+    },
+  }),
   outbound: {
     deliveryMode: "direct",
     resolveTarget: ({ to, allowFrom }) => {
@@ -441,19 +435,31 @@ describe("gateway server agent", () => {
     expect(images[0]?.data).toBe(BASE_IMAGE_PNG);
   });
 
-  test("agent falls back to whatsapp when delivery requested and no last channel exists", async () => {
-    const call = await runMainAgentDeliveryWithSession({
-      entry: {
-        sessionId: "sess-main-missing-provider",
-      },
-      request: {
+  test("agent errors when delivery requested and no last channel exists", async () => {
+    setRegistry(defaultRegistry);
+    testState.allowFrom = ["+1555"];
+    try {
+      await setTestSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main-missing-provider",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const res = await rpcReq(ws, "agent", {
+        message: "hi",
+        sessionKey: "main",
+        deliver: true,
         idempotencyKey: "idem-agent-missing-provider",
-      },
-    });
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1555");
-    expect(call.deliver).toBe(true);
-    expect(call.sessionId).toBe("sess-main-missing-provider");
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("INVALID_REQUEST");
+      expect(res.error?.message).toContain("Channel is required");
+      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+    } finally {
+      testState.allowFrom = undefined;
+    }
   });
 
   test.each([

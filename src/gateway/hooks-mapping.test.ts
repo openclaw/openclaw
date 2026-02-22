@@ -240,6 +240,92 @@ describe("hooks mapping", () => {
     const result = await applyNullTransformFromTempConfig({ configDir, transformsDir: "subdir" });
     expectSkippedTransformResult(result);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects transform module symlink escape outside transformsDir",
+    () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-module-"));
+      const transformsRoot = path.join(configDir, "hooks", "transforms");
+      fs.mkdirSync(transformsRoot, { recursive: true });
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-module-"));
+      const outsideModule = path.join(outsideDir, "evil.mjs");
+      fs.writeFileSync(outsideModule, 'export default () => ({ kind: "wake", text: "owned" });');
+      fs.symlinkSync(outsideModule, path.join(transformsRoot, "linked.mjs"));
+      expect(() =>
+        resolveHookMappings(
+          {
+            mappings: [
+              {
+                match: { path: "custom" },
+                action: "agent",
+                transform: { module: "linked.mjs" },
+              },
+            ],
+          },
+          { configDir },
+        ),
+      ).toThrow(/must be within/);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects transformsDir symlink escape outside transforms root",
+    () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-dir-"));
+      const transformsRoot = path.join(configDir, "hooks", "transforms");
+      fs.mkdirSync(transformsRoot, { recursive: true });
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-dir-"));
+      fs.writeFileSync(path.join(outsideDir, "transform.mjs"), "export default () => null;");
+      fs.symlinkSync(outsideDir, path.join(transformsRoot, "escape"), "dir");
+      expect(() =>
+        resolveHookMappings(
+          {
+            transformsDir: "escape",
+            mappings: [
+              {
+                match: { path: "custom" },
+                action: "agent",
+                transform: { module: "transform.mjs" },
+              },
+            ],
+          },
+          { configDir },
+        ),
+      ).toThrow(/Hook transformsDir/);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("accepts in-root transform module symlink", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-ok-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    const nestedDir = path.join(transformsRoot, "nested");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(path.join(nestedDir, "transform.mjs"), "export default () => null;");
+    fs.symlinkSync(path.join(nestedDir, "transform.mjs"), path.join(transformsRoot, "linked.mjs"));
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "skip" },
+            action: "agent",
+            transform: { module: "linked.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/skip"),
+      path: "skip",
+    });
+
+    expectSkippedTransformResult(result);
+  });
+
   it("treats null transform as a handled skip", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-skip-"));
     const result = await applyNullTransformFromTempConfig({ configDir });
@@ -294,6 +380,72 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("caches transform functions by module path and export name", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-export-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "multi-export.mjs");
+    fs.writeFileSync(
+      modPath,
+      [
+        'export function transformA() { return { kind: "wake", text: "from-A" }; }',
+        'export function transformB() { return { kind: "wake", text: "from-B" }; }',
+      ].join("\n"),
+    );
+
+    const mappingsA = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "testA" },
+            action: "agent",
+            messageTemplate: "unused",
+            transform: { module: "multi-export.mjs", export: "transformA" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const mappingsB = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "testB" },
+            action: "agent",
+            messageTemplate: "unused",
+            transform: { module: "multi-export.mjs", export: "transformB" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const resultA = await applyHookMappings(mappingsA, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testA"),
+      path: "testA",
+    });
+
+    const resultB = await applyHookMappings(mappingsB, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testB"),
+      path: "testB",
+    });
+
+    expect(resultA?.ok).toBe(true);
+    if (resultA?.ok && resultA.action?.kind === "wake") {
+      expect(resultA.action.text).toBe("from-A");
+    }
+
+    expect(resultB?.ok).toBe(true);
+    if (resultB?.ok && resultB.action?.kind === "wake") {
+      expect(resultB.action.text).toBe("from-B");
+    }
+  });
+
   it("rejects missing message", async () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
@@ -305,5 +457,79 @@ describe("hooks mapping", () => {
       path: "noop",
     });
     expect(result?.ok).toBe(false);
+  });
+
+  describe("prototype pollution protection", () => {
+    it("blocks __proto__ traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "proto-test",
+            messageTemplate: "value: {{__proto__}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { __proto__: { polluted: true } } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("value: ");
+        }
+      }
+    });
+
+    it("blocks constructor traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "constructor-test",
+            messageTemplate: "type: {{constructor.name}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { constructor: { name: "INJECTED" } } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("type: ");
+        }
+      }
+    });
+
+    it("blocks prototype traversal in webhook payload", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "prototype-test",
+            messageTemplate: "val: {{prototype}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { prototype: "leaked" } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        const action = result.action;
+        if (action?.kind === "agent") {
+          expect(action.message).toBe("val: ");
+        }
+      }
+    });
   });
 });

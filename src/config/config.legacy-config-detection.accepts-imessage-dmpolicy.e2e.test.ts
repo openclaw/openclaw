@@ -98,7 +98,7 @@ describe("legacy config detection", () => {
           ?.groupPolicy,
       "allowlist",
     ],
-  ])("%s", (_name, config, readValue, expectedValue) => {
+  ])("defaults: %s", (_name, config, readValue, expectedValue) => {
     expectValidConfigValue({ config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", async () => {
@@ -149,7 +149,7 @@ describe("legacy config detection", () => {
       { channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } } },
       "channels.slack.allowFrom",
     ],
-  ])("%s", (_name, config, expectedPath) => {
+  ])("rejects: %s", (_name, config, expectedPath) => {
     expectInvalidIssuePath(config, expectedPath);
   });
 
@@ -361,6 +361,16 @@ describe("legacy config detection", () => {
         (parsed as { bindings?: Array<{ match?: { accountID?: string } }> }).bindings?.[0]?.match
           ?.accountID,
       expectedValue: "work",
+    });
+  });
+  it("accepts bindings[].comment on load", () => {
+    expectValidConfigValue({
+      config: {
+        bindings: [{ agentId: "main", comment: "primary route", match: { channel: "telegram" } }],
+      },
+      readValue: (config) =>
+        (config as { bindings?: Array<{ comment?: string }> }).bindings?.[0]?.comment,
+      expectedValue: "primary route",
     });
   });
   it("rejects session.sendPolicy.rules[].match.provider on load", async () => {

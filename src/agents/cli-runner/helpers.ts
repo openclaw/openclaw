@@ -11,6 +11,7 @@ import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
@@ -81,11 +82,14 @@ export function buildSystemPrompt(params: {
     },
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
+    ownerDisplay: ownerDisplay.ownerDisplay,
+    ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,

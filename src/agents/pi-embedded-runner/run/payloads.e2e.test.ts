@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
 describe("buildEmbeddedRunPayloads", () => {
@@ -15,31 +16,12 @@ describe("buildEmbeddedRunPayloads", () => {
   },
   "request_id": "req_011CX7DwS7tSvggaNHmefwWg"
 }`;
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-    role: "assistant",
-    api: "openai-responses",
-    provider: "openai",
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    timestamp: 0,
-    stopReason: "error",
-    errorMessage: errorJson,
-    content: [{ type: "text", text: errorJson }],
-    ...overrides,
-  });
+  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
+    makeAssistantMessageFixture({
+      errorMessage: errorJson,
+      content: [{ type: "text", text: errorJson }],
+      ...overrides,
+    });
 
   type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
   const buildPayloads = (overrides: Partial<BuildPayloadParams> = {}) =>
@@ -161,6 +143,42 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("All good");
+  });
+
+  it("adds completion fallback when tools run successfully without final assistant text", () => {
+    const payloads = buildPayloads({
+      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBeUndefined();
+    expect(payloads[0]?.text).toBe("✅ Done.");
+  });
+
+  it("does not add completion fallback when the run still has a tool error", () => {
+    const payloads = buildPayloads({
+      toolMetas: [{ toolName: "browser", meta: "open https://example.com" }],
+      lastToolError: { toolName: "browser", error: "url required" },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not add completion fallback when no tools ran", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
   });
 
   it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {

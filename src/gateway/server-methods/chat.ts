@@ -10,6 +10,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
@@ -103,9 +104,10 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   const entry = { ...(block as Record<string, unknown>) };
   let changed = false;
   if (typeof entry.text === "string") {
-    const res = truncateChatHistoryText(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateChatHistoryText(entry.partialJson);
@@ -158,9 +160,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateChatHistoryText(entry.content);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const res = truncateChatHistoryText(stripped.text);
     entry.content = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
     if (updated.some((item) => item.changed)) {
@@ -170,9 +173,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.text === "string") {
-    const res = truncateChatHistoryText(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   }
 
   return { message: changed ? entry : message, changed };
@@ -523,6 +527,25 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+function stripMessageDirectiveTags(
+  message: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!message) {
+    return message;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return message;
+  }
+  const cleaned = content.map((part: Record<string, unknown>) => {
+    if (part.type === "text" && typeof part.text === "string") {
+      return { ...part, text: stripInlineDirectiveTagsForDisplay(part.text).text };
+    }
+    return part;
+  });
+  return { ...message, content: cleaned };
+}
+
 function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
@@ -535,7 +558,7 @@ function broadcastChatFinal(params: {
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: params.message,
+    message: stripMessageDirectiveTags(params.message),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -1066,7 +1089,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: rawSessionKey,
       seq: 0,
       state: "final" as const,
-      message: appended.message,
+      message: stripMessageDirectiveTags(appended.message),
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);

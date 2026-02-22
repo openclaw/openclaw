@@ -75,9 +75,9 @@ import {
 
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
-  delivery: { channel: string; to?: string; accountId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string },
 ): boolean {
-  if (!delivery.to || !target.to) {
+  if (!delivery.channel || !delivery.to || !target.to) {
     return false;
   }
   const channel = delivery.channel.trim().toLowerCase();
@@ -154,6 +154,7 @@ export async function runCronIsolatedAgentTurn(params: {
   deps: CliDeps;
   job: CronJob;
   message: string;
+  abortSignal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -454,6 +455,9 @@ export async function runCronIsolatedAgentTurn(params: {
       agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
+        if (params.abortSignal?.aborted) {
+          throw new Error("cron: isolated run aborted");
+        }
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
           const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
@@ -492,6 +496,7 @@ export async function runCronIsolatedAgentTurn(params: {
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
+          abortSignal: params.abortSignal,
         });
       },
     });
@@ -538,6 +543,8 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.outputTokens = output;
       cronSession.sessionEntry.totalTokens = totalTokens;
       cronSession.sessionEntry.totalTokensFresh = true;
+      cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
+      cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
 
       telemetry = {
         model: modelUsed,
@@ -602,6 +609,20 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
+      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+    }
+    if (!resolvedDelivery.channel) {
+      const message = "cron delivery channel is missing";
+      if (!deliveryBestEffort) {
+        return withRunSession({
+          status: "error",
+          error: message,
+          summary,
+          outputText,
+          ...telemetry,
+        });
+      }
+      logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     if (!resolvedDelivery.to) {

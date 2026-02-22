@@ -62,14 +62,16 @@ function mockPatchAndSingleAgentRun(params: { calls: GatewayCall[]; runId: strin
 }
 
 async function expectSpawnUsesConfiguredModel(params: {
-  config: SessionsSpawnConfigOverride;
+  config?: SessionsSpawnConfigOverride;
   runId: string;
   callId: string;
   expectedModel: string;
 }) {
-  resetSubagentRegistryForTests();
-  callGatewayMock.mockReset();
-  setSessionsSpawnConfigOverride(params.config);
+  if (params.config) {
+    setSessionsSpawnConfigOverride(params.config);
+  } else {
+    resetSessionsSpawnConfigOverride();
+  }
   const calls: GatewayCall[] = [];
   mockPatchAndSingleAgentRun({ calls, runId: params.runId });
 
@@ -97,11 +99,11 @@ async function expectSpawnUsesConfiguredModel(params: {
 describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockClear();
   });
 
   it("sessions_spawn applies a model to the child session", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({ calls, acceptedAtBase: 3000 });
 
@@ -137,8 +139,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn forwards thinking overrides to the agent run", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -170,8 +170,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn rejects invalid thinking levels", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: Array<{ method?: string }> = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -198,60 +196,22 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn applies default subagent model from defaults config", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
-    });
-    const calls: GatewayCall[] = [];
-    mockPatchAndSingleAgentRun({ calls, runId: "run-default-model" });
-
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-default-model", {
-      task: "do thing",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
-
-    const patchCall = calls.find(
-      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
-    );
-    expect(patchCall?.params).toMatchObject({
-      model: "minimax/MiniMax-M2.1",
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
+      },
+      runId: "run-default-model",
+      callId: "call-default-model",
+      expectedModel: "minimax/MiniMax-M2.1",
     });
   });
 
   it("sessions_spawn falls back to runtime default model when no model config is set", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    const calls: GatewayCall[] = [];
-    mockPatchAndSingleAgentRun({ calls, runId: "run-runtime-default-model" });
-
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-runtime-default-model", {
-      task: "do thing",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
-
-    const patchCall = calls.find(
-      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
-    );
-    expect(patchCall?.params).toMatchObject({
-      model: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+    await expectSpawnUsesConfiguredModel({
+      runId: "run-runtime-default-model",
+      callId: "call-runtime-default-model",
+      expectedModel: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
     });
   });
 
@@ -286,8 +246,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn fails when model patch is rejected", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({
       calls,
@@ -319,8 +277,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     let spawnedTimeout: number | undefined;
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {

@@ -1,3 +1,6 @@
+import { isIP } from "node:net";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
@@ -12,12 +15,15 @@ import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
+  collectGatewayHttpNoAuthFindings,
   collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectSandboxBrowserHashLabelFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
   collectSmallModelRiskFindings,
   collectSandboxDangerousConfigFindings,
@@ -34,6 +40,7 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
 
@@ -87,6 +94,8 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: typeof probeGateway;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
+  /** Dependency injection for tests (Docker label checks). */
+  execDockerRawFn?: typeof execDockerRaw;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -262,6 +271,8 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
+  const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
   // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
   // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
@@ -326,6 +337,39 @@ function collectGatewayConfigFindings(
     });
   }
 
+  if (allowRealIpFallback) {
+    const hasNonLoopbackTrustedProxy = trustedProxies.some(
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
+    );
+    const exposed =
+      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+    findings.push({
+      checkId: "gateway.real_ip_fallback_enabled",
+      severity: exposed ? "critical" : "warn",
+      title: "X-Real-IP fallback is enabled",
+      detail:
+        "gateway.allowRealIpFallback=true trusts X-Real-IP when trusted proxies omit X-Forwarded-For. " +
+        "Misconfigured proxies that forward client-supplied X-Real-IP can spoof source IP and local-client checks.",
+      remediation:
+        "Keep gateway.allowRealIpFallback=false (default). Only enable this when your trusted proxy " +
+        "always overwrites X-Real-IP and cannot provide X-Forwarded-For.",
+    });
+  }
+
+  if (mdnsMode === "full") {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "discovery.mdns_full_mode",
+      severity: exposed ? "critical" : "warn",
+      title: "mDNS full mode can leak host metadata",
+      detail:
+        'discovery.mdns.mode="full" publishes cliPath/sshPort in local-network TXT records. ' +
+        "This can reveal usernames, filesystem layout, and management ports.",
+      remediation:
+        'Prefer discovery.mdns.mode="minimal" (recommended) or "off", especially when gateway.bind is not loopback.',
+    });
+  }
+
   if (tailscaleMode === "funnel") {
     findings.push({
       checkId: "gateway.tailscale_funnel",
@@ -346,10 +390,10 @@ function collectGatewayConfigFindings(
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "critical",
-      title: "Control UI allows insecure HTTP auth",
+      severity: "warn",
+      title: "Control UI insecure auth toggle enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
+        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }
@@ -362,6 +406,18 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+    });
+  }
+
+  const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
+  if (enabledDangerousFlags.length > 0) {
+    findings.push({
+      checkId: "config.insecure_or_dangerous_flags",
+      severity: "warn",
+      title: "Insecure or dangerous config flags enabled",
+      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      remediation:
+        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
@@ -449,6 +505,35 @@ function collectGatewayConfigFindings(
   }
 
   return findings;
+}
+
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
+  const candidate = entry.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (!candidate.includes("/")) {
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
+  }
+
+  const [rawIp, rawPrefix] = candidate.split("/", 2);
+  if (!rawIp || !rawPrefix) {
+    return false;
+  }
+  const ipVersion = isIP(rawIp.trim());
+  const prefix = Number.parseInt(rawPrefix.trim(), 10);
+  if (!Number.isInteger(prefix)) {
+    return false;
+  }
+  if (ipVersion === 4) {
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
+  }
+  if (ipVersion === 6) {
+    return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
+  }
+  return false;
 }
 
 function collectBrowserControlFindings(
@@ -565,6 +650,54 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
+function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const globalExecHost = cfg.tools?.exec?.host;
+  const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
+  const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
+
+  if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
+    findings.push({
+      checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
+      severity: "warn",
+      title: "Exec host is sandbox but sandbox mode is off",
+      detail:
+        "tools.exec.host is explicitly set to sandbox while agents.defaults.sandbox.mode=off. " +
+        "In this mode, exec runs directly on the gateway host.",
+      remediation:
+        'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway" with approvals.',
+    });
+  }
+
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const riskyAgents = agents
+    .filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        entry.tools?.exec?.host === "sandbox" &&
+        resolveSandboxConfigForAgent(cfg, entry.id).mode === "off",
+    )
+    .map((entry) => entry.id)
+    .slice(0, 5);
+
+  if (riskyAgents.length > 0) {
+    findings.push({
+      checkId: "tools.exec.host_sandbox_no_sandbox_agents",
+      severity: "warn",
+      title: "Agent exec host uses sandbox while sandbox mode is off",
+      detail:
+        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
+        "With sandbox mode off, exec runs directly on the gateway host.",
+      remediation:
+        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+    });
+  }
+
+  return findings;
+}
+
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
   timeoutMs: number;
@@ -620,11 +753,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
+  findings.push(...collectExecRuntimeFindings(cfg));
   findings.push(...collectHooksHardeningFindings(cfg, env));
+  findings.push(...collectGatewayHttpNoAuthFindings(cfg, env));
   findings.push(...collectGatewayHttpSessionKeyOverrideFindings(cfg));
   findings.push(...collectSandboxDockerNoopFindings(cfg));
   findings.push(...collectSandboxDangerousConfigFindings(cfg));
   findings.push(...collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...collectMinimalProfileOverrideFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
@@ -653,6 +789,11 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
+    );
+    findings.push(
+      ...(await collectSandboxBrowserHashLabelFindings({
+        execDockerRawFn: opts.execDockerRawFn,
+      })),
     );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {

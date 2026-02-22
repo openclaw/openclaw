@@ -44,6 +44,8 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Only applies to Anthropic provider (OpenRouter uses openai-completions API
  * with hardcoded cache_control, not the cacheRetention stream option).
+ *
+ * Defaults to "short" for Anthropic provider when not explicitly configured.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
@@ -67,7 +69,9 @@ function resolveCacheRetention(
   if (legacy === "1h") {
     return "long";
   }
-  return undefined;
+
+  // Default to "short" for Anthropic when not explicitly configured
+  return "short";
 }
 
 function createStreamFnWithExtraParams(
@@ -218,16 +222,46 @@ function mergeAnthropicBetaHeader(
   return merged;
 }
 
+// Betas that pi-ai's createClient injects for standard Anthropic API key calls.
+// Must be included when injecting anthropic-beta via options.headers, because
+// pi-ai's mergeHeaders uses Object.assign (last-wins), which would otherwise
+// overwrite the hardcoded defaultHeaders["anthropic-beta"].
+const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
+  "fine-grained-tool-streaming-2025-05-14",
+  "interleaved-thinking-2025-05-14",
+] as const;
+
+// Additional betas pi-ai injects when the API key is an OAuth token (sk-ant-oat-*).
+// These are required for Anthropic to accept OAuth Bearer auth. Losing oauth-2025-04-20
+// causes a 401 "OAuth authentication is currently not supported".
+const PI_AI_OAUTH_ANTHROPIC_BETAS = [
+  "claude-code-20250219",
+  "oauth-2025-04-20",
+  ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
+] as const;
+
+function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
+}
+
 function createAnthropicBetaHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   betas: string[],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
+  return (model, context, options) => {
+    // Preserve the betas pi-ai's createClient would inject for the given token type.
+    // Without this, our options.headers["anthropic-beta"] overwrites the pi-ai
+    // defaultHeaders via Object.assign, stripping critical betas like oauth-2025-04-20.
+    const piAiBetas = isAnthropicOAuthApiKey(options?.apiKey)
+      ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
+      : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
+    const allBetas = [...new Set([...piAiBetas, ...betas])];
+    return underlying(model, context, {
       ...options,
-      headers: mergeAnthropicBetaHeader(options?.headers, betas),
+      headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
     });
+  };
 }
 
 /**

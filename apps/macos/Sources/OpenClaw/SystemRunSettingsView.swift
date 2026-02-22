@@ -105,16 +105,24 @@ struct SystemRunSettingsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
-                    TextField("Add allowlist pattern (case-insensitive globs)", text: self.$newPattern)
+                    TextField("Add allowlist path pattern (case-insensitive globs)", text: self.$newPattern)
                         .textFieldStyle(.roundedBorder)
                     Button("Add") {
-                        let pattern = self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !pattern.isEmpty else { return }
-                        self.model.addEntry(pattern)
-                        self.newPattern = ""
+                        if self.model.addEntry(self.newPattern) == nil {
+                            self.newPattern = ""
+                        }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!self.model.isPathPattern(self.newPattern))
+                }
+
+                Text("Path patterns only. Basename entries like \"echo\" are ignored.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if let validationMessage = self.model.allowlistValidationMessage {
+                    Text(validationMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
 
                 if self.model.entries.isEmpty {
@@ -234,6 +242,7 @@ final class ExecApprovalsSettingsModel {
     var autoAllowSkills = false
     var entries: [ExecAllowlistEntry] = []
     var skillBins: [String] = []
+    var allowlistValidationMessage: String?
 
     var agentPickerIds: [String] {
         [Self.defaultsScopeId] + self.agentIds
@@ -289,6 +298,7 @@ final class ExecApprovalsSettingsModel {
 
     func selectAgent(_ id: String) {
         self.selectedAgentId = id
+        self.allowlistValidationMessage = nil
         self.loadSettings(for: id)
         Task { await self.refreshSkillBins() }
     }
@@ -301,6 +311,7 @@ final class ExecApprovalsSettingsModel {
             self.askFallback = defaults.askFallback
             self.autoAllowSkills = defaults.autoAllowSkills
             self.entries = []
+            self.allowlistValidationMessage = nil
             return
         }
         let resolved = ExecApprovalsStore.resolve(agentId: agentId)
@@ -310,6 +321,7 @@ final class ExecApprovalsSettingsModel {
         self.autoAllowSkills = resolved.agent.autoAllowSkills
         self.entries = resolved.allowlist
             .sorted { $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending }
+        self.allowlistValidationMessage = nil
     }
 
     func setSecurity(_ security: ExecSecurity) {
@@ -367,30 +379,53 @@ final class ExecApprovalsSettingsModel {
         Task { await self.refreshSkillBins(force: enabled) }
     }
 
-    func addEntry(_ pattern: String) {
-        guard !self.isDefaultsScope else { return }
-        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.entries.append(ExecAllowlistEntry(pattern: trimmed, lastUsedAt: nil))
-        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+    @discardableResult
+    func addEntry(_ pattern: String) -> ExecAllowlistPatternValidationReason? {
+        guard !self.isDefaultsScope else { return nil }
+        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
+        case .valid(let normalizedPattern):
+            self.entries.append(ExecAllowlistEntry(pattern: normalizedPattern, lastUsedAt: nil))
+            let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+            self.allowlistValidationMessage = rejected.first?.reason.message
+            return rejected.first?.reason
+        case .invalid(let reason):
+            self.allowlistValidationMessage = reason.message
+            return reason
+        }
     }
 
-    func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) {
-        guard !self.isDefaultsScope else { return }
-        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
-        self.entries[index] = entry
-        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+    @discardableResult
+    func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) -> ExecAllowlistPatternValidationReason? {
+        guard !self.isDefaultsScope else { return nil }
+        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return nil }
+        var next = entry
+        switch ExecApprovalHelpers.validateAllowlistPattern(next.pattern) {
+        case .valid(let normalizedPattern):
+            next.pattern = normalizedPattern
+        case .invalid(let reason):
+            self.allowlistValidationMessage = reason.message
+            return reason
+        }
+        self.entries[index] = next
+        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+        self.allowlistValidationMessage = rejected.first?.reason.message
+        return rejected.first?.reason
     }
 
     func removeEntry(id: UUID) {
         guard !self.isDefaultsScope else { return }
         guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
         self.entries.remove(at: index)
-        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
+        self.allowlistValidationMessage = rejected.first?.reason.message
     }
 
     func entry(for id: UUID) -> ExecAllowlistEntry? {
         self.entries.first(where: { $0.id == id })
+    }
+
+    func isPathPattern(_ pattern: String) -> Bool {
+        ExecApprovalHelpers.isPathPattern(pattern)
     }
 
     func refreshSkillBins(force: Bool = false) async {

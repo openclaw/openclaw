@@ -5,7 +5,11 @@ import {
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
+import {
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+  writeConfigFile,
+} from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
@@ -33,11 +37,17 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonRestart } from "../daemon-cli.js";
+import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import {
+  renderRestartDiagnostics,
+  terminateStaleGatewayPids,
+  waitForGatewayHealthyRestart,
+} from "../daemon-cli/restart-health.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
   DEFAULT_PACKAGE_NAME,
+  createGlobalCommandRunner,
   ensureGitCheckout,
   normalizeTag,
   parseTimeoutMsOrExit,
@@ -55,6 +65,7 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
+const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -81,6 +92,53 @@ const UPDATE_QUIPS = [
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
+}
+
+function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
+  if (!root) {
+    return [];
+  }
+  return [
+    path.join(root, "dist", "entry.js"),
+    path.join(root, "dist", "entry.mjs"),
+    path.join(root, "dist", "index.js"),
+    path.join(root, "dist", "index.mjs"),
+  ];
+}
+
+function formatCommandFailure(stdout: string, stderr: string): string {
+  const detail = (stderr || stdout).trim();
+  if (!detail) {
+    return "command returned a non-zero exit code";
+  }
+  return detail.split("\n").slice(-3).join("\n");
+}
+
+async function refreshGatewayServiceEnv(params: {
+  result: UpdateRunResult;
+  jsonMode: boolean;
+}): Promise<void> {
+  const args = ["gateway", "install", "--force"];
+  if (params.jsonMode) {
+    args.push("--json");
+  }
+
+  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
+    if (!(await pathExists(candidate))) {
+      continue;
+    }
+    const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
+      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+    });
+    if (res.code === 0) {
+      return;
+    }
+    throw new Error(
+      `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
+    );
+  }
+
+  await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -151,10 +209,7 @@ async function runPackageInstallUpdate(params: {
     installKind: params.installKind,
     timeoutMs: params.timeoutMs,
   });
-  const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
-    const res = await runCommandWithTimeout(argv, options);
-    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-  };
+  const runCommand = createGlobalCommandRunner();
 
   const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
   const packageName =
@@ -391,6 +446,8 @@ async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
+  refreshServiceEnv: boolean;
+  gatewayPort: number;
   restartScriptPath?: string | null;
 }): Promise<void> {
   if (params.shouldRestart) {
@@ -402,6 +459,22 @@ async function maybeRestartService(params: {
     try {
       let restarted = false;
       let restartInitiated = false;
+      if (params.refreshServiceEnv) {
+        try {
+          await refreshGatewayServiceEnv({
+            result: params.result,
+            jsonMode: Boolean(params.opts.json),
+          });
+        } catch (err) {
+          if (!params.opts.json) {
+            defaultRuntime.log(
+              theme.warn(
+                `Failed to refresh gateway service environment from updated install: ${String(err)}`,
+              ),
+            );
+          }
+        }
+      }
       if (params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
@@ -427,12 +500,40 @@ async function maybeRestartService(params: {
       }
 
       if (!params.opts.json && restartInitiated) {
-        defaultRuntime.log(theme.success("Daemon restart initiated."));
-        defaultRuntime.log(
-          theme.muted(
-            `Verify with \`${replaceCliName(formatCliCommand("openclaw gateway status"), CLI_NAME)}\` once the gateway is back.`,
-          ),
-        );
+        const service = resolveGatewayService();
+        let health = await waitForGatewayHealthyRestart({
+          service,
+          port: params.gatewayPort,
+        });
+        if (!health.healthy && health.staleGatewayPids.length > 0) {
+          if (!params.opts.json) {
+            defaultRuntime.log(
+              theme.warn(
+                `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+              ),
+            );
+          }
+          await terminateStaleGatewayPids(health.staleGatewayPids);
+          await runDaemonRestart();
+          health = await waitForGatewayHealthyRestart({
+            service,
+            port: params.gatewayPort,
+          });
+        }
+
+        if (health.healthy) {
+          defaultRuntime.log(theme.success("Daemon restart completed."));
+        } else {
+          defaultRuntime.log(theme.warn("Gateway did not become healthy after restart."));
+          for (const line of renderRestartDiagnostics(health)) {
+            defaultRuntime.log(theme.muted(line));
+          }
+          defaultRuntime.log(
+            theme.muted(
+              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --probe --deep"), CLI_NAME)}\` for details.`,
+            ),
+          );
+        }
         defaultRuntime.log("");
       }
     } catch (err) {
@@ -586,11 +687,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const startedAt = Date.now();
 
   let restartScriptPath: string | null = null;
+  let refreshGatewayServiceEnv = false;
   if (shouldRestart) {
     try {
       const loaded = await resolveGatewayService().isLoaded({ env: process.env });
       if (loaded) {
         restartScriptPath = await prepareRestartScript(process.env);
+        refreshGatewayServiceEnv = true;
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
@@ -669,6 +772,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     shouldRestart,
     result,
     opts,
+    refreshServiceEnv: refreshGatewayServiceEnv,
+    gatewayPort: resolveGatewayPort(configSnapshot.valid ? configSnapshot.config : undefined),
     restartScriptPath,
   });
 

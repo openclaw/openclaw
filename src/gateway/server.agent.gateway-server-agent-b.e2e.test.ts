@@ -7,11 +7,11 @@ import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
+  connectWebchatClient,
   connectOk,
   installGatewayTestHooks,
   onceMessage,
@@ -154,7 +154,7 @@ describe("gateway server agent", () => {
     setRegistry(emptyRegistry);
   });
 
-  test("agent falls back when last-channel plugin is unavailable", async () => {
+  test("agent errors when deliver=true and last-channel plugin is unavailable", async () => {
     const registry = createRegistry([
       {
         pluginId: "msteams",
@@ -175,9 +175,10 @@ describe("gateway server agent", () => {
       deliver: true,
       idempotencyKey: "idem-agent-last-msteams",
     });
-    expect(res.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "whatsapp", deliver: true });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toContain("Channel is required");
+    expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
   test("agent accepts channel aliases (imsg/teams)", async () => {
@@ -233,7 +234,7 @@ describe("gateway server agent", () => {
     expect(res.error?.code).toBe("INVALID_REQUEST");
   });
 
-  test("agent ignores webchat last-channel for routing", async () => {
+  test("agent errors when deliver=true and last channel is webchat", async () => {
     testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
@@ -247,9 +248,10 @@ describe("gateway server agent", () => {
       deliver: true,
       idempotencyKey: "idem-agent-webchat",
     });
-    expect(res.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "whatsapp", deliver: true });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
+    expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {
@@ -285,6 +287,8 @@ describe("gateway server agent", () => {
     await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
     const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
     expect(call.message).toBe(BARE_SESSION_RESET_PROMPT);
+    expect(call.message).toBeTypeOf("string");
+    expect(call.message).toContain("Execute your Session Startup sequence now");
     expect(typeof call.sessionId).toBe("string");
     expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
@@ -367,18 +371,7 @@ describe("gateway server agent", () => {
   test("agent events stream to webchat clients when run context is registered", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main" });
 
-    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
-      headers: { origin: `http://127.0.0.1:${port}` },
-    });
-    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
-    await connectOk(webchatWs, {
-      client: {
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    });
+    const webchatWs = await connectWebchatClient({ port });
 
     registerAgentRunContext("run-auto-1", { sessionKey: "main" });
 

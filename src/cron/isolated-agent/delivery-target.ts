@@ -1,5 +1,4 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -12,8 +11,11 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveWhatsAppAccount } from "../../web/accounts.js";
+import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -24,7 +26,7 @@ export async function resolveDeliveryTarget(
     sessionKey?: string;
   },
 ): Promise<{
-  channel: Exclude<OutboundChannel, "none">;
+  channel?: Exclude<OutboundChannel, "none">;
   to?: string;
   accountId?: string;
   threadId?: string | number;
@@ -54,12 +56,20 @@ export async function resolveDeliveryTarget(
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
+  let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
-    try {
-      const selection = await resolveMessageChannelSelection({ cfg });
-      fallbackChannel = selection.channel;
-    } catch {
-      fallbackChannel = preliminary.lastChannel ?? DEFAULT_CHAT_CHANNEL;
+    if (preliminary.lastChannel) {
+      fallbackChannel = preliminary.lastChannel;
+    } else {
+      try {
+        const selection = await resolveMessageChannelSelection({ cfg });
+        fallbackChannel = selection.channel;
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        channelResolutionError = new Error(
+          `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
+        );
+      }
     }
   }
 
@@ -74,9 +84,9 @@ export async function resolveDeliveryTarget(
       })
     : preliminary;
 
-  const channel = resolved.channel ?? fallbackChannel ?? DEFAULT_CHAT_CHANNEL;
+  const channel = resolved.channel ?? fallbackChannel;
   const mode = resolved.mode as "explicit" | "implicit";
-  const toCandidate = resolved.to;
+  let toCandidate = resolved.to;
 
   // When the session has no lastAccountId (e.g. first-run isolated cron
   // session), fall back to the agent's bound account from bindings config.
@@ -102,6 +112,17 @@ export async function resolveDeliveryTarget(
       ? resolved.threadId
       : undefined;
 
+  if (!channel) {
+    return {
+      channel: undefined,
+      to: undefined,
+      accountId,
+      threadId,
+      mode,
+      error: channelResolutionError,
+    };
+  }
+
   if (!toCandidate) {
     return {
       channel,
@@ -109,7 +130,29 @@ export async function resolveDeliveryTarget(
       accountId,
       threadId,
       mode,
+      error: channelResolutionError,
     };
+  }
+
+  let allowFromOverride: string[] | undefined;
+  if (channel === "whatsapp") {
+    const configuredAllowFromRaw = resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [];
+    const configuredAllowFrom = configuredAllowFromRaw
+      .map((entry) => String(entry).trim())
+      .filter((entry) => entry && entry !== "*")
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, accountId)
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+
+    if (mode === "implicit" && allowFromOverride.length > 0) {
+      const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
+      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
+        toCandidate = allowFromOverride[0];
+      }
+    }
   }
 
   const docked = resolveOutboundTarget({
@@ -118,6 +161,7 @@ export async function resolveDeliveryTarget(
     cfg,
     accountId,
     mode,
+    allowFrom: allowFromOverride,
   });
   return {
     channel,
@@ -125,6 +169,6 @@ export async function resolveDeliveryTarget(
     accountId,
     threadId,
     mode,
-    error: docked.ok ? undefined : docked.error,
+    error: docked.ok ? channelResolutionError : docked.error,
   };
 }

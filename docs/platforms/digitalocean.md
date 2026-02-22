@@ -40,6 +40,10 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 
 ## 1) Create a Droplet
 
+<Warning>
+Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click images unless you have reviewed their startup scripts and firewall defaults.
+</Warning>
+
 1. Log into [DigitalOcean](https://cloud.digitalocean.com/)
 2. Click **Create → Droplets**
 3. Choose:
@@ -128,7 +132,7 @@ Open: `https://<magicdns>/`
 
 Notes:
 
-- Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers.
+- Serve keeps the Gateway loopback-only and authenticates Control UI/WebSocket traffic via Tailscale identity headers (tokenless auth assumes trusted gateway host; HTTP APIs still require token/password).
 - To require token/password instead, set `gateway.auth.allowTailscale: false` or use `gateway.auth.mode: "password"`.
 
 **Option C: Tailnet bind (no Serve)**

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -8,7 +9,6 @@ import {
   renameSync,
   unlinkSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -22,6 +22,7 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -237,11 +238,12 @@ function resolveModelOverridePolicy(
       allowSeed: false,
     };
   }
-  const allow = (value?: boolean) => value ?? true;
+  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
     enabled: true,
     allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider),
+    // Provider switching is higher-impact than voice/style tweaks; keep opt-in.
+    allowProvider: allow(overrides?.allowProvider, false),
     allowVoice: allow(overrides?.allowVoice),
     allowModelId: allow(overrides?.allowModelId),
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
@@ -382,8 +384,8 @@ function readPrefs(prefsPath: string): TtsUserPrefs {
 }
 
 function atomicWriteFileSync(filePath: string, content: string): void {
-  const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  writeFileSync(tmpPath, content);
+  const tmpPath = `${filePath}.tmp.${Date.now()}.${randomBytes(8).toString("hex")}`;
+  writeFileSync(tmpPath, content, { mode: 0o600 });
   try {
     renameSync(tmpPath, filePath);
   } catch (err) {
@@ -562,7 +564,9 @@ export async function textToSpeech(params: {
           continue;
         }
 
-        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
         let edgeOutputFormat = resolveEdgeOutputFormat(config);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
@@ -669,7 +673,9 @@ export async function textToSpeech(params: {
 
       const latencyMs = Date.now() - providerStart;
 
-      const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+      const tempRoot = resolvePreferredOpenClawTmpDir();
+      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+      const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
       const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);

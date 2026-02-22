@@ -19,6 +19,7 @@ import {
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
+import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -31,6 +32,7 @@ export async function buildStatusReply(params: {
   command: CommandContext;
   sessionEntry?: SessionEntry;
   sessionKey: string;
+  parentSessionKey?: string;
   sessionScope?: SessionScope;
   storePath?: string;
   provider: string;
@@ -50,6 +52,7 @@ export async function buildStatusReply(params: {
     command,
     sessionEntry,
     sessionKey,
+    parentSessionKey,
     sessionScope,
     storePath,
     provider,
@@ -136,6 +139,25 @@ export async function buildStatusReply(params: {
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider: provider,
+    selectedModel: model,
+    sessionEntry,
+  });
+  const selectedModelAuth = resolveModelAuthLabel({
+    provider,
+    cfg,
+    sessionEntry,
+    agentDir: statusAgentDir,
+  });
+  const activeModelAuth = modelRefs.activeDiffers
+    ? resolveModelAuthLabel({
+        provider: modelRefs.active.provider,
+        cfg,
+        sessionEntry,
+        agentDir: statusAgentDir,
+      })
+    : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
   const statusText = buildStatusMessage({
     config: cfg,
@@ -153,6 +175,7 @@ export async function buildStatusReply(params: {
     agentId: statusAgentId,
     sessionEntry,
     sessionKey,
+    parentSessionKey,
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,
@@ -160,12 +183,8 @@ export async function buildStatusReply(params: {
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
-    modelAuth: resolveModelAuthLabel({
-      provider,
-      cfg,
-      sessionEntry,
-      agentDir: statusAgentDir,
-    }),
+    modelAuth: selectedModelAuth,
+    activeModelAuth,
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

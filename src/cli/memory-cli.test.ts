@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.fn();
 const loadConfig = vi.fn(() => ({}));
@@ -20,15 +20,37 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
 }));
 
-afterEach(async () => {
+let registerMemoryCli: typeof import("./memory-cli.js").registerMemoryCli;
+let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
+let isVerbose: typeof import("../globals.js").isVerbose;
+let setVerbose: typeof import("../globals.js").setVerbose;
+
+beforeAll(async () => {
+  ({ registerMemoryCli } = await import("./memory-cli.js"));
+  ({ defaultRuntime } = await import("../runtime.js"));
+  ({ isVerbose, setVerbose } = await import("../globals.js"));
+});
+
+afterEach(() => {
   vi.restoreAllMocks();
-  getMemorySearchManager.mockReset();
+  getMemorySearchManager.mockClear();
   process.exitCode = undefined;
-  const { setVerbose } = await import("../globals.js");
   setVerbose(false);
 });
 
 describe("memory cli", () => {
+  function spyRuntimeLogs() {
+    return vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  }
+
+  function spyRuntimeErrors() {
+    return vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  }
+
+  function firstLoggedJson(log: ReturnType<typeof vi.spyOn>) {
+    return JSON.parse(String(log.mock.calls[0]?.[0] ?? "null")) as Record<string, unknown>;
+  }
+
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
     expect(sync).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
@@ -55,15 +77,45 @@ describe("memory cli", () => {
   }
 
   async function runMemoryCli(args: string[]) {
-    const { registerMemoryCli } = await import("./memory-cli.js");
     const program = new Command();
     program.name("test");
     registerMemoryCli(program);
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
+  async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
+    const dbPath = path.join(tmpDir, "index.sqlite");
+    try {
+      await fs.writeFile(dbPath, content, "utf-8");
+      await run(dbPath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  async function expectCloseFailureAfterCommand(params: {
+    args: string[];
+    manager: Record<string, unknown>;
+    beforeExpect?: () => void;
+  }) {
+    const close = vi.fn(async () => {
+      throw new Error("close boom");
+    });
+    mockManager({ ...params.manager, close });
+
+    const error = spyRuntimeErrors();
+    await runMemoryCli(params.args);
+
+    params.beforeExpect?.();
+    expect(close).toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("Memory manager close failed: close boom"),
+    );
+    expect(process.exitCode).toBeUndefined();
+  }
+
   it("prints vector status when available", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     mockManager({
       probeVectorAvailability: vi.fn(async () => true),
@@ -83,7 +135,7 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs();
     await runMemoryCli(["status"]);
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
@@ -97,7 +149,6 @@ describe("memory cli", () => {
   });
 
   it("prints vector error when unavailable", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     mockManager({
       probeVectorAvailability: vi.fn(async () => false),
@@ -113,7 +164,7 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs();
     await runMemoryCli(["status", "--agent", "main"]);
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: unavailable"));
@@ -122,7 +173,6 @@ describe("memory cli", () => {
   });
 
   it("prints embeddings status when deep", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
     mockManager({
@@ -132,7 +182,7 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs();
     await runMemoryCli(["status", "--deep"]);
 
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
@@ -141,7 +191,6 @@ describe("memory cli", () => {
   });
 
   it("enables verbose logging with --verbose", async () => {
-    const { isVerbose } = await import("../globals.js");
     const close = vi.fn(async () => {});
     mockManager({
       probeVectorAvailability: vi.fn(async () => true),
@@ -155,28 +204,16 @@ describe("memory cli", () => {
   });
 
   it("logs close failure after status", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
-    const close = vi.fn(async () => {
-      throw new Error("close boom");
+    await expectCloseFailureAfterCommand({
+      args: ["status"],
+      manager: {
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      },
     });
-    mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
-      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
-      close,
-    });
-
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    await runMemoryCli(["status"]);
-
-    expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("Memory manager close failed: close boom"),
-    );
-    expect(process.exitCode).toBeUndefined();
   });
 
   it("reindexes on status --index", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
     const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
@@ -188,7 +225,7 @@ describe("memory cli", () => {
       close,
     });
 
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    spyRuntimeLogs();
     await runMemoryCli(["status", "--index"]);
 
     expectCliSync(sync);
@@ -197,12 +234,11 @@ describe("memory cli", () => {
   });
 
   it("closes manager after index", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
     mockManager({ sync, close });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs();
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
@@ -211,69 +247,143 @@ describe("memory cli", () => {
   });
 
   it("logs qmd index file path and size after index", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
-    const dbPath = path.join(tmpDir, "index.sqlite");
-    await fs.writeFile(dbPath, "sqlite-bytes", "utf-8");
-    mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
+    await withQmdIndexDb("sqlite-bytes", async (dbPath) => {
+      mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    await runMemoryCli(["index"]);
+      const log = spyRuntimeLogs();
+      await runMemoryCli(["index"]);
 
-    expectCliSync(sync);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
-    expect(log).toHaveBeenCalledWith("Memory index updated (main).");
-    expect(close).toHaveBeenCalled();
-    await fs.rm(tmpDir, { recursive: true, force: true });
+      expectCliSync(sync);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
+      expect(log).toHaveBeenCalledWith("Memory index updated (main).");
+      expect(close).toHaveBeenCalled();
+    });
   });
 
   it("fails index when qmd db file is empty", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
-    const dbPath = path.join(tmpDir, "index.sqlite");
-    await fs.writeFile(dbPath, "", "utf-8");
-    mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
+    await withQmdIndexDb("", async (dbPath) => {
+      mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
 
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    await runMemoryCli(["index"]);
+      const error = spyRuntimeErrors();
+      await runMemoryCli(["index"]);
 
-    expectCliSync(sync);
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("Memory index failed (main): QMD index file is empty"),
-    );
-    expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    await fs.rm(tmpDir, { recursive: true, force: true });
+      expectCliSync(sync);
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("Memory index failed (main): QMD index file is empty"),
+      );
+      expect(close).toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    });
   });
 
   it("logs close failures without failing the command", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
-    const close = vi.fn(async () => {
-      throw new Error("close boom");
-    });
     const sync = vi.fn(async () => {});
-    mockManager({ sync, close });
-
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    await runMemoryCli(["index"]);
-
-    expectCliSync(sync);
-    expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("Memory manager close failed: close boom"),
-    );
-    expect(process.exitCode).toBeUndefined();
+    await expectCloseFailureAfterCommand({
+      args: ["index"],
+      manager: { sync },
+      beforeExpect: () => {
+        expectCliSync(sync);
+      },
+    });
   });
 
   it("logs close failure after search", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
-    const close = vi.fn(async () => {
-      throw new Error("close boom");
+    const search = vi.fn(async () => [
+      {
+        path: "memory/2026-01-12.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.5,
+        snippet: "Hello",
+      },
+    ]);
+    await expectCloseFailureAfterCommand({
+      args: ["search", "hello"],
+      manager: { search },
+      beforeExpect: () => {
+        expect(search).toHaveBeenCalled();
+      },
     });
+  });
+
+  it("closes manager after search error", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    mockManager({ search, close });
+
+    const error = spyRuntimeErrors();
+    await runMemoryCli(["search", "oops"]);
+
+    expect(search).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory search failed: boom"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints status json output when requested", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["status", "--json"]);
+
+    const payload = firstLoggedJson(log);
+    expect(Array.isArray(payload)).toBe(true);
+    expect((payload[0] as Record<string, unknown>)?.agentId).toBe("main");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("logs default message when memory manager is missing", async () => {
+    getMemorySearchManager.mockResolvedValueOnce({ manager: null });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith("Memory search disabled.");
+  });
+
+  it("logs backend unsupported message when index has no sync", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["index"]);
+
+    expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints no matches for empty search results", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({ search, close });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["search", "hello"]);
+
+    expect(search).toHaveBeenCalledWith("hello", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(log).toHaveBeenCalledWith("No matches.");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints search results as json when requested", async () => {
+    const close = vi.fn(async () => {});
     const search = vi.fn(async () => [
       {
         path: "memory/2026-01-12.md",
@@ -285,31 +395,12 @@ describe("memory cli", () => {
     ]);
     mockManager({ search, close });
 
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    await runMemoryCli(["search", "hello"]);
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["search", "hello", "--json"]);
 
-    expect(search).toHaveBeenCalled();
+    const payload = firstLoggedJson(log);
+    expect(Array.isArray(payload.results)).toBe(true);
+    expect(payload.results as unknown[]).toHaveLength(1);
     expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("Memory manager close failed: close boom"),
-    );
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it("closes manager after search error", async () => {
-    const { defaultRuntime } = await import("../runtime.js");
-    const close = vi.fn(async () => {});
-    const search = vi.fn(async () => {
-      throw new Error("boom");
-    });
-    mockManager({ search, close });
-
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    await runMemoryCli(["search", "oops"]);
-
-    expect(search).toHaveBeenCalled();
-    expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory search failed: boom"));
-    expect(process.exitCode).toBe(1);
   });
 });

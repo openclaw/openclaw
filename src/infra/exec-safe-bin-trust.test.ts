@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   buildTrustedSafeBinDirs,
   getTrustedSafeBinDirs,
@@ -53,5 +54,16 @@ describe("exec safe bin trust", () => {
         trustedDirs: trusted,
       }),
     ).toBe(false);
+  });
+
+  it("uses startup PATH snapshot when pathEnv is omitted", () => {
+    const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
+    const initial = getTrustedSafeBinDirs({ refresh: true });
+
+    withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
+      const refreshed = getTrustedSafeBinDirs({ refresh: true });
+      expect(refreshed.has(path.resolve(injected))).toBe(false);
+      expect([...refreshed].toSorted()).toEqual([...initial].toSorted());
+    });
   });
 });

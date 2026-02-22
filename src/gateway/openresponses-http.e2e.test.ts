@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -123,7 +124,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it("handles OpenResponses request parsing and validation", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({ payloads, meta } as never);
     };
 
@@ -432,13 +433,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it("streams OpenResponses SSE events", async () => {
     const port = enabledPort;
     try {
-      agentCommand.mockReset();
-      agentCommand.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-        return { payloads: [{ text: "hello" }] } as never;
-      }) as never);
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: "hello",
+        })) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,
@@ -471,7 +473,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         .join("");
       expect(deltas).toBe("hello");
 
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],
       } as never);
@@ -486,7 +488,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(fallbackText).toContain("[DONE]");
       expect(fallbackText).toContain("hello");
 
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],
       } as never);
@@ -514,7 +516,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
   it("blocks unsafe URL-based file/image inputs", async () => {
     const port = enabledPort;
-    agentCommand.mockReset();
+    agentCommand.mockClear();
 
     const blockedPrivate = await postResponses(port, {
       model: "openclaw",
@@ -617,7 +619,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const allowlistPort = await getFreePort();
     const allowlistServer = await startServer(allowlistPort, { openResponsesEnabled: true });
     try {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
 
       const allowlistBlocked = await postResponses(allowlistPort, {
         model: "openclaw",
@@ -672,7 +674,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const capPort = await getFreePort();
     const capServer = await startServer(capPort, { openResponsesEnabled: true });
     try {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       const maxUrlBlocked = await postResponses(capPort, {
         model: "openclaw",
         input: [

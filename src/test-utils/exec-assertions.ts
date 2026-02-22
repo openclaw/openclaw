@@ -28,7 +28,7 @@ export function expectSingleNpmPackIgnoreScriptsCall(params: {
     throw new Error("expected npm pack call");
   }
   const [argv, options] = packCall;
-  expect(argv).toEqual(["npm", "pack", params.expectedSpec, "--ignore-scripts"]);
+  expect(argv).toEqual(["npm", "pack", params.expectedSpec, "--ignore-scripts", "--json"]);
   const commandOptions = typeof options === "number" ? undefined : options;
   expect(commandOptions).toMatchObject({ env: { NPM_CONFIG_IGNORE_SCRIPTS: "true" } });
 }
