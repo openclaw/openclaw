@@ -23,6 +23,11 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
       preferBrew: true,
       nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
     },
+    commandDispatch: {
+      allowTools: ["sessions_send", "gateway/*"], // optional allowlist; supports wildcards
+      maxArgLength: 4000, // max chars forwarded from slash command args
+      requireStructuredArgsTools: ["exec"], // require JSON-object args for selected tools
+    },
     entries: {
       "nano-banana-pro": {
         enabled: true,
@@ -49,6 +54,12 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun not recommended for WhatsApp/Telegram).
+- `commandDispatch.allowTools`: optional allowlist for `command-dispatch: tool` targets.
+  Supports exact names and wildcard patterns (for example `gateway/*`).
+- `commandDispatch.maxArgLength`: max characters accepted for tool-dispatch args
+  (default: `4000`).
+- `commandDispatch.requireStructuredArgsTools`: optional list of tools that must receive
+  JSON-object args when invoked via skill command dispatch.
 - `entries.<skillKey>`: per-skill overrides.
 
 Per-skill fields:

@@ -605,6 +605,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        commandDispatch: z
+          .object({
+            allowTools: z.array(z.string()).optional(),
+            maxArgLength: z.number().int().min(1).optional(),
+            requireStructuredArgsTools: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         limits: z
           .object({
             maxCandidatesPerRoot: z.number().int().min(1).optional(),

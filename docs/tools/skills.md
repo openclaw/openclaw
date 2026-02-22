@@ -102,6 +102,12 @@ Notes:
     The tool is invoked with params:
     `{ command: "<raw args>", commandName: "<slash command>", skillName: "<skill name>" }`.
 
+    Tool dispatch is gated by `skills.commandDispatch`:
+    - Default denylist blocks high-risk tools (`exec`, `system.run`, `nodes.run`, `gateway/*`).
+    - `skills.commandDispatch.allowTools` can explicitly allow tool targets.
+    - `skills.commandDispatch.maxArgLength` caps forwarded args length.
+    - `skills.commandDispatch.requireStructuredArgsTools` can require JSON-object args for selected tools.
+
 ## Gating (load-time filters)
 
 OpenClaw **filters skills at load time** using `metadata` (single-line JSON):
