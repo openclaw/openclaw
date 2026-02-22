@@ -147,9 +147,9 @@ describe("exec tool backgrounding", () => {
     isWin ? 15_000 : 5_000,
   );
 
-  it("supports explicit background", async () => {
+  it("supports explicit background and derives session name from the command", async () => {
     const result = await execTool.execute("call1", {
-      command: echoAfterDelay("later"),
+      command: "echo hello",
       background: true,
     });
 
@@ -157,28 +157,10 @@ describe("exec tool backgrounding", () => {
     const sessionId = (result.details as { sessionId: string }).sessionId;
 
     const list = await processTool.execute("call2", { action: "list" });
-    const sessions = (list.details as { sessions: Array<{ sessionId: string }> }).sessions;
+    const sessions = (list.details as { sessions: Array<{ sessionId: string; name?: string }> })
+      .sessions;
     expect(sessions.some((s) => s.sessionId === sessionId)).toBe(true);
-  });
-
-  it("derives a session name from the command", async () => {
-    const result = await execTool.execute("call1", {
-      command: "echo hello",
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await expect
-      .poll(
-        async () => {
-          const list = await processTool.execute("call2", { action: "list" });
-          const sessions = (
-            list.details as { sessions: Array<{ sessionId: string; name?: string }> }
-          ).sessions;
-          return sessions.find((s) => s.sessionId === sessionId)?.name;
-        },
-        { timeout: process.platform === "win32" ? 8000 : 1200, interval: POLL_INTERVAL_MS },
-      )
-      .toBe("echo hello");
+    expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe("echo hello");
   });
 
   it("uses default timeout when timeout is omitted", async () => {
