@@ -301,3 +301,34 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });
+
+describe("handleToolExecutionStart block reply flush ordering (#15968)", () => {
+  it("awaits onBlockReplyFlush before returning", async () => {
+    // Track the order of operations to verify flush completes before handler returns.
+    const order: string[] = [];
+
+    const onBlockReplyFlush = vi.fn(async () => {
+      // Simulate async flush (e.g., HTTP delivery to Telegram)
+      await new Promise((r) => setTimeout(r, 50));
+      order.push("flush_complete");
+    });
+
+    const { ctx } = createTestContext();
+    ctx.params.onBlockReplyFlush = onBlockReplyFlush;
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-flush-1",
+      args: { command: "echo test" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+    order.push("handler_returned");
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    // The flush MUST complete BEFORE the handler returns.
+    // If flush is fire-and-forget (void), handler returns first → wrong order.
+    expect(order).toEqual(["flush_complete", "handler_returned"]);
+  });
+});
