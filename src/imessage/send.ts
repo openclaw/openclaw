@@ -150,7 +150,7 @@ export async function sendMessageIMessage(
   message = prependReplyTagIfNeeded(message, opts.replyToId);
 
   const params: Record<string, unknown> = {
-    text: message,
+    text: typeof message === "string" ? message.trim() : message,
     service: service || "auto",
     region,
   };
