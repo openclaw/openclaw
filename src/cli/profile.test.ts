@@ -28,6 +28,45 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "gateway"]);
   });
 
+  it("parses --profile after subcommand", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "gateway",
+      "--profile",
+      "invest",
+      "--port",
+      "18795",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("invest");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway", "--port", "18795"]);
+  });
+
+  it("parses --profile=NAME after subcommand", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "gateway", "--profile=work"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway"]);
+  });
+
+  it("keeps --dev and strips --profile when both after subcommand", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "gateway", "--dev", "--profile", "work"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway", "--dev"]);
+  });
+
+  it("rejects --dev before subcommand combined with --profile after subcommand", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "--dev", "gateway", "--profile", "work"]);
+    expect(res.ok).toBe(false);
+  });
   it("parses --profile value and strips it", () => {
     const res = parseCliProfileArgs(["node", "openclaw", "--profile", "work", "status"]);
     if (!res.ok) {
