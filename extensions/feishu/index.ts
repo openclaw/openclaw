@@ -21,6 +21,7 @@ export {
   uploadFileFeishu,
   sendImageFeishu,
   sendFileFeishu,
+  sendAudioFeishu,
   sendMediaFeishu,
 } from "./src/media.js";
 export { probeFeishu } from "./src/probe.js";
