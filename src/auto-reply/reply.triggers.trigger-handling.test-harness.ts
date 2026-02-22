@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -105,17 +105,91 @@ vi.mock("../web/session.js", () => webSessionMocks);
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 
+type TempHomeEnvSnapshot = {
+  home: string | undefined;
+  userProfile: string | undefined;
+  homeDrive: string | undefined;
+  homePath: string | undefined;
+  openclawHome: string | undefined;
+  stateDir: string | undefined;
+};
+
+let suiteTempHomeRoot = "";
+let suiteTempHomeId = 0;
+
+function snapshotTempHomeEnv(): TempHomeEnvSnapshot {
+  return {
+    home: process.env.HOME,
+    userProfile: process.env.USERPROFILE,
+    homeDrive: process.env.HOMEDRIVE,
+    homePath: process.env.HOMEPATH,
+    openclawHome: process.env.OPENCLAW_HOME,
+    stateDir: process.env.OPENCLAW_STATE_DIR,
+  };
+}
+
+function restoreTempHomeEnv(snapshot: TempHomeEnvSnapshot): void {
+  const restoreKey = (key: string, value: string | undefined) => {
+    if (value === undefined) {
+      delete process.env[key];
+      return;
+    }
+    process.env[key] = value;
+  };
+
+  restoreKey("HOME", snapshot.home);
+  restoreKey("USERPROFILE", snapshot.userProfile);
+  restoreKey("HOMEDRIVE", snapshot.homeDrive);
+  restoreKey("HOMEPATH", snapshot.homePath);
+  restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
+  restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
+}
+
+function setTempHomeEnv(home: string): void {
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_STATE_DIR = join(home, ".openclaw");
+
+  if (process.platform !== "win32") {
+    return;
+  }
+  const match = home.match(/^([A-Za-z]:)(.*)$/);
+  if (!match) {
+    return;
+  }
+  process.env.HOMEDRIVE = match[1];
+  process.env.HOMEPATH = match[2] || "\\";
+}
+
+beforeAll(async () => {
+  suiteTempHomeRoot = await fs.mkdtemp(join(os.tmpdir(), "openclaw-triggers-suite-"));
+});
+
+afterAll(async () => {
+  if (!suiteTempHomeRoot) {
+    return;
+  }
+  await fs.rm(suiteTempHomeRoot, { recursive: true, force: true }).catch(() => undefined);
+  suiteTempHomeRoot = "";
+  suiteTempHomeId = 0;
+});
+
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      // Avoid cross-test leakage if a test doesn't touch these mocks.
-      piEmbeddedMocks.runEmbeddedPiAgent.mockClear();
-      piEmbeddedMocks.abortEmbeddedPiRun.mockClear();
-      piEmbeddedMocks.compactEmbeddedPiSession.mockClear();
-      return await fn(home);
-    },
-    { prefix: "openclaw-triggers-" },
-  );
+  const home = join(suiteTempHomeRoot, `case-${++suiteTempHomeId}`);
+  const snapshot = snapshotTempHomeEnv();
+  await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  setTempHomeEnv(home);
+
+  try {
+    // Avoid cross-test leakage if a test doesn't touch these mocks.
+    piEmbeddedMocks.runEmbeddedPiAgent.mockClear();
+    piEmbeddedMocks.abortEmbeddedPiRun.mockClear();
+    piEmbeddedMocks.compactEmbeddedPiSession.mockClear();
+    return await fn(home);
+  } finally {
+    restoreTempHomeEnv(snapshot);
+  }
 }
 
 export function makeCfg(home: string): OpenClawConfig {
@@ -126,6 +200,8 @@ export function makeCfg(home: string): OpenClawConfig {
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
         blockStreamingCoalesce: { idleMs: 1 },
+        // Trigger tests assert routing/authorization behavior, not delivery pacing.
+        humanDelay: { mode: "off" },
       },
     },
     channels: {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -32,13 +32,16 @@ vi.mock("../process/exec.js", () => ({
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
-const tempMediaDirs: string[] = [];
+let suiteTempMediaRootDir = "";
+let tempMediaDirCounter = 0;
 
 async function createTempMediaDir() {
-  const baseDir = resolvePreferredOpenClawTmpDir();
-  await fs.mkdir(baseDir, { recursive: true });
-  const dir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
-  tempMediaDirs.push(dir);
+  if (!suiteTempMediaRootDir) {
+    throw new Error("suite temp media root not initialized");
+  }
+  const dir = path.join(suiteTempMediaRootDir, `case-${String(tempMediaDirCounter)}`);
+  tempMediaDirCounter += 1;
+  await fs.mkdir(dir, { recursive: true });
   return dir;
 }
 
@@ -162,6 +165,9 @@ describe("applyMediaUnderstanding", () => {
   const mockedFetchRemoteMedia = vi.mocked(fetchRemoteMedia);
 
   beforeAll(async () => {
+    const baseDir = resolvePreferredOpenClawTmpDir();
+    await fs.mkdir(baseDir, { recursive: true });
+    suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
     ({ applyMediaUnderstanding } = await import("./apply.js"));
   });
 
@@ -175,12 +181,12 @@ describe("applyMediaUnderstanding", () => {
     });
   });
 
-  afterEach(async () => {
-    await Promise.all(
-      tempMediaDirs.splice(0).map(async (dir) => {
-        await fs.rm(dir, { recursive: true, force: true });
-      }),
-    );
+  afterAll(async () => {
+    if (!suiteTempMediaRootDir) {
+      return;
+    }
+    await fs.rm(suiteTempMediaRootDir, { recursive: true, force: true });
+    suiteTempMediaRootDir = "";
   });
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
