@@ -233,9 +233,9 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmTagVersion).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
     vi.mocked(runCommandWithTimeout).mockClear();
-    vi.mocked(runDaemonRestart).mockReset();
+    vi.mocked(runDaemonRestart).mockClear();
     vi.mocked(mockedRunDaemonInstall).mockClear();
-    vi.mocked(doctorCommand).mockReset();
+    vi.mocked(doctorCommand).mockClear();
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();
     vi.mocked(defaultRuntime.exit).mockClear();
@@ -312,6 +312,8 @@ describe("update-cli", () => {
     classifyPortListener.mockReturnValue("gateway");
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    vi.mocked(doctorCommand).mockResolvedValue(undefined);
     setTty(false);
     setStdoutTty(false);
   });
