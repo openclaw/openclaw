@@ -88,50 +88,38 @@ describe("tts", () => {
   });
 
   describe("isValidVoiceId", () => {
-    it("accepts valid ElevenLabs voice IDs", () => {
-      expect(isValidVoiceId("pMsXgVXv3BLzUgSXRplE")).toBe(true);
-      expect(isValidVoiceId("21m00Tcm4TlvDq8ikWAM")).toBe(true);
-      expect(isValidVoiceId("EXAVITQu4vr4xnSDxMaL")).toBe(true);
-    });
-
-    it("accepts voice IDs of varying valid lengths", () => {
-      expect(isValidVoiceId("a1b2c3d4e5")).toBe(true);
-      expect(isValidVoiceId("a".repeat(40))).toBe(true);
-    });
-
-    it("rejects too short voice IDs", () => {
-      expect(isValidVoiceId("")).toBe(false);
-      expect(isValidVoiceId("abc")).toBe(false);
-      expect(isValidVoiceId("123456789")).toBe(false);
-    });
-
-    it("rejects too long voice IDs", () => {
-      expect(isValidVoiceId("a".repeat(41))).toBe(false);
-      expect(isValidVoiceId("a".repeat(100))).toBe(false);
-    });
-
-    it("rejects voice IDs with invalid characters", () => {
-      expect(isValidVoiceId("pMsXgVXv3BLz-gSXRplE")).toBe(false);
-      expect(isValidVoiceId("pMsXgVXv3BLz_gSXRplE")).toBe(false);
-      expect(isValidVoiceId("pMsXgVXv3BLz gSXRplE")).toBe(false);
-      expect(isValidVoiceId("../../../etc/passwd")).toBe(false);
-      expect(isValidVoiceId("voice?param=value")).toBe(false);
+    it("validates ElevenLabs voice ID length and character rules", () => {
+      const cases = [
+        { value: "pMsXgVXv3BLzUgSXRplE", expected: true },
+        { value: "21m00Tcm4TlvDq8ikWAM", expected: true },
+        { value: "EXAVITQu4vr4xnSDxMaL", expected: true },
+        { value: "a1b2c3d4e5", expected: true },
+        { value: "a".repeat(40), expected: true },
+        { value: "", expected: false },
+        { value: "abc", expected: false },
+        { value: "123456789", expected: false },
+        { value: "a".repeat(41), expected: false },
+        { value: "a".repeat(100), expected: false },
+        { value: "pMsXgVXv3BLz-gSXRplE", expected: false },
+        { value: "pMsXgVXv3BLz_gSXRplE", expected: false },
+        { value: "pMsXgVXv3BLz gSXRplE", expected: false },
+        { value: "../../../etc/passwd", expected: false },
+        { value: "voice?param=value", expected: false },
+      ] as const;
+      for (const testCase of cases) {
+        expect(isValidVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+      }
     });
   });
 
   describe("isValidOpenAIVoice", () => {
-    it("accepts all valid OpenAI voices", () => {
+    it("accepts all valid OpenAI voices including newer additions", () => {
       for (const voice of OPENAI_TTS_VOICES) {
         expect(isValidOpenAIVoice(voice)).toBe(true);
       }
-    });
-
-    it("includes newer OpenAI voices (ballad, cedar, juniper, marin, verse) (#2393)", () => {
-      expect(isValidOpenAIVoice("ballad")).toBe(true);
-      expect(isValidOpenAIVoice("cedar")).toBe(true);
-      expect(isValidOpenAIVoice("juniper")).toBe(true);
-      expect(isValidOpenAIVoice("marin")).toBe(true);
-      expect(isValidOpenAIVoice("verse")).toBe(true);
+      for (const newerVoice of ["ballad", "cedar", "juniper", "marin", "verse"]) {
+        expect(isValidOpenAIVoice(newerVoice), newerVoice).toBe(true);
+      }
     });
 
     it("rejects invalid voice names", () => {
@@ -144,48 +132,56 @@ describe("tts", () => {
   });
 
   describe("isValidOpenAIModel", () => {
-    it("accepts supported models", () => {
-      expect(isValidOpenAIModel("gpt-4o-mini-tts")).toBe(true);
-      expect(isValidOpenAIModel("tts-1")).toBe(true);
-      expect(isValidOpenAIModel("tts-1-hd")).toBe(true);
-    });
-
-    it("rejects unsupported models", () => {
-      expect(isValidOpenAIModel("invalid")).toBe(false);
-      expect(isValidOpenAIModel("")).toBe(false);
-      expect(isValidOpenAIModel("gpt-4")).toBe(false);
-    });
-  });
-
-  describe("OPENAI_TTS_MODELS", () => {
-    it("contains supported models", () => {
+    it("matches the supported model set and rejects unsupported values", () => {
       expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
       expect(OPENAI_TTS_MODELS).toContain("tts-1");
       expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
       expect(OPENAI_TTS_MODELS).toHaveLength(3);
-    });
-
-    it("is a non-empty array", () => {
       expect(Array.isArray(OPENAI_TTS_MODELS)).toBe(true);
       expect(OPENAI_TTS_MODELS.length).toBeGreaterThan(0);
+      const cases = [
+        { model: "gpt-4o-mini-tts", expected: true },
+        { model: "tts-1", expected: true },
+        { model: "tts-1-hd", expected: true },
+        { model: "invalid", expected: false },
+        { model: "", expected: false },
+        { model: "gpt-4", expected: false },
+      ] as const;
+      for (const testCase of cases) {
+        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
+      }
     });
   });
 
   describe("resolveOutputFormat", () => {
-    it("uses Opus for Telegram", () => {
-      const output = resolveOutputFormat("telegram");
-      expect(output.openai).toBe("opus");
-      expect(output.elevenlabs).toBe("opus_48000_64");
-      expect(output.extension).toBe(".opus");
-      expect(output.voiceCompatible).toBe(true);
-    });
-
-    it("uses MP3 for other channels", () => {
-      const output = resolveOutputFormat("discord");
-      expect(output.openai).toBe("mp3");
-      expect(output.elevenlabs).toBe("mp3_44100_128");
-      expect(output.extension).toBe(".mp3");
-      expect(output.voiceCompatible).toBe(false);
+    it("selects opus for Telegram and mp3 for other channels", () => {
+      const cases = [
+        {
+          channel: "telegram",
+          expected: {
+            openai: "opus",
+            elevenlabs: "opus_48000_64",
+            extension: ".opus",
+            voiceCompatible: true,
+          },
+        },
+        {
+          channel: "discord",
+          expected: {
+            openai: "mp3",
+            elevenlabs: "mp3_44100_128",
+            extension: ".mp3",
+            voiceCompatible: false,
+          },
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const output = resolveOutputFormat(testCase.channel);
+        expect(output.openai, testCase.channel).toBe(testCase.expected.openai);
+        expect(output.elevenlabs, testCase.channel).toBe(testCase.expected.elevenlabs);
+        expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
+        expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
+      }
     });
   });
 
@@ -195,27 +191,36 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("uses default output format when edge output format is not configured", () => {
-      const config = resolveTtsConfig(baseCfg);
-      expect(resolveEdgeOutputFormat(config)).toBe("audio-24khz-48kbitrate-mono-mp3");
-    });
-
-    it("uses configured output format when provided", () => {
-      const config = resolveTtsConfig({
-        ...baseCfg,
-        messages: {
-          tts: {
-            edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
-          },
+    it("uses default edge output format unless overridden", () => {
+      const cases = [
+        {
+          name: "default",
+          cfg: baseCfg,
+          expected: "audio-24khz-48kbitrate-mono-mp3",
         },
-      });
-      expect(resolveEdgeOutputFormat(config)).toBe("audio-24khz-96kbitrate-mono-mp3");
+        {
+          name: "override",
+          cfg: {
+            ...baseCfg,
+            messages: {
+              tts: {
+                edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
+              },
+            },
+          } as OpenClawConfig,
+          expected: "audio-24khz-96kbitrate-mono-mp3",
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const config = resolveTtsConfig(testCase.cfg);
+        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
+      }
     });
   });
 
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true });
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input =
         "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
@@ -230,11 +235,20 @@ describe("tts", () => {
     });
 
     it("accepts edge as provider override", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true });
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("rejects provider override by default while keeping voice overrides enabled", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=edge voice=alloy]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBeUndefined();
+      expect(result.overrides.openai?.voice).toBe("alloy");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -309,79 +323,52 @@ describe("tts", () => {
       expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
-    it("rejects targetLength below minimum (100)", async () => {
-      await expect(
-        summarizeText({
+    it("validates targetLength bounds", async () => {
+      const cases = [
+        { targetLength: 99, shouldThrow: true },
+        { targetLength: 100, shouldThrow: false },
+        { targetLength: 10000, shouldThrow: false },
+        { targetLength: 10001, shouldThrow: true },
+      ] as const;
+      for (const testCase of cases) {
+        const call = summarizeText({
           text: "text",
-          targetLength: 99,
+          targetLength: testCase.targetLength,
           cfg: baseCfg,
           config: baseConfig,
           timeoutMs: 30_000,
-        }),
-      ).rejects.toThrow("Invalid targetLength: 99");
+        });
+        if (testCase.shouldThrow) {
+          await expect(call, String(testCase.targetLength)).rejects.toThrow(
+            `Invalid targetLength: ${testCase.targetLength}`,
+          );
+        } else {
+          await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
+        }
+      }
     });
 
-    it("rejects targetLength above maximum (10000)", async () => {
-      await expect(
-        summarizeText({
-          text: "text",
-          targetLength: 10001,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        }),
-      ).rejects.toThrow("Invalid targetLength: 10001");
-    });
-
-    it("accepts targetLength at boundaries", async () => {
-      await expect(
-        summarizeText({
-          text: "text",
-          targetLength: 100,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        }),
-      ).resolves.toBeDefined();
-      await expect(
-        summarizeText({
-          text: "text",
-          targetLength: 10000,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        }),
-      ).resolves.toBeDefined();
-    });
-
-    it("throws error when no summary is returned", async () => {
-      vi.mocked(completeSimple).mockResolvedValue(mockAssistantMessage([]));
-
-      await expect(
-        summarizeText({
-          text: "text",
-          targetLength: 500,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        }),
-      ).rejects.toThrow("No summary returned");
-    });
-
-    it("throws error when summary content is empty", async () => {
-      vi.mocked(completeSimple).mockResolvedValue(
-        mockAssistantMessage([{ type: "text", text: "   " }]),
-      );
-
-      await expect(
-        summarizeText({
-          text: "text",
-          targetLength: 500,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        }),
-      ).rejects.toThrow("No summary returned");
+    it("throws when summary output is missing or empty", async () => {
+      const cases = [
+        { name: "no summary blocks", message: mockAssistantMessage([]) },
+        {
+          name: "empty summary content",
+          message: mockAssistantMessage([{ type: "text", text: "   " }]),
+        },
+      ] as const;
+      for (const testCase of cases) {
+        vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+        await expect(
+          summarizeText({
+            text: "text",
+            targetLength: 500,
+            cfg: baseCfg,
+            config: baseConfig,
+            timeoutMs: 30_000,
+          }),
+          testCase.name,
+        ).rejects.toThrow("No summary returned");
+      }
     });
   });
 
@@ -391,49 +378,44 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("prefers OpenAI when no provider is configured and API key exists", () => {
-      withEnv(
+    it("selects provider based on available API keys", () => {
+      const cases = [
         {
-          OPENAI_API_KEY: "test-openai-key",
-          ELEVENLABS_API_KEY: undefined,
-          XI_API_KEY: undefined,
+          env: {
+            OPENAI_API_KEY: "test-openai-key",
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          prefsPath: "/tmp/tts-prefs-openai.json",
+          expected: "openai",
         },
-        () => {
-          const config = resolveTtsConfig(baseCfg);
-          const provider = getTtsProvider(config, "/tmp/tts-prefs-openai.json");
-          expect(provider).toBe("openai");
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: "test-elevenlabs-key",
+            XI_API_KEY: undefined,
+          },
+          prefsPath: "/tmp/tts-prefs-elevenlabs.json",
+          expected: "elevenlabs",
         },
-      );
-    });
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          prefsPath: "/tmp/tts-prefs-edge.json",
+          expected: "edge",
+        },
+      ] as const;
 
-    it("prefers ElevenLabs when OpenAI is missing and ElevenLabs key exists", () => {
-      withEnv(
-        {
-          OPENAI_API_KEY: undefined,
-          ELEVENLABS_API_KEY: "test-elevenlabs-key",
-          XI_API_KEY: undefined,
-        },
-        () => {
+      for (const testCase of cases) {
+        withEnv(testCase.env, () => {
           const config = resolveTtsConfig(baseCfg);
-          const provider = getTtsProvider(config, "/tmp/tts-prefs-elevenlabs.json");
-          expect(provider).toBe("elevenlabs");
-        },
-      );
-    });
-
-    it("falls back to Edge when no API keys are present", () => {
-      withEnv(
-        {
-          OPENAI_API_KEY: undefined,
-          ELEVENLABS_API_KEY: undefined,
-          XI_API_KEY: undefined,
-        },
-        () => {
-          const config = resolveTtsConfig(baseCfg);
-          const provider = getTtsProvider(config, "/tmp/tts-prefs-edge.json");
-          expect(provider).toBe("edge");
-        },
-      );
+          const provider = getTtsProvider(config, testCase.prefsPath);
+          expect(provider).toBe(testCase.expected);
+        });
+      }
     });
   });
 
@@ -476,48 +458,47 @@ describe("tts", () => {
       },
     };
 
-    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
-        const payload = { text: "Hello world" };
-        const result = await maybeApplyTtsToPayload({
-          payload,
-          cfg: baseCfg,
-          kind: "final",
-          inboundAudio: false,
-        });
-
-        expect(result).toBe(payload);
-        expect(fetchMock).not.toHaveBeenCalled();
-      });
-    });
-
-    it("skips auto-TTS when markdown stripping leaves text too short", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
-        const payload = { text: "### **bold**" };
-        const result = await maybeApplyTtsToPayload({
-          payload,
-          cfg: baseCfg,
-          kind: "final",
-          inboundAudio: true,
-        });
-
-        expect(result).toBe(payload);
-        expect(fetchMock).not.toHaveBeenCalled();
-      });
-    });
-
-    it("attempts auto-TTS when inbound audio gating is on and the message is audio", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
-        const result = await maybeApplyTtsToPayload({
+    it("applies inbound auto-TTS gating by audio status and cleaned text length", async () => {
+      const cases = [
+        {
+          name: "inbound gating blocks non-audio",
           payload: { text: "Hello world" },
-          cfg: baseCfg,
-          kind: "final",
+          inboundAudio: false,
+          expectedFetchCalls: 0,
+          expectSamePayload: true,
+        },
+        {
+          name: "inbound gating blocks too-short cleaned text",
+          payload: { text: "### **bold**" },
           inboundAudio: true,
-        });
+          expectedFetchCalls: 0,
+          expectSamePayload: true,
+        },
+        {
+          name: "inbound gating allows audio with real text",
+          payload: { text: "Hello world" },
+          inboundAudio: true,
+          expectedFetchCalls: 1,
+          expectSamePayload: false,
+        },
+      ] as const;
 
-        expect(result.mediaUrl).toBeDefined();
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-      });
+      for (const testCase of cases) {
+        await withMockedAutoTtsFetch(async (fetchMock) => {
+          const result = await maybeApplyTtsToPayload({
+            payload: testCase.payload,
+            cfg: baseCfg,
+            kind: "final",
+            inboundAudio: testCase.inboundAudio,
+          });
+          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
+          if (testCase.expectSamePayload) {
+            expect(result, testCase.name).toBe(testCase.payload);
+          } else {
+            expect(result.mediaUrl, testCase.name).toBeDefined();
+          }
+        });
+      }
     });
 
     it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {

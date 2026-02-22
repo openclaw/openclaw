@@ -58,6 +58,48 @@ describe("refreshQwenPortalCredentials", () => {
     expect(result.refresh).toBe("old-refresh");
   });
 
+  it("keeps refresh token when response sends an empty refresh token", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: "new-access",
+        refresh_token: "",
+        expires_in: 1800,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await refreshQwenPortalCredentials({
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: Date.now() - 1000,
+    });
+
+    expect(result.refresh).toBe("old-refresh");
+  });
+
+  it("errors when refresh response has invalid expires_in", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: "new-access",
+        refresh_token: "new-refresh",
+        expires_in: 0,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      refreshQwenPortalCredentials({
+        access: "old-access",
+        refresh: "old-refresh",
+        expires: Date.now() - 1000,
+      }),
+    ).rejects.toThrow("Qwen OAuth refresh response missing or invalid expires_in");
+  });
+
   it("errors when refresh token is invalid", async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: false,

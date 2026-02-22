@@ -41,5 +41,7 @@ export function resolveCronStaggerMs(schedule: Extract<CronSchedule, { kind: "cr
   if (explicit !== undefined) {
     return explicit;
   }
-  return resolveDefaultCronStaggerMs(schedule.expr) ?? 0;
+  const expr = (schedule as { expr?: unknown }).expr;
+  const cronExpr = typeof expr === "string" ? expr : "";
+  return resolveDefaultCronStaggerMs(cronExpr) ?? 0;
 }

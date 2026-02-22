@@ -1,4 +1,4 @@
-import { createWriteStream } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -10,6 +10,7 @@ import {
   stripArchivePath,
   validateArchiveEntryPath,
 } from "./archive-path.js";
+import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -32,6 +33,21 @@ export type ArchiveExtractLimits = {
   maxEntryBytes?: number;
 };
 
+export type ArchiveSecurityErrorCode =
+  | "destination-not-directory"
+  | "destination-symlink"
+  | "destination-symlink-traversal";
+
+export class ArchiveSecurityError extends Error {
+  code: ArchiveSecurityErrorCode;
+
+  constructor(code: ArchiveSecurityErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.code = code;
+    this.name = "ArchiveSecurityError";
+  }
+}
+
 /** @internal */
 export const DEFAULT_MAX_ARCHIVE_BYTES_ZIP = 256 * 1024 * 1024;
 /** @internal */
@@ -46,8 +62,14 @@ const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT = "archive entry count exceeds lim
 const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
   "archive entry extracted size exceeds limit";
 const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
+const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
+const OPEN_WRITE_FLAGS =
+  fsConstants.O_WRONLY |
+  fsConstants.O_CREAT |
+  fsConstants.O_TRUNC |
+  (process.platform !== "win32" && "O_NOFOLLOW" in fsConstants ? fsConstants.O_NOFOLLOW : 0);
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   const lower = filePath.toLowerCase();
@@ -190,6 +212,96 @@ function createExtractBudgetTransform(params: {
   });
 }
 
+function symlinkTraversalError(originalPath: string): ArchiveSecurityError {
+  return new ArchiveSecurityError(
+    "destination-symlink-traversal",
+    `${ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK}: ${originalPath}`,
+  );
+}
+
+async function assertDestinationDirReady(destDir: string): Promise<string> {
+  const stat = await fs.lstat(destDir);
+  if (stat.isSymbolicLink()) {
+    throw new ArchiveSecurityError("destination-symlink", "archive destination is a symlink");
+  }
+  if (!stat.isDirectory()) {
+    throw new ArchiveSecurityError(
+      "destination-not-directory",
+      "archive destination is not a directory",
+    );
+  }
+  return await fs.realpath(destDir);
+}
+
+async function assertNoSymlinkTraversal(params: {
+  rootDir: string;
+  relPath: string;
+  originalPath: string;
+}): Promise<void> {
+  const parts = params.relPath.split("/").filter(Boolean);
+  let current = path.resolve(params.rootDir);
+  for (const part of parts) {
+    current = path.join(current, part);
+    let stat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      stat = await fs.lstat(current);
+    } catch (err) {
+      if (isNotFoundPathError(err)) {
+        continue;
+      }
+      throw err;
+    }
+    if (stat.isSymbolicLink()) {
+      throw symlinkTraversalError(params.originalPath);
+    }
+  }
+}
+
+async function assertResolvedInsideDestination(params: {
+  destinationRealDir: string;
+  targetPath: string;
+  originalPath: string;
+}): Promise<void> {
+  let resolved: string;
+  try {
+    resolved = await fs.realpath(params.targetPath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (!isPathInside(params.destinationRealDir, resolved)) {
+    throw symlinkTraversalError(params.originalPath);
+  }
+}
+
+async function openZipOutputFile(outPath: string, originalPath: string) {
+  try {
+    return await fs.open(outPath, OPEN_WRITE_FLAGS, 0o666);
+  } catch (err) {
+    if (isSymlinkOpenError(err)) {
+      throw symlinkTraversalError(originalPath);
+    }
+    throw err;
+  }
+}
+
+async function cleanupPartialRegularFile(filePath: string): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stat = await fs.lstat(filePath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (stat.isFile()) {
+    await fs.unlink(filePath).catch(() => undefined);
+  }
+}
+
 type ZipEntry = {
   name: string;
   dir: boolean;
@@ -197,6 +309,8 @@ type ZipEntry = {
   nodeStream?: () => NodeJS.ReadableStream;
   async: (type: "nodebuffer") => Promise<Buffer>;
 };
+
+type ZipExtractBudget = ReturnType<typeof createByteBudgetTracker>;
 
 async function readZipEntryStream(entry: ZipEntry): Promise<NodeJS.ReadableStream> {
   if (typeof entry.nodeStream === "function") {
@@ -207,6 +321,90 @@ async function readZipEntryStream(entry: ZipEntry): Promise<NodeJS.ReadableStrea
   return Readable.from(buf);
 }
 
+function resolveZipOutputPath(params: {
+  entryPath: string;
+  strip: number;
+  destinationDir: string;
+}): { relPath: string; outPath: string } | null {
+  validateArchiveEntryPath(params.entryPath);
+  const relPath = stripArchivePath(params.entryPath, params.strip);
+  if (!relPath) {
+    return null;
+  }
+  validateArchiveEntryPath(relPath);
+  return {
+    relPath,
+    outPath: resolveArchiveOutputPath({
+      rootDir: params.destinationDir,
+      relPath,
+      originalPath: params.entryPath,
+    }),
+  };
+}
+
+async function prepareZipOutputPath(params: {
+  destinationDir: string;
+  destinationRealDir: string;
+  relPath: string;
+  outPath: string;
+  originalPath: string;
+  isDirectory: boolean;
+}): Promise<void> {
+  await assertNoSymlinkTraversal({
+    rootDir: params.destinationDir,
+    relPath: params.relPath,
+    originalPath: params.originalPath,
+  });
+
+  if (params.isDirectory) {
+    await fs.mkdir(params.outPath, { recursive: true });
+    await assertResolvedInsideDestination({
+      destinationRealDir: params.destinationRealDir,
+      targetPath: params.outPath,
+      originalPath: params.originalPath,
+    });
+    return;
+  }
+
+  const parentDir = path.dirname(params.outPath);
+  await fs.mkdir(parentDir, { recursive: true });
+  await assertResolvedInsideDestination({
+    destinationRealDir: params.destinationRealDir,
+    targetPath: parentDir,
+    originalPath: params.originalPath,
+  });
+}
+
+async function writeZipFileEntry(params: {
+  entry: ZipEntry;
+  outPath: string;
+  budget: ZipExtractBudget;
+}): Promise<void> {
+  const handle = await openZipOutputFile(params.outPath, params.entry.name);
+  params.budget.startEntry();
+  const readable = await readZipEntryStream(params.entry);
+  const writable = handle.createWriteStream();
+
+  try {
+    await pipeline(
+      readable,
+      createExtractBudgetTransform({ onChunkBytes: params.budget.addBytes }),
+      writable,
+    );
+  } catch (err) {
+    await cleanupPartialRegularFile(params.outPath).catch(() => undefined);
+    throw err;
+  }
+
+  // Best-effort permission restore for zip entries created on unix.
+  if (typeof params.entry.unixPermissions === "number") {
+    const mode = params.entry.unixPermissions & 0o777;
+    if (mode !== 0) {
+      await fs.chmod(params.outPath, mode).catch(() => undefined);
+    }
+  }
+}
+
 async function extractZip(params: {
   archivePath: string;
   destDir: string;
@@ -214,6 +412,7 @@ async function extractZip(params: {
   limits?: ArchiveExtractLimits;
 }): Promise<void> {
   const limits = resolveExtractLimits(params.limits);
+  const destinationRealDir = await assertDestinationDirReady(params.destDir);
   const stat = await fs.stat(params.archivePath);
   if (stat.size > limits.maxArchiveBytes) {
     throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
@@ -229,46 +428,32 @@ async function extractZip(params: {
   const budget = createByteBudgetTracker(limits);
 
   for (const entry of entries) {
-    validateArchiveEntryPath(entry.name);
-
-    const relPath = stripArchivePath(entry.name, strip);
-    if (!relPath) {
+    const output = resolveZipOutputPath({
+      entryPath: entry.name,
+      strip,
+      destinationDir: params.destDir,
+    });
+    if (!output) {
       continue;
     }
-    validateArchiveEntryPath(relPath);
 
-    const outPath = resolveArchiveOutputPath({
-      rootDir: params.destDir,
-      relPath,
+    await prepareZipOutputPath({
+      destinationDir: params.destDir,
+      destinationRealDir,
+      relPath: output.relPath,
+      outPath: output.outPath,
       originalPath: entry.name,
+      isDirectory: entry.dir,
     });
     if (entry.dir) {
-      await fs.mkdir(outPath, { recursive: true });
       continue;
     }
 
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    budget.startEntry();
-    const readable = await readZipEntryStream(entry);
-
-    try {
-      await pipeline(
-        readable,
-        createExtractBudgetTransform({ onChunkBytes: budget.addBytes }),
-        createWriteStream(outPath),
-      );
-    } catch (err) {
-      await fs.unlink(outPath).catch(() => undefined);
-      throw err;
-    }
-
-    // Best-effort permission restore for zip entries created on unix.
-    if (typeof entry.unixPermissions === "number") {
-      const mode = entry.unixPermissions & 0o777;
-      if (mode !== 0) {
-        await fs.chmod(outPath, mode).catch(() => undefined);
-      }
-    }
+    await writeZipFileEntry({
+      entry,
+      outPath: output.outPath,
+      budget,
+    });
   }
 }
 

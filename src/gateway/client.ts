@@ -11,6 +11,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { clearDevicePairing } from "../infra/device-pairing.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -175,21 +176,23 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      // If closed due to device token mismatch, clear the stored token so next attempt can get a fresh one
+      // If closed due to device token mismatch, clear the stored token and pairing so next attempt can get a fresh one
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
         this.opts.deviceIdentity
       ) {
+        const deviceId = this.opts.deviceIdentity.deviceId;
         const role = this.opts.role ?? "operator";
         try {
-          clearDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role });
-          logDebug(
-            `cleared stale device-auth token for device ${this.opts.deviceIdentity.deviceId}`,
-          );
+          clearDeviceAuthToken({ deviceId, role });
+          void clearDevicePairing(deviceId).catch((err) => {
+            logDebug(`failed clearing stale device pairing for device ${deviceId}: ${String(err)}`);
+          });
+          logDebug(`cleared stale device-auth token for device ${deviceId}`);
         } catch (err) {
           logDebug(
-            `failed clearing stale device-auth token for device ${this.opts.deviceIdentity.deviceId}: ${String(err)}`,
+            `failed clearing stale device-auth token for device ${deviceId}: ${String(err)}`,
           );
         }
       }

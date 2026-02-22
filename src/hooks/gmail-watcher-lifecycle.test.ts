@@ -19,9 +19,9 @@ describe("startGmailWatcherWithLogs", () => {
 
   beforeEach(() => {
     startGmailWatcherMock.mockReset();
-    log.info.mockReset();
-    log.warn.mockReset();
-    log.error.mockReset();
+    log.info.mockClear();
+    log.warn.mockClear();
+    log.error.mockClear();
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   });
 

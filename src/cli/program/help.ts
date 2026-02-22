@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
+import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
@@ -98,9 +99,9 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   });
 
   if (
-    process.argv.includes("-V") ||
-    process.argv.includes("--version") ||
-    process.argv.includes("-v")
+    hasFlag(process.argv, "-V") ||
+    hasFlag(process.argv, "--version") ||
+    hasRootVersionAlias(process.argv)
   ) {
     console.log(ctx.programVersion);
     process.exit(0);
