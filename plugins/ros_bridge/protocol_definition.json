@@ -1,0 +1,13 @@
+{
+  "required": {
+    "position": { "unit": "m" },
+    "velocity": { "unit": "m/s" },
+    "acceleration": { "unit": "m/s^2" },
+    "timestamp": { "unit": "unix_ms" }
+  },
+  "optional": {
+    "frame_id": { "type": "string" },
+    "source": { "type": "string" },
+    "seq": { "type": "integer" }
+  }
+}
