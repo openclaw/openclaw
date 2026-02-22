@@ -242,22 +242,22 @@ describe("monitorDiscordProvider", () => {
     }) as OpenClawConfig;
 
   beforeEach(() => {
-    createDiscordNativeCommandMock.mockReset().mockReturnValue({ name: "mock-command" });
+    createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
     createdBindingManagers.length = 0;
-    listNativeCommandSpecsForConfigMock.mockReset().mockReturnValue([{ name: "cmd" }]);
-    listSkillCommandsForAgentsMock.mockReset().mockReturnValue([]);
-    monitorLifecycleMock.mockReset().mockImplementation(async (params) => {
+    listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
+    listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
+    monitorLifecycleMock.mockClear().mockImplementation(async (params) => {
       params.threadBindings.stop();
     });
     resolveDiscordAccountMock.mockClear();
-    resolveDiscordAllowlistConfigMock.mockReset().mockResolvedValue({
+    resolveDiscordAllowlistConfigMock.mockClear().mockResolvedValue({
       guildEntries: undefined,
       allowFrom: undefined,
     });
-    resolveNativeCommandsEnabledMock.mockReset().mockReturnValue(true);
-    resolveNativeSkillsEnabledMock.mockReset().mockReturnValue(false);
+    resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
+    resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
