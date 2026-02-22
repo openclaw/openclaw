@@ -46,6 +46,31 @@ describe("extractTextFromChatContent", () => {
       ),
     ).toBe("hello\nworld");
   });
+
+  it("falls back to thinking blocks when no text blocks exist", () => {
+    expect(
+      extractTextFromChatContent([
+        { type: "thinking", thinking: "This is the actual response" },
+      ]),
+    ).toBe("This is the actual response");
+  });
+
+  it("prefers text blocks over thinking blocks when both exist", () => {
+    expect(
+      extractTextFromChatContent([
+        { type: "thinking", thinking: "internal reasoning" },
+        { type: "text", text: "user-facing response" },
+      ]),
+    ).toBe("user-facing response");
+  });
+
+  it("returns null when thinking block is empty", () => {
+    expect(
+      extractTextFromChatContent([
+        { type: "thinking", thinking: "  " },
+      ]),
+    ).toBeNull();
+  });
 });
 
 describe("shared/frontmatter", () => {
