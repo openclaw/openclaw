@@ -570,6 +570,23 @@ export async function preflightDiscordMessage(
     }
   }
 
+  // Drop messages that mention another bot/user but not this one (ignoreOtherMentions)
+  const ignoreOtherMentions =
+    channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  if (isGuildMessage && ignoreOtherMentions && hasAnyMention && !wasMentioned && !implicitMention) {
+    logDebug(`[discord-preflight] drop: other-mention`);
+    logVerbose(
+      `discord: drop guild message (another user/bot mentioned, ignoreOtherMentions=true, botId=${botId})`,
+    );
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.guildHistories,
+      historyKey: messageChannelId,
+      limit: params.historyLimit,
+      entry: historyEntry ?? null,
+    });
+    return null;
+  }
+
   if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
     logDebug(`[discord-preflight] drop: member not allowed`);
     logVerbose(`Blocked discord guild sender ${sender.id} (not in users/roles allowlist)`);

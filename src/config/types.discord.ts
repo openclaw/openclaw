@@ -27,6 +27,8 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** If true, drop messages that mention another bot/user but not this one. Default: false. */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -49,6 +51,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** If true, drop messages that mention another bot/user but not this one. Default: false. */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
