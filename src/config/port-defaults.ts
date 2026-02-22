@@ -23,7 +23,7 @@ export function deriveDefaultBridgePort(gatewayPort: number): number {
 }
 
 export function deriveDefaultBrowserControlPort(gatewayPort: number): number {
-  return derivePort(gatewayPort, 2, DEFAULT_BROWSER_CONTROL_PORT);
+  return derivePort(gatewayPort, 1, DEFAULT_BROWSER_CONTROL_PORT);
 }
 
 export function deriveDefaultCanvasHostPort(gatewayPort: number): number {
