@@ -181,6 +181,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
+  "models.providers.sarvam":
+    "Sarvam AI (Indic/sovereign models). OpenAI-compatible API at https://api.sarvam.ai/v1; auth via api-subscription-key header. Set SARVAM_API_KEY or add an auth profile.",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.sources":
