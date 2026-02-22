@@ -3,6 +3,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -19,6 +20,8 @@ import {
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
+type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
+
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
@@ -33,6 +36,11 @@ vi.mock("./openai-codex-oauth.js", () => ({
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../plugins/providers.js", () => ({
   resolvePluginProviders,
+}));
+
+const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
+vi.mock("./zai-endpoint-detect.js", () => ({
+  detectZaiEndpoint,
 }));
 
 type StoredAuthProfile = {
@@ -57,6 +65,15 @@ describe("applyAuthChoice", () => {
     "LITELLM_API_KEY",
     "AI_GATEWAY_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
+    "MOONSHOT_API_KEY",
+    "KIMI_API_KEY",
+    "GEMINI_API_KEY",
+    "XIAOMI_API_KEY",
+    "VENICE_API_KEY",
+    "OPENCODE_API_KEY",
+    "TOGETHER_API_KEY",
+    "QIANFAN_API_KEY",
+    "SYNTHETIC_API_KEY",
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
   ]);
@@ -101,8 +118,10 @@ describe("applyAuthChoice", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    resolvePluginProviders.mockClear();
-    loginOpenAICodexOAuth.mockClear();
+    resolvePluginProviders.mockReset();
+    detectZaiEndpoint.mockReset();
+    detectZaiEndpoint.mockResolvedValue(null);
+    loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
     await lifecycle.cleanup();
   });
@@ -319,6 +338,38 @@ describe("applyAuthChoice", () => {
     expect(result.config.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
   });
 
+  it("uses detected Z.AI endpoint without prompting for endpoint selection", async () => {
+    await setupTempState();
+    detectZaiEndpoint.mockResolvedValueOnce({
+      endpoint: "coding-global",
+      modelId: "glm-4.5",
+      baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+      note: "Detected coding-global endpoint",
+    });
+
+    const text = vi.fn().mockResolvedValue("zai-detected-key");
+    const select = vi.fn(async () => "default");
+    const { prompter, runtime } = createApiKeyPromptHarness({
+      select: select as WizardPrompter["select"],
+      text,
+    });
+
+    const result = await applyAuthChoice({
+      authChoice: "zai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(detectZaiEndpoint).toHaveBeenCalledWith({ apiKey: "zai-detected-key" });
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select Z.AI endpoint" }),
+    );
+    expect(result.config.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
+    expect(result.config.agents?.defaults?.model?.primary).toBe("zai/glm-4.5");
+  });
+
   it("maps apiKey + tokenProvider=huggingface to huggingface-api-key flow", async () => {
     await setupTempState();
     delete process.env.HF_TOKEN;
@@ -349,6 +400,309 @@ describe("applyAuthChoice", () => {
 
     expect((await readAuthProfile("huggingface:default"))?.key).toBe("hf-token-provider-test");
   });
+
+  it("maps apiKey + tokenProvider=together to together-api-key flow", async () => {
+    await setupTempState();
+
+    const text = vi.fn().mockResolvedValue("should-not-be-used");
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "apiKey",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "  ToGeThEr  ",
+        token: "sk-together-token-provider-test",
+      },
+    });
+
+    expect(result.config.auth?.profiles?.["together:default"]).toMatchObject({
+      provider: "together",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toMatch(/^together\/.+/);
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect((await readAuthProfile("together:default"))?.key).toBe(
+      "sk-together-token-provider-test",
+    );
+  });
+
+  it("maps apiKey + tokenProvider=KIMI-CODING (case-insensitive) to kimi-code-api-key flow", async () => {
+    await setupTempState();
+
+    const text = vi.fn().mockResolvedValue("should-not-be-used");
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "apiKey",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "KIMI-CODING",
+        token: "sk-kimi-token-provider-test",
+      },
+    });
+
+    expect(result.config.auth?.profiles?.["kimi-coding:default"]).toMatchObject({
+      provider: "kimi-coding",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toMatch(/^kimi-coding\/.+/);
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect((await readAuthProfile("kimi-coding:default"))?.key).toBe("sk-kimi-token-provider-test");
+  });
+
+  it("maps apiKey + tokenProvider= GOOGLE  (case-insensitive/trimmed) to gemini-api-key flow", async () => {
+    await setupTempState();
+
+    const text = vi.fn().mockResolvedValue("should-not-be-used");
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "apiKey",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: " GOOGLE  ",
+        token: "sk-gemini-token-provider-test",
+      },
+    });
+
+    expect(result.config.auth?.profiles?.["google:default"]).toMatchObject({
+      provider: "google",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe(GOOGLE_GEMINI_DEFAULT_MODEL);
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect((await readAuthProfile("google:default"))?.key).toBe("sk-gemini-token-provider-test");
+  });
+
+  it("maps apiKey + tokenProvider= LITELLM  (case-insensitive/trimmed) to litellm-api-key flow", async () => {
+    await setupTempState();
+
+    const text = vi.fn().mockResolvedValue("should-not-be-used");
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "apiKey",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: " LITELLM  ",
+        token: "sk-litellm-token-provider-test",
+      },
+    });
+
+    expect(result.config.auth?.profiles?.["litellm:default"]).toMatchObject({
+      provider: "litellm",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toMatch(/^litellm\/.+/);
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect((await readAuthProfile("litellm:default"))?.key).toBe("sk-litellm-token-provider-test");
+  });
+
+  it.each([
+    {
+      authChoice: "moonshot-api-key",
+      tokenProvider: "moonshot",
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      modelPrefix: "moonshot/",
+    },
+    {
+      authChoice: "kimi-code-api-key",
+      tokenProvider: "kimi-code",
+      profileId: "kimi-coding:default",
+      provider: "kimi-coding",
+      modelPrefix: "kimi-coding/",
+    },
+    {
+      authChoice: "xiaomi-api-key",
+      tokenProvider: "xiaomi",
+      profileId: "xiaomi:default",
+      provider: "xiaomi",
+      modelPrefix: "xiaomi/",
+    },
+    {
+      authChoice: "venice-api-key",
+      tokenProvider: "venice",
+      profileId: "venice:default",
+      provider: "venice",
+      modelPrefix: "venice/",
+    },
+    {
+      authChoice: "opencode-zen",
+      tokenProvider: "opencode",
+      profileId: "opencode:default",
+      provider: "opencode",
+      modelPrefix: "opencode/",
+    },
+    {
+      authChoice: "together-api-key",
+      tokenProvider: "together",
+      profileId: "together:default",
+      provider: "together",
+      modelPrefix: "together/",
+    },
+    {
+      authChoice: "qianfan-api-key",
+      tokenProvider: "qianfan",
+      profileId: "qianfan:default",
+      provider: "qianfan",
+      modelPrefix: "qianfan/",
+    },
+    {
+      authChoice: "synthetic-api-key",
+      tokenProvider: "synthetic",
+      profileId: "synthetic:default",
+      provider: "synthetic",
+      modelPrefix: "synthetic/",
+    },
+  ] as const)(
+    "uses opts token for $authChoice without prompting",
+    async ({ authChoice, tokenProvider, profileId, provider, modelPrefix }) => {
+      await setupTempState();
+
+      const text = vi.fn();
+      const confirm = vi.fn(async () => false);
+      const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+      const token = `sk-${tokenProvider}-test`;
+
+      const result = await applyAuthChoice({
+        authChoice,
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: true,
+        opts: {
+          tokenProvider,
+          token,
+        },
+      });
+
+      expect(text).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result.config.auth?.profiles?.[profileId]).toMatchObject({
+        provider,
+        mode: "api_key",
+      });
+      expect(result.config.agents?.defaults?.model?.primary?.startsWith(modelPrefix)).toBe(true);
+      expect((await readAuthProfile(profileId))?.key).toBe(token);
+    },
+  );
+
+  it("uses opts token for Gemini and keeps global default model when setDefaultModel=false", async () => {
+    await setupTempState();
+
+    const text = vi.fn();
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "gemini-api-key",
+      config: { agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } } },
+      prompter,
+      runtime,
+      setDefaultModel: false,
+      opts: {
+        tokenProvider: "google",
+        token: "sk-gemini-test",
+      },
+    });
+
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["google:default"]).toMatchObject({
+      provider: "google",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("openai/gpt-4o-mini");
+    expect(result.agentModelOverride).toBe(GOOGLE_GEMINI_DEFAULT_MODEL);
+    expect((await readAuthProfile("google:default"))?.key).toBe("sk-gemini-test");
+  });
+
+  it("prompts for Venice API key and shows the Venice note when no token is provided", async () => {
+    await setupTempState();
+    process.env.VENICE_API_KEY = "";
+
+    const note = vi.fn(async () => {});
+    const text = vi.fn(async () => "sk-venice-manual");
+    const prompter = createPrompter({ note, text });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "venice-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("privacy-focused inference"),
+      "Venice AI",
+    );
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Enter Venice AI API key",
+      }),
+    );
+    expect(result.config.auth?.profiles?.["venice:default"]).toMatchObject({
+      provider: "venice",
+      mode: "api_key",
+    });
+    expect((await readAuthProfile("venice:default"))?.key).toBe("sk-venice-manual");
+  });
+
+  it("uses existing SYNTHETIC_API_KEY when selecting synthetic-api-key", async () => {
+    await setupTempState();
+    process.env.SYNTHETIC_API_KEY = "sk-synthetic-env";
+
+    const text = vi.fn();
+    const confirm = vi.fn(async () => true);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "synthetic-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SYNTHETIC_API_KEY"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["synthetic:default"]).toMatchObject({
+      provider: "synthetic",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toMatch(/^synthetic\/.+/);
+
+    expect((await readAuthProfile("synthetic:default"))?.key).toBe("sk-synthetic-env");
+  });
+
   it("does not override the global default model when selecting xai-api-key without setDefaultModel", async () => {
     await setupTempState();
 
@@ -652,6 +1006,39 @@ describe("applyAuthChoice", () => {
     });
 
     delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
+  });
+
+  it("uses explicit Cloudflare account/gateway/api key opts without extra prompts", async () => {
+    await setupTempState();
+
+    const text = vi.fn();
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "cloudflare-ai-gateway-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        cloudflareAiGatewayAccountId: "acc-direct",
+        cloudflareAiGatewayGatewayId: "gw-direct",
+        cloudflareAiGatewayApiKey: "cf-direct-key",
+      },
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["cloudflare-ai-gateway:default"]).toMatchObject({
+      provider: "cloudflare-ai-gateway",
+      mode: "api_key",
+    });
+    expect((await readAuthProfile("cloudflare-ai-gateway:default"))?.key).toBe("cf-direct-key");
+    expect((await readAuthProfile("cloudflare-ai-gateway:default"))?.metadata).toEqual({
+      accountId: "acc-direct",
+      gatewayId: "gw-direct",
+    });
   });
 
   it("writes Chutes OAuth credentials when selecting chutes (remote/manual)", async () => {
