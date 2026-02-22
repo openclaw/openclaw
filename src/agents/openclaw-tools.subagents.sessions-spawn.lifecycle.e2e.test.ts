@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
   resetSessionsSpawnConfigOverride,
+  setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
@@ -15,6 +16,7 @@ vi.mock("./pi-embedded.js", () => ({
 }));
 
 const callGatewayMock = getCallGatewayMock();
+const RUN_TIMEOUT_SECONDS = 1;
 
 type CreateOpenClawTools = (typeof import("./openclaw-tools.js"))["createOpenClawTools"];
 type CreateOpenClawToolsOpts = Parameters<CreateOpenClawTools>[0];
@@ -138,20 +140,45 @@ function setupSessionsSpawnGatewayMock(opts: {
   };
 }
 
-const waitFor = async (predicate: () => boolean, timeoutMs = 2000) => {
+const waitFor = async (predicate: () => boolean, timeoutMs = 1_500) => {
   await vi.waitFor(
     () => {
       expect(predicate()).toBe(true);
     },
-    { timeout: timeoutMs, interval: 10 },
+    { timeout: timeoutMs, interval: 8 },
   );
 };
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
+  let previousFastTestEnv: string | undefined;
+
   beforeEach(() => {
+    if (previousFastTestEnv === undefined) {
+      previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    }
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetSessionsSpawnConfigOverride();
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      messages: {
+        queue: {
+          debounceMs: 0,
+        },
+      },
+    });
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
+  });
+
+  afterAll(() => {
+    if (previousFastTestEnv === undefined) {
+      delete process.env.OPENCLAW_TEST_FAST;
+      return;
+    }
+    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
   });
 
   it("sessions_spawn runs cleanup flow after subagent completion", async () => {
@@ -173,7 +200,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     const result = await tool.execute("call2", {
       task: "do thing",
-      runTimeoutSeconds: 1,
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
       label: "my-task",
     });
     expect(result.details).toMatchObject({
@@ -240,7 +267,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     const result = await tool.execute("call1", {
       task: "do thing",
-      runTimeoutSeconds: 1,
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
       cleanup: "delete",
     });
     expect(result.details).toMatchObject({
@@ -326,7 +353,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     const result = await tool.execute("call1b", {
       task: "do thing",
-      runTimeoutSeconds: 1,
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
       cleanup: "delete",
     });
     expect(result.details).toMatchObject({
@@ -411,7 +438,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     const result = await tool.execute("call-timeout", {
       task: "do thing",
-      runTimeoutSeconds: 1,
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
       cleanup: "keep",
     });
     expect(result.details).toMatchObject({
@@ -477,7 +504,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
 
     const result = await tool.execute("call-announce-account", {
       task: "do thing",
-      runTimeoutSeconds: 1,
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
       cleanup: "keep",
     });
     expect(result.details).toMatchObject({
