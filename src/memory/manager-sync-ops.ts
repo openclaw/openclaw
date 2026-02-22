@@ -361,10 +361,7 @@ export abstract class MemoryManagerSyncOps {
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
       try {
-        const stat = fsSync.lstatSync(entry);
-        if (stat.isSymbolicLink()) {
-          continue;
-        }
+        const stat = fsSync.statSync(entry);
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
           continue;
