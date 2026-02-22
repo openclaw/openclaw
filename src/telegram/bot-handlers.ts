@@ -711,6 +711,119 @@ export const registerTelegramHandlers = ({
         messageThreadId,
       });
 
+      // Authorization checks — mirror the same gates as the regular message handler.
+      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
+      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+      const effectiveGroupAllow = normalizeAllowFromWithStore({
+        allowFrom: groupAllowOverride ?? groupAllowFrom,
+        storeAllowFrom,
+      });
+      const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+
+      if (isGroup) {
+        if (groupConfig?.enabled === false) {
+          logVerbose(`telegram: edited_message blocked for group ${chatId} (group disabled)`);
+          return;
+        }
+        if (topicConfig?.enabled === false) {
+          logVerbose(
+            `telegram: edited_message blocked for topic ${chatId}:${resolvedThreadId ?? "unknown"} (topic disabled)`,
+          );
+          return;
+        }
+        if (hasGroupAllowOverride) {
+          const senderId = msg.from?.id;
+          const senderUsername = msg.from?.username ?? "";
+          const allowed =
+            senderId != null &&
+            isSenderAllowed({
+              allow: effectiveGroupAllow,
+              senderId: String(senderId),
+              senderUsername,
+            });
+          if (!allowed) {
+            logVerbose(
+              `telegram: edited_message blocked from ${senderId ?? "unknown"} (group allowFrom override)`,
+            );
+            return;
+          }
+        }
+        const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+        const groupPolicy = firstDefined(
+          topicConfig?.groupPolicy,
+          groupConfig?.groupPolicy,
+          telegramCfg.groupPolicy,
+          defaultGroupPolicy,
+          "open",
+        );
+        if (groupPolicy === "disabled") {
+          logVerbose(`telegram: edited_message blocked (groupPolicy: disabled)`);
+          return;
+        }
+        if (groupPolicy === "allowlist") {
+          const senderId = msg.from?.id;
+          if (senderId == null) {
+            logVerbose(`telegram: edited_message blocked (no sender ID, groupPolicy: allowlist)`);
+            return;
+          }
+          if (!effectiveGroupAllow.hasEntries) {
+            logVerbose(
+              `telegram: edited_message blocked (groupPolicy: allowlist, no allowlist entries)`,
+            );
+            return;
+          }
+          const senderUsername = msg.from?.username ?? "";
+          if (
+            !isSenderAllowed({
+              allow: effectiveGroupAllow,
+              senderId: String(senderId),
+              senderUsername,
+            })
+          ) {
+            logVerbose(
+              `telegram: edited_message blocked from ${senderId} (groupPolicy: allowlist)`,
+            );
+            return;
+          }
+        }
+        const groupAllowlist = resolveGroupPolicy(chatId);
+        if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
+          logVerbose(
+            `telegram: edited_message blocked for group ${chatId} (not in group allowlist)`,
+          );
+          return;
+        }
+      } else {
+        // DM policy check
+        const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+        if (dmPolicy === "disabled") {
+          logVerbose(`telegram: edited_message blocked (DM policy: disabled)`);
+          return;
+        }
+        if (dmPolicy !== "open") {
+          const effectiveDmAllow = normalizeAllowFromWithStore({
+            allowFrom: telegramCfg.allowFrom,
+            storeAllowFrom,
+          });
+          const senderId = msg.from?.id;
+          const senderUsername = msg.from?.username ?? "";
+          if (
+            senderId == null ||
+            !isSenderAllowed({
+              allow: effectiveDmAllow,
+              senderId: String(senderId),
+              senderUsername,
+            })
+          ) {
+            logVerbose(
+              `telegram: edited_message blocked from ${senderId ?? "unknown"} (DM not authorized)`,
+            );
+            return;
+          }
+        }
+      }
+
       // Resolve session key for this chat/group
       const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
       const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
