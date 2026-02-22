@@ -136,17 +136,28 @@ function isLegacyLabel(label: string): boolean {
   return lower.includes("clawdbot") || lower.includes("moltbot");
 }
 
+async function readDirEntries(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+async function readUtf8File(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(params.dir);
-  } catch {
-    return results;
-  }
+  const entries = await readDirEntries(params.dir);
 
   for (const entry of entries) {
     if (!entry.endsWith(".plist")) {
@@ -157,10 +168,8 @@ async function scanLaunchdDir(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    let contents = "";
-    try {
-      contents = await fs.readFile(fullPath, "utf8");
-    } catch {
+    const contents = await readUtf8File(fullPath);
+    if (contents === null) {
       continue;
     }
     const marker = detectMarker(contents);
@@ -204,12 +213,7 @@ async function scanSystemdDir(params: {
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(params.dir);
-  } catch {
-    return results;
-  }
+  const entries = await readDirEntries(params.dir);
 
   for (const entry of entries) {
     if (!entry.endsWith(".service")) {
@@ -220,10 +224,8 @@ async function scanSystemdDir(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    let contents = "";
-    try {
-      contents = await fs.readFile(fullPath, "utf8");
-    } catch {
+    const contents = await readUtf8File(fullPath);
+    if (contents === null) {
       continue;
     }
     const marker = detectMarker(contents);

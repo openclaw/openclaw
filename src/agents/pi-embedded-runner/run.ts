@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -51,11 +50,13 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -99,6 +100,19 @@ const createUsageAccumulator = (): UsageAccumulator => ({
 
 function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Defensive guard for the outer run loop across all retry branches.
+const BASE_RUN_RETRY_ITERATIONS = 24;
+const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
+const MIN_RUN_RETRY_ITERATIONS = 32;
+const MAX_RUN_RETRY_ITERATIONS = 160;
+
+function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+  const scaled =
+    BASE_RUN_RETRY_ITERATIONS +
+    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
+  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
 const hasUsageValues = (
@@ -159,6 +173,17 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   };
 };
 
+function resolveActiveErrorContext(params: {
+  lastAssistant: { provider?: string; model?: string } | undefined;
+  provider: string;
+  model: string;
+}): { provider: string; model: string } {
+  return {
+    provider: params.lastAssistant?.provider ?? params.provider,
+    model: params.lastAssistant?.model ?? params.model,
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -198,12 +223,62 @@ export async function runEmbeddedPiAgent(
       }
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
+
+      // Run before_model_resolve hooks early so plugins can override the
+      // provider/model before resolveModel().
+      //
+      // Legacy compatibility: before_agent_start is also checked for override
+      // fields if present. New hook takes precedence when both are set.
+      let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+      const hookRunner = getGlobalHookRunner();
+      const hookCtx = {
+        agentId: workspaceResolution.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: resolvedWorkspace,
+        messageProvider: params.messageProvider ?? undefined,
+      };
+      if (hookRunner?.hasHooks("before_model_resolve")) {
+        try {
+          modelResolveOverride = await hookRunner.runBeforeModelResolve(
+            { prompt: params.prompt },
+            hookCtx,
+          );
+        } catch (hookErr) {
+          log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
+        }
+      }
+      if (hookRunner?.hasHooks("before_agent_start")) {
+        try {
+          const legacyResult = await hookRunner.runBeforeAgentStart(
+            { prompt: params.prompt },
+            hookCtx,
+          );
+          modelResolveOverride = {
+            providerOverride:
+              modelResolveOverride?.providerOverride ?? legacyResult?.providerOverride,
+            modelOverride: modelResolveOverride?.modelOverride ?? legacyResult?.modelOverride,
+          };
+        } catch (hookErr) {
+          log.warn(
+            `before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`,
+          );
+        }
+      }
+      if (modelResolveOverride?.providerOverride) {
+        provider = modelResolveOverride.providerOverride;
+        log.info(`[hooks] provider overridden to ${provider}`);
+      }
+      if (modelResolveOverride?.modelOverride) {
+        modelId = modelResolveOverride.modelOverride;
+        log.info(`[hooks] model overridden to ${modelId}`);
+      }
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
@@ -212,7 +287,11 @@ export async function runEmbeddedPiAgent(
         params.config,
       );
       if (!model) {
-        throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+        });
       }
 
       const ctxInfo = resolveContextWindowInfo({
@@ -409,13 +488,45 @@ export async function runEmbeddedPiAgent(
       }
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let runLoopIterations = 0;
       try {
         while (true) {
+          if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+            const message =
+              `Exceeded retry limit after ${runLoopIterations} attempts ` +
+              `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
+            log.error(
+              `[run-retry-limit] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
+                `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
+            );
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request failed after repeated internal retries. " +
+                    "Please try again, or use /new to start a fresh session.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: {
+                  sessionId: params.sessionId,
+                  provider,
+                  model: model.id,
+                },
+                error: { kind: "retry_limit", message },
+              },
+            };
+          }
+          runLoopIterations += 1;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -471,6 +582,7 @@ export async function runEmbeddedPiAgent(
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
+            onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -494,13 +606,20 @@ export async function runEmbeddedPiAgent(
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
+          const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
+          const activeErrorContext = resolveActiveErrorContext({
+            lastAssistant,
+            provider,
+            model: modelId,
+          });
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
                 sessionKey: params.sessionKey ?? params.sessionId,
-                provider,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
               })
             : undefined;
           const assistantErrorText =
@@ -640,8 +759,8 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Session is now smaller; allow compaction retries again.
-                  overflowCompactionAttempts = 0;
+                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
+                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
                   continue;
                 }
                 log.warn(
@@ -866,7 +985,8 @@ export async function runEmbeddedPiAgent(
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
-                      provider,
+                      provider: activeErrorContext.provider,
+                      model: activeErrorContext.model,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -875,7 +995,10 @@ export async function runEmbeddedPiAgent(
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? formatBillingErrorMessage(provider)
+                      ? formatBillingErrorMessage(
+                          activeErrorContext.provider,
+                          activeErrorContext.model,
+                        )
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -884,8 +1007,8 @@ export async function runEmbeddedPiAgent(
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
-                provider,
-                model: modelId,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
               });
@@ -893,6 +1016,9 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
+          if (usage && lastTurnTotal && lastTurnTotal > 0) {
+            usage.total = lastTurnTotal;
+          }
           // Extract the last individual API call's usage for context-window
           // utilization display. The accumulated `usage` sums input tokens
           // across all calls (tool-use loops, compaction retries), which
@@ -917,10 +1043,12 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
-            provider,
+            provider: activeErrorContext.provider,
+            model: activeErrorContext.model,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
           });
 
@@ -945,7 +1073,9 @@ export async function runEmbeddedPiAgent(
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
             };
           }
 
@@ -986,7 +1116,9 @@ export async function runEmbeddedPiAgent(
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
+            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
+            successfulCronAdds: attempt.successfulCronAdds,
           };
         }
       } finally {

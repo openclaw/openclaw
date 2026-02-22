@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   getAbortEmbeddedPiRunMock,
@@ -23,10 +24,14 @@ describe("trigger handling", () => {
   it("targets the active session for native /stop", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
+      const storePath = cfg.session?.store;
+      if (!storePath) {
+        throw new Error("missing session store path");
+      }
       const targetSessionKey = "agent:main:telegram:group:123";
       const targetSessionId = "session-target";
       await fs.writeFile(
-        cfg.session.store,
+        storePath,
         JSON.stringify(
           {
             [targetSessionKey]: {
@@ -85,7 +90,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("⚙️ Agent was aborted.");
       expect(getAbortEmbeddedPiRunMock()).toHaveBeenCalledWith(targetSessionId);
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(storePath);
       expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
       expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
     });
@@ -93,12 +98,16 @@ describe("trigger handling", () => {
   it("applies native /model to the target session", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
+      const storePath = cfg.session?.store;
+      if (!storePath) {
+        throw new Error("missing session store path");
+      }
       const slashSessionKey = "telegram:slash:111";
       const targetSessionKey = MAIN_SESSION_KEY;
 
       // Seed the target session to ensure the native command mutates it.
       await fs.writeFile(
-        cfg.session.store,
+        storePath,
         JSON.stringify(
           {
             [targetSessionKey]: {
@@ -131,7 +140,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Model set to openai/gpt-4.1-mini");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(storePath);
       expect(store[targetSessionKey]?.providerOverride).toBe("openai");
       expect(store[targetSessionKey]?.modelOverride).toBe("gpt-4.1-mini");
       expect(store[slashSessionKey]).toBeUndefined();
@@ -183,7 +192,7 @@ describe("trigger handling", () => {
           },
         },
         session: { store: join(home, "sessions.json") },
-      };
+      } as unknown as OpenClawConfig;
 
       const res = await getReplyFromConfig(
         {

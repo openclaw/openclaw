@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  createDoctorRuntime,
   findLegacyGatewayServices,
+  migrateLegacyConfig,
+  mockDoctorConfigSnapshot,
   note,
   readConfigFileSnapshot,
   resolveOpenClawPackageRoot,
@@ -9,89 +12,103 @@ import {
   serviceInstall,
   serviceIsLoaded,
   uninstallLegacyGatewayServices,
-  migrateLegacyConfig,
   writeConfigFile,
 } from "./doctor.e2e-harness.js";
 
+const DOCTOR_MIGRATION_TIMEOUT_MS = 20_000;
+
 describe("doctor command", () => {
-  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 60_000 }, async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: { routing: { allowFrom: ["+15555550123"] } },
+  it(
+    "migrates routing.allowFrom to channels.whatsapp.allowFrom",
+    { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
+    async () => {
+      mockDoctorConfigSnapshot({
+        parsed: { routing: { allowFrom: ["+15555550123"] } },
+        valid: false,
+        issues: [{ path: "routing.allowFrom", message: "legacy" }],
+        legacyIssues: [{ path: "routing.allowFrom", message: "legacy" }],
+      });
+
+      const { doctorCommand } = await import("./doctor.js");
+      const runtime = createDoctorRuntime();
+
+      migrateLegacyConfig.mockReturnValue({
+        config: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
+        changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
+      });
+
+      await doctorCommand(runtime, { nonInteractive: true, repair: true });
+
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect((written.channels as Record<string, unknown>)?.whatsapp).toEqual({
+        allowFrom: ["+15555550123"],
+      });
+      expect(written.routing).toBeUndefined();
+    },
+  );
+
+  it("does not add a new gateway auth token while fixing legacy issues on invalid config", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        routing: { allowFrom: ["+15555550123"] },
+        gateway: { remote: { token: "legacy-remote-token" } },
+      },
+      parsed: {
+        routing: { allowFrom: ["+15555550123"] },
+        gateway: { remote: { token: "legacy-remote-token" } },
+      },
       valid: false,
-      config: {},
-      issues: [
-        {
-          path: "routing.allowFrom",
-          message: "legacy",
-        },
-      ],
-      legacyIssues: [
-        {
-          path: "routing.allowFrom",
-          message: "legacy",
-        },
-      ],
+      issues: [{ path: "routing.allowFrom", message: "legacy" }],
+      legacyIssues: [{ path: "routing.allowFrom", message: "legacy" }],
     });
 
     const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createDoctorRuntime();
 
     migrateLegacyConfig.mockReturnValue({
-      config: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
+      config: {
+        channels: { whatsapp: { allowFrom: ["+15555550123"] } },
+        gateway: { remote: { token: "legacy-remote-token" } },
+      },
       changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
     });
 
-    await doctorCommand(runtime, { nonInteractive: true, repair: true });
+    await doctorCommand(runtime, { repair: true });
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);
     const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect((written.channels as Record<string, unknown>)?.whatsapp).toEqual({
-      allowFrom: ["+15555550123"],
-    });
-    expect(written.routing).toBeUndefined();
+    const gateway = (written.gateway as Record<string, unknown>) ?? {};
+    const auth = gateway.auth as Record<string, unknown> | undefined;
+    const remote = gateway.remote as Record<string, unknown>;
+
+    expect(remote.token).toBe("legacy-remote-token");
+    expect(auth).toBeUndefined();
   });
 
-  it("skips legacy gateway services migration", { timeout: 60_000 }, async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
+  it(
+    "skips legacy gateway services migration",
+    { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
+    async () => {
+      mockDoctorConfigSnapshot();
 
-    findLegacyGatewayServices.mockResolvedValueOnce([
-      {
-        platform: "darwin",
-        label: "com.steipete.openclaw.gateway",
-        detail: "loaded",
-      },
-    ]);
-    serviceIsLoaded.mockResolvedValueOnce(false);
-    serviceInstall.mockClear();
+      findLegacyGatewayServices.mockResolvedValueOnce([
+        {
+          platform: "darwin",
+          label: "com.steipete.openclaw.gateway",
+          detail: "loaded",
+        },
+      ]);
+      serviceIsLoaded.mockResolvedValueOnce(false);
+      serviceInstall.mockClear();
 
-    const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+      const { doctorCommand } = await import("./doctor.js");
+      await doctorCommand(createDoctorRuntime());
 
-    await doctorCommand(runtime);
-
-    expect(uninstallLegacyGatewayServices).not.toHaveBeenCalled();
-    expect(serviceInstall).not.toHaveBeenCalled();
-  });
+      expect(uninstallLegacyGatewayServices).not.toHaveBeenCalled();
+      expect(serviceInstall).not.toHaveBeenCalled();
+    },
+  );
 
   it("offers to update first for git checkouts", async () => {
     delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -113,25 +130,10 @@ describe("doctor command", () => {
       durationMs: 1,
     });
 
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
+    mockDoctorConfigSnapshot();
 
     const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    await doctorCommand(runtime);
+    await doctorCommand(createDoctorRuntime());
 
     expect(runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ cwd: root }));
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();

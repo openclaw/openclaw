@@ -4,14 +4,15 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
+import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   connectOk,
   embeddedRunMock,
-  getFreePort,
   installGatewayTestHooks,
   piSdkMock,
   rpcReq,
-  startGatewayServer,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -23,6 +24,18 @@ const sessionCleanupMocks = vi.hoisted(() => ({
 
 const sessionHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async () => {}),
+}));
+
+const subagentLifecycleHookMocks = vi.hoisted(() => ({
+  runSubagentEnded: vi.fn(async () => {}),
+}));
+
+const subagentLifecycleHookState = vi.hoisted(() => ({
+  hasSubagentEndedHook: true,
+}));
+
+const threadBindingMocks = vi.hoisted(() => ({
+  unbindThreadBindingsBySessionKey: vi.fn((_params?: unknown) => []),
 }));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
@@ -55,49 +68,115 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   };
 });
 
+vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: vi.fn(() => ({
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook,
+      runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+    })),
+  };
+});
+
+vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+  return {
+    ...actual,
+    unbindThreadBindingsBySessionKey: (params: unknown) =>
+      threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+  };
+});
+
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
-let port = 0;
-let previousToken: string | undefined;
+let harness: GatewayServerHarness;
 
 beforeAll(async () => {
-  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  port = await getFreePort();
-  server = await startGatewayServer(port);
+  harness = await startGatewayServerHarness();
 });
 
 afterAll(async () => {
-  await server.close();
-  if (previousToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
-  }
+  await harness.close();
 });
 
-const openClient = async (opts?: Parameters<typeof connectOk>[1]) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  const hello = await connectOk(ws, opts);
-  return { ws, hello };
-};
+const openClient = async (opts?: Parameters<typeof connectOk>[1]) => await harness.openClient(opts);
+
+async function createSessionStoreDir() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+  const storePath = path.join(dir, "sessions.json");
+  testState.sessionStorePath = storePath;
+  return { dir, storePath };
+}
+
+async function writeSingleLineSession(dir: string, sessionId: string, content: string) {
+  await fs.writeFile(
+    path.join(dir, `${sessionId}.jsonl`),
+    `${JSON.stringify({ role: "user", content })}\n`,
+    "utf-8",
+  );
+}
+
+async function seedActiveMainSession() {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: { sessionId: "sess-main", updatedAt: Date.now() },
+    },
+  });
+  return { dir, storePath };
+}
+
+function expectActiveRunCleanup(
+  requesterSessionKey: string,
+  expectedQueueKeys: string[],
+  sessionId: string,
+) {
+  expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
+    cfg: expect.any(Object),
+    requesterSessionKey,
+  });
+  expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
+  const clearedKeys = (
+    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
+  )[0]?.[0];
+  expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
+  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
+  expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
+}
+
+async function getMainPreviewEntry(ws: import("ws").WebSocket) {
+  const preview = await rpcReq<{
+    previews: Array<{
+      key: string;
+      status: string;
+      items: Array<{ role: string; text: string }>;
+    }>;
+  }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+  expect(preview.ok).toBe(true);
+  const entry = preview.payload?.previews[0];
+  expect(entry?.key).toBe("main");
+  expect(entry?.status).toBe("ok");
+  return entry;
+}
 
 describe("gateway server sessions", () => {
   beforeEach(() => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     sessionHookMocks.triggerInternalHook.mockClear();
+    subagentLifecycleHookMocks.runSubagentEnded.mockClear();
+    subagentLifecycleHookState.hasSubagentEndedHook = true;
+    threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-    const storePath = path.join(dir, "sessions.json");
+    const { dir, storePath } = await createSessionStoreDir();
     const now = Date.now();
     const recent = now - 30_000;
     const stale = now - 15 * 60_000;
-    testState.sessionStorePath = storePath;
 
     await fs.writeFile(
       path.join(dir, "sess-main.jsonl"),
@@ -143,7 +222,7 @@ describe("gateway server sessions", () => {
     });
 
     const { ws, hello } = await openClient();
-    expect((hello as unknown as { features?: { methods?: string[] } }).features?.methods).toEqual(
+    expect((hello as { features?: { methods?: string[] } }).features?.methods).toEqual(
       expect.arrayContaining([
         "sessions.list",
         "sessions.preview",
@@ -397,15 +476,7 @@ describe("gateway server sessions", () => {
     testState.sessionStorePath = storePath;
     const sessionId = "sess-preview";
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "Hello" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
-      JSON.stringify({
-        message: { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
-      }),
-      JSON.stringify({ message: { role: "assistant", content: "Forecast ready" } }),
-    ];
+    const lines = createToolSummaryPreviewTranscriptLines(sessionId);
     await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
 
     await writeSessionStore({
@@ -418,18 +489,7 @@ describe("gateway server sessions", () => {
     });
 
     const { ws } = await openClient();
-    const preview = await rpcReq<{
-      previews: Array<{
-        key: string;
-        status: string;
-        items: Array<{ role: string; text: string }>;
-      }>;
-    }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
-
-    expect(preview.ok).toBe(true);
-    const entry = preview.payload?.previews[0];
-    expect(entry?.key).toBe("main");
-    expect(entry?.status).toBe("ok");
+    const entry = await getMainPreviewEntry(ws);
     expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(entry?.items[1]?.text).toContain("call weather");
 
@@ -465,18 +525,7 @@ describe("gateway server sessions", () => {
     );
 
     const { ws } = await openClient();
-    const preview = await rpcReq<{
-      previews: Array<{
-        key: string;
-        status: string;
-        items: Array<{ role: string; text: string }>;
-      }>;
-    }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
-
-    expect(preview.ok).toBe(true);
-    const entry = preview.payload?.previews[0];
-    expect(entry?.key).toBe("main");
-    expect(entry?.status).toBe("ok");
+    const entry = await getMainPreviewEntry(ws);
     expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
 
     ws.close();
@@ -560,20 +609,9 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-
-    await fs.writeFile(
-      path.join(dir, "sess-main.jsonl"),
-      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(dir, "sess-active.jsonl"),
-      `${JSON.stringify({ role: "user", content: "active" })}\n`,
-      "utf-8",
-    );
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSingleLineSession(dir, "sess-active", "active");
 
     await writeSessionStore({
       entries: {
@@ -598,37 +636,159 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
-    expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      requesterSessionKey: "agent:main:discord:group:dev",
-    });
-    expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-    const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
-    expect(clearedKeys).toEqual(
-      expect.arrayContaining(["discord:group:dev", "agent:main:discord:group:dev", "sess-active"]),
+    expectActiveRunCleanup(
+      "agent:main:discord:group:dev",
+      ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
+      "sess-active",
     );
-    expect(embeddedRunMock.abortCalls).toEqual(["sess-active"]);
-    expect(embeddedRunMock.waitCalls).toEqual(["sess-active"]);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
+      {
+        targetSessionKey: "agent:main:discord:group:dev",
+        targetKind: "acp",
+        reason: "session-delete",
+        sendFarewell: true,
+        outcome: "deleted",
+      },
+      {
+        childSessionKey: "agent:main:discord:group:dev",
+      },
+    );
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:discord:group:dev",
+      targetKind: "acp",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
 
     ws.close();
   });
 
-  test("sessions.reset aborts active runs and clears queues", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-
-    await fs.writeFile(
-      path.join(dir, "sess-main.jsonl"),
-      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
-      "utf-8",
-    );
-
+  test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
     await writeSessionStore({
       entries: {
         main: { sessionId: "sess-main", updatedAt: Date.now() },
       },
     });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:missing",
+    });
+
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(false);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("sessions.delete emits subagent targetKind for subagent sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+      | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
+      | undefined;
+    expect(event).toMatchObject({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      outcome: "deleted",
+    });
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+      emitLifecycleHooks: false,
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.delete directly unbinds thread bindings when hooks are unavailable", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    subagentLifecycleHookState.hasSubagentEndedHook = false;
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:subagent:worker",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-delete",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.reset aborts active runs and clears queues", async () => {
+    await seedActiveMainSession();
 
     embeddedRunMock.activeIds.add("sess-main");
     embeddedRunMock.waitResults.set("sess-main", true);
@@ -645,29 +805,137 @@ describe("gateway server sessions", () => {
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
-    expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      requesterSessionKey: "agent:main:main",
+    expectActiveRunCleanup(
+      "agent:main:main",
+      ["main", "agent:main:main", "sess-main"],
+      "sess-main",
+    );
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
+      {
+        targetSessionKey: "agent:main:main",
+        targetKind: "acp",
+        reason: "session-reset",
+        sendFarewell: true,
+        outcome: "reset",
+      },
+      {
+        childSessionKey: "agent:main:main",
+      },
+    );
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:main",
+      targetKind: "acp",
+      reason: "session-reset",
+      sendFarewell: true,
     });
-    expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-    const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
-    expect(clearedKeys).toEqual(expect.arrayContaining(["main", "agent:main:main", "sess-main"]));
-    expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
-    expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+    ws.close();
+  });
+
+  test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      ws,
+      "sessions.reset",
+      {
+        key: "agent:main:subagent:missing",
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("sessions.reset emits subagent targetKind for subagent sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-subagent", "hello");
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:worker": {
+          sessionId: "sess-subagent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      ws,
+      "sessions.reset",
+      {
+        key: "agent:main:subagent:worker",
+      },
+    );
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:main:subagent:worker");
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
+    expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+      | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
+      | undefined;
+    expect(event).toMatchObject({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-reset",
+      outcome: "reset",
+    });
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:worker",
+      targetKind: "subagent",
+      reason: "session-reset",
+      sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    subagentLifecycleHookState.hasSubagentEndedHook = false;
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+    });
+    expect(reset.ok).toBe(true);
+    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:main",
+      targetKind: "acp",
+      reason: "session-reset",
+      sendFarewell: true,
+    });
 
     ws.close();
   });
 
   test("sessions.reset emits internal command hook with reason", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-
-    await fs.writeFile(
-      path.join(dir, "sess-main.jsonl"),
-      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
-      "utf-8",
-    );
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
 
     await writeSessionStore({
       entries: {
@@ -682,7 +950,12 @@ describe("gateway server sessions", () => {
     });
     expect(reset.ok).toBe(true);
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const [event] = sessionHookMocks.triggerInternalHook.mock.calls[0] ?? [];
+    const event = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    if (!event) {
+      throw new Error("expected session hook event");
+    }
     expect(event).toMatchObject({
       type: "command",
       action: "new",
@@ -691,26 +964,12 @@ describe("gateway server sessions", () => {
         commandSource: "gateway:sessions.reset",
       },
     });
-    expect(event.context.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
     ws.close();
   });
 
   test("sessions.reset returns unavailable when active run does not stop", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-
-    await fs.writeFile(
-      path.join(dir, "sess-main.jsonl"),
-      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
-      "utf-8",
-    );
-
-    await writeSessionStore({
-      entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
-      },
-    });
+    const { dir, storePath } = await seedActiveMainSession();
 
     embeddedRunMock.activeIds.add("sess-main");
     embeddedRunMock.waitResults.set("sess-main", false);
@@ -723,15 +982,11 @@ describe("gateway server sessions", () => {
     expect(reset.ok).toBe(false);
     expect(reset.error?.code).toBe("UNAVAILABLE");
     expect(reset.error?.message ?? "").toMatch(/still active/i);
-    expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      requesterSessionKey: "agent:main:main",
-    });
-    expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-    const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
-    expect(clearedKeys).toEqual(expect.arrayContaining(["main", "agent:main:main", "sess-main"]));
-    expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
-    expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+    expectActiveRunCleanup(
+      "agent:main:main",
+      ["main", "agent:main:main", "sess-main"],
+      "sess-main",
+    );
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -745,15 +1000,8 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.delete returns unavailable when active run does not stop", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-
-    await fs.writeFile(
-      path.join(dir, "sess-active.jsonl"),
-      `${JSON.stringify({ role: "user", content: "active" })}\n`,
-      "utf-8",
-    );
+    const { dir, storePath } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-active", "active");
 
     await writeSessionStore({
       entries: {
@@ -775,17 +1023,11 @@ describe("gateway server sessions", () => {
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.code).toBe("UNAVAILABLE");
     expect(deleted.error?.message ?? "").toMatch(/still active/i);
-    expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      requesterSessionKey: "agent:main:discord:group:dev",
-    });
-    expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-    const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
-    expect(clearedKeys).toEqual(
-      expect.arrayContaining(["discord:group:dev", "agent:main:discord:group:dev", "sess-active"]),
+    expectActiveRunCleanup(
+      "agent:main:discord:group:dev",
+      ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
+      "sess-active",
     );
-    expect(embeddedRunMock.abortCalls).toEqual(["sess-active"]);
-    expect(embeddedRunMock.waitCalls).toEqual(["sess-active"]);
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -796,6 +1038,54 @@ describe("gateway server sessions", () => {
     expect(filesAfterDeleteAttempt.some((f) => f.startsWith("sess-active.jsonl.deleted."))).toBe(
       false,
     );
+
+    ws.close();
+  });
+
+  test("webchat clients cannot patch or delete sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+        "discord:group:dev": {
+          sessionId: "sess-group",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:discord:group:dev",
+      label: "should-fail",
+    });
+    expect(patched.ok).toBe(false);
+    expect(patched.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
+
+    const deleted = await rpcReq(ws, "sessions.delete", {
+      key: "agent:main:discord:group:dev",
+    });
+    expect(deleted.ok).toBe(false);
+    expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
 
     ws.close();
   });

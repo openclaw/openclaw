@@ -1,5 +1,4 @@
 import type { startGatewayServer } from "../../gateway/server.js";
-import type { defaultRuntime } from "../../runtime.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -14,6 +13,7 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
+import type { defaultRuntime } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -124,7 +124,7 @@ export async function runGatewayLoop(params: {
     const authorized = consumeGatewaySigusr1RestartAuthorization();
     if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
       gatewayLog.warn(
-        "SIGUSR1 restart ignored (not authorized; enable commands.restart or use gateway tool).",
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
       return;
     }

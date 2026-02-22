@@ -1,35 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
-
 describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
-  it("does not strip thinking tags inside inline code backticks", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
+  function createPartialReplyHarness() {
+    const { session, emit } = createStubSessionHarness();
     const onPartialReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onPartialReply,
     });
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "The fix strips leaked `<thinking>` tags from messages.",
-      },
+    return { emit, onPartialReply };
+  }
+
+  it("does not strip thinking tags inside inline code backticks", () => {
+    const { emit, onPartialReply } = createPartialReplyHarness();
+
+    emitAssistantTextDelta({
+      emit,
+      delta: "The fix strips leaked `<thinking>` tags from messages.",
     });
 
     expect(onPartialReply).toHaveBeenCalled();
@@ -38,29 +33,11 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   });
 
   it("does not strip thinking tags inside fenced code blocks", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onPartialReply } = createPartialReplyHarness();
 
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onPartialReply,
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-      },
+    emitAssistantTextDelta({
+      emit,
+      delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
     });
 
     expect(onPartialReply).toHaveBeenCalled();
@@ -69,29 +46,11 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   });
 
   it("still strips actual thinking tags outside code spans", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onPartialReply } = createPartialReplyHarness();
 
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onPartialReply,
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello <thinking>internal thought</thinking> world",
-      },
+    emitAssistantTextDelta({
+      emit,
+      delta: "Hello <thinking>internal thought</thinking> world",
     });
 
     expect(onPartialReply).toHaveBeenCalled();

@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
@@ -10,7 +9,11 @@ import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
 } from "../agents/tool-policy-pipeline.js";
-import { collectExplicitAllowlist, resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import {
+  collectExplicitAllowlist,
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+} from "../agents/tool-policy.js";
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -20,7 +23,8 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendGatewayAuthFailure,
@@ -108,16 +112,23 @@ function getErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function isToolInputError(err: unknown): boolean {
+function resolveToolInputErrorStatus(err: unknown): number | null {
   if (err instanceof ToolInputError) {
-    return true;
+    const status = (err as { status?: unknown }).status;
+    return typeof status === "number" ? status : 400;
   }
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "name" in err &&
-    (err as { name?: unknown }).name === "ToolInputError"
-  );
+  if (typeof err !== "object" || err === null || !("name" in err)) {
+    return null;
+  }
+  const name = (err as { name?: unknown }).name;
+  if (name !== "ToolInputError" && name !== "ToolAuthorizationError") {
+    return null;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status === "number") {
+    return status;
+  }
+  return name === "ToolAuthorizationError" ? 403 : 400;
 }
 
 export async function handleToolsInvokeHttpRequest(
@@ -127,6 +138,7 @@ export async function handleToolsInvokeHttpRequest(
     auth: ResolvedGatewayAuth;
     maxBodyBytes?: number;
     trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
@@ -142,11 +154,12 @@ export async function handleToolsInvokeHttpRequest(
 
   const cfg = loadConfig();
   const token = getBearerToken(req);
-  const authResult = await authorizeGatewayConnect({
+  const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
     req,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
@@ -215,15 +228,8 @@ export async function handleToolsInvokeHttpRequest(
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const mergeAlsoAllow = (policy: typeof profilePolicy, alsoAllow?: string[]) => {
-    if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
-      return policy;
-    }
-    return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
-  };
-
-  const profilePolicyWithAlsoAllow = mergeAlsoAllow(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllow(
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
@@ -309,8 +315,9 @@ export async function handleToolsInvokeHttpRequest(
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
-    if (isToolInputError(err)) {
-      sendJson(res, 400, {
+    const inputStatus = resolveToolInputErrorStatus(err);
+    if (inputStatus !== null) {
+      sendJson(res, inputStatus, {
         ok: false,
         error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
       });

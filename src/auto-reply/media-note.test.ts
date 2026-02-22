@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildInboundMediaNote } from "./media-note.js";
+import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 
 describe("buildInboundMediaNote", () => {
   it("formats single MediaPath as a media note", () => {
@@ -79,29 +80,9 @@ describe("buildInboundMediaNote", () => {
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
       MediaUnderstandingDecisions: [
-        {
-          capability: "image",
-          outcome: "success",
-          attachments: [
-            {
-              attachmentIndex: 0,
-              attempts: [
-                {
-                  type: "provider",
-                  outcome: "success",
-                  provider: "openai",
-                  model: "gpt-5.2",
-                },
-              ],
-              chosen: {
-                type: "provider",
-                outcome: "success",
-                provider: "openai",
-                model: "gpt-5.2",
-              },
-            },
-          ],
-        },
+        createSuccessfulImageMediaDecision() as unknown as NonNullable<
+          Parameters<typeof buildInboundMediaNote>[0]["MediaUnderstandingDecisions"]
+        >[number],
       ],
     });
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");

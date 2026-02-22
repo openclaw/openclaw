@@ -27,10 +27,18 @@ const unitIsolatedFilesRaw = [
   "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
   "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
   "src/browser/server.auth-token-gates-http.test.ts",
-  "src/browser/server-context.remote-tab-ops.test.ts",
-  "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
+  // Keep this high-variance heavy file off the unit-fast critical path.
+  "src/auto-reply/reply.block-streaming.test.ts",
+  // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
+  "src/hooks/install.test.ts",
+  // Setup-heavy bot bootstrap suite.
+  "src/telegram/bot.create-telegram-bot.test.ts",
+  // Medium-heavy bot behavior suite; move off unit-fast critical path.
+  "src/telegram/bot.test.ts",
+  // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
+  "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
-  "src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts",
+  "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
@@ -116,6 +124,14 @@ const silentArgs =
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
+const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
+const testProfile =
+  rawTestProfile === "low" ||
+  rawTestProfile === "max" ||
+  rawTestProfile === "normal" ||
+  rawTestProfile === "serial"
+    ? rawTestProfile
+    : "normal";
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -124,14 +140,41 @@ const resolvedOverride =
 const keepGatewaySerial =
   isWindowsCi ||
   process.env.OPENCLAW_TEST_SERIAL_GATEWAY === "1" ||
+  testProfile === "serial" ||
   (isCI && process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1");
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const defaultUnitWorkers = localWorkers;
-// Local perf: extensions tend to be the critical path under parallel vitest runs; give them more headroom.
-const defaultExtensionsWorkers = Math.max(1, Math.min(6, Math.floor(localWorkers / 2)));
-const defaultGatewayWorkers = Math.max(1, Math.min(2, Math.floor(localWorkers / 4)));
+const defaultWorkerBudget =
+  testProfile === "low"
+    ? {
+        unit: 2,
+        unitIsolated: 1,
+        extensions: 1,
+        gateway: 1,
+      }
+    : testProfile === "serial"
+      ? {
+          unit: 1,
+          unitIsolated: 1,
+          extensions: 1,
+          gateway: 1,
+        }
+      : testProfile === "max"
+        ? {
+            unit: localWorkers,
+            unitIsolated: Math.min(4, localWorkers),
+            extensions: Math.max(1, Math.min(6, Math.floor(localWorkers / 2))),
+            gateway: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
+          }
+        : {
+            // Local `pnpm test` runs multiple vitest groups concurrently;
+            // keep per-group workers conservative to avoid pegging all cores.
+            unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
+            unitIsolated: 1,
+            extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+            gateway: 2,
+          };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
@@ -146,16 +189,15 @@ const maxWorkersForRun = (name) => {
     return 1;
   }
   if (name === "unit-isolated") {
-    // Local: allow a bit of parallelism while keeping this run stable.
-    return Math.min(4, localWorkers);
+    return defaultWorkerBudget.unitIsolated;
   }
   if (name === "extensions") {
-    return defaultExtensionsWorkers;
+    return defaultWorkerBudget.extensions;
   }
   if (name === "gateway") {
-    return defaultGatewayWorkers;
+    return defaultWorkerBudget.gateway;
   }
-  return defaultUnitWorkers;
+  return defaultWorkerBudget.unit;
 };
 
 const WARNING_SUPPRESSION_FLAGS = [

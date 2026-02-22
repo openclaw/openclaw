@@ -2,6 +2,7 @@ export type NodeMatchCandidate = {
   nodeId: string;
   displayName?: string;
   remoteIp?: string;
+  connected?: boolean;
 };
 
 export function normalizeNodeKey(value: string) {
@@ -53,14 +54,23 @@ export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: 
     throw new Error("node required");
   }
 
-  const matches = resolveNodeMatches(nodes, q);
-  if (matches.length === 1) {
-    return matches[0]?.nodeId ?? "";
+  const rawMatches = resolveNodeMatches(nodes, q);
+  if (rawMatches.length === 1) {
+    return rawMatches[0]?.nodeId ?? "";
   }
-  if (matches.length === 0) {
+  if (rawMatches.length === 0) {
     const known = listKnownNodes(nodes);
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
+
+  // Re-pair/reinstall flows can leave multiple nodes with the same display name.
+  // Prefer a unique connected match when available.
+  const connectedMatches = rawMatches.filter((match) => match.connected === true);
+  const matches = connectedMatches.length > 0 ? connectedMatches : rawMatches;
+  if (matches.length === 1) {
+    return matches[0]?.nodeId ?? "";
+  }
+
   throw new Error(
     `ambiguous node: ${q} (matches: ${matches
       .map((n) => n.displayName || n.remoteIp || n.nodeId)

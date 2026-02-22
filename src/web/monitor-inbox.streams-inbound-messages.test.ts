@@ -12,27 +12,69 @@ import {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+  type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
 
-  it("streams inbound messages", async () => {
-    const onMessage = vi.fn(async (msg) => {
-      await msg.sendComposing();
-      await msg.reply("pong");
-    });
+  async function tick() {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 
+  async function startInboxMonitor(onMessage: InboxOnMessage) {
     const listener = await monitorWebInbox({
       verbose: false,
       onMessage,
       accountId: DEFAULT_ACCOUNT_ID,
       authDir: getAuthDir(),
     });
-    const sock = getSock();
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    return { listener, sock: getSock() };
+  }
+
+  function buildMessageUpsert(params: {
+    id: string;
+    remoteJid: string;
+    text: string;
+    timestamp: number;
+    pushName?: string;
+    participant?: string;
+  }) {
+    return {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: params.id,
+            fromMe: false,
+            remoteJid: params.remoteJid,
+            participant: params.participant,
+          },
+          message: { conversation: params.text },
+          messageTimestamp: params.timestamp,
+          pushName: params.pushName,
+        },
+      ],
+    };
+  }
+
+  async function expectQuotedReplyContext(quotedMessage: unknown) {
+    const onMessage = vi.fn(async (msg) => {
+      await msg.reply("pong");
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
     const upsert = {
       type: "notify",
       messages: [
         {
           key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "ping" },
+          message: {
+            extendedTextMessage: {
+              text: "reply",
+              contextInfo: {
+                stanzaId: "q1",
+                participant: "111@s.whatsapp.net",
+                quotedMessage,
+              },
+            },
+          },
           messageTimestamp: 1_700_000_000,
           pushName: "Tester",
         },
@@ -40,7 +82,40 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToId: "q1",
+        replyToBody: "original",
+        replyToSender: "+111",
+      }),
+    );
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: "pong",
+    });
+
+    await listener.close();
+  }
+
+  it("streams inbound messages", async () => {
+    const onMessage = vi.fn(async (msg) => {
+      await msg.sendComposing();
+      await msg.reply("pong");
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
@@ -67,28 +142,18 @@ describe("web monitor inbox", () => {
       return;
     });
 
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
     });
-    const sock = getSock();
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "ping" },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    };
 
     sock.ev.emit("messages.upsert", upsert);
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
 
@@ -100,29 +165,19 @@ describe("web monitor inbox", () => {
       return;
     });
 
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-    });
-    const sock = getSock();
+    const { listener, sock } = await startInboxMonitor(onMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("999:0@s.whatsapp.net");
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "abc", fromMe: false, remoteJid: "999@lid" },
-          message: { conversation: "ping" },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    };
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@lid",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
 
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
     expect(onMessage).toHaveBeenCalledWith(
@@ -141,28 +196,18 @@ describe("web monitor inbox", () => {
       JSON.stringify("1555"),
     );
 
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-    });
-    const sock = getSock();
+    const { listener, sock } = await startInboxMonitor(onMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "abc", fromMe: false, remoteJid: "555@lid" },
-          message: { conversation: "ping" },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    };
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "555@lid",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ body: "ping", from: "+1555", to: "+123" }),
@@ -177,33 +222,19 @@ describe("web monitor inbox", () => {
       return;
     });
 
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-    });
-    const sock = getSock();
+    const { listener, sock } = await startInboxMonitor(onMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("444:0@s.whatsapp.net");
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "abc",
-            fromMe: false,
-            remoteJid: "123@g.us",
-            participant: "444@lid",
-          },
-          message: { conversation: "ping" },
-          messageTimestamp: 1_700_000_000,
-        },
-      ],
-    };
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "123@g.us",
+      participant: "444@lid",
+      text: "ping",
+      timestamp: 1_700_000_000,
+    });
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
 
     expect(getPNForLID).toHaveBeenCalledWith("444@lid");
     expect(onMessage).toHaveBeenCalledWith(
@@ -228,13 +259,7 @@ describe("web monitor inbox", () => {
       }
     });
 
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-    });
-    const sock = getSock();
+    const { listener, sock } = await startInboxMonitor(onMessage);
     const upsert = {
       type: "notify",
       messages: [
@@ -252,105 +277,23 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
 
     expect(onMessage).toHaveBeenCalledTimes(2);
 
-    resolveFirst?.();
+    (resolveFirst as (() => void) | null)?.();
     await listener.close();
   });
 
   it("captures reply context from quoted messages", async () => {
-    const onMessage = vi.fn(async (msg) => {
-      await msg.reply("pong");
-    });
-
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
-    const sock = getSock();
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: {
-            extendedTextMessage: {
-              text: "reply",
-              contextInfo: {
-                stanzaId: "q1",
-                participant: "111@s.whatsapp.net",
-                quotedMessage: { conversation: "original" },
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    };
-
-    sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToId: "q1",
-        replyToBody: "original",
-        replyToSender: "+111",
-      }),
-    );
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
-
-    await listener.close();
+    await expectQuotedReplyContext({ conversation: "original" });
   });
 
   it("captures reply context from wrapped quoted messages", async () => {
-    const onMessage = vi.fn(async (msg) => {
-      await msg.reply("pong");
+    await expectQuotedReplyContext({
+      viewOnceMessageV2Extension: {
+        message: { conversation: "original" },
+      },
     });
-
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
-    const sock = getSock();
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: {
-            extendedTextMessage: {
-              text: "reply",
-              contextInfo: {
-                stanzaId: "q1",
-                participant: "111@s.whatsapp.net",
-                quotedMessage: {
-                  viewOnceMessageV2Extension: {
-                    message: { conversation: "original" },
-                  },
-                },
-              },
-            },
-          },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    };
-
-    sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToId: "q1",
-        replyToBody: "original",
-        replyToSender: "+111",
-      }),
-    );
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
-
-    await listener.close();
   });
 });

@@ -1,6 +1,8 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
@@ -9,6 +11,14 @@ export type GatewayCallOptions = {
   gatewayToken?: string;
   timeoutMs?: number;
 };
+
+export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
+  return {
+    gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+    gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+    timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+  };
+}
 
 function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: string } {
   const input = raw.trim();
@@ -100,6 +110,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   extra?: { expectFinal?: boolean },
 ) {
   const gateway = resolveGatewayOptions(opts);
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method);
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,
@@ -110,5 +121,6 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    scopes,
   });
 }

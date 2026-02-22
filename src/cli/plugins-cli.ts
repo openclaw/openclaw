@@ -1,14 +1,16 @@
-import type { Command } from "commander";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginRecord } from "../plugins/registry.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
@@ -134,22 +136,6 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   };
 }
 
-function enablePluginInConfig(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [pluginId]: {
-          ...(config.plugins?.entries?.[pluginId] as object | undefined),
-          enabled: true,
-        },
-      },
-    },
-  };
-}
-
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) {
     return;
@@ -162,7 +148,7 @@ function logSlotWarnings(warnings: string[]) {
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
-    .description("Manage OpenClaw plugins/extensions")
+    .description("Manage OpenClaw plugins and extensions")
     .addHelpText(
       "after",
       () =>
@@ -351,24 +337,21 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const cfg = loadConfig();
-      let next: OpenClawConfig = {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            [id]: {
-              ...(cfg.plugins?.entries as Record<string, { enabled?: boolean }> | undefined)?.[id],
-              enabled: true,
-            },
-          },
-        },
-      };
+      const enableResult = enablePluginInConfig(cfg, id);
+      let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
       await writeConfigFile(next);
       logSlotWarnings(slotResult.warnings);
-      defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+      if (enableResult.enabled) {
+        defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+        return;
+      }
+      defaultRuntime.log(
+        theme.warn(
+          `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
+        ),
+      );
     });
 
   plugins
@@ -534,7 +517,8 @@ export function registerPluginsCli(program: Command) {
     .description("Install a plugin (path, archive, or npm spec)")
     .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
-    .action(async (raw: string, opts: { link?: boolean }) => {
+    .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
       const fileSpec = resolveFileNpmSpecToLocalPath(raw);
       if (fileSpec && !fileSpec.ok) {
         defaultRuntime.error(fileSpec.error);
@@ -566,7 +550,7 @@ export function registerPluginsCli(program: Command) {
               },
             },
             probe.pluginId,
-          );
+          ).config;
           next = recordPluginInstall(next, {
             pluginId: probe.pluginId,
             source: "path",
@@ -591,8 +575,11 @@ export function registerPluginsCli(program: Command) {
           defaultRuntime.error(result.error);
           process.exit(1);
         }
+        // Plugin CLI registrars may have warmed the manifest registry cache before install;
+        // force a rescan so config validation sees the freshly installed plugin.
+        clearPluginManifestRegistryCache();
 
-        let next = enablePluginInConfig(cfg, result.pluginId);
+        let next = enablePluginInConfig(cfg, result.pluginId).config;
         const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
         next = recordPluginInstall(next, {
           pluginId: result.pluginId,
@@ -640,14 +627,32 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.error(result.error);
         process.exit(1);
       }
+      // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
+      clearPluginManifestRegistryCache();
 
-      let next = enablePluginInConfig(cfg, result.pluginId);
+      let next = enablePluginInConfig(cfg, result.pluginId).config;
+      const resolvedSpec = result.npmResolution?.resolvedSpec;
+      const recordSpec = opts.pin && resolvedSpec ? resolvedSpec : raw;
+      if (opts.pin && !resolvedSpec) {
+        defaultRuntime.log(
+          theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
+        );
+      }
+      if (opts.pin && resolvedSpec) {
+        defaultRuntime.log(`Pinned npm install record to ${resolvedSpec}.`);
+      }
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
         source: "npm",
-        spec: raw,
+        spec: recordSpec,
         installPath: result.targetDir,
         version: result.version,
+        resolvedName: result.npmResolution?.name,
+        resolvedVersion: result.npmResolution?.version,
+        resolvedSpec: result.npmResolution?.resolvedSpec,
+        integrity: result.npmResolution?.integrity,
+        shasum: result.npmResolution?.shasum,
+        resolvedAt: result.npmResolution?.resolvedAt,
       });
       const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
       next = slotResult.config;
@@ -684,6 +689,20 @@ export function registerPluginsCli(program: Command) {
         logger: {
           info: (msg) => defaultRuntime.log(msg),
           warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+        },
+        onIntegrityDrift: async (drift) => {
+          const specLabel = drift.resolvedSpec ?? drift.spec;
+          defaultRuntime.log(
+            theme.warn(
+              `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
+                `\nExpected: ${drift.expectedIntegrity}` +
+                `\nActual:   ${drift.actualIntegrity}`,
+            ),
+          );
+          if (drift.dryRun) {
+            return true;
+          }
+          return await promptYesNo(`Continue updating "${drift.pluginId}" with this artifact?`);
         },
       });
 

@@ -36,6 +36,35 @@ const WORKSPACE_STATE_VERSION = 1;
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
 
+// File content cache with mtime invalidation to avoid redundant reads
+const workspaceFileCache = new Map<string, { content: string; mtimeMs: number }>();
+
+/**
+ * Read file with caching based on mtime. Returns cached content if file
+ * hasn't changed, otherwise reads from disk and updates cache.
+ */
+async function readFileWithCache(filePath: string): Promise<string> {
+  try {
+    const stats = await fs.stat(filePath);
+    const mtimeMs = stats.mtimeMs;
+    const cached = workspaceFileCache.get(filePath);
+
+    // Return cached content if mtime matches
+    if (cached && cached.mtimeMs === mtimeMs) {
+      return cached.content;
+    }
+
+    // Read from disk and update cache
+    const content = await fs.readFile(filePath, "utf-8");
+    workspaceFileCache.set(filePath, { content, mtimeMs });
+    return content;
+  } catch (error) {
+    // Remove from cache if file doesn't exist or is unreadable
+    workspaceFileCache.delete(filePath);
+    throw error;
+  }
+}
+
 function stripFrontMatter(content: string): string {
   if (!content.startsWith("---")) {
     return content;
@@ -182,6 +211,18 @@ async function readWorkspaceOnboardingState(statePath: string): Promise<Workspac
       version: WORKSPACE_STATE_VERSION,
     };
   }
+}
+
+async function readWorkspaceOnboardingStateForDir(dir: string): Promise<WorkspaceOnboardingState> {
+  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
+  return await readWorkspaceOnboardingState(statePath);
+}
+
+export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boolean> {
+  const state = await readWorkspaceOnboardingStateForDir(dir);
+  return (
+    typeof state.onboardingCompletedAt === "string" && state.onboardingCompletedAt.trim().length > 0
+  );
 }
 
 async function writeWorkspaceOnboardingState(
@@ -439,7 +480,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     try {
-      const content = await fs.readFile(entry.filePath, "utf-8");
+      const content = await readFileWithCache(entry.filePath);
       result.push({
         name: entry.name,
         path: entry.filePath,
@@ -519,7 +560,7 @@ export async function loadExtraBootstrapFiles(
       if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
         continue;
       }
-      const content = await fs.readFile(realFilePath, "utf-8");
+      const content = await readFileWithCache(realFilePath);
       result.push({
         name: baseName as WorkspaceBootstrapFileName,
         path: filePath,

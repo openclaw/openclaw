@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -89,12 +90,19 @@ export async function resolveSandboxedMediaSource(params: {
       throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
     }
   }
-  const resolved = await assertSandboxPath({
+  const resolved = path.resolve(resolveSandboxInputPath(candidate, params.sandboxRoot));
+  const tmpDir = path.resolve(os.tmpdir());
+  const candidateIsAbsolute = path.isAbsolute(expandPath(candidate));
+  if (candidateIsAbsolute && isPathInside(tmpDir, resolved)) {
+    await assertNoSymlinkEscape(path.relative(tmpDir, resolved), tmpDir);
+    return resolved;
+  }
+  const sandboxResult = await assertSandboxPath({
     filePath: candidate,
     cwd: params.sandboxRoot,
     root: params.sandboxRoot,
   });
-  return resolved.resolved;
+  return sandboxResult.resolved;
 }
 
 async function assertNoSymlinkEscape(
@@ -129,8 +137,7 @@ async function assertNoSymlinkEscape(
         current = target;
       }
     } catch (err) {
-      const anyErr = err as { code?: string };
-      if (anyErr.code === "ENOENT") {
+      if (isNotFoundPathError(err)) {
         return;
       }
       throw err;
@@ -144,14 +151,6 @@ async function tryRealpath(value: string): Promise<string> {
   } catch {
     return path.resolve(value);
   }
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  if (!relative || relative === "") {
-    return true;
-  }
-  return !(relative.startsWith("..") || path.isAbsolute(relative));
 }
 
 function shortPath(value: string) {

@@ -2,29 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
-
-async function writeSkill(params: {
-  dir: string;
-  name: string;
-  description: string;
-  metadata?: string;
-  body?: string;
-}) {
-  const { dir, name, description, metadata, body } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---
-name: ${name}
-description: ${description}${metadata ? `\nmetadata: ${metadata}` : ""}
----
-
-${body ?? `# ${name}\n`}
-`,
-    "utf-8",
-  );
-}
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("prefers workspace skills over managed skills", async () => {
@@ -68,7 +48,6 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
     const skillsDir = path.join(workspaceDir, "skills");
     const binDir = path.join(workspaceDir, "bin");
-    const originalPath = process.env.PATH;
 
     await writeSkill({
       dir: path.join(skillsDir, "bin-skill"),
@@ -101,22 +80,21 @@ describe("buildWorkspaceSkillsPrompt", () => {
       metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
-    try {
-      const defaultPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-      });
-      expect(defaultPrompt).toContain("always-skill");
-      expect(defaultPrompt).toContain("config-skill");
-      expect(defaultPrompt).not.toContain("bin-skill");
-      expect(defaultPrompt).not.toContain("anybin-skill");
-      expect(defaultPrompt).not.toContain("env-skill");
+    const defaultPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    expect(defaultPrompt).toContain("always-skill");
+    expect(defaultPrompt).toContain("config-skill");
+    expect(defaultPrompt).not.toContain("bin-skill");
+    expect(defaultPrompt).not.toContain("anybin-skill");
+    expect(defaultPrompt).not.toContain("env-skill");
 
-      await fs.mkdir(binDir, { recursive: true });
-      const fakebinPath = path.join(binDir, "fakebin");
-      await fs.writeFile(fakebinPath, "#!/bin/sh\nexit 0\n", "utf-8");
-      await fs.chmod(fakebinPath, 0o755);
-      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    await fs.mkdir(binDir, { recursive: true });
+    const fakebinPath = path.join(binDir, "fakebin");
+    await fs.writeFile(fakebinPath, "#!/bin/sh\nexit 0\n", "utf-8");
+    await fs.chmod(fakebinPath, 0o755);
 
+    withEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
       const gatedPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: {
@@ -129,9 +107,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       expect(gatedPrompt).toContain("env-skill");
       expect(gatedPrompt).toContain("always-skill");
       expect(gatedPrompt).not.toContain("config-skill");
-    } finally {
-      process.env.PATH = originalPath;
-    }
+    });
   });
   it("uses skillKey for config lookups", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));

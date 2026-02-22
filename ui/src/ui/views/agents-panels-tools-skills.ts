@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
+import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
-import type { SkillGroup } from "./skills-grouping.ts";
-import { normalizeToolName } from "../../../../src/agents/tool-policy.js";
 import {
   isAllowedByPolicy,
   matchesList,
@@ -10,6 +9,7 @@ import {
   resolveToolProfile,
   TOOL_SECTIONS,
 } from "./agents-utils.ts";
+import type { SkillGroup } from "./skills-grouping.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,

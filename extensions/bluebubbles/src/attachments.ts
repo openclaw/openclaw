@@ -1,8 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveBlueBubblesAccount } from "./accounts.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { resolveRequestUrl } from "./request-url.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
 import {
@@ -53,19 +56,19 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
 }
 
 function resolveAccount(params: BlueBubblesAttachmentOpts) {
-  const account = resolveBlueBubblesAccount({
-    cfg: params.cfg ?? {},
-    accountId: params.accountId,
-  });
-  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = params.password?.trim() || account.config.password?.trim();
-  if (!baseUrl) {
-    throw new Error("BlueBubbles serverUrl is required");
+  return resolveBlueBubblesServerAccount(params);
+}
+
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+
+function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
   }
-  if (!password) {
-    throw new Error("BlueBubbles password is required");
-  }
-  return { baseUrl, password, accountId: account.accountId };
+  const code = (error as { code?: unknown }).code;
+  return code === "max_bytes" || code === "http_error" || code === "fetch_failed"
+    ? code
+    : undefined;
 }
 
 export async function downloadBlueBubblesAttachment(
@@ -82,20 +85,30 @@ export async function downloadBlueBubblesAttachment(
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
     password,
   });
-  const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, opts.timeoutMs);
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(
-      `BlueBubbles attachment download failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
-  const contentType = res.headers.get("content-type") ?? undefined;
-  const buf = new Uint8Array(await res.arrayBuffer());
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
-  if (buf.byteLength > maxBytes) {
-    throw new Error(`BlueBubbles attachment too large (${buf.byteLength} bytes)`);
+  try {
+    const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
+      url,
+      filePathHint: attachment.transferName ?? attachment.guid ?? "attachment",
+      maxBytes,
+      fetchImpl: async (input, init) =>
+        await blueBubblesFetchWithTimeout(
+          resolveRequestUrl(input),
+          { ...init, method: init?.method ?? "GET" },
+          opts.timeoutMs,
+        ),
+    });
+    return {
+      buffer: new Uint8Array(fetched.buffer),
+      contentType: fetched.contentType ?? attachment.mimeType ?? undefined,
+    };
+  } catch (error) {
+    if (readMediaFetchErrorCode(error) === "max_bytes") {
+      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
+    }
+    const text = error instanceof Error ? error.message : String(error);
+    throw new Error(`BlueBubbles attachment download failed: ${text}`);
   }
-  return { buffer: buf, contentType: contentType ?? attachment.mimeType ?? undefined };
 }
 
 export type SendBlueBubblesAttachmentResult = {
@@ -219,26 +232,12 @@ export async function sendBlueBubblesAttachment(params: {
   // Close the multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  // Combine all parts into a single buffer
-  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
-  const body = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    body.set(part, offset);
-    offset += part.length;
-  }
-
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await postMultipartFormData({
     url,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-      },
-      body,
-    },
-    opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-  );
+    boundary,
+    parts,
+    timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+  });
 
   if (!res.ok) {
     const errorText = await res.text();

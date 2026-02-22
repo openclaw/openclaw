@@ -1,9 +1,8 @@
 import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedLineAccount } from "./types.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -13,6 +12,7 @@ import {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import type { ResolvedLineAccount } from "./types.js";
 
 interface MediaRef {
   path: string;
@@ -26,12 +26,14 @@ interface BuildLineMessageContextParams {
   account: ResolvedLineAccount;
 }
 
-function getSourceInfo(source: EventSource): {
+export type LineSourceInfo = {
   userId?: string;
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
-} {
+};
+
+export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   const userId =
     source.type === "user"
       ? source.userId
@@ -78,7 +80,7 @@ function resolveLineInboundRoute(params: {
     direction: "inbound",
   });
 
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(params.source);
+  const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
   const route = resolveAgentRoute({
     cfg: params.cfg,
@@ -170,7 +172,7 @@ function extractMediaPlaceholder(message: MessageEvent["message"]): string {
 }
 
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
-type LineSourceInfo = ReturnType<typeof getSourceInfo> & { peerId: string };
+type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
 function resolveLineConversationLabel(params: {
   isGroup: boolean;
@@ -211,7 +213,7 @@ async function finalizeLineInboundContext(params: {
   account: ResolvedLineAccount;
   event: MessageEvent | PostbackEvent;
   route: LineRouteInfo;
-  source: LineSourceInfo;
+  source: LineSourceInfoWithPeerId;
   rawBody: string;
   timestamp: number;
   messageSid: string;

@@ -1,12 +1,12 @@
+import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   type CameraFacing,
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  writeCameraClipPayloadToFile,
   writeBase64ToFile,
   writeUrlToFile,
 } from "../../cli/nodes-camera.js";
@@ -17,12 +17,14 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
@@ -45,6 +47,20 @@ const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+
+function isPairingRequiredMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("pairing required") || lower.includes("not_paired");
+}
+
+function extractPairingRequestId(message: string): string | null {
+  const match = message.match(/\(requestId:\s*([^)]+)\)/i);
+  if (!match) {
+    return null;
+  }
+  const value = (match[1] ?? "").trim();
+  return value.length > 0 ? value : null;
+}
 
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
@@ -100,6 +116,7 @@ export function createNodesTool(options?: {
     sessionKey: options?.agentSessionKey,
     config: options?.config,
   });
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Nodes",
     name: "nodes",
@@ -109,11 +126,7 @@ export function createNodesTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts: GatewayCallOptions = {
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
-      };
+      const gatewayOpts = readGatewayCallOptions(params);
 
       try {
         switch (action) {
@@ -254,7 +267,7 @@ export function createNodesTool(options?: {
             }
 
             const result: AgentToolResult<unknown> = { content, details };
-            return await sanitizeToolResultImages(result, "nodes:camera_snap");
+            return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
           case "camera_list": {
             const node = readStringParam(params, "node", { required: true });
@@ -302,16 +315,10 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseCameraClipPayload(raw?.payload);
-            const filePath = cameraTempPath({
-              kind: "clip",
+            const filePath = await writeCameraClipPayloadToFile({
+              payload,
               facing,
-              ext: payload.format,
             });
-            if (payload.url) {
-              await writeUrlToFile(filePath, payload.url);
-            } else if (payload.base64) {
-              await writeBase64ToFile(filePath, payload.base64);
-            }
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
               details: {
@@ -551,7 +558,14 @@ export function createNodesTool(options?: {
             ? gatewayOpts.gatewayUrl.trim()
             : "default";
         const agentLabel = agentId ?? "unknown";
-        const message = err instanceof Error ? err.message : String(err);
+        let message = err instanceof Error ? err.message : String(err);
+        if (action === "invoke" && isPairingRequiredMessage(message)) {
+          const requestId = extractPairingRequestId(message);
+          const approveHint = requestId
+            ? `Approve pairing request ${requestId} and retry.`
+            : "Approve the pending pairing request and retry.";
+          message = `pairing required before node invoke. ${approveHint}`;
+        }
         throw new Error(
           `agent=${agentLabel} node=${nodeLabel} gateway=${gatewayLabel} action=${action}: ${message}`,
           { cause: err },

@@ -1,17 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import "./subagent-registry.mocks.shared.js";
 
-const noop = () => {};
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async () => ({
-    status: "ok",
-    startedAt: 111,
-    endedAt: 222,
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({
+    agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   })),
-}));
-
-vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn(() => noop),
 }));
 
 vi.mock("./subagent-announce.js", () => ({
@@ -19,15 +12,24 @@ vi.mock("./subagent-announce.js", () => ({
   buildSubagentSystemPrompt: vi.fn(() => "test prompt"),
 }));
 
+vi.mock("./subagent-registry.store.js", () => ({
+  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
+  saveSubagentRegistryToDisk: vi.fn(() => {}),
+}));
+
+let subagentRegistry: typeof import("./subagent-registry.js");
+
 describe("subagent registry nested agent tracking", () => {
-  afterEach(async () => {
-    const mod = await import("./subagent-registry.js");
-    mod.resetSubagentRegistryForTests();
+  beforeAll(async () => {
+    subagentRegistry = await import("./subagent-registry.js");
+  });
+
+  afterEach(() => {
+    subagentRegistry.resetSubagentRegistryForTests({ persist: false });
   });
 
   it("listSubagentRunsForRequester returns children of the requesting session", async () => {
-    const { registerSubagentRun, listSubagentRunsForRequester } =
-      await import("./subagent-registry.js");
+    const { registerSubagentRun, listSubagentRunsForRequester } = subagentRegistry;
 
     // Main agent spawns a depth-1 orchestrator
     registerSubagentRun({
@@ -69,7 +71,7 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("announce uses requesterSessionKey to route to the correct parent", async () => {
-    const { registerSubagentRun } = await import("./subagent-registry.js");
+    const { registerSubagentRun } = subagentRegistry;
     // Register a sub-sub-agent whose parent is a sub-agent
     registerSubagentRun({
       runId: "run-subsub",
@@ -84,7 +86,7 @@ describe("subagent registry nested agent tracking", () => {
     // When announce fires for the sub-sub-agent, it should target the sub-agent (depth-1),
     // NOT the main session. The registry entry's requesterSessionKey ensures this.
     // We verify the registry entry has the correct requesterSessionKey.
-    const { listSubagentRunsForRequester } = await import("./subagent-registry.js");
+    const { listSubagentRunsForRequester } = subagentRegistry;
     const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch");
     expect(orchRuns).toHaveLength(1);
     expect(orchRuns[0].requesterSessionKey).toBe("agent:main:subagent:orch");
@@ -92,8 +94,7 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("countActiveRunsForSession only counts active children of the specific session", async () => {
-    const { registerSubagentRun, countActiveRunsForSession } =
-      await import("./subagent-registry.js");
+    const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
 
     // Main spawns orchestrator (active)
     registerSubagentRun({
@@ -132,8 +133,7 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("countActiveDescendantRuns traverses through ended parents", async () => {
-    const { addSubagentRunForTests, countActiveDescendantRuns } =
-      await import("./subagent-registry.js");
+    const { addSubagentRunForTests, countActiveDescendantRuns } = subagentRegistry;
 
     addSubagentRunForTests({
       runId: "run-parent-ended",

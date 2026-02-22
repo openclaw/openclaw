@@ -1,6 +1,6 @@
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
 import { Readable } from "node:stream";
-import { ensureUrbitChannelOpen } from "./channel-ops.js";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
+import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -290,71 +290,31 @@ export class UrbitSSEClient {
   }
 
   async poke(params: { app: string; mark: string; json: unknown }) {
-    const pokeId = Date.now();
-    const pokeData = {
-      id: pokeId,
-      action: "poke",
-      ship: this.ship,
-      app: params.app,
-      mark: params.mark,
-      json: params.json,
-    };
-
-    const { response, release } = await urbitFetch({
-      baseUrl: this.url,
-      path: `/~/channel/${this.channelId}`,
-      init: {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: this.cookie,
-        },
-        body: JSON.stringify([pokeData]),
+    return await pokeUrbitChannel(
+      {
+        baseUrl: this.url,
+        cookie: this.cookie,
+        ship: this.ship,
+        channelId: this.channelId,
+        ssrfPolicy: this.ssrfPolicy,
+        lookupFn: this.lookupFn,
+        fetchImpl: this.fetchImpl,
       },
-      ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
-      timeoutMs: 30_000,
-      auditContext: "tlon-urbit-poke",
-    });
-
-    try {
-      if (!response.ok && response.status !== 204) {
-        const errorText = await response.text().catch(() => "");
-        throw new Error(`Poke failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`);
-      }
-    } finally {
-      await release();
-    }
-
-    return pokeId;
+      { ...params, auditContext: "tlon-urbit-poke" },
+    );
   }
 
   async scry(path: string) {
-    const { response, release } = await urbitFetch({
-      baseUrl: this.url,
-      path: `/~/scry${path}`,
-      init: {
-        method: "GET",
-        headers: {
-          Cookie: this.cookie,
-        },
+    return await scryUrbitPath(
+      {
+        baseUrl: this.url,
+        cookie: this.cookie,
+        ssrfPolicy: this.ssrfPolicy,
+        lookupFn: this.lookupFn,
+        fetchImpl: this.fetchImpl,
       },
-      ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
-      timeoutMs: 30_000,
-      auditContext: "tlon-urbit-scry",
-    });
-
-    try {
-      if (!response.ok) {
-        throw new Error(`Scry failed: ${response.status} for path ${path}`);
-      }
-      return await response.json();
-    } finally {
-      await release();
-    }
+      { path, auditContext: "tlon-urbit-scry" },
+    );
   }
 
   async attemptReconnect() {

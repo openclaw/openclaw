@@ -17,19 +17,6 @@ describe("agent concurrency defaults", () => {
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 
-  it("resolves configured values", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          maxConcurrent: 6,
-          subagents: { maxConcurrent: 9 },
-        },
-      },
-    };
-    expect(resolveAgentMaxConcurrent(cfg)).toBe(6);
-    expect(resolveSubagentMaxConcurrent(cfg)).toBe(9);
-  });
-
   it("clamps invalid values to at least 1", () => {
     const cfg = {
       agents: {

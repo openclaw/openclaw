@@ -10,7 +10,6 @@ import {
   type ChannelMessageActionName,
   type ChannelToolSend,
 } from "openclaw/plugin-sdk";
-import type { BlueBubblesSendTarget } from "./types.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import {
@@ -27,6 +26,7 @@ import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe
 import { sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
+import type { BlueBubblesSendTarget } from "./types.js";
 
 const providerId = "bluebubbles";
 

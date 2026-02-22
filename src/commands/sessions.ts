@@ -1,4 +1,3 @@
-import type { RuntimeEnv } from "../runtime.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -9,8 +8,11 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { classifySessionKey, resolveSessionModelRef } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SessionRow = {
@@ -32,6 +34,9 @@ type SessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   model?: string;
+  modelProvider?: string;
+  providerOverride?: string;
+  modelOverride?: string;
   contextTokens?: number;
 };
 
@@ -129,29 +134,13 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 };
 
-function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
-}
-
 function toRows(store: Record<string, SessionEntry>): SessionRow[] {
   return Object.entries(store)
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
       return {
         key,
-        kind: classifyKey(key, entry),
+        kind: classifySessionKey(key, entry),
         updatedAt,
         ageMs: updatedAt ? Date.now() - updatedAt : null,
         sessionId: entry?.sessionId,
@@ -168,6 +157,9 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         totalTokens: entry?.totalTokens,
         totalTokensFresh: entry?.totalTokensFresh,
         model: entry?.model,
+        modelProvider: entry?.modelProvider,
+        providerOverride: entry?.providerOverride,
+        modelOverride: entry?.modelOverride,
         contextTokens: entry?.contextTokens,
       } satisfies SessionRow;
     })
@@ -220,15 +212,23 @@ export async function sessionsCommand(
           path: storePath,
           count: rows.length,
           activeMinutes: activeMinutes ?? null,
-          sessions: rows.map((r) => ({
-            ...r,
-            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
-            totalTokensFresh:
-              typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
-            contextTokens:
-              r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
-            model: r.model ?? configModel ?? null,
-          })),
+          sessions: rows.map((r) => {
+            const resolvedModel = resolveSessionModelRef(
+              cfg,
+              r,
+              parseAgentSessionKey(r.key)?.agentId,
+            );
+            const model = resolvedModel.model ?? configModel;
+            return {
+              ...r,
+              totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+              totalTokensFresh:
+                typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+              contextTokens:
+                r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
+              model,
+            };
+          }),
         },
         null,
         2,
@@ -260,7 +260,8 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = row.model ?? configModel;
+    const resolvedModel = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
+    const model = resolvedModel.model ?? configModel;
     const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 

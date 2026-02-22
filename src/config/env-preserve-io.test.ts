@@ -51,6 +51,23 @@ async function withEnvOverrides(
   }
 }
 
+async function withWrapperEnvContext(configPath: string, run: () => Promise<void>): Promise<void> {
+  await withEnvOverrides(
+    {
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_CONFIG_CACHE: "1",
+      MY_API_KEY: "original-key-123",
+    },
+    run,
+  );
+}
+
+async function readGatewayToken(configPath: string): Promise<string> {
+  const written = await fs.readFile(configPath, "utf-8");
+  const parsed = JSON.parse(written) as { gateway: { remote: { token: string } } };
+  return parsed.gateway.remote.token;
+}
+
 describe("env snapshot TOCTOU via createConfigIO", () => {
   it("restores env refs using read-time env even after env mutation", async () => {
     const env: Record<string, string> = {
@@ -117,56 +134,38 @@ describe("env snapshot TOCTOU via wrapper APIs", () => {
   it("uses explicit read context even if another read interleaves", async () => {
     const configJson = JSON.stringify({ gateway: { remote: { token: "${MY_API_KEY}" } } }, null, 2);
     await withTempConfig(configJson, async (configPath) => {
-      await withEnvOverrides(
-        {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_CONFIG_CACHE: "1",
-          MY_API_KEY: "original-key-123",
-        },
-        async () => {
-          const firstRead = await readConfigFileSnapshotForWrite();
-          expect(firstRead.snapshot.config.gateway?.remote?.token).toBe("original-key-123");
+      await withWrapperEnvContext(configPath, async () => {
+        const firstRead = await readConfigFileSnapshotForWrite();
+        expect(firstRead.snapshot.config.gateway?.remote?.token).toBe("original-key-123");
 
-          // Interleaving read from another request context with a different env value.
-          process.env.MY_API_KEY = "mutated-key-456";
-          const secondRead = await readConfigFileSnapshotForWrite();
-          expect(secondRead.snapshot.config.gateway?.remote?.token).toBe("mutated-key-456");
+        // Interleaving read from another request context with a different env value.
+        process.env.MY_API_KEY = "mutated-key-456";
+        const secondRead = await readConfigFileSnapshotForWrite();
+        expect(secondRead.snapshot.config.gateway?.remote?.token).toBe("mutated-key-456");
 
-          // Write using the first read's explicit context.
-          await writeConfigFileViaWrapper(firstRead.snapshot.config, firstRead.writeOptions);
-          const written = await fs.readFile(configPath, "utf-8");
-          const parsed = JSON.parse(written);
-          expect(parsed.gateway.remote.token).toBe("${MY_API_KEY}");
-        },
-      );
+        // Write using the first read's explicit context.
+        await writeConfigFileViaWrapper(firstRead.snapshot.config, firstRead.writeOptions);
+        expect(await readGatewayToken(configPath)).toBe("${MY_API_KEY}");
+      });
     });
   });
 
   it("ignores read context when expected config path does not match", async () => {
     const configJson = JSON.stringify({ gateway: { remote: { token: "${MY_API_KEY}" } } }, null, 2);
     await withTempConfig(configJson, async (configPath) => {
-      await withEnvOverrides(
-        {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_CONFIG_CACHE: "1",
-          MY_API_KEY: "original-key-123",
-        },
-        async () => {
-          const firstRead = await readConfigFileSnapshotForWrite();
-          expect(firstRead.snapshot.config.gateway?.remote?.token).toBe("original-key-123");
-          expect(firstRead.writeOptions.expectedConfigPath).toBe(configPath);
+      await withWrapperEnvContext(configPath, async () => {
+        const firstRead = await readConfigFileSnapshotForWrite();
+        expect(firstRead.snapshot.config.gateway?.remote?.token).toBe("original-key-123");
+        expect(firstRead.writeOptions.expectedConfigPath).toBe(configPath);
 
-          process.env.MY_API_KEY = "mutated-key-456";
-          await writeConfigFileViaWrapper(firstRead.snapshot.config, {
-            ...firstRead.writeOptions,
-            expectedConfigPath: `${configPath}.different`,
-          });
+        process.env.MY_API_KEY = "mutated-key-456";
+        await writeConfigFileViaWrapper(firstRead.snapshot.config, {
+          ...firstRead.writeOptions,
+          expectedConfigPath: `${configPath}.different`,
+        });
 
-          const written = await fs.readFile(configPath, "utf-8");
-          const parsed = JSON.parse(written);
-          expect(parsed.gateway.remote.token).toBe("original-key-123");
-        },
-      );
+        expect(await readGatewayToken(configPath)).toBe("original-key-123");
+      });
     });
   });
 });

@@ -1,7 +1,7 @@
-import type { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { getWideAreaZonePath, resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";

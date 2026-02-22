@@ -1,0 +1,84 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+
+export function mockSessionsConfig() {
+  vi.mock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => ({
+        agents: {
+          defaults: {
+            model: { primary: "pi:opus" },
+            models: { "pi:opus": {} },
+            contextTokens: 32000,
+          },
+        },
+      }),
+    };
+  });
+}
+
+export function makeRuntime(params?: { throwOnError?: boolean }): {
+  runtime: RuntimeEnv;
+  logs: string[];
+  errors: string[];
+} {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const throwOnError = params?.throwOnError ?? false;
+  return {
+    runtime: {
+      log: (msg: unknown) => logs.push(String(msg)),
+      error: (msg: unknown) => {
+        errors.push(String(msg));
+        if (throwOnError) {
+          throw new Error(String(msg));
+        }
+      },
+      exit: (code: number) => {
+        throw new Error(`exit ${code}`);
+      },
+    },
+    logs,
+    errors,
+  };
+}
+
+export function writeStore(data: unknown, prefix = "sessions"): string {
+  const file = path.join(
+    os.tmpdir(),
+    `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+  );
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  return file;
+}
+
+export async function runSessionsJson<T>(
+  run: (
+    opts: { json?: boolean; store?: string; active?: string },
+    runtime: RuntimeEnv,
+  ) => Promise<void>,
+  store: string,
+  options?: {
+    active?: string;
+  },
+): Promise<T> {
+  const { runtime, logs } = makeRuntime();
+  try {
+    await run(
+      {
+        store,
+        json: true,
+        active: options?.active,
+      },
+      runtime,
+    );
+  } finally {
+    fs.rmSync(store, { force: true });
+  }
+  return JSON.parse(logs[0] ?? "{}") as T;
+}

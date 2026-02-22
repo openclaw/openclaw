@@ -21,7 +21,7 @@ const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_
 
 const describeLive = LIVE ? describe : describe.skip;
 
-function parseProviderFilter(raw?: string): Set<string> | null {
+function parseCsvFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") {
     return null;
@@ -33,16 +33,12 @@ function parseProviderFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
+function parseProviderFilter(raw?: string): Set<string> | null {
+  return parseCsvFilter(raw);
+}
+
 function parseModelFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return ids.length ? new Set(ids) : null;
+  return parseCsvFilter(raw);
 }
 
 function logProgress(message: string): void {
@@ -53,6 +49,9 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   const msg = String(err);
   if (!/not found/i.test(msg)) {
     return false;
+  }
+  if (/\b404\b/.test(msg)) {
+    return true;
   }
   if (/models\/.+ is not found for api version/i.test(msg)) {
     return true;
@@ -418,6 +417,18 @@ describeLive("live models (profile keys)", () => {
             if (
               ok.text.length === 0 &&
               allowNotFoundSkip &&
+              (model.provider === "minimax" || model.provider === "zai")
+            ) {
+              skipped.push({
+                model: id,
+                reason: "no text returned (provider returned empty content)",
+              });
+              logProgress(`${progressLabel}: skip (empty response)`);
+              break;
+            }
+            if (
+              ok.text.length === 0 &&
+              allowNotFoundSkip &&
               (model.provider === "google-antigravity" || model.provider === "openai-codex")
             ) {
               skipped.push({
@@ -449,7 +460,10 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (anthropic billing)`);
               break;
             }
-            if (model.provider === "google" && isGoogleModelNotFoundError(err)) {
+            if (
+              (model.provider === "google" || model.provider === "google-gemini-cli") &&
+              isGoogleModelNotFoundError(err)
+            ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (google model not found)`);
               break;
@@ -461,6 +475,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (minimax empty response)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              (model.provider === "minimax" || model.provider === "zai") &&
+              isRateLimitErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (rate limit)`);
               break;
             }
             if (

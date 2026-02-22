@@ -1,7 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayPort } from "../config/config.js";
+import {
+  TAILSCALE_DOCS_LINES,
+  TAILSCALE_EXPOSURE_OPTIONS,
+  TAILSCALE_MISSING_BIN_NOTE_LINES,
+} from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
@@ -72,25 +78,7 @@ export async function promptGatewayConfig(
       await text({
         message: "Custom IP address",
         placeholder: "192.168.1.100",
-        validate: (value) => {
-          if (!value) {
-            return "IP address is required for custom bind mode";
-          }
-          const trimmed = value.trim();
-          const parts = trimmed.split(".");
-          if (parts.length !== 4) {
-            return "Invalid IPv4 address (e.g., 192.168.1.100)";
-          }
-          if (
-            parts.every((part) => {
-              const n = parseInt(part, 10);
-              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
-            })
-          ) {
-            return undefined;
-          }
-          return "Invalid IPv4 address (each octet must be 0-255)";
-        },
+        validate: validateIPv4AddressInput,
       }),
       runtime,
     );
@@ -117,19 +105,7 @@ export async function promptGatewayConfig(
   let tailscaleMode = guardCancel(
     await select({
       message: "Tailscale exposure",
-      options: [
-        { value: "off", label: "Off", hint: "No Tailscale exposure" },
-        {
-          value: "serve",
-          label: "Serve",
-          hint: "Private HTTPS for your tailnet (devices on Tailscale)",
-        },
-        {
-          value: "funnel",
-          label: "Funnel",
-          hint: "Public HTTPS via Tailscale Funnel (internet)",
-        },
-      ],
+      options: [...TAILSCALE_EXPOSURE_OPTIONS],
     }),
     runtime,
   );
@@ -138,27 +114,13 @@ export async function promptGatewayConfig(
   if (tailscaleMode !== "off") {
     const tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
-      note(
-        [
-          "Tailscale binary not found in PATH or /Applications.",
-          "Ensure Tailscale is installed from:",
-          "  https://tailscale.com/download/mac",
-          "",
-          "You can continue setup, but serve/funnel will fail at runtime.",
-        ].join("\n"),
-        "Tailscale Warning",
-      );
+      note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
   }
 
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
-    note(
-      ["Docs:", "https://docs.openclaw.ai/gateway/tailscale", "https://docs.openclaw.ai/web"].join(
-        "\n",
-      ),
-      "Tailscale",
-    );
+    note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
     tailscaleResetOnExit = Boolean(
       guardCancel(
         await confirm({
@@ -180,10 +142,8 @@ export async function promptGatewayConfig(
     authMode = "password";
   }
 
-  if (authMode === "trusted-proxy" && bind === "loopback") {
-    note("Trusted proxy auth requires network bind. Adjusting bind to lan.", "Note");
-    bind = "lan";
-  }
+  // trusted-proxy + loopback is valid when the reverse proxy runs on the same
+  // host (e.g. cloudflared, nginx, Caddy). trustedProxies must include 127.0.0.1.
   if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
     note(
       "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",

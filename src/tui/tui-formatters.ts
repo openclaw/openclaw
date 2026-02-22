@@ -1,4 +1,5 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -7,6 +8,9 @@ const MAX_TOKEN_CHARS = 32;
 const LONG_TOKEN_RE = /\S{33,}/g;
 const LONG_TOKEN_TEST_RE = /\S{33,}/;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
+const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -47,6 +51,35 @@ function chunkToken(token: string, maxChars: number): string[] {
   return chunks;
 }
 
+function isCopySensitiveToken(token: string): boolean {
+  if (URL_PREFIX_RE.test(token)) {
+    return true;
+  }
+  if (
+    token.startsWith("/") ||
+    token.startsWith("~/") ||
+    token.startsWith("./") ||
+    token.startsWith("../")
+  ) {
+    return true;
+  }
+  if (WINDOWS_DRIVE_RE.test(token) || token.startsWith("\\\\")) {
+    return true;
+  }
+  if (token.includes("/") || token.includes("\\")) {
+    return true;
+  }
+  return token.includes("_") && FILE_LIKE_RE.test(token);
+}
+
+function normalizeLongTokenForDisplay(token: string): string {
+  // Preserve copy-sensitive tokens exactly (paths/urls/file-like names).
+  if (isCopySensitiveToken(token)) {
+    return token;
+  }
+  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+}
+
 function redactBinaryLikeLine(line: string): string {
   const replacementCount = (line.match(REPLACEMENT_CHAR_RE) || []).length;
   if (
@@ -80,7 +113,7 @@ export function sanitizeRenderableText(text: string): string {
         .join("\n")
     : withoutControlChars;
   return LONG_TOKEN_TEST_RE.test(redacted)
-    ? redacted.replace(LONG_TOKEN_RE, (token) => chunkToken(token, MAX_TOKEN_CHARS).join(" "))
+    ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
     : redacted;
 }
 
@@ -241,6 +274,9 @@ export function extractTextFromMessage(
   const record = message as Record<string, unknown>;
   const text = extractTextBlocks(record.content, opts);
   if (text) {
+    if (record.role === "user") {
+      return stripLeadingInboundMetadata(text);
+    }
     return text;
   }
 

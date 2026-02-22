@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureFullEnv } from "../test-utils/env.js";
 import { resolveSandboxContext } from "./sandbox.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 
 vi.mock("./sandbox/docker.js", () => ({
   ensureSandboxContainer: vi.fn(async () => "openclaw-sbx-test"),
@@ -17,40 +19,15 @@ vi.mock("./sandbox/prune.js", () => ({
   maybePruneSandboxes: vi.fn(async () => undefined),
 }));
 
-async function writeSkill(params: { dir: string; name: string; description: string }) {
-  const { dir, name, description } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
-    "utf-8",
-  );
-}
-
-function restoreEnv(snapshot: Record<string, string | undefined>) {
-  for (const key of Object.keys(process.env)) {
-    if (!(key in snapshot)) {
-      delete process.env[key];
-    }
-  }
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
 describe("sandbox skill mirroring", () => {
-  let envSnapshot: Record<string, string | undefined>;
+  let envSnapshot: ReturnType<typeof captureFullEnv>;
 
   beforeEach(() => {
-    envSnapshot = { ...process.env };
+    envSnapshot = captureFullEnv();
   });
 
   afterEach(() => {
-    restoreEnv(envSnapshot);
+    envSnapshot.restore();
   });
 
   const runContext = async (workspaceAccess: "none" | "ro") => {

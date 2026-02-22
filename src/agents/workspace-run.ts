@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { logWarn } from "../logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   classifySessionKeyShape,
@@ -8,6 +9,7 @@ import {
 } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 export type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
 type AgentIdSource = "explicit" | "session_key" | "default";
@@ -84,8 +86,12 @@ export function resolveRunWorkspaceDir(params: {
   if (typeof requested === "string") {
     const trimmed = requested.trim();
     if (trimmed) {
+      const sanitized = sanitizeForPromptLiteral(trimmed);
+      if (sanitized !== trimmed) {
+        logWarn("Control/format characters stripped from workspaceDir (OC-19 hardening).");
+      }
       return {
-        workspaceDir: resolveUserPath(trimmed),
+        workspaceDir: resolveUserPath(sanitized),
         usedFallback: false,
         agentId,
         agentIdSource,
@@ -96,8 +102,12 @@ export function resolveRunWorkspaceDir(params: {
   const fallbackReason: WorkspaceFallbackReason =
     requested == null ? "missing" : typeof requested === "string" ? "blank" : "invalid_type";
   const fallbackWorkspace = resolveAgentWorkspaceDir(params.config ?? {}, agentId);
+  const sanitizedFallback = sanitizeForPromptLiteral(fallbackWorkspace);
+  if (sanitizedFallback !== fallbackWorkspace) {
+    logWarn("Control/format characters stripped from fallback workspaceDir (OC-19 hardening).");
+  }
   return {
-    workspaceDir: resolveUserPath(fallbackWorkspace),
+    workspaceDir: resolveUserPath(sanitizedFallback),
     usedFallback: true,
     fallbackReason,
     agentId,

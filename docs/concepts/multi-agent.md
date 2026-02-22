@@ -19,7 +19,7 @@ An **agent** is a fully scoped brain with its own:
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
-```
+```text
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
@@ -69,6 +69,55 @@ Verify with:
 ```bash
 openclaw agents list --bindings
 ```
+
+## Quick start
+
+<Steps>
+  <Step title="Create each agent workspace">
+
+Use the wizard or create workspaces manually:
+
+```bash
+openclaw agents add coding
+openclaw agents add social
+```
+
+Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
+
+  </Step>
+
+  <Step title="Create channel accounts">
+
+Create one account per agent on your preferred channels:
+
+- Discord: one bot per agent, enable Message Content Intent, copy each token.
+- Telegram: one bot per agent via BotFather, copy each token.
+- WhatsApp: link each phone number per account.
+
+```bash
+openclaw channels login --channel whatsapp --account work
+```
+
+See channel guides: [Discord](/channels/discord), [Telegram](/channels/telegram), [WhatsApp](/channels/whatsapp).
+
+  </Step>
+
+  <Step title="Add agents, accounts, and bindings">
+
+Add agents under `agents.list`, channel accounts under `channels.<channel>.accounts`, and connect them with `bindings` (examples below).
+
+  </Step>
+
+  <Step title="Restart and verify">
+
+```bash
+openclaw gateway restart
+openclaw agents list --bindings
+openclaw channels status --probe
+```
+
+  </Step>
+</Steps>
 
 ## Multiple agents = multiple people, multiple personalities
 
@@ -133,6 +182,7 @@ Bindings are **deterministic** and **most-specific wins**:
 7. channel-level match (`accountId: "*"`)
 8. fallback to default agent (`agents.list[].default`, else first list entry, default: `main`)
 
+If multiple bindings match in the same tier, the first one in config order wins.
 If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
 
 ## Multiple accounts / phone numbers
@@ -148,7 +198,104 @@ multiple phone numbers without mixing sessions.
 - `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)` and optionally guild/team ids.
 - Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent “main”; `session.mainKey`).
 
-## Example: two WhatsApps → two agents
+## Platform examples
+
+### Discord bots per agent
+
+Each Discord bot account maps to a unique `accountId`. Bind each account to an agent and keep allowlists per bot.
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main", workspace: "~/.openclaw/workspace-main" },
+      { id: "coding", workspace: "~/.openclaw/workspace-coding" },
+    ],
+  },
+  bindings: [
+    { agentId: "main", match: { channel: "discord", accountId: "default" } },
+    { agentId: "coding", match: { channel: "discord", accountId: "coding" } },
+  ],
+  channels: {
+    discord: {
+      groupPolicy: "allowlist",
+      accounts: {
+        default: {
+          token: "DISCORD_BOT_TOKEN_MAIN",
+          guilds: {
+            "123456789012345678": {
+              channels: {
+                "222222222222222222": { allow: true, requireMention: false },
+              },
+            },
+          },
+        },
+        coding: {
+          token: "DISCORD_BOT_TOKEN_CODING",
+          guilds: {
+            "123456789012345678": {
+              channels: {
+                "333333333333333333": { allow: true, requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Invite each bot to the guild and enable Message Content Intent.
+- Tokens live in `channels.discord.accounts.<id>.token` (default account can use `DISCORD_BOT_TOKEN`).
+
+### Telegram bots per agent
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main", workspace: "~/.openclaw/workspace-main" },
+      { id: "alerts", workspace: "~/.openclaw/workspace-alerts" },
+    ],
+  },
+  bindings: [
+    { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+    { agentId: "alerts", match: { channel: "telegram", accountId: "alerts" } },
+  ],
+  channels: {
+    telegram: {
+      accounts: {
+        default: {
+          botToken: "123456:ABC...",
+          dmPolicy: "pairing",
+        },
+        alerts: {
+          botToken: "987654:XYZ...",
+          dmPolicy: "allowlist",
+          allowFrom: ["tg:123456789"],
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Create one bot per agent with BotFather and copy each token.
+- Tokens live in `channels.telegram.accounts.<id>.botToken` (default account can use `TELEGRAM_BOT_TOKEN`).
+
+### WhatsApp numbers per agent
+
+Link each account before starting the gateway:
+
+```bash
+openclaw channels login --channel whatsapp --account personal
+openclaw channels login --channel whatsapp --account biz
+```
 
 `~/.openclaw/openclaw.json` (JSON5):
 

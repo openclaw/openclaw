@@ -220,7 +220,7 @@ async function main() {
     const authorized = consumeGatewaySigusr1RestartAuthorization();
     if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
       defaultRuntime.log(
-        "gateway: SIGUSR1 restart ignored (not authorized; enable commands.restart or use gateway tool).",
+        "gateway: SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
       return;
     }

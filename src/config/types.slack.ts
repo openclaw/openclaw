@@ -45,6 +45,8 @@ export type SlackChannelConfig = {
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+export type SlackLegacyStreamMode = "replace" | "status_final" | "append";
 
 export type SlackActionConfig = {
   reactions?: boolean;
@@ -124,6 +126,23 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Stream preview mode:
+   * - "off": disable live preview streaming
+   * - "partial": replace preview text with the latest partial output (default)
+   * - "block": append chunked preview updates
+   * - "progress": show progress status, then send final text
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
+   */
+  streaming?: SlackStreamingMode | boolean;
+  /**
+   * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
+   * Used when `streaming` is `partial`. Default: true.
+   */
+  nativeStreaming?: boolean;
+  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
+  streamMode?: SlackLegacyStreamMode;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
@@ -150,12 +169,19 @@ export type SlackAccountConfig = {
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dm?: SlackDmConfig;
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
+   */
+  ackReaction?: string;
 };
 
 export type SlackConfig = {

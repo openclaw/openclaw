@@ -66,7 +66,8 @@ platform :ios do
     if team_id.nil? || team_id.strip.empty?
       helper_path = File.expand_path("../../scripts/ios-team-id.sh", __dir__)
       if File.exist?(helper_path)
-        team_id = sh("bash #{helper_path.shellescape}").strip
+        # Keep CI/local compatibility where teams are present in keychain but not Xcode account metadata.
+        team_id = sh("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 bash #{helper_path.shellescape}").strip
       end
     end
     UI.user_error!("Missing IOS_DEVELOPMENT_TEAM (Apple Team ID). Add it to fastlane/.env or export it in your shell.") if team_id.nil? || team_id.strip.empty?

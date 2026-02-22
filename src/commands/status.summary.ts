@@ -1,4 +1,3 @@
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -10,28 +9,17 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { listAgentsForGateway } from "../gateway/session-utils.js";
+import {
+  classifySessionKey,
+  listAgentsForGateway,
+  resolveSessionModelRef,
+} from "../gateway/session-utils.js";
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
-
-const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] => {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
-};
+import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -141,7 +129,8 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const model = entry?.model ?? configModel ?? null;
+        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+        const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
           entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
@@ -159,7 +148,7 @@ export async function getStatusSummary(
         return {
           agentId,
           key,
-          kind: classifyKey(key, entry),
+          kind: classifySessionKey(key, entry),
           sessionId: entry?.sessionId,
           updatedAt,
           age,
@@ -171,6 +160,8 @@ export async function getStatusSummary(
           abortedLastRun: entry?.abortedLastRun,
           inputTokens: entry?.inputTokens,
           outputTokens: entry?.outputTokens,
+          cacheRead: entry?.cacheRead,
+          cacheWrite: entry?.cacheWrite,
           totalTokens: total ?? null,
           totalTokensFresh,
           remainingTokens: remaining,

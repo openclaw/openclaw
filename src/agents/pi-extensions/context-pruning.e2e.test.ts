@@ -68,7 +68,14 @@ function makeAssistant(text: string): AgentMessage {
     api: "openai-responses",
     provider: "openai",
     model: "fake",
-    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -76,6 +83,76 @@ function makeAssistant(text: string): AgentMessage {
 
 function makeUser(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: Date.now() };
+}
+
+type ContextPruningSettings = NonNullable<ReturnType<typeof computeEffectiveSettings>>;
+type PruneArgs = Parameters<typeof pruneContextMessages>[0];
+type PruneOverrides = Omit<PruneArgs, "messages" | "settings" | "ctx">;
+
+const CONTEXT_WINDOW_1000 = {
+  model: { contextWindow: 1000 },
+} as unknown as ExtensionContext;
+
+function makeAggressiveSettings(
+  overrides: Partial<ContextPruningSettings> = {},
+): ContextPruningSettings {
+  return {
+    ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+    keepLastAssistants: 0,
+    softTrimRatio: 0,
+    hardClearRatio: 0,
+    minPrunableToolChars: 0,
+    hardClear: { enabled: true, placeholder: "[cleared]" },
+    softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
+    ...overrides,
+  };
+}
+
+function pruneWithAggressiveDefaults(
+  messages: AgentMessage[],
+  settingsOverrides: Partial<ContextPruningSettings> = {},
+  extra: PruneOverrides = {},
+): AgentMessage[] {
+  return pruneContextMessages({
+    messages,
+    settings: makeAggressiveSettings(settingsOverrides),
+    ctx: CONTEXT_WINDOW_1000,
+    ...extra,
+  });
+}
+
+type ContextHandler = (
+  event: { messages: AgentMessage[] },
+  ctx: ExtensionContext,
+) => { messages: AgentMessage[] } | undefined;
+
+function createContextHandler(): ContextHandler {
+  let handler: ContextHandler | undefined;
+  const api = {
+    on: (name: string, fn: unknown) => {
+      if (name === "context") {
+        handler = fn as ContextHandler;
+      }
+    },
+    appendEntry: (_type: string, _data?: unknown) => {},
+  } as unknown as ExtensionAPI;
+
+  contextPruningExtension(api);
+  if (!handler) {
+    throw new Error("missing context handler");
+  }
+  return handler;
+}
+
+function runContextHandler(
+  handler: ContextHandler,
+  messages: AgentMessage[],
+  sessionManager: unknown,
+) {
+  return handler({ messages }, {
+    model: undefined,
+    sessionManager,
+  } as unknown as ExtensionContext);
 }
 
 describe("context-pruning", () => {
@@ -116,21 +193,7 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 3,
-      softTrimRatio: 0.0,
-      hardClearRatio: 0.0,
-      minPrunableToolChars: 0,
-      hardClear: { enabled: true, placeholder: "[cleared]" },
-      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-    };
-
-    const ctx = {
-      model: { contextWindow: 1000 },
-    } as unknown as ExtensionContext;
-
-    const next = pruneContextMessages({ messages, settings, ctx });
+    const next = pruneWithAggressiveDefaults(messages, { keepLastAssistants: 3 });
 
     expect(toolText(findToolResult(next, "t2"))).toContain("y".repeat(20_000));
     expect(toolText(findToolResult(next, "t3"))).toContain("z".repeat(20_000));
@@ -139,16 +202,6 @@ describe("context-pruning", () => {
   });
 
   it("never prunes tool results before the first user message", () => {
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 0,
-      softTrimRatio: 0.0,
-      hardClearRatio: 0.0,
-      minPrunableToolChars: 0,
-      hardClear: { enabled: true, placeholder: "[cleared]" },
-      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-    };
-
     const messages: AgentMessage[] = [
       makeAssistant("bootstrap tool calls"),
       makeToolResult({
@@ -165,13 +218,14 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const next = pruneContextMessages({
+    const next = pruneWithAggressiveDefaults(
       messages,
-      settings,
-      ctx: { model: { contextWindow: 1000 } } as unknown as ExtensionContext,
-      isToolPrunable: () => true,
-      contextWindowTokensOverride: 1000,
-    });
+      {},
+      {
+        isToolPrunable: () => true,
+        contextWindowTokensOverride: 1000,
+      },
+    );
 
     expect(toolText(findToolResult(next, "t0"))).toBe("x".repeat(20_000));
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
@@ -200,19 +254,11 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+    const next = pruneWithAggressiveDefaults(messages, {
       keepLastAssistants: 1,
       softTrimRatio: 10.0,
-      hardClearRatio: 0.0,
-      minPrunableToolChars: 0,
-      hardClear: { enabled: true, placeholder: "[cleared]" },
-    };
-
-    const ctx = {
-      model: { contextWindow: 1000 },
-    } as unknown as ExtensionContext;
-    const next = pruneContextMessages({ messages, settings, ctx });
+      softTrim: DEFAULT_CONTEXT_PRUNING_SETTINGS.softTrim,
+    });
 
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
     expect(toolText(findToolResult(next, "t2"))).toBe("[cleared]");
@@ -232,19 +278,9 @@ describe("context-pruning", () => {
       makeAssistant("a2"),
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 0,
-      softTrimRatio: 0,
-      hardClearRatio: 0,
-      minPrunableToolChars: 0,
-      hardClear: { enabled: true, placeholder: "[cleared]" },
-      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-    };
-
     const next = pruneContextMessages({
       messages,
-      settings,
+      settings: makeAggressiveSettings(),
       ctx: { model: undefined } as unknown as ExtensionContext,
       contextWindowTokensOverride: 1000,
     });
@@ -256,15 +292,7 @@ describe("context-pruning", () => {
     const sessionManager = {};
 
     setContextPruningRuntime(sessionManager, {
-      settings: {
-        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        keepLastAssistants: 0,
-        softTrimRatio: 0,
-        hardClearRatio: 0,
-        minPrunableToolChars: 0,
-        hardClear: { enabled: true, placeholder: "[cleared]" },
-        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-      },
+      settings: makeAggressiveSettings(),
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
       lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
@@ -281,32 +309,8 @@ describe("context-pruning", () => {
       makeAssistant("a2"),
     ];
 
-    let handler:
-      | ((
-          event: { messages: AgentMessage[] },
-          ctx: ExtensionContext,
-        ) => { messages: AgentMessage[] } | undefined)
-      | undefined;
-
-    const api = {
-      on: (name: string, fn: unknown) => {
-        if (name === "context") {
-          handler = fn as typeof handler;
-        }
-      },
-      appendEntry: (_type: string, _data?: unknown) => {},
-    } as unknown as ExtensionAPI;
-
-    contextPruningExtension(api);
-
-    if (!handler) {
-      throw new Error("missing context handler");
-    }
-
-    const result = handler({ messages }, {
-      model: undefined,
-      sessionManager,
-    } as unknown as ExtensionContext);
+    const handler = createContextHandler();
+    const result = runContextHandler(handler, messages, sessionManager);
 
     if (!result) {
       throw new Error("expected handler to return messages");
@@ -319,15 +323,7 @@ describe("context-pruning", () => {
     const lastTouch = Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000;
 
     setContextPruningRuntime(sessionManager, {
-      settings: {
-        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        keepLastAssistants: 0,
-        softTrimRatio: 0,
-        hardClearRatio: 0,
-        minPrunableToolChars: 0,
-        hardClear: { enabled: true, placeholder: "[cleared]" },
-        softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-      },
+      settings: makeAggressiveSettings(),
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
       lastCacheTouchAt: lastTouch,
@@ -343,31 +339,8 @@ describe("context-pruning", () => {
       }),
     ];
 
-    let handler:
-      | ((
-          event: { messages: AgentMessage[] },
-          ctx: ExtensionContext,
-        ) => { messages: AgentMessage[] } | undefined)
-      | undefined;
-
-    const api = {
-      on: (name: string, fn: unknown) => {
-        if (name === "context") {
-          handler = fn as typeof handler;
-        }
-      },
-      appendEntry: (_type: string, _data?: unknown) => {},
-    } as unknown as ExtensionAPI;
-
-    contextPruningExtension(api);
-    if (!handler) {
-      throw new Error("missing context handler");
-    }
-
-    const first = handler({ messages }, {
-      model: undefined,
-      sessionManager,
-    } as unknown as ExtensionContext);
+    const handler = createContextHandler();
+    const first = runContextHandler(handler, messages, sessionManager);
     if (!first) {
       throw new Error("expected first prune");
     }
@@ -379,10 +352,7 @@ describe("context-pruning", () => {
     }
     expect(runtime.lastCacheTouchAt).toBeGreaterThan(lastTouch);
 
-    const second = handler({ messages }, {
-      model: undefined,
-      sessionManager,
-    } as unknown as ExtensionContext);
+    const second = runContextHandler(handler, messages, sessionManager);
     expect(second).toBeUndefined();
   });
 
@@ -401,21 +371,9 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 0,
-      softTrimRatio: 0.0,
-      hardClearRatio: 0.0,
-      minPrunableToolChars: 0,
+    const next = pruneWithAggressiveDefaults(messages, {
       tools: { allow: ["ex*"], deny: ["exec"] },
-      hardClear: { enabled: true, placeholder: "[cleared]" },
-      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-    };
-
-    const ctx = {
-      model: { contextWindow: 1000 },
-    } as unknown as ExtensionContext;
-    const next = pruneContextMessages({ messages, settings, ctx });
+    });
 
     // Deny wins => exec is not pruned, even though allow matches.
     expect(toolText(findToolResult(next, "t1"))).toContain("x".repeat(20_000));
@@ -433,20 +391,7 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 0,
-      softTrimRatio: 0.0,
-      hardClearRatio: 0.0,
-      minPrunableToolChars: 0,
-      hardClear: { enabled: true, placeholder: "[cleared]" },
-      softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
-    };
-
-    const ctx = {
-      model: { contextWindow: 1000 },
-    } as unknown as ExtensionContext;
-    const next = pruneContextMessages({ messages, settings, ctx });
+    const next = pruneWithAggressiveDefaults(messages);
 
     const tool = findToolResult(next, "t1");
     if (!tool || tool.role !== "toolResult") {
@@ -472,18 +417,10 @@ describe("context-pruning", () => {
       } as unknown as AgentMessage,
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 0,
-      softTrimRatio: 0.0,
+    const next = pruneWithAggressiveDefaults(messages, {
       hardClearRatio: 10.0,
       softTrim: { maxChars: 5, headChars: 7, tailChars: 3 },
-    };
-
-    const ctx = {
-      model: { contextWindow: 1000 },
-    } as unknown as ExtensionContext;
-    const next = pruneContextMessages({ messages, settings, ctx });
+    });
 
     const text = toolText(findToolResult(next, "t1"));
     expect(text).toContain("AAAAA\nB");
@@ -501,20 +438,10 @@ describe("context-pruning", () => {
       }),
     ];
 
-    const settings = {
-      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-      keepLastAssistants: 0,
-      softTrimRatio: 0.0,
+    const next = pruneWithAggressiveDefaults(messages, {
       hardClearRatio: 10.0,
-      minPrunableToolChars: 0,
-      hardClear: { enabled: true, placeholder: "[cleared]" },
       softTrim: { maxChars: 10, headChars: 6, tailChars: 6 },
-    };
-
-    const ctx = {
-      model: { contextWindow: 1000 },
-    } as unknown as ExtensionContext;
-    const next = pruneContextMessages({ messages, settings, ctx });
+    });
 
     const tool = findToolResult(next, "t1");
     const text = toolText(tool);

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   GatewayIntents,
@@ -70,6 +70,22 @@ vi.mock("ws", () => ({
 }));
 
 describe("createDiscordGatewayPlugin", () => {
+  let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+
+  beforeAll(async () => {
+    ({ createDiscordGatewayPlugin } = await import("./gateway-plugin.js"));
+  });
+
+  function createRuntime() {
+    return {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
+    };
+  }
+
   beforeEach(() => {
     proxyAgentSpy.mockReset();
     webSocketSpy.mockReset();
@@ -77,15 +93,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("uses proxy agent for gateway WebSocket when configured", async () => {
-    const { createDiscordGatewayPlugin } = await import("./gateway-plugin.js");
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
@@ -108,15 +116,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("falls back to the default gateway plugin when proxy is invalid", async () => {
-    const { createDiscordGatewayPlugin } = await import("./gateway-plugin.js");
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "bad-proxy" },

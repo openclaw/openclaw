@@ -38,16 +38,6 @@ final class NodePairingApprovalPrompter {
     private var remoteResolutionsByRequestId: [String: PairingResolution] = [:]
     private var autoApproveAttempts: Set<String> = []
 
-    private final class AlertHostWindow: NSWindow {
-        override var canBecomeKey: Bool {
-            true
-        }
-
-        override var canBecomeMain: Bool {
-            true
-        }
-    }
-
     private struct PairingList: Codable {
         let pending: [PendingRequest]
         let paired: [PairedNode]?
@@ -242,35 +232,11 @@ final class NodePairingApprovalPrompter {
     }
 
     private func endActiveAlert() {
-        guard let alert = self.activeAlert else { return }
-        if let parent = alert.window.sheetParent {
-            parent.endSheet(alert.window, returnCode: .abort)
-        }
-        self.activeAlert = nil
-        self.activeRequestId = nil
+        PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
     }
 
     private func requireAlertHostWindow() -> NSWindow {
-        if let alertHostWindow {
-            return alertHostWindow
-        }
-
-        let window = AlertHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 1),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false)
-        window.title = ""
-        window.isReleasedWhenClosed = false
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isOpaque = false
-        window.hasShadow = false
-        window.backgroundColor = .clear
-        window.ignoresMouseEvents = true
-
-        self.alertHostWindow = window
-        return window
+        PairingAlertSupport.requireAlertHostWindow(alertHostWindow: &self.alertHostWindow)
     }
 
     private func handle(push: GatewayPush) {
@@ -554,11 +520,12 @@ final class NodePairingApprovalPrompter {
         let preferred = GatewayDiscoveryPreferences.preferredStableID()
         let gateway = model.gateways.first { $0.stableID == preferred } ?? model.gateways.first
         guard let gateway else { return nil }
-        let host = (gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ??
-            gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-        guard let host, !host.isEmpty else { return nil }
-        let port = gateway.sshPort > 0 ? gateway.sshPort : 22
-        return SSHTarget(host: host, port: port)
+        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
+              let parsed = CommandResolver.parseSSHTarget(target)
+        else {
+            return nil
+        }
+        return SSHTarget(host: parsed.host, port: parsed.port)
     }
 
     private static func probeSSH(user: String, host: String, port: Int) async -> Bool {

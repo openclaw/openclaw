@@ -17,7 +17,7 @@ function makeToolResult(text: string, toolCallId = "call_1"): AgentMessage {
     content: [{ type: "text", text }],
     isError: false,
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function makeUserMessage(text: string): AgentMessage {
@@ -25,7 +25,7 @@ function makeUserMessage(text: string): AgentMessage {
     role: "user",
     content: text,
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function makeAssistantMessage(text: string): AgentMessage {
@@ -43,7 +43,7 @@ function makeAssistantMessage(text: string): AgentMessage {
     },
     stopReason: "end_turn",
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 describe("truncateToolResultText", () => {

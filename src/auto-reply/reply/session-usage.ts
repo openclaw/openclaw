@@ -11,6 +11,27 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 
+function applyCliSessionIdToSessionPatch(
+  params: {
+    providerUsed?: string;
+    cliSessionId?: string;
+  },
+  entry: SessionEntry,
+  patch: Partial<SessionEntry>,
+): Partial<SessionEntry> {
+  const cliProvider = params.providerUsed ?? entry.modelProvider;
+  if (params.cliSessionId && cliProvider) {
+    const nextEntry = { ...entry, ...patch };
+    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
+    return {
+      ...patch,
+      cliSessionIds: nextEntry.cliSessionIds,
+      claudeCliSessionId: nextEntry.claudeCliSessionId,
+    };
+  }
+  return patch;
+}
+
 export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
@@ -65,6 +86,8 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             inputTokens: input,
             outputTokens: output,
+            cacheRead: params.usage?.cacheRead ?? 0,
+            cacheWrite: params.usage?.cacheWrite ?? 0,
             // Missing a last-call snapshot means context utilization is stale/unknown.
             totalTokens,
             totalTokensFresh: typeof totalTokens === "number",
@@ -74,17 +97,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          const cliProvider = params.providerUsed ?? entry.modelProvider;
-          if (params.cliSessionId && cliProvider) {
-            const nextEntry = { ...entry, ...patch };
-            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
-            return {
-              ...patch,
-              cliSessionIds: nextEntry.cliSessionIds,
-              claudeCliSessionId: nextEntry.claudeCliSessionId,
-            };
-          }
-          return patch;
+          return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
@@ -106,17 +119,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          const cliProvider = params.providerUsed ?? entry.modelProvider;
-          if (params.cliSessionId && cliProvider) {
-            const nextEntry = { ...entry, ...patch };
-            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
-            return {
-              ...patch,
-              cliSessionIds: nextEntry.cliSessionIds,
-              claudeCliSessionId: nextEntry.claudeCliSessionId,
-            };
-          }
-          return patch;
+          return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
