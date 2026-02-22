@@ -4,6 +4,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mocks.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
@@ -29,18 +30,7 @@ vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => ({}),
-  };
-});
-
-// Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../discord/monitor/gateway-plugin.js", () => ({
-  createDiscordGatewayPlugin: () => ({}),
-}));
+installSubagentsCommandCoreMocks();
 
 const { handleSubagentsCommand } = await import("./commands-subagents.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
@@ -58,6 +48,25 @@ type FakeBinding = {
   boundBy: string;
   boundAt: number;
 };
+
+function createFakeBinding(
+  overrides: Pick<FakeBinding, "threadId" | "targetKind" | "targetSessionKey" | "agentId"> &
+    Partial<FakeBinding>,
+): FakeBinding {
+  return {
+    accountId: "default",
+    channelId: "parent-1",
+    boundBy: "user-1",
+    boundAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function expectAgentListContainsThreadBinding(text: string, label: string, threadId: string): void {
+  expect(text).toContain("agents:");
+  expect(text).toContain(label);
+  expect(text).toContain(`thread:${threadId}`);
+}
 
 function createFakeThreadBindingManager(initialBindings: FakeBinding[] = []) {
   const byThread = new Map<string, FakeBinding>(
@@ -222,39 +231,27 @@ describe("/focus, /unfocus, /agents", () => {
     });
 
     const fake = createFakeThreadBindingManager([
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      createFakeBinding({
         threadId: "thread-1",
         targetKind: "subagent",
         targetSessionKey: "agent:main:subagent:child-1",
         agentId: "main",
         label: "child-1",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      }),
+      createFakeBinding({
         threadId: "thread-2",
         targetKind: "acp",
         targetSessionKey: "agent:main:main",
         agentId: "codex-acp",
         label: "main-session",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      }),
+      createFakeBinding({
         threadId: "thread-3",
         targetKind: "acp",
         targetSessionKey: "agent:codex-acp:session-2",
         agentId: "codex-acp",
         label: "codex-acp",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
+      }),
     ]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
@@ -284,17 +281,13 @@ describe("/focus, /unfocus, /agents", () => {
     });
 
     const fake = createFakeThreadBindingManager([
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      createFakeBinding({
         threadId: "thread-persistent-1",
         targetKind: "subagent",
         targetSessionKey: "agent:main:subagent:persistent-1",
         agentId: "main",
         label: "persistent-1",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
+      }),
     ]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
@@ -302,9 +295,7 @@ describe("/focus, /unfocus, /agents", () => {
     const result = await handleSubagentsCommand(params, true);
     const text = result?.reply?.text ?? "";
 
-    expect(text).toContain("agents:");
-    expect(text).toContain("persistent-1");
-    expect(text).toContain("thread:thread-persistent-1");
+    expectAgentListContainsThreadBinding(text, "persistent-1", "thread-persistent-1");
   });
 
   it("/focus is discord-only", async () => {
