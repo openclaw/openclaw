@@ -25,6 +25,9 @@ export type CronProps = {
   onRun: (job: CronJob) => void;
   onRemove: (job: CronJob) => void;
   onLoadRuns: (jobId: string) => void;
+  editingJobId?: string | null;
+  onEdit?: (job: CronJob) => void;
+  onCancelEdit?: () => void;
 };
 
 function buildChannelOptions(props: CronProps): string[] {
@@ -298,8 +301,13 @@ export function renderCron(props: CronProps) {
         </div>
         <div class="row" style="margin-top: 14px;">
           <button class="btn primary" ?disabled=${props.busy} @click=${props.onAdd}>
-            ${props.busy ? "Saving…" : "Add job"}
+            ${props.busy ? "Saving…" : props.editingJobId ? "Save changes" : "Add job"}
           </button>
+          ${
+            props.editingJobId
+              ? html`<button class="btn" ?disabled=${props.busy} @click=${props.onCancelEdit}>Cancel</button>`
+              : nothing
+          }
         </div>
       </div>
     </section>
@@ -443,6 +451,16 @@ function renderJob(job: CronJob, props: CronProps) {
             }}
           >
             ${job.enabled ? "Disable" : "Enable"}
+          </button>
+          <button
+            class="btn"
+            ?disabled=${props.busy}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onEdit?.(job);
+            }}
+          >
+            Edit
           </button>
           <button
             class="btn"

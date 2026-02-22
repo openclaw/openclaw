@@ -301,6 +301,7 @@ export class OpenClawApp extends LitElement {
   @state() cronRunsJobId: string | null = null;
   @state() cronRuns: CronRunLogEntry[] = [];
   @state() cronBusy = false;
+  @state() cronEditingId: string | null = null;
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 
