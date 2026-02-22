@@ -45,4 +45,45 @@ describe("normalizeModelCompat", () => {
       (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
     ).toBe(false);
   });
+
+  it("forces supportsDeveloperRole off for DashScope models (#22710)", () => {
+    const model = {
+      ...baseModel(),
+      id: "qwen3.5-plus",
+      provider: "dashscope",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+
+  it("forces supportsDeveloperRole off for Qwen Portal models (#22710)", () => {
+    const model = {
+      ...baseModel(),
+      id: "qwen-coder",
+      provider: "qwen-portal",
+      baseUrl: "https://portal.qwen.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+
+  it("does not override explicit DashScope compat false", () => {
+    const model = {
+      ...baseModel(),
+      provider: "dashscope",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    };
+    model.compat = { supportsDeveloperRole: false };
+    const normalized = normalizeModelCompat(model);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
 });

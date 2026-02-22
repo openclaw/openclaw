@@ -5,9 +5,21 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
 }
 
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+  if (!isOpenAiCompletionsModel(model)) {
+    return model;
+  }
+
   const baseUrl = model.baseUrl ?? "";
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  const provider = model.provider ?? "";
+  const needsDeveloperRoleOff =
+    provider === "zai" ||
+    baseUrl.includes("api.z.ai") ||
+    provider === "dashscope" ||
+    baseUrl.includes("dashscope.aliyuncs.com") ||
+    provider === "qwen-portal" ||
+    baseUrl.includes("portal.qwen.ai");
+
+  if (!needsDeveloperRoleOff) {
     return model;
   }
 
