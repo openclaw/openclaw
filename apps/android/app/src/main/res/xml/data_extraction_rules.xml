@@ -2,8 +2,10 @@
 <data-extraction-rules>
   <cloud-backup>
     <include domain="file" path="." />
+    <exclude domain="file" path="openclaw/identity" />
   </cloud-backup>
   <device-transfer>
     <include domain="file" path="." />
+    <exclude domain="file" path="openclaw/identity" />
   </device-transfer>
 </data-extraction-rules>
