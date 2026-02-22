@@ -20,15 +20,15 @@ describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
 
   beforeEach(() => {
-    sendMessageDiscordMock.mockReset().mockResolvedValue({
+    sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
     });
-    sendVoiceMessageDiscordMock.mockReset().mockResolvedValue({
+    sendVoiceMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "voice-1",
       channelId: "channel-1",
     });
-    sendWebhookMessageDiscordMock.mockReset().mockResolvedValue({
+    sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "webhook-1",
       channelId: "thread-1",
     });
