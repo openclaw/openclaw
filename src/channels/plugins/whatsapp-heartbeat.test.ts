@@ -39,8 +39,8 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
   }
 
   beforeEach(() => {
-    vi.mocked(loadSessionStore).mockReset();
-    vi.mocked(readChannelAllowFromStoreSync).mockReset();
+    vi.mocked(loadSessionStore).mockClear();
+    vi.mocked(readChannelAllowFromStoreSync).mockClear();
     setAllowFromStore([]);
   });
 
