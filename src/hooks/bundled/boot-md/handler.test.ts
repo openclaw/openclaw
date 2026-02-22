@@ -48,8 +48,6 @@ describe("boot-md handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    logWarn.mockReset();
-    logDebug.mockReset();
   });
 
   it("skips non-gateway events", async () => {

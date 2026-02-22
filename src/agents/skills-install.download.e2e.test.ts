@@ -70,9 +70,9 @@ async function installZipDownloadSkill(params: {
 
 describe("installSkill download extraction safety", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockReset();
-    scanDirectoryWithSummaryMock.mockReset();
-    fetchWithSsrFGuardMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
+    scanDirectoryWithSummaryMock.mockClear();
+    fetchWithSsrFGuardMock.mockClear();
     scanDirectoryWithSummaryMock.mockResolvedValue({
       scannedFiles: 0,
       critical: 0,
