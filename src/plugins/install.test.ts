@@ -167,6 +167,26 @@ function setupPluginInstallDirs() {
   return { tmpDir, pluginDir, extensionsDir };
 }
 
+function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
+  const workDir = makeTempDir();
+  const stateDir = makeTempDir();
+  const pluginDir = path.join(workDir, "plugin");
+  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/test-plugin",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+      dependencies: { "left-pad": "1.3.0" },
+      ...(params?.devDependencies ? { devDependencies: params.devDependencies } : {}),
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
+}
+
 async function installFromDirWithWarnings(params: { pluginDir: string; extensionsDir: string }) {
   const warnings: string[] = [];
   const result = await installPluginFromDir({
@@ -445,21 +465,7 @@ describe("installPluginFromArchive", () => {
 
 describe("installPluginFromDir", () => {
   it("uses --ignore-scripts for dependency install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(workDir, "plugin");
-    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/test-plugin",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
 
     const run = vi.mocked(runCommandWithTimeout);
     await expectInstallUsesIgnoreScripts({
@@ -467,31 +473,18 @@ describe("installPluginFromDir", () => {
       install: async () =>
         await installPluginFromDir({
           dirPath: pluginDir,
-          extensionsDir: path.join(stateDir, "extensions"),
+          extensionsDir,
         }),
     });
   });
 
   it("strips workspace devDependencies before npm install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(workDir, "plugin");
-    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/test-plugin",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-        devDependencies: {
-          openclaw: "workspace:*",
-          vitest: "^3.0.0",
-        },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
+      devDependencies: {
+        openclaw: "workspace:*",
+        vitest: "^3.0.0",
+      },
+    });
 
     const run = vi.mocked(runCommandWithTimeout);
     run.mockResolvedValue({
@@ -505,7 +498,7 @@ describe("installPluginFromDir", () => {
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
-      extensionsDir: path.join(stateDir, "extensions"),
+      extensionsDir,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
