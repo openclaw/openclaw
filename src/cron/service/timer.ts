@@ -45,6 +45,45 @@ type TimedCronRunOutcome = CronRunOutcome &
     endedAt: number;
   };
 
+function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
+  const configuredTimeoutMs =
+    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      ? Math.floor(job.payload.timeoutSeconds * 1_000)
+      : undefined;
+  if (configuredTimeoutMs === undefined) {
+    return DEFAULT_JOB_TIMEOUT_MS;
+  }
+  return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
+}
+
+export async function executeJobCoreWithTimeout(
+  state: CronServiceState,
+  job: CronJob,
+): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
+  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+  if (typeof jobTimeoutMs !== "number") {
+    return await executeJobCore(state, job);
+  }
+
+  const runAbortController = new AbortController();
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      executeJobCore(state, job, runAbortController.signal),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          runAbortController.abort(new Error("cron: job execution timed out"));
+          reject(new Error("cron: job execution timed out"));
+        }, jobTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 function resolveRunConcurrency(state: CronServiceState): number {
   const raw = state.deps.cronConfig?.maxConcurrentRuns;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -309,42 +348,10 @@ export async function onTimer(state: CronServiceState) {
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
-
-      const configuredTimeoutMs =
-        job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-          ? Math.floor(job.payload.timeoutSeconds * 1_000)
-          : undefined;
-      const jobTimeoutMs =
-        configuredTimeoutMs !== undefined
-          ? configuredTimeoutMs <= 0
-            ? undefined
-            : configuredTimeoutMs
-          : DEFAULT_JOB_TIMEOUT_MS;
+      const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       try {
-        const runAbortController =
-          typeof jobTimeoutMs === "number" ? new AbortController() : undefined;
-        const result =
-          typeof jobTimeoutMs === "number"
-            ? await (async () => {
-                let timeoutId: NodeJS.Timeout | undefined;
-                try {
-                  return await Promise.race([
-                    executeJobCore(state, job, runAbortController?.signal),
-                    new Promise<never>((_, reject) => {
-                      timeoutId = setTimeout(() => {
-                        runAbortController?.abort(new Error("cron: job execution timed out"));
-                        reject(new Error("cron: job execution timed out"));
-                      }, jobTimeoutMs);
-                    }),
-                  ]);
-                } finally {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
-                }
-              })()
-            : await executeJobCore(state, job);
+        const result = await executeJobCoreWithTimeout(state, job);
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         state.deps.log.warn(
