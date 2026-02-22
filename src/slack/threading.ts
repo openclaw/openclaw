@@ -40,6 +40,8 @@ export function resolveSlackThreadTargets(params: {
 }) {
   const { incomingThreadTs, messageTs } = resolveSlackThreadContext(params);
   const replyThreadTs = incomingThreadTs ?? (params.replyToMode === "all" ? messageTs : undefined);
-  const statusThreadTs = replyThreadTs ?? messageTs;
+  // Only set statusThreadTs if we're actually threading (replyToMode is "all" or in existing thread)
+  // Don't fallback to messageTs when replyToMode is "off" or "first"
+  const statusThreadTs = params.replyToMode === "off" ? undefined : (replyThreadTs ?? messageTs);
   return { replyThreadTs, statusThreadTs };
 }
