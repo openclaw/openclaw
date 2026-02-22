@@ -114,13 +114,20 @@ describe("linePlugin gateway.startAccount", () => {
     const { runtime, monitorLineProvider } = createRuntime();
     setLineRuntime(runtime);
 
-    await linePlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        token: "token",
-        secret: "secret",
-        runtime: createRuntimeEnv(),
-      }),
-    );
+    const ac = new AbortController();
+    const ctx = createStartAccountCtx({
+      token: "token",
+      secret: "secret",
+      runtime: createRuntimeEnv(),
+    });
+    // Replace the default signal so we can abort from the test.
+    (ctx as { abortSignal: AbortSignal }).abortSignal = ac.signal;
+
+    const started = linePlugin.gateway!.startAccount!(ctx);
+
+    // startAccount now blocks until the abort signal fires.
+    ac.abort();
+    await started;
 
     expect(monitorLineProvider).toHaveBeenCalledWith(
       expect.objectContaining({
