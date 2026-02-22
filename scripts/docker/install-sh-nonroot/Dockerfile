@@ -11,6 +11,9 @@ RUN set -eux; \
     bash \
     ca-certificates \
     curl \
+    g++ \
+    make \
+    python3 \
     sudo \
   && rm -rf /var/lib/apt/lists/*
 

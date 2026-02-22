@@ -210,6 +210,14 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
     | undefined;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
@@ -368,6 +376,62 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+  });
+
+  it("registers options handlers without losing app receiver binding", async () => {
+    const commands = new Map<string, (args: unknown) => Promise<void>>();
+    const actions = new Map<string, (args: unknown) => Promise<void>>();
+    const options = new Map<string, (args: unknown) => Promise<void>>();
+    const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const app = {
+      client: { chat: { postEphemeral } },
+      command: (name: string, handler: (args: unknown) => Promise<void>) => {
+        commands.set(name, handler);
+      },
+      action: (id: string, handler: (args: unknown) => Promise<void>) => {
+        actions.set(id, handler);
+      },
+      options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+        expect(this).toBe(app);
+        options.set(id, handler);
+      },
+    };
+    const ctx = {
+      cfg: { commands: { native: true, nativeSkills: false } },
+      runtime: {},
+      botToken: "bot-token",
+      botUserId: "bot",
+      teamId: "T1",
+      allowFrom: ["*"],
+      dmEnabled: true,
+      dmPolicy: "open",
+      groupDmEnabled: false,
+      groupDmChannels: [],
+      defaultRequireMention: true,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      channelsConfig: undefined,
+      slashCommand: {
+        enabled: true,
+        name: "openclaw",
+        ephemeral: true,
+        sessionPrefix: "slack:slash",
+      },
+      textLimit: 4000,
+      app,
+      isChannelAllowed: () => true,
+      resolveChannelName: async () => ({ name: "dm", type: "im" }),
+      resolveUserName: async () => ({ name: "Ada" }),
+    } as unknown;
+    const account = {
+      accountId: "acct",
+      config: { commands: { native: true, nativeSkills: false } },
+    } as unknown;
+
+    await registerCommands(ctx, account);
+    expect(commands.size).toBeGreaterThan(0);
+    expect(actions.has("openclaw_cmdarg")).toBe(true);
+    expect(options.has("openclaw_cmdarg")).toBe(true);
   });
 
   it("shows a button menu when required args are omitted", async () => {
@@ -801,5 +865,49 @@ describe("slack slash commands access groups", () => {
     const { respond } = await registerAndRunPolicySlash({ harness });
 
     expectUnauthorizedResponse(respond);
+  });
+});
+
+describe("slack slash command session metadata", () => {
+  const { recordSessionMetaFromInboundMock } = getSlackSlashMocks();
+
+  it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerAndRunPolicySlash({ harness });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
+    const call = recordSessionMetaFromInboundMock.mock.calls[0]?.[0] as {
+      sessionKey?: string;
+      ctx?: { OriginatingChannel?: string };
+    };
+    expect(call.ctx?.OriginatingChannel).toBe("slack");
+    expect(call.sessionKey).toBeDefined();
+  });
+
+  it("awaits session metadata persistence before dispatch", async () => {
+    const deferred = createDeferred<void>();
+    recordSessionMetaFromInboundMock.mockReset().mockReturnValue(deferred.promise);
+
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerCommands(harness.ctx, harness.account);
+
+    const runPromise = runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    deferred.resolve();
+    await runPromise;
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 });

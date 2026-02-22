@@ -9,7 +9,7 @@ export type TtsModelOverrideConfig = {
   enabled?: boolean;
   /** Allow model-provided TTS text blocks. */
   allowText?: boolean;
-  /** Allow model-provided provider override. */
+  /** Allow model-provided provider override (default: false). */
   allowProvider?: boolean;
   /** Allow model-provided voice/voiceId override. */
   allowVoice?: boolean;
