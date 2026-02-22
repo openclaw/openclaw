@@ -29,7 +29,8 @@ const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
-const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
+const DEFAULT_GROK_BASE_URL = "https://api.x.ai/v1";
+
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
@@ -98,6 +99,7 @@ type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "
 
 type GrokConfig = {
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
   inlineCitations?: boolean;
 };
@@ -370,6 +372,17 @@ function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
   return grok as GrokConfig;
 }
 
+function resolveGrokBaseUrl(grok?: GrokConfig): string {
+  const fromConfig =
+    grok && "baseUrl" in grok && typeof grok.baseUrl === "string"
+      ? grok.baseUrl.trim().replace(/\/$/, "")
+      : "";
+  if (fromConfig) {
+    return fromConfig;
+  }
+  return DEFAULT_GROK_BASE_URL;
+}
+
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
   const fromConfig = normalizeApiKey(grok?.apiKey);
   if (fromConfig) {
@@ -524,6 +537,7 @@ async function runGrokSearch(params: {
   query: string;
   apiKey: string;
   model: string;
+  baseUrl: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
 }): Promise<{
@@ -531,6 +545,9 @@ async function runGrokSearch(params: {
   citations: string[];
   inlineCitations?: GrokSearchResponse["inline_citations"];
 }> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/responses`;
+
   const body: Record<string, unknown> = {
     model: params.model,
     input: [
@@ -547,7 +564,7 @@ async function runGrokSearch(params: {
   // citations are returned automatically when available — we just parse
   // them from the response without requesting them explicitly (#12910).
 
-  const res = await fetch(XAI_API_ENDPOINT, {
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -586,15 +603,24 @@ async function runWebSearch(params: {
   freshness?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
+  grokBaseUrl?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
 }): Promise<Record<string, unknown>> {
+  // Normalize base URLs for consistent cache keys
+  const normalizedPerplexityBaseUrl = (params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL)
+    .trim()
+    .replace(/\/$/, "");
+  const normalizedGrokBaseUrl = (params.grokBaseUrl ?? DEFAULT_GROK_BASE_URL)
+    .trim()
+    .replace(/\/$/, "");
+
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
-        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        ? `${params.provider}:${params.query}:${normalizedPerplexityBaseUrl}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
+        : `${params.provider}:${params.query}:${normalizedGrokBaseUrl}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -636,6 +662,7 @@ async function runWebSearch(params: {
       query: params.query,
       apiKey: params.apiKey,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
+      baseUrl: params.grokBaseUrl ?? DEFAULT_GROK_BASE_URL,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.grokInlineCitations ?? false,
     });
@@ -806,6 +833,7 @@ export function createWebSearchTool(options?: {
           perplexityAuth?.apiKey,
         ),
         perplexityModel: resolvePerplexityModel(perplexityConfig),
+        grokBaseUrl: resolveGrokBaseUrl(grokConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
       });
@@ -822,6 +850,7 @@ export const __testing = {
   normalizeFreshness,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
+  resolveGrokBaseUrl,
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,

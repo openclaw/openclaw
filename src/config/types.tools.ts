@@ -414,6 +414,8 @@ export type ToolsConfig = {
         apiKey?: string;
         /** Model to use (defaults to "grok-4-1-fast"). */
         model?: string;
+        /** Base url to use (defaults to "https://api.x.ai/v1"). */
+        baseUrl?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
       };
