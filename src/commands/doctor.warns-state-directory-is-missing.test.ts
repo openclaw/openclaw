@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import "./doctor.fast-path-mocks.js";
+
+vi.doUnmock("./doctor-state-integrity.js");
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
