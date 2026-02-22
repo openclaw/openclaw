@@ -9,7 +9,7 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Edge TTS, or Pocket TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
@@ -17,6 +17,7 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
+- **Pocket TTS** (local CPU-based TTS; see [Pocket TTS docs](providers/pocket-tts.md))
 
 ### Edge TTS notes
 
@@ -52,6 +53,7 @@ so that provider must also be authenticated if you enable summaries.
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
+- [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) (local CPU-based TTS)
 
 ## Is it enabled by default?
 

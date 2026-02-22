@@ -528,4 +528,207 @@ describe("tts", () => {
       });
     });
   });
+
+  describe("pocket TTS", () => {
+    const {
+      POCKET_VOICES,
+      checkPocketHealth,
+      normalizePocketBaseUrl,
+      parsePocketBaseUrl,
+      isValidPocketVoice,
+    } = _test;
+
+    describe("POCKET_VOICES", () => {
+      it("contains all built-in pocket-tts voices", () => {
+        expect(POCKET_VOICES).toContain("alba");
+        expect(POCKET_VOICES).toContain("marius");
+        expect(POCKET_VOICES).toContain("javert");
+        expect(POCKET_VOICES).toContain("jean");
+        expect(POCKET_VOICES).toContain("fantine");
+        expect(POCKET_VOICES).toContain("cosette");
+        expect(POCKET_VOICES).toContain("eponine");
+        expect(POCKET_VOICES).toContain("azelma");
+        expect(POCKET_VOICES.length).toBe(8);
+      });
+    });
+
+    describe("normalizePocketBaseUrl", () => {
+      it("returns default URL for empty input", () => {
+        expect(normalizePocketBaseUrl("")).toBe("http://localhost:8000");
+        expect(normalizePocketBaseUrl("  ")).toBe("http://localhost:8000");
+      });
+
+      it("strips trailing slashes", () => {
+        expect(normalizePocketBaseUrl("http://localhost:8000/")).toBe("http://localhost:8000");
+        expect(normalizePocketBaseUrl("http://localhost:8000///")).toBe("http://localhost:8000");
+      });
+
+      it("preserves valid URLs without trailing slash", () => {
+        expect(normalizePocketBaseUrl("http://localhost:8000")).toBe("http://localhost:8000");
+        expect(normalizePocketBaseUrl("http://192.168.1.100:9000")).toBe(
+          "http://192.168.1.100:9000",
+        );
+      });
+    });
+
+    describe("parsePocketBaseUrl", () => {
+      it("extracts host and port from URL", () => {
+        expect(parsePocketBaseUrl("http://localhost:8000")).toEqual({
+          host: "localhost",
+          port: 8000,
+        });
+        expect(parsePocketBaseUrl("http://192.168.1.100:9000")).toEqual({
+          host: "192.168.1.100",
+          port: 9000,
+        });
+        expect(parsePocketBaseUrl("http://myserver:3000/")).toEqual({
+          host: "myserver",
+          port: 3000,
+        });
+      });
+
+      it("uses defaults for missing port", () => {
+        expect(parsePocketBaseUrl("http://localhost")).toEqual({ host: "localhost", port: 8000 });
+      });
+
+      it("handles invalid URLs gracefully", () => {
+        expect(parsePocketBaseUrl("not-a-url")).toEqual({ host: "localhost", port: 8000 });
+        expect(parsePocketBaseUrl("")).toEqual({ host: "localhost", port: 8000 });
+      });
+    });
+
+    describe("isValidPocketVoice", () => {
+      it("accepts built-in voices", () => {
+        expect(isValidPocketVoice("alba")).toBe(true);
+        expect(isValidPocketVoice("marius")).toBe(true);
+        expect(isValidPocketVoice("cosette")).toBe(true);
+      });
+
+      it("accepts URL-based voices", () => {
+        expect(isValidPocketVoice("http://example.com/voice.wav")).toBe(true);
+        expect(isValidPocketVoice("https://example.com/voice.wav")).toBe(true);
+        expect(isValidPocketVoice("hf://kyutai/tts-voices/custom.wav")).toBe(true);
+      });
+
+      it("rejects unknown voice names", () => {
+        expect(isValidPocketVoice("unknown_voice")).toBe(false);
+        expect(isValidPocketVoice("my_custom_voice")).toBe(false);
+        expect(isValidPocketVoice("/path/to/local/file.wav")).toBe(false);
+      });
+    });
+
+    describe("checkPocketHealth", () => {
+      it("returns false when server is not reachable", async () => {
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () => {
+          throw new Error("Connection refused");
+        }) as unknown as typeof fetch;
+
+        const result = await checkPocketHealth("http://localhost:9999", 1000);
+        expect(result).toBe(false);
+
+        globalThis.fetch = originalFetch;
+      });
+
+      it("returns true when server responds with ok", async () => {
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () => ({
+          ok: true,
+          json: async () => ({ status: "healthy" }),
+        })) as unknown as typeof fetch;
+
+        const result = await checkPocketHealth("http://localhost:8000", 1000);
+        expect(result).toBe(true);
+
+        globalThis.fetch = originalFetch;
+      });
+
+      it("returns false when server responds with error status", async () => {
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () => ({
+          ok: false,
+          status: 500,
+        })) as unknown as typeof fetch;
+
+        const result = await checkPocketHealth("http://localhost:8000", 1000);
+        expect(result).toBe(false);
+
+        globalThis.fetch = originalFetch;
+      });
+    });
+
+    describe("resolveTtsConfig pocket defaults", () => {
+      it("resolves pocket config with defaults", () => {
+        const config = resolveTtsConfig({});
+        expect(config.pocket.enabled).toBe(true);
+        expect(config.pocket.baseUrl).toBe("http://localhost:8000");
+        expect(config.pocket.voice).toBe("alba");
+        expect(config.pocket.autoStart).toBe(false);
+      });
+
+      it("respects custom pocket config", () => {
+        const config = resolveTtsConfig({
+          messages: {
+            tts: {
+              pocket: {
+                enabled: false,
+                baseUrl: "http://myserver:9000",
+                voice: "marius",
+                autoStart: true,
+              },
+            },
+          },
+        });
+        expect(config.pocket.enabled).toBe(false);
+        expect(config.pocket.baseUrl).toBe("http://myserver:9000");
+        expect(config.pocket.voice).toBe("marius");
+        expect(config.pocket.autoStart).toBe(true);
+      });
+    });
+
+    describe("auto-start configuration", () => {
+      it("autoStart defaults to false for safety", () => {
+        const config = resolveTtsConfig({
+          messages: {
+            tts: {
+              provider: "pocket",
+            },
+          },
+        });
+        expect(config.pocket.autoStart).toBe(false);
+      });
+
+      it("can enable autoStart via config", () => {
+        const config = resolveTtsConfig({
+          messages: {
+            tts: {
+              pocket: {
+                autoStart: true,
+              },
+            },
+          },
+        });
+        expect(config.pocket.autoStart).toBe(true);
+      });
+
+      it("derives host/port from baseUrl for auto-start", () => {
+        // This tests that baseUrl is the single source of truth
+        const config = resolveTtsConfig({
+          messages: {
+            tts: {
+              pocket: {
+                baseUrl: "http://192.168.1.50:9999",
+                autoStart: true,
+              },
+            },
+          },
+        });
+        expect(config.pocket.baseUrl).toBe("http://192.168.1.50:9999");
+        // parsePocketBaseUrl will extract host/port from baseUrl
+        const { host, port } = parsePocketBaseUrl(config.pocket.baseUrl);
+        expect(host).toBe("192.168.1.50");
+        expect(port).toBe(9999);
+      });
+    });
+  });
 });

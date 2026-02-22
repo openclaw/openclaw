@@ -56,6 +56,19 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+const DEFAULT_POCKET_BASE_URL = "http://localhost:8000";
+const DEFAULT_POCKET_VOICE = "alba";
+const POCKET_VOICES = [
+  "alba",
+  "marius",
+  "javert",
+  "jean",
+  "fantine",
+  "cosette",
+  "eponine",
+  "azelma",
+] as const;
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -128,6 +141,12 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  pocket: {
+    enabled: boolean;
+    baseUrl: string;
+    voice: string;
+    autoStart: boolean;
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -168,6 +187,9 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  pocket?: {
+    voice?: string;
   };
 };
 
@@ -302,6 +324,12 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    pocket: {
+      enabled: raw.pocket?.enabled ?? true,
+      baseUrl: raw.pocket?.baseUrl?.trim() || DEFAULT_POCKET_BASE_URL,
+      voice: raw.pocket?.voice?.trim() || DEFAULT_POCKET_VOICE,
+      autoStart: raw.pocket?.autoStart ?? false,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -508,7 +536,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "pocket"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -517,6 +545,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "pocket") {
+    return config.pocket.enabled;
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -527,6 +558,258 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${error.message}`;
+}
+
+function normalizePocketBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return DEFAULT_POCKET_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function parsePocketBaseUrl(baseUrl: string): { host: string; port: number } {
+  try {
+    const url = new URL(normalizePocketBaseUrl(baseUrl));
+    return {
+      host: url.hostname || "localhost",
+      port: url.port ? parseInt(url.port, 10) : 8000,
+    };
+  } catch {
+    return { host: "localhost", port: 8000 };
+  }
+}
+
+function isValidPocketVoice(voice: string): boolean {
+  if (!voice) {
+    return false;
+  }
+  // Built-in voices
+  if (POCKET_VOICES.includes(voice as (typeof POCKET_VOICES)[number])) {
+    return true;
+  }
+  // URL-based voices (http://, https://, hf://)
+  if (voice.startsWith("http://") || voice.startsWith("https://") || voice.startsWith("hf://")) {
+    return true;
+  }
+  return false;
+}
+
+function formatPocketVoiceWarning(voice: string): string {
+  return `Pocket TTS voice "${voice}" may not be valid. Valid options: ${POCKET_VOICES.join(", ")}, or hf:// / http:// URLs`;
+}
+
+async function pocketTTS(params: {
+  text: string;
+  baseUrl: string;
+  voice: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, baseUrl, voice, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = new URL(`${normalizePocketBaseUrl(baseUrl)}/tts`);
+
+    // Build form data
+    const formData = new FormData();
+    formData.append("text", text);
+
+    // Always send voice_url - let server validate/reject invalid voices
+    // This ensures explicit errors rather than silent fallback to server default
+    if (voice) {
+      formData.append("voice_url", voice);
+    }
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      body: formData,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      let errorDetail = "";
+      try {
+        const errorText = await response.text();
+        // Try to parse JSON error response from FastAPI
+        const parsed = JSON.parse(errorText);
+        errorDetail = parsed.detail || errorText;
+      } catch {
+        // If not JSON, use raw text
+      }
+      throw new Error(
+        `Pocket TTS API error (${response.status})${errorDetail ? `: ${errorDetail}` : ""}`,
+      );
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function checkPocketHealth(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const url = `${normalizePocketBaseUrl(baseUrl)}/health`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, 5000));
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      return response.ok;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    // Swallow errors - server not reachable is expected when not running
+    return false;
+  }
+}
+
+// Pocket TTS subprocess management
+let pocketProcess: import("node:child_process").ChildProcess | null = null;
+let pocketStartupPromise: Promise<boolean> | null = null;
+let pocketLastFailure: number = 0;
+const POCKET_STARTUP_COOLDOWN_MS = 60000; // 1 minute cooldown after failure
+
+async function startPocketServer(config: ResolvedTtsConfig["pocket"]): Promise<boolean> {
+  // If already running, return true
+  if (pocketProcess) {
+    return true;
+  }
+
+  // If startup is in progress, wait for it (fixes race condition)
+  if (pocketStartupPromise) {
+    return pocketStartupPromise;
+  }
+
+  // Cooldown after failure to prevent repeated spawn attempts
+  if (pocketLastFailure && Date.now() - pocketLastFailure < POCKET_STARTUP_COOLDOWN_MS) {
+    const remainingSec = Math.ceil(
+      (POCKET_STARTUP_COOLDOWN_MS - (Date.now() - pocketLastFailure)) / 1000,
+    );
+    logVerbose(`TTS: pocket-tts startup on cooldown (${remainingSec}s remaining)`);
+    return false;
+  }
+
+  // Start new startup process
+  pocketStartupPromise = (async () => {
+    try {
+      const { spawn } = await import("node:child_process");
+      const { host, port } = parsePocketBaseUrl(config.baseUrl);
+
+      const args = ["serve", "--host", host, "--port", String(port)];
+
+      // Add voice if specified
+      if (config.voice) {
+        args.push("--voice", config.voice);
+      }
+
+      logVerbose(`TTS: Starting pocket-tts server: pocket-tts ${args.join(" ")}`);
+
+      pocketProcess = spawn("pocket-tts", args, {
+        stdio: ["ignore", "ignore", "pipe"], // stdin: ignore, stdout: ignore (prevent buffer hang), stderr: pipe
+        detached: false,
+      });
+
+      // Register cleanup handlers only when we actually spawn a process
+      registerPocketCleanupHandlers();
+
+      let spawnError: Error | null = null;
+
+      pocketProcess.on("error", (err) => {
+        spawnError = err;
+        pocketProcess = null;
+      });
+
+      pocketProcess.on("exit", (code, signal) => {
+        logVerbose(`TTS: pocket-tts exited (code=${code}, signal=${signal})`);
+        pocketProcess = null;
+      });
+
+      // Capture stderr for debugging
+      pocketProcess.stderr?.on("data", (data: Buffer) => {
+        const msg = data.toString().trim();
+        if (msg) {
+          logVerbose(`TTS: pocket-tts: ${msg}`);
+        }
+      });
+
+      // Wait for server to become healthy (up to 30s for model loading)
+      const maxWait = 30000;
+      const pollInterval = 500;
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < maxWait) {
+        await new Promise((r) => setTimeout(r, pollInterval));
+
+        // Check for spawn error (e.g., pocket-tts not installed)
+        if (spawnError) {
+          const err = spawnError as Error; // Type narrowing doesn't work across async callbacks
+          const hint = err.message.includes("ENOENT")
+            ? " (is pocket-tts installed? Run: pip install pocket-tts)"
+            : "";
+          logVerbose(`TTS: pocket-tts spawn failed: ${err.message}${hint}`);
+          pocketLastFailure = Date.now();
+          return false;
+        }
+
+        if (!pocketProcess) {
+          // Process died during startup
+          pocketLastFailure = Date.now();
+          return false;
+        }
+
+        const healthy = await checkPocketHealth(config.baseUrl, 2000);
+        if (healthy) {
+          logVerbose(`TTS: pocket-tts server ready after ${Date.now() - startTime}ms`);
+          pocketLastFailure = 0; // Reset on success
+          return true;
+        }
+      }
+
+      logVerbose("TTS: pocket-tts server failed to become healthy within 30s");
+      stopPocketServer();
+      pocketLastFailure = Date.now();
+      return false;
+    } catch (err) {
+      logVerbose(
+        `TTS: Failed to start pocket-tts: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      pocketLastFailure = Date.now();
+      return false;
+    } finally {
+      pocketStartupPromise = null;
+    }
+  })();
+
+  return pocketStartupPromise;
+}
+
+function stopPocketServer(): void {
+  if (pocketProcess) {
+    logVerbose("TTS: Stopping pocket-tts server");
+    pocketProcess.kill("SIGTERM");
+    pocketProcess = null;
+  }
+}
+
+// Track if cleanup handlers are registered (prevents duplicate listeners)
+let pocketHandlersRegistered = false;
+
+function registerPocketCleanupHandlers(): void {
+  if (pocketHandlersRegistered) {
+    return;
+  }
+  pocketHandlersRegistered = true;
+  // Clean up on process exit (don't call process.exit - let OpenClaw handle graceful shutdown)
+  process.on("exit", stopPocketServer);
+  process.on("SIGINT", stopPocketServer);
+  process.on("SIGTERM", stopPocketServer);
 }
 
 export async function textToSpeech(params: {
@@ -624,6 +907,67 @@ export async function textToSpeech(params: {
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
+          voiceCompatible,
+        };
+      }
+
+      if (provider === "pocket") {
+        if (!config.pocket.enabled) {
+          lastError = "pocket: disabled";
+          continue;
+        }
+
+        // Check if pocket-tts server is running
+        let isHealthy = await checkPocketHealth(config.pocket.baseUrl, config.timeoutMs);
+
+        // Try auto-starting if configured and not healthy
+        if (!isHealthy && config.pocket.autoStart) {
+          logVerbose("TTS: pocket-tts not running, attempting auto-start...");
+          const started = await startPocketServer(config.pocket);
+          if (started) {
+            isHealthy = true;
+          }
+        }
+
+        if (!isHealthy) {
+          const hint = config.pocket.autoStart
+            ? "auto-start failed"
+            : "run `pocket-tts serve` or set pocket.autoStart=true";
+          lastError = `pocket: server not running (${hint})`;
+          continue;
+        }
+
+        // Support voice override from model directives
+        const pocketVoice = params.overrides?.pocket?.voice ?? config.pocket.voice;
+
+        // Warn if voice looks invalid (but still try - server will give authoritative error)
+        if (pocketVoice && !isValidPocketVoice(pocketVoice)) {
+          logVerbose(`TTS: ${formatPocketVoiceWarning(pocketVoice)}`);
+        }
+
+        const audioBuffer = await pocketTTS({
+          text: params.text,
+          baseUrl: config.pocket.baseUrl,
+          voice: pocketVoice,
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+
+        // Pocket TTS returns WAV format
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: "wav",
           voiceCompatible,
         };
       }
@@ -939,9 +1283,17 @@ export const _test = {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  POCKET_VOICES,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  checkPocketHealth,
+  normalizePocketBaseUrl,
+  parsePocketBaseUrl,
+  isValidPocketVoice,
+  formatPocketVoiceWarning,
+  startPocketServer,
+  stopPocketServer,
 };

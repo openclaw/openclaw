@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "pocket";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,17 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Pocket TTS (local CPU-based TTS) configuration. */
+  pocket?: {
+    /** Explicitly allow Pocket TTS usage (no API key required, but requires pocket-tts serve running). */
+    enabled?: boolean;
+    /** Base URL for pocket-tts serve (default: http://localhost:8000). Used for both API calls and auto-start binding. */
+    baseUrl?: string;
+    /** Voice name or URL (built-in: alba, marius, javert, jean, fantine, cosette, eponine, azelma; or hf:// URL). */
+    voice?: string;
+    /** Auto-start pocket-tts serve if not running (default: false). Requires pocket-tts to be installed. */
+    autoStart?: boolean;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
