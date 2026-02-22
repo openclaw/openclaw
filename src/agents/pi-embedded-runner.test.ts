@@ -245,54 +245,54 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string) => {
 };
 
 describe("runEmbeddedPiAgent", () => {
-  it("persists the user message when prompt fails before assistant output", async () => {
-    const sessionFile = nextSessionFile();
-    const cfg = makeOpenAiConfig(["mock-error"]);
-
-    const result = await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey: testSessionKey,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "boom",
-      provider: "openai",
-      model: "mock-error",
-      timeoutMs: 5_000,
-      agentDir,
-      runId: nextRunId("prompt-error"),
-      enqueue: immediateEnqueue,
-    });
-    expect(result.payloads?.[0]?.isError).toBe(true);
-
-    const messages = await readSessionMessages(sessionFile);
-    const userIndex = messages.findIndex(
-      (message) => message?.role === "user" && textFromContent(message.content) === "boom",
-    );
-    expect(userIndex).toBeGreaterThanOrEqual(0);
-  });
-
-  it("fails fast on prompt transport errors", async () => {
-    const sessionFile = nextSessionFile();
-    const cfg = makeOpenAiConfig(["mock-throw"]);
-
-    await expect(
-      runEmbeddedPiAgent({
+  it("handles prompt error paths without dropping user state", async () => {
+    for (const testCase of [
+      {
+        label: "assistant error response keeps user message",
+        model: "mock-error",
+        prompt: "boom",
+        runIdPrefix: "prompt-error",
+        expectReject: false,
+      },
+      {
+        label: "transport error fails fast before writing transcript",
+        model: "mock-throw",
+        prompt: "transport error",
+        runIdPrefix: "transport-error",
+        expectReject: true,
+      },
+    ] as const) {
+      const sessionFile = nextSessionFile();
+      const cfg = makeOpenAiConfig([testCase.model]);
+      const execution = runEmbeddedPiAgent({
         sessionId: "session:test",
         sessionKey: testSessionKey,
         sessionFile,
         workspaceDir,
         config: cfg,
-        prompt: "transport error",
+        prompt: testCase.prompt,
         provider: "openai",
-        model: "mock-throw",
+        model: testCase.model,
         timeoutMs: 5_000,
         agentDir,
-        runId: nextRunId("transport-error"),
+        runId: nextRunId(testCase.runIdPrefix),
         enqueue: immediateEnqueue,
-      }),
-    ).rejects.toThrow("transport failed");
-    await expect(fs.stat(sessionFile)).rejects.toBeTruthy();
+      });
+
+      if (testCase.expectReject) {
+        await expect(execution, testCase.label).rejects.toThrow("transport failed");
+        await expect(fs.stat(sessionFile), testCase.label).rejects.toBeTruthy();
+      } else {
+        const result = await execution;
+        expect(result.payloads?.[0]?.isError, testCase.label).toBe(true);
+
+        const messages = await readSessionMessages(sessionFile);
+        const userIndex = messages.findIndex(
+          (message) => message?.role === "user" && textFromContent(message.content) === "boom",
+        );
+        expect(userIndex, testCase.label).toBeGreaterThanOrEqual(0);
+      }
+    }
   });
 
   it(
