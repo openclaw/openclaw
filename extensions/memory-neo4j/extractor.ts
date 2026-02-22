@@ -19,6 +19,18 @@ import type { Neo4jMemoryClient } from "./neo4j-client.js";
 import type { EntityType, ExtractionResult, Logger, MemoryCategory } from "./schema.js";
 import { ALLOWED_RELATIONSHIP_TYPES, ENTITY_TYPES, MEMORY_CATEGORIES } from "./schema.js";
 
+/**
+ * Strip markdown code fences from LLM output that wraps JSON in ```json ... ```.
+ * Some providers (e.g. OpenRouter via Bedrock) ignore response_format: json_object
+ * and return markdown-wrapped JSON, which breaks JSON.parse().
+ */
+function stripCodeFences(text: string): string {
+  const trimmed = text.trim();
+  // Match ```json ... ``` or ``` ... ``` (with optional language tag)
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+  return match ? match[1].trim() : trimmed;
+}
+
 // ============================================================================
 // Extraction Prompt
 // ============================================================================
@@ -141,7 +153,7 @@ export async function extractEntities(
   }
 
   try {
-    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const parsed = JSON.parse(stripCodeFences(content)) as Record<string, unknown>;
     return { result: validateExtractionResult(parsed), transientFailure: false };
   } catch {
     // JSON parse failure is permanent — LLM returned malformed output
@@ -181,7 +193,7 @@ export async function extractTagsOnly(
   }
 
   try {
-    const parsed = JSON.parse(content) as { tags?: unknown };
+    const parsed = JSON.parse(stripCodeFences(content)) as { tags?: unknown };
     const rawTags = Array.isArray(parsed.tags) ? parsed.tags : [];
     return rawTags
       .filter(
@@ -463,7 +475,7 @@ Return JSON: {"keep": "a"|"b"|"both", "reason": "brief explanation"}`,
     );
     if (!content) return "skip";
 
-    const parsed = JSON.parse(content) as { keep?: string };
+    const parsed = JSON.parse(stripCodeFences(content)) as { keep?: string };
     const keep = parsed.keep;
     if (keep === "a" || keep === "b" || keep === "both") return keep;
     return "skip";
@@ -647,7 +659,7 @@ export async function rateImportance(text: string, config: ExtractionConfig): Pr
       return 0.5;
     }
 
-    const parsed = JSON.parse(content) as { score?: unknown };
+    const parsed = JSON.parse(stripCodeFences(content)) as { score?: unknown };
     const score = typeof parsed.score === "number" ? parsed.score : NaN;
     if (Number.isNaN(score)) {
       return 0.5;
@@ -725,7 +737,7 @@ Return JSON: {"classification": "stale"|"lasting", "reason": "brief explanation"
       return "lasting";
     }
 
-    const parsed = JSON.parse(content) as { classification?: string };
+    const parsed = JSON.parse(stripCodeFences(content)) as { classification?: string };
     if (parsed.classification === "stale") {
       return "stale";
     }
@@ -797,7 +809,7 @@ export async function isSemanticDuplicate(
       return false;
     }
 
-    const parsed = JSON.parse(content) as { verdict?: string };
+    const parsed = JSON.parse(stripCodeFences(content)) as { verdict?: string };
     return parsed.verdict === "duplicate";
   } catch {
     return false;
