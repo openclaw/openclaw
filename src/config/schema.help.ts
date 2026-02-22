@@ -43,6 +43,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Insecure-auth toggle; Control UI still enforces secure context + device identity unless dangerouslyDisableDeviceAuth is enabled.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "DANGEROUS. Disable Control UI device identity checks (token/password only).",
+  "gateway.rejectUntrustedProxyHeaders":
+    "Reject WebSocket connections that send X-Forwarded-For/X-Real-IP from non-trusted sources. Default: true on non-loopback binds and trusted-proxy auth mode.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',

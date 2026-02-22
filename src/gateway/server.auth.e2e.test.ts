@@ -33,6 +33,23 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
   });
 }
 
+async function waitForWsCloseInfo(
+  ws: WebSocket,
+  timeoutMs: number,
+): Promise<{ code: number; reason: string } | null> {
+  return await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      ws.off("close", onClose);
+      resolve(null);
+    }, timeoutMs);
+    const onClose = (code: number, reason: Buffer) => {
+      clearTimeout(timer);
+      resolve({ code, reason: reason.toString() });
+    };
+    ws.once("close", onClose);
+  });
+}
+
 const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   await new Promise<void>((resolve) => ws.once("open", resolve));
@@ -683,6 +700,91 @@ describe("gateway server auth/connect", () => {
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("secure context");
       ws.close();
+    });
+  });
+
+  describe("untrusted proxy header policy", () => {
+    test("rejects proxy headers from untrusted sources when explicitly enabled", async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      try {
+        await writeConfigFile({
+          gateway: {
+            bind: "loopback",
+            trustedProxies: [],
+            rejectUntrustedProxyHeaders: true,
+          },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any);
+        await withGatewayServer(async ({ port }) => {
+          const ws = await openWs(port, { "x-forwarded-for": "203.0.113.10" });
+          const closeInfoPromise = waitForWsCloseInfo(ws, 2_000);
+          const res = await connectReq(ws, { token: "secret", device: null });
+          expect(res.ok).toBe(false);
+          expect(res.error?.message ?? "").toContain("proxy headers from untrusted source");
+          const closeInfo = await closeInfoPromise;
+          expect(closeInfo?.code).toBe(1008);
+        });
+      } finally {
+        await writeConfigFile({});
+        restoreGatewayToken(prevToken);
+      }
+    });
+
+    test("rejects proxy headers from untrusted sources by default on non-loopback binds", async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      try {
+        await writeConfigFile({
+          gateway: {
+            bind: "lan",
+            trustedProxies: [],
+          },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any);
+        await withGatewayServer(async ({ port }) => {
+          const ws = await openWs(port, { "x-forwarded-for": "203.0.113.11" });
+          const closeInfoPromise = waitForWsCloseInfo(ws, 2_000);
+          const res = await connectReq(ws, { token: "secret", device: null });
+          expect(res.ok).toBe(false);
+          expect(res.error?.message ?? "").toContain("proxy headers from untrusted source");
+          const closeInfo = await closeInfoPromise;
+          expect(closeInfo?.code).toBe(1008);
+        });
+      } finally {
+        await writeConfigFile({});
+        restoreGatewayToken(prevToken);
+      }
+    });
+
+    test("allows untrusted proxy headers when explicitly disabled", async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      try {
+        await writeConfigFile({
+          gateway: {
+            bind: "lan",
+            trustedProxies: [],
+            rejectUntrustedProxyHeaders: false,
+          },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any);
+        await withGatewayServer(async ({ port }) => {
+          const ws = await openWs(port, { "x-forwarded-for": "203.0.113.12" });
+          const res = await connectReq(ws, { token: "secret", device: null });
+          expect(res.ok).toBe(true);
+          ws.close();
+        });
+      } finally {
+        await writeConfigFile({});
+        restoreGatewayToken(prevToken);
+      }
     });
   });
 

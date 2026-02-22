@@ -460,6 +460,7 @@ export const OpenClawSchema = z
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
         allowRealIpFallback: z.boolean().optional(),
+        rejectUntrustedProxyHeaders: z.boolean().optional(),
         tools: z
           .object({
             deny: z.array(z.string()).optional(),

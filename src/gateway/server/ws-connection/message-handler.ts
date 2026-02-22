@@ -149,6 +149,14 @@ export function attachGatewayWsMessageHandler(params: {
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const rejectUntrustedProxyHeaders = (() => {
+    const configured = configSnapshot.gateway?.rejectUntrustedProxyHeaders;
+    if (typeof configured === "boolean") {
+      return configured;
+    }
+    const bindMode = configSnapshot.gateway?.bind ?? "loopback";
+    return bindMode !== "loopback" || resolvedAuth.mode === "trusted-proxy";
+  })();
   const clientIp = resolveClientIp({
     remoteAddr,
     forwardedFor,
@@ -179,7 +187,9 @@ export function attachGatewayWsMessageHandler(params: {
   if (hasUntrustedProxyHeaders) {
     logWsControl.warn(
       "Proxy headers detected from untrusted address. " +
-        "Connection will not be treated as local. " +
+        (rejectUntrustedProxyHeaders
+          ? "Connection will be rejected. "
+          : "Connection will not be treated as local. ") +
         "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
     );
   }
@@ -291,6 +301,20 @@ export function attachGatewayWsMessageHandler(params: {
             error: errorShape(code, message, options),
           });
         };
+
+        if (hasUntrustedProxyHeaders && rejectUntrustedProxyHeaders) {
+          const errorMessage =
+            "proxy headers from untrusted source (configure gateway.trustedProxies or disable gateway.rejectUntrustedProxyHeaders)";
+          markHandshakeFailure("trusted_proxy_untrusted_source", {
+            remoteAddr: remoteAddr ?? "n/a",
+            forwardedFor: forwardedFor ?? "n/a",
+            realIp: realIp ?? "n/a",
+            trustedProxies,
+          });
+          sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
+          close(1008, truncateCloseReason(errorMessage));
+          return;
+        }
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
