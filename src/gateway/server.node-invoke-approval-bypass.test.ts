@@ -65,6 +65,7 @@ describe("node.invoke approval bypass", () => {
     const started = await startServerWithClient("secret", { controlUiEnabled: true });
     server = started.server;
     port = started.port;
+    started.ws.close();
   });
 
   afterAll(async () => {
