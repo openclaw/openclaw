@@ -219,7 +219,7 @@ async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
 }): Promise<string | undefined> {
-  const RETRY_INTERVAL_MS = 100;
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? 25 : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
   let result: string | undefined;
   while (Date.now() < deadline) {
@@ -241,7 +241,7 @@ async function waitForSubagentOutputChange(params: {
   if (!baseline) {
     return params.baselineReply;
   }
-  const RETRY_INTERVAL_MS = 100;
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? 25 : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 5_000));
   let latest = params.baselineReply;
   while (Date.now() < deadline) {
