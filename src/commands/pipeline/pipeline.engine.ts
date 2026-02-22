@@ -12,6 +12,17 @@ export type PipelineRunOptions = {
   dryRun?: boolean;
 };
 
+type PipelineRunSummary = {
+  ok: boolean;
+  name: string;
+  runDir: string;
+  stepsPlanned: number;
+  loopsPlanned: number;
+  loopsRun: number;
+  stepsRun: number;
+  records: StepRunRecord[];
+};
+
 type StepRunRecord = {
   id: string;
   phase: string;
@@ -60,7 +71,21 @@ async function runAgentTurn(params: {
   message: string;
   timeoutMs: number;
 }) {
+  const startedAt = now();
   const idempotencyKey = crypto.randomUUID();
+
+  // Helpful for diagnosing “hangs” where the pipeline is waiting on gateway/agent I/O.
+  // Keep this behind an env toggle so normal runs stay clean.
+  const debug = process.env.PIPELINE_DEBUG === "1";
+  if (debug) {
+    // avoid dumping full prompt bodies in debug by default
+    const preview =
+      params.message.length > 240 ? params.message.slice(0, 240) + "…" : params.message;
+    console.error(
+      `[pipeline][debug] agent.turn start agentId=${params.agentId ?? "(default)"} sessionKey=${params.sessionKey} timeoutMs=${params.timeoutMs} msgPreview=${JSON.stringify(preview)}`,
+    );
+  }
+
   const resp = await callGateway<{ runId?: string }>({
     method: "agent",
     params: {
@@ -69,22 +94,49 @@ async function runAgentTurn(params: {
       sessionKey: params.sessionKey,
       deliver: false,
       // channel omitted; gateway will infer/default
-
       lane: "pipeline",
-      timeout: 0,
+      // gateway CLI expects timeout as positive integer seconds; omit if no explicit timeout.
+      // NOTE: per-turn wall clock timeout is enforced by our agent.wait loop below.
+
       idempotencyKey,
     },
     timeoutMs: 10_000,
   });
+
   const runId = typeof resp?.runId === "string" && resp.runId ? resp.runId : idempotencyKey;
 
-  const waitMs = params.timeoutMs;
-  const wait = await callGateway<{ status?: string }>({
-    method: "agent.wait",
-    params: { runId, timeoutMs: waitMs },
-    timeoutMs: waitMs + 2_000,
-  });
-  return { runId, status: wait?.status ?? "unknown" };
+  // If the first wait never returns, poll in smaller chunks so we can emit progress.
+  const deadlineAt = startedAt + params.timeoutMs;
+  let status = "unknown";
+  let waits = 0;
+  while (now() < deadlineAt) {
+    const remaining = deadlineAt - now();
+    const slice = Math.min(remaining, 15_000);
+    waits++;
+
+    if (debug) {
+      console.error(`[pipeline][debug] agent.wait #${waits} runId=${runId} sliceMs=${slice}`);
+    }
+
+    const wait = await callGateway<{ status?: string }>({
+      method: "agent.wait",
+      params: { runId, timeoutMs: slice },
+      timeoutMs: slice + 2_000,
+    });
+
+    status = wait?.status ?? status;
+    if (status && status !== "running" && status !== "queued" && status !== "unknown") {
+      break;
+    }
+  }
+
+  if (debug) {
+    console.error(
+      `[pipeline][debug] agent.turn end runId=${runId} status=${status} elapsedMs=${now() - startedAt}`,
+    );
+  }
+
+  return { runId, status };
 }
 
 function readVerdictFromFile(workspaceRoot: string, filePath: string): string {
@@ -372,7 +424,7 @@ export async function runPipeline(spec: PipelineSpecZ, opts: PipelineRunOptions)
 
       // eslint-disable-next-line no-console
       console.log(
-        `[pipeline] loop '${rule.id}' iteration ${iter}/${maxIterations} (verdict=${verdict}); wrote ${fixOut.outRel}; rerunning: ${rule.rerunStepIds.join(
+        `[pipeline] loop '${rule.id}' iteration ${iter}/${maxIterations} (verdict=${verdict}); wrote ${fixOutRel}; rerunning: ${rule.rerunStepIds.join(
           ", ",
         )}`,
       );
@@ -455,10 +507,13 @@ export async function runPipeline(spec: PipelineSpecZ, opts: PipelineRunOptions)
     }
   }
 
-  const summary = {
+  const summary: PipelineRunSummary = {
     ok: true,
     name: spec.name,
     runDir: spec.runDir,
+    stepsPlanned: steps.filter((s) => phaseAllowed(s.phase)).length,
+    loopsPlanned: (spec.loops ?? []).length,
+    loopsRun: Array.from(loopIterations.values()).reduce((a, b) => a + b, 0),
     stepsRun: records.length,
     records,
   };
