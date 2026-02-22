@@ -28,6 +28,9 @@ describe("probeSignal", () => {
     expect(res.ok).toBe(true);
     expect(res.version).toBe("0.13.22");
     expect(res.status).toBe(200);
+    expect(signalCheckMock).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: undefined,
+    });
   });
 
   it("returns ok=false when /check fails", async () => {
@@ -42,6 +45,24 @@ describe("probeSignal", () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
+  });
+
+  it("forwards configured account to signal health checks", async () => {
+    signalCheckMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    signalRpcRequestMock.mockResolvedValueOnce({ version: "0.13.22" });
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, {
+      account: "+15550001111",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(signalCheckMock).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      account: "+15550001111",
+    });
   });
 });
 

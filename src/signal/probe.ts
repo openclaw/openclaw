@@ -20,7 +20,11 @@ function parseSignalVersion(value: unknown): string | null {
   return null;
 }
 
-export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<SignalProbe> {
+export async function probeSignal(
+  baseUrl: string,
+  timeoutMs: number,
+  opts: { account?: string } = {},
+): Promise<SignalProbe> {
   const started = Date.now();
   const result: SignalProbe = {
     ok: false,
@@ -29,7 +33,7 @@ export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<S
     elapsedMs: 0,
     version: null,
   };
-  const check = await signalCheck(baseUrl, timeoutMs);
+  const check = await signalCheck(baseUrl, timeoutMs, { account: opts.account });
   if (!check.ok) {
     return {
       ...result,

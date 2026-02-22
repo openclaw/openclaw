@@ -54,7 +54,10 @@ const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10)
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
+    !isWindows &&
+    supportsVmForks &&
+    !(isCI && isMacOS));
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const runs = [
   ...(useVmForks

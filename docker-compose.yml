@@ -12,8 +12,8 @@ services:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:
@@ -44,3 +44,18 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  signal:
+    # Pin to a known-good tag; avoid :latest drift in production.
+    image: bbernhard/signal-cli-rest-api:${OPENCLAW_SIGNAL_IMAGE_TAG:-0.97}
+    environment:
+      # Prefer native mode by default to reduce JVM spawn/lock churn in normal mode.
+      MODE: ${OPENCLAW_SIGNAL_MODE:-native}
+      # Use JAVA_OPTS (not JAVA_TOOL_OPTIONS) so JVM flags don't pollute stdout JSON payloads.
+      JAVA_OPTS: "${OPENCLAW_SIGNAL_JAVA_OPTS:--XX:TieredStopAtLevel=1 -XX:CICompilerCount=2}"
+    # Cap container CPU so signal-cli bursts don't starve the host.
+    cpus: ${OPENCLAW_SIGNAL_CPUS:-0.5}
+    mem_limit: ${OPENCLAW_SIGNAL_MEM_LIMIT:-1g}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}/signal:/home/.local/share/signal-cli
+    restart: unless-stopped

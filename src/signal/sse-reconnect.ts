@@ -14,15 +14,17 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
 type RunSignalSseLoopParams = {
   baseUrl: string;
   account?: string;
+  receivePollTimeoutSeconds?: number;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
-  onEvent: (event: SignalSseEvent) => void;
+  onEvent: (event: SignalSseEvent) => void | Promise<void>;
   policy?: Partial<BackoffPolicy>;
 };
 
 export async function runSignalSseLoop({
   baseUrl,
   account,
+  receivePollTimeoutSeconds,
   abortSignal,
   runtime,
   onEvent,
@@ -46,10 +48,11 @@ export async function runSignalSseLoop({
       await streamSignalEvents({
         baseUrl,
         account,
+        receivePollTimeoutSeconds,
         abortSignal,
-        onEvent: (event) => {
+        onEvent: async (event) => {
           reconnectAttempts = 0;
-          onEvent(event);
+          await onEvent(event);
         },
       });
       if (abortSignal?.aborted) {

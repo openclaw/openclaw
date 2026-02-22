@@ -54,7 +54,17 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             BASE="${{ github.event.before }}"
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+            # pull_request.base.sha can lag behind when main moves quickly.
+            # Resolve from the current base branch head to avoid widening scope.
+            if git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
+              BASE="$(git merge-base "origin/${BASE_REF}" HEAD || true)"
+            else
+              BASE=""
+            fi
+            if [ -z "$BASE" ]; then
+              BASE="${{ github.event.pull_request.base.sha }}"
+            fi
           fi
 
           CHANGED="$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")"

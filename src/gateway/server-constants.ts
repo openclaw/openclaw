@@ -31,6 +31,6 @@ export const getHandshakeTimeoutMs = () => {
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };
 export const TICK_INTERVAL_MS = 30_000;
-export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
+export const HEALTH_REFRESH_INTERVAL_MS = 300_000;
 export const DEDUPE_TTL_MS = 5 * 60_000;
 export const DEDUPE_MAX = 1000;
