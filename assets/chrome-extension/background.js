@@ -23,8 +23,18 @@ const tabBySession = new Map()
 /** @type {Map<string, number>} */
 const childSessionToTab = new Map()
 
-/** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
+/** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void, timeoutId:number}>} */
 const pending = new Map()
+
+// ========== NEW: Operation locks to prevent double-attach races ==========
+/** @type {Set<number>} */
+const tabOperationLocks = new Set()
+
+// ========== NEW: Reconnection state ==========
+let reconnectTimer = null
+let reconnectAttempts = 0
+const MAX_RECONNECT_DELAY = 30000 // 30 seconds cap
+const REQUEST_TIMEOUT = 30000 // 30 seconds for pending requests
 
 function nowStack() {
   try {
@@ -55,8 +65,60 @@ function setBadge(tabId, kind) {
   void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
 }
 
+function isUnsupportedTabUrl(url) {
+  return (
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-extension://') ||
+    url.startsWith('about:') ||
+    url.startsWith('edge://') ||
+    url.startsWith('devtools://')
+  )
+}
+
+// ========== NEW: State persistence for MV3 service worker restarts ==========
+async function saveState() {
+  try {
+    const state = {
+      attachedTabs: Array.from(tabs.entries()),
+      sessionMappings: Array.from(tabBySession.entries()),
+      childSessions: Array.from(childSessionToTab.entries()),
+      nextSession
+    }
+    await chrome.storage.local.set({ extensionState: state })
+  } catch (err) {
+    console.warn('Failed to save state:', err)
+  }
+}
+
+async function restoreState() {
+  try {
+    const { extensionState } = await chrome.storage.local.get(['extensionState'])
+    if (extensionState) {
+      // Restore nextSession counter to avoid ID conflicts
+      if (typeof extensionState.nextSession === 'number') {
+        nextSession = extensionState.nextSession
+      }
+      
+      // NOTE: We do NOT restore tab attachment state.
+      // After a service worker restart or extension reload, debugger attachments
+      // are lost. Restoring stale state causes the click handler to think tabs
+      // are "connected" when they're not, leading to detach-instead-of-attach bugs.
+      // Instead, we just restore the session counter and let the user re-attach
+      // via the icon click (which triggers attachAllOpenTabs).
+      console.log('State restored (nextSession counter only, tabs cleared)')
+    }
+    
+    // Clear any stale persisted tab state
+    await chrome.storage.local.remove(['extensionState'])
+  } catch (err) {
+    console.warn('Failed to restore state:', err)
+  }
+}
+
 async function ensureRelayConnection() {
   if (relayWs && relayWs.readyState === WebSocket.OPEN) return
+  
+  // ========== FIXED: Race condition in promise caching ==========
   if (relayConnectPromise) return await relayConnectPromise
 
   relayConnectPromise = (async () => {
@@ -99,7 +161,11 @@ async function ensureRelayConnection() {
       }
     })
 
-    ws.onmessage = (event) => void onRelayMessage(String(event.data || ''))
+    ws.onmessage = (event) => {
+      onRelayMessage(String(event.data || '')).catch(err => {
+        console.warn('Message handling failed:', err)
+      })
+    }
     ws.onclose = () => onRelayClosed('closed')
     ws.onerror = () => onRelayClosed('error')
 
@@ -117,24 +183,105 @@ async function ensureRelayConnection() {
   }
 }
 
-function onRelayClosed(reason) {
-  relayWs = null
-  for (const [id, p] of pending.entries()) {
-    pending.delete(id)
-    p.reject(new Error(`Relay disconnected (${reason})`))
-  }
-
+// ========== NEW: Auto-reconnection with exponential backoff ==========
+function scheduleReconnect() {
+  if (reconnectTimer) return
+  
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY)
+  console.log(`Scheduling reconnect attempt ${reconnectAttempts + 1} in ${delay}ms`)
+  
+  // Update badge to show reconnecting state
   for (const tabId of tabs.keys()) {
-    void chrome.debugger.detach({ tabId }).catch(() => {})
     setBadge(tabId, 'connecting')
     void chrome.action.setTitle({
       tabId,
-      title: 'OpenClaw Browser Relay: disconnected (click to re-attach)',
+      title: `OpenClaw Browser Relay: reconnecting... (attempt ${reconnectAttempts + 1})`,
     })
   }
-  tabs.clear()
-  tabBySession.clear()
-  childSessionToTab.clear()
+  
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null
+    reconnectAttempts++
+    
+    try {
+      await ensureRelayConnection()
+      console.log('Reconnection successful')
+      reconnectAttempts = 0
+      
+      // Re-attach previously tracked tabs
+      await reattachKnownTabs()
+    } catch (err) {
+      console.warn(`Reconnect attempt ${reconnectAttempts} failed:`, err.message)
+      if (reconnectAttempts < 10) { // Give up after 10 attempts
+        scheduleReconnect()
+      } else {
+        console.error('Max reconnection attempts reached, giving up')
+        // Set error badge for all tracked tabs
+        for (const tabId of tabs.keys()) {
+          setBadge(tabId, 'error')
+          void chrome.action.setTitle({
+            tabId,
+            title: 'OpenClaw Browser Relay: connection failed (click to retry)',
+          })
+        }
+      }
+    }
+  }, delay)
+}
+
+async function reattachKnownTabs() {
+  // Save current tab IDs before cleanup — debuggers may still be attached
+  // from before the WS drop (onRelayClosed no longer detaches them)
+  const tabsToReattach = Array.from(tabs.keys())
+  
+  for (const tabId of tabsToReattach) {
+    try {
+      const tab = await chrome.tabs.get(tabId)
+      if (tab) {
+        // Detach first to avoid "Another debugger is already attached" errors
+        try { await chrome.debugger.detach({ tabId }) } catch { /* may not be attached */ }
+        
+        // Clear stale state for this tab before re-attaching
+        const oldState = tabs.get(tabId)
+        if (oldState?.sessionId) tabBySession.delete(oldState.sessionId)
+        tabs.delete(tabId)
+        
+        console.log(`Re-attaching tab ${tabId}`)
+        await attachTab(tabId, { skipAttachedEvent: false })
+      }
+    } catch (err) {
+      console.warn(`Failed to re-attach tab ${tabId}:`, err.message)
+      tabs.delete(tabId)
+    }
+  }
+  
+  await saveState()
+}
+
+function onRelayClosed(reason) {
+  relayWs = null
+  
+  // Clean up pending requests with timeout errors
+  for (const [id, p] of pending.entries()) {
+    pending.delete(id)
+    clearTimeout(p.timeoutId)
+    p.reject(new Error(`Relay disconnected (${reason})`))
+  }
+
+  // ========== NEW: Save state before disconnecting ==========
+  void saveState()
+
+  // ========== CHANGED: Don't detach debuggers immediately, just update badge ==========
+  for (const tabId of tabs.keys()) {
+    setBadge(tabId, 'connecting')
+    void chrome.action.setTitle({
+      tabId,
+      title: 'OpenClaw Browser Relay: disconnected (reconnecting...)',
+    })
+  }
+  
+  // ========== NEW: Auto-reconnect instead of giving up ==========
+  scheduleReconnect()
 }
 
 function sendToRelay(payload) {
@@ -156,14 +303,35 @@ async function maybeOpenHelpOnce() {
   }
 }
 
+// ========== FIXED: Pending request timeouts to prevent memory leaks ==========
 function requestFromRelay(command) {
   const id = command.id
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
+    // Set up timeout to prevent memory leaks
+    const timeoutId = setTimeout(() => {
+      const p = pending.get(id)
+      if (p) {
+        pending.delete(id)
+        reject(new Error('Request timeout after 30s'))
+      }
+    }, REQUEST_TIMEOUT)
+    
+    const wrappedResolve = (v) => {
+      clearTimeout(timeoutId)
+      resolve(v)
+    }
+    
+    const wrappedReject = (e) => {
+      clearTimeout(timeoutId)
+      reject(e)
+    }
+    
+    pending.set(id, { resolve: wrappedResolve, reject: wrappedReject, timeoutId })
     try {
       sendToRelay(command)
     } catch (err) {
       pending.delete(id)
+      clearTimeout(timeoutId)
       reject(err instanceof Error ? err : new Error(String(err)))
     }
   })
@@ -191,6 +359,7 @@ async function onRelayMessage(text) {
     const p = pending.get(msg.id)
     if (!p) return
     pending.delete(msg.id)
+    clearTimeout(p.timeoutId)
     if (msg.error) p.reject(new Error(String(msg.error)))
     else p.resolve(msg.result)
     return
@@ -233,8 +402,9 @@ async function attachTab(tabId, opts = {}) {
     throw new Error('Target.getTargetInfo returned no targetId')
   }
 
-  const sessionId = `cb-tab-${nextSession++}`
-  const attachOrder = nextSession
+  const sessionNumber = nextSession++
+  const sessionId = `cb-tab-${sessionNumber}`
+  const attachOrder = sessionNumber
 
   tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
   tabBySession.set(sessionId, tabId)
@@ -258,11 +428,41 @@ async function attachTab(tabId, opts = {}) {
   }
 
   setBadge(tabId, 'on')
+  
+  // ========== NEW: Save state after successful attach ==========
+  await saveState()
+  
   return { sessionId, targetId }
 }
 
 async function detachTab(tabId, reason) {
   const tab = tabs.get(tabId)
+  
+  // ========== NEW: Send detach events for child sessions ==========
+  const childSessionsToDetach = []
+  for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
+    if (parentTabId === tabId) {
+      childSessionsToDetach.push(childSessionId)
+    }
+  }
+  
+  // Send detach events for child sessions first
+  for (const childSessionId of childSessionsToDetach) {
+    try {
+      sendToRelay({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: childSessionId, reason: 'parent_detached' },
+        },
+      })
+    } catch (err) {
+      console.warn('Failed to send child detach event:', err)
+    }
+    childSessionToTab.delete(childSessionId)
+  }
+  
+  // Send detach event for main session
   if (tab?.sessionId && tab?.targetId) {
     try {
       sendToRelay({
@@ -272,22 +472,18 @@ async function detachTab(tabId, reason) {
           params: { sessionId: tab.sessionId, targetId: tab.targetId, reason },
         },
       })
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn('Failed to send detach event:', err)
     }
   }
 
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
   tabs.delete(tabId)
 
-  for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
-    if (parentTabId === tabId) childSessionToTab.delete(childSessionId)
-  }
-
   try {
     await chrome.debugger.detach({ tabId })
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('Failed to detach debugger:', err)
   }
 
   setBadge(tabId, 'off')
@@ -295,41 +491,9 @@ async function detachTab(tabId, reason) {
     tabId,
     title: 'OpenClaw Browser Relay (click to attach/detach)',
   })
-}
-
-async function connectOrToggleForActiveTab() {
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-  const tabId = active?.id
-  if (!tabId) return
-
-  const existing = tabs.get(tabId)
-  if (existing?.state === 'connected') {
-    await detachTab(tabId, 'toggle')
-    return
-  }
-
-  tabs.set(tabId, { state: 'connecting' })
-  setBadge(tabId, 'connecting')
-  void chrome.action.setTitle({
-    tabId,
-    title: 'OpenClaw Browser Relay: connecting to local relay…',
-  })
-
-  try {
-    await ensureRelayConnection()
-    await attachTab(tabId)
-  } catch (err) {
-    tabs.delete(tabId)
-    setBadge(tabId, 'error')
-    void chrome.action.setTitle({
-      tabId,
-      title: 'OpenClaw Browser Relay: relay not running (open options for setup)',
-    })
-    void maybeOpenHelpOnce()
-    // Extra breadcrumbs in chrome://extensions service worker logs.
-    const message = err instanceof Error ? err.message : String(err)
-    console.warn('attach failed', message, nowStack())
-  }
+  
+  // ========== NEW: Save state after detach ==========
+  await saveState()
 }
 
 async function handleForwardCdpCommand(msg) {
@@ -418,10 +582,12 @@ function onDebuggerEvent(source, method, params) {
 
   if (method === 'Target.attachedToTarget' && params?.sessionId) {
     childSessionToTab.set(String(params.sessionId), tabId)
+    void saveState()
   }
 
   if (method === 'Target.detachedFromTarget' && params?.sessionId) {
     childSessionToTab.delete(String(params.sessionId))
+    void saveState()
   }
 
   try {
@@ -433,21 +599,246 @@ function onDebuggerEvent(source, method, params) {
         params,
       },
     })
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('Failed to forward CDP event:', err)
   }
 }
 
+// ========== FIXED: Re-attach on navigation/reload ==========
 function onDebuggerDetach(source, reason) {
   const tabId = source.tabId
   if (!tabId) return
   if (!tabs.has(tabId)) return
-  void detachTab(tabId, reason)
+
+  if (tabOperationLocks.has(tabId)) return
+
+  tabOperationLocks.add(tabId)
+  void (async () => {
+    try {
+      await detachTab(tabId, reason)
+    } finally {
+      tabOperationLocks.delete(tabId)
+    }
+  })()
+
+  // If detached due to navigation/reload, try to re-attach after a delay
+  if (reason === 'target_closed') {
+    setTimeout(async () => {
+      if (tabOperationLocks.has(tabId)) return
+
+      tabOperationLocks.add(tabId)
+      try {
+        const tab = await chrome.tabs.get(tabId)
+        const url = tab?.url || tab?.pendingUrl || ''
+        if (!tab || isUnsupportedTabUrl(url) || relayWs?.readyState !== WebSocket.OPEN) return
+        if (tabs.has(tabId)) return
+
+        console.log(`Re-attaching tab ${tabId} after navigation`)
+        await attachTab(tabId, { skipAttachedEvent: false })
+      } catch (err) {
+        console.warn(`Failed to re-attach tab ${tabId} after navigation:`, err.message)
+      } finally {
+        tabOperationLocks.delete(tabId)
+      }
+    }, 500)
+  }
 }
 
-chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
+// ========== AUTO-ATTACH MODE ==========
+let autoAttachEnabled = false
 
-chrome.runtime.onInstalled.addListener(() => {
-  // Useful: first-time instructions.
-  void chrome.runtime.openOptionsPage()
+async function attachAllOpenTabs() {
+  const allTabs = await chrome.tabs.query({})
+  console.log(`attachAllOpenTabs: found ${allTabs.length} tabs`)
+  let attached = 0, skipped = 0, failed = 0
+  for (const tab of allTabs) {
+    if (!tab.id) { skipped++; continue }
+    if (tabs.has(tab.id)) { skipped++; continue }
+    // Skip chrome:// and extension pages (can't attach debugger)
+    const url = tab.url || tab.pendingUrl || ''
+    if (isUnsupportedTabUrl(url)) {
+      console.log(`Skipping tab ${tab.id}: ${url.substring(0, 60)}`)
+      skipped++
+      continue
+    }
+    if (tabOperationLocks.has(tab.id)) { skipped++; continue }
+    
+    tabOperationLocks.add(tab.id)
+    try {
+      // Verify tab still exists before attaching
+      await chrome.tabs.get(tab.id)
+      console.log(`Auto-attaching tab ${tab.id}: ${url.substring(0, 80)}`)
+      await attachTab(tab.id)
+      attached++
+    } catch (err) {
+      console.warn(`Failed to auto-attach tab ${tab.id} (${url.substring(0, 40)}):`, err.message)
+      failed++
+    } finally {
+      tabOperationLocks.delete(tab.id)
+    }
+  }
+  console.log(`attachAllOpenTabs complete: ${attached} attached, ${skipped} skipped, ${failed} failed`)
+}
+
+async function autoAttachNewTab(tabId, url) {
+  if (!autoAttachEnabled) return
+  if (tabs.has(tabId)) return
+  if (url && isUnsupportedTabUrl(url)) return
+  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) return
+  if (tabOperationLocks.has(tabId)) return
+  
+  tabOperationLocks.add(tabId)
+  try {
+    console.log(`Auto-attaching new tab ${tabId}`)
+    await attachTab(tabId)
+  } catch (err) {
+    console.warn(`Failed to auto-attach new tab ${tabId}:`, err.message)
+  } finally {
+    tabOperationLocks.delete(tabId)
+  }
+}
+
+// ========== Tab lifecycle listeners ==========
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabs.has(tabId)) {
+    console.log(`Tab ${tabId} closed, cleaning up`)
+    void detachTab(tabId, 'tab_closed')
+  }
+})
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url && tabs.has(tabId)) {
+    console.log(`Tab ${tabId} navigated to ${changeInfo.url}`)
+  }
+  // Auto-attach when a tab finishes loading and we're in auto-attach mode
+  if (changeInfo.status === 'complete' && autoAttachEnabled && !tabs.has(tabId)) {
+    void autoAttachNewTab(tabId, changeInfo.url)
+  }
+})
+
+// Auto-attach newly created tabs. URL is often empty here, so re-read tab state.
+chrome.tabs.onCreated.addListener((tab) => {
+  if (!tab.id || !autoAttachEnabled) return
+  const tabId = tab.id
+  setTimeout(async () => {
+    try {
+      const current = await chrome.tabs.get(tabId)
+      const url = current?.url || current?.pendingUrl || ''
+      if (isUnsupportedTabUrl(url)) return
+      await autoAttachNewTab(tabId, url)
+    } catch {
+      // tab may no longer exist
+    }
+  }, 300)
+})
+
+// ========== NEW: MV3 keepalive via chrome.alarms ==========
+chrome.alarms.create('relay-keepalive', { periodInMinutes: 0.4 }) // 24 seconds < 30s Chrome limit
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'relay-keepalive') {
+    // Don't spin up relay unless the user has attached tabs or enabled auto-attach.
+    if (tabs.size === 0 && !autoAttachEnabled) return
+
+    // Check WebSocket health and reconnect if needed
+    if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+      if (!relayConnectPromise && !reconnectTimer) {
+        console.log('Keepalive: WebSocket unhealthy, triggering reconnect')
+        await ensureRelayConnection().catch(() => {
+          // If connection fails, scheduleReconnect will be called by onRelayClosed
+        })
+      }
+    }
+  }
+})
+
+// ========== NEW: Service worker startup - restore state ==========
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('Service worker startup - restoring state')
+  await restoreState()
+})
+
+// For development: also restore on extension reload
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === 'install') {
+    // First-time installation: show options page
+    void chrome.runtime.openOptionsPage()
+  } else if (details.reason === 'update') {
+    // Extension update: restore state
+    console.log('Extension updated - restoring state')
+    await restoreState()
+    // Restore auto-attach mode
+    const { autoAttachEnabled: stored } = await chrome.storage.local.get(['autoAttachEnabled'])
+    if (stored) {
+      autoAttachEnabled = true
+      console.log('Restored auto-attach mode after update')
+    }
+  }
+})
+
+// Restore auto-attach on service worker wake
+;(async () => {
+  const { autoAttachEnabled: stored } = await chrome.storage.local.get(['autoAttachEnabled'])
+  if (stored) {
+    autoAttachEnabled = true
+    console.log('Restored auto-attach mode on service worker init')
+  }
+})()
+
+let clickActionInProgress = false
+
+chrome.action.onClicked.addListener(async () => {
+  if (clickActionInProgress) {
+    console.log('Click ignored: action already in progress')
+    return
+  }
+  clickActionInProgress = true
+
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+  const tabId = active?.id
+
+  try {
+    // If clicking on an already-attached tab, detach just that tab
+    if (tabId && tabs.get(tabId)?.state === 'connected') {
+      if (tabOperationLocks.has(tabId)) return
+
+      tabOperationLocks.add(tabId)
+      try {
+        await detachTab(tabId, 'toggle')
+      } finally {
+        tabOperationLocks.delete(tabId)
+      }
+
+      // If no more attached tabs, disable auto-attach
+      if (tabs.size === 0) {
+        autoAttachEnabled = false
+        await chrome.storage.local.set({ autoAttachEnabled: false })
+        console.log('All tabs detached, auto-attach disabled')
+      }
+      return
+    }
+
+    // Otherwise: enable auto-attach mode and attach ALL open tabs
+    // Reset reconnection state on manual click
+    reconnectAttempts = 0
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+
+    await ensureRelayConnection()
+    autoAttachEnabled = true
+    await chrome.storage.local.set({ autoAttachEnabled: true })
+    console.log('Auto-attach mode enabled, attaching all tabs')
+    await attachAllOpenTabs()
+  } catch (err) {
+    if (tabId) {
+      setBadge(tabId, 'error')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: relay not running (open options for setup)',
+      })
+    }
+    void maybeOpenHelpOnce()
+    console.warn('attach failed:', err instanceof Error ? err.message : String(err))
+  } finally {
+    clickActionInProgress = false
+  }
 })

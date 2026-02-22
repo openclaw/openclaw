@@ -56,6 +56,21 @@ function resolveFailedDir(stateDir?: string): string {
   return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
 }
 
+/** Format a duration in ms as a human-readable string (e.g., "3h 12m", "45s"). */
+function formatAge(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  const seconds = Math.floor(ms / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  if (hours < 24) return remainMinutes > 0 ? `${hours}h ${remainMinutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remainHours = hours % 24;
+  return remainHours > 0 ? `${days}d ${remainHours}h` : `${days}d`;
+}
+
 /** Ensure the queue directory (and failed/ subdirectory) exist. */
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveQueueDir(stateDir);
@@ -229,7 +244,13 @@ export async function recoverPendingDeliveries(opts: {
   // Process oldest first.
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
 
-  opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
+  const now = Date.now();
+  const oldestAge = now - pending[0]!.enqueuedAt;
+  const newestAge = now - pending[pending.length - 1]!.enqueuedAt;
+
+  opts.log.info(
+    `Found ${pending.length} pending delivery entries — starting recovery (oldest: ${formatAge(oldestAge)}, newest: ${formatAge(newestAge)})`,
+  );
 
   const delayFn = opts.delay ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
@@ -237,17 +258,22 @@ export async function recoverPendingDeliveries(opts: {
   let recovered = 0;
   let failed = 0;
   let skipped = 0;
+  let deferred = 0;
 
   for (const entry of pending) {
-    const now = Date.now();
-    if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skipped;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+    const currentTime = Date.now();
+    const entryAge = formatAge(currentTime - entry.enqueuedAt);
+
+    if (currentTime >= deadline) {
+      deferred = pending.length - recovered - failed - skipped;
+      opts.log.warn(
+        `Recovery time budget exceeded — ${deferred} entries deferred to next restart (oldest deferred: ${entryAge})`,
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
+        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}), age ${entryAge} — moving to failed/`,
       );
       try {
         await moveToFailed(entry.id, opts.stateDir);
@@ -260,14 +286,17 @@ export async function recoverPendingDeliveries(opts: {
 
     const backoff = computeBackoffMs(entry.retryCount + 1);
     if (backoff > 0) {
-      if (now + backoff >= deadline) {
-        const deferred = pending.length - recovered - failed - skipped;
+      const remaining = deadline - currentTime;
+      if (currentTime + backoff >= deadline) {
+        deferred = pending.length - recovered - failed - skipped;
         opts.log.warn(
-          `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
+          `Recovery deferred — backoff ${backoff}ms exceeds remaining budget ${remaining}ms; ${deferred} entries deferred (entry ${entry.id}, age ${entryAge}, retry ${entry.retryCount})`,
         );
         break;
       }
-      opts.log.info(`Waiting ${backoff}ms before retrying delivery ${entry.id}`);
+      opts.log.info(
+        `Waiting ${backoff}ms before retrying delivery ${entry.id} (age: ${entryAge}, retry ${entry.retryCount + 1}/${MAX_RETRIES})`,
+      );
       await delayFn(backoff);
     }
 
@@ -288,7 +317,7 @@ export async function recoverPendingDeliveries(opts: {
       });
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;
-      opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
+      opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to} (age: ${entryAge})`);
     } catch (err) {
       try {
         await failDelivery(
@@ -301,13 +330,22 @@ export async function recoverPendingDeliveries(opts: {
       }
       failed += 1;
       opts.log.warn(
-        `Retry failed for delivery ${entry.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `Retry failed for delivery ${entry.id} (age: ${entryAge}): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
 
+  const summaryParts = [
+    `${recovered} recovered`,
+    `${failed} failed`,
+    `${skipped} skipped (max retries)`,
+  ];
+  if (deferred > 0) {
+    summaryParts.push(`${deferred} deferred`);
+  }
+
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skipped} skipped (max retries)`,
+    `Delivery recovery complete: ${summaryParts.join(", ")}`,
   );
   return { recovered, failed, skipped };
 }
