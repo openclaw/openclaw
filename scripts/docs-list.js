@@ -20,9 +20,15 @@ if (!statSync(DOCS_DIR).isDirectory()) {
   process.exit(1);
 }
 
-const includeTranslations = process.argv.includes("--include-translations");
+const args = new Set(process.argv.slice(2));
+const includeTranslations = args.has("--include-translations");
+const showHelp = args.has("--help") || args.has("-h");
 const localeDirPattern = /^[a-z]{2}-[A-Z]{2}$/;
 const EXCLUDED_DIRS = new Set(["archive", "research"]);
+
+function printHelp() {
+  console.log(`Usage: pnpm docs:list [--include-translations]\n\nOptions:\n  --include-translations  Include docs/<locale>/ directories\n  -h, --help              Show this help message`);
+}
 
 /**
  * @param {unknown[]} values
@@ -169,7 +175,23 @@ function extractMetadata(fullPath) {
   return { summary: normalized, readWhen };
 }
 
+if (showHelp) {
+  printHelp();
+  process.exit(0);
+}
+
+const localeDirs = readdirSync(DOCS_DIR, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && localeDirPattern.test(entry.name))
+  .map((entry) => entry.name)
+  .toSorted((a, b) => a.localeCompare(b));
+
 console.log("Listing all markdown files in docs folder:");
+if (!includeTranslations && localeDirs.length > 0) {
+  console.log(
+    `Note: skipping translation folders (${localeDirs.join(", ")}). ` +
+      "Use --include-translations to include them.",
+  );
+}
 
 const markdownFiles = walkMarkdownFiles(DOCS_DIR, {
   baseDir: DOCS_DIR,
