@@ -101,10 +101,13 @@ function execText(
   maxBuffer = 1024 * 1024,
 ): string | null {
   try {
+    // Capture stderr so failed subprocess commands (e.g. Windows reg query when key
+    // is missing) do not pollute the parent process stderr (CI logs).
     const output = execFileSync(command, args, {
       timeout: timeoutMs,
       encoding: "utf8",
       maxBuffer,
+      stdio: ["ignore", "pipe", "pipe"],
     });
     return String(output ?? "").trim() || null;
   } catch {

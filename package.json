@@ -216,6 +216,9 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
   },
+  "optionalDependencies": {
+    "@rolldown/binding-darwin-arm64": "1.0.0-rc.3"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
