@@ -114,6 +114,50 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
+  it("treats reply-to-bot as implicit mention when replyToSenderJid uses LID format", () => {
+    const cfg = makeConfig({});
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "m-lid",
+        to: "+15550000",
+        accountId: "default",
+        body: "hello",
+        timestamp: Date.now(),
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        selfLid: "98765432@lid",
+        replyToId: "m0",
+        replyToBody: "bot said hi",
+        replyToSenderJid: "98765432@lid",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
+  it("does not treat reply as implicit mention when LID does not match", () => {
+    const cfg = makeConfig({});
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "m-lid-no",
+        to: "+15550000",
+        accountId: "default",
+        body: "hello",
+        timestamp: Date.now(),
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        selfLid: "98765432@lid",
+        replyToId: "m0",
+        replyToBody: "someone else said hi",
+        replyToSenderJid: "11111111@lid",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(false);
+  });
+
   it("bypasses mention gating for owner /new in group chats", () => {
     const cfg = makeConfig({
       channels: {
