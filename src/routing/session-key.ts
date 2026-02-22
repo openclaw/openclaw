@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { DmScope } from "../config/types.base.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
@@ -134,8 +135,18 @@ export function buildAgentPeerSessionKey(params: {
   peerId?: string | null;
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  /** Per-binding DM scope override. */
+  overrideDmScope?: DmScope;
 }): string {
+  // Per-binding override takes priority over default logic.
+  if (params.overrideDmScope === "main") {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: params.mainKey,
+    });
+  }
+
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
     const dmScope = params.dmScope ?? "main";
