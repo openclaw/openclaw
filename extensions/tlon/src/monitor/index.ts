@@ -1,9 +1,11 @@
-import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
 import { format } from "node:util";
+import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
 import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
+import { ssrfPolicyFromAllowPrivateNetwork } from "../urbit/context.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { fetchAllChannels } from "./discovery.js";
@@ -17,6 +19,11 @@ import {
   isSummarizationRequest,
 } from "./utils.js";
 
+function formatError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 export type MonitorTlonOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -26,6 +33,34 @@ export type MonitorTlonOpts = {
 type ChannelAuthorization = {
   mode?: "restricted" | "open";
   allowedShips?: string[];
+};
+
+type UrbitMemo = {
+  author?: string;
+  content?: unknown;
+  sent?: number;
+};
+
+type UrbitSeal = {
+  "parent-id"?: string;
+  parent?: string;
+};
+
+type UrbitUpdate = {
+  id?: string | number;
+  response?: {
+    add?: { memo?: UrbitMemo };
+    post?: {
+      id?: string | number;
+      "r-post"?: {
+        set?: { essay?: UrbitMemo; seal?: UrbitSeal };
+        reply?: {
+          id?: string | number;
+          "r-reply"?: { set?: { memo?: UrbitMemo; seal?: UrbitSeal } };
+        };
+      };
+    };
+  };
 };
 
 function resolveChannelAuthorization(
@@ -79,17 +114,19 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   let api: UrbitSSEClient | null = null;
   try {
+    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
     runtime.log?.(`[tlon] Attempting authentication to ${account.url}...`);
-    const cookie = await authenticate(account.url, account.code);
+    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
     api = new UrbitSSEClient(account.url, cookie, {
       ship: botShipName,
+      ssrfPolicy,
       logger: {
         log: (message) => runtime.log?.(message),
         error: (message) => runtime.error?.(message),
       },
     });
   } catch (error) {
-    runtime.error?.(`[tlon] Failed to authenticate: ${error?.message ?? String(error)}`);
+    runtime.error?.(`[tlon] Failed to authenticate: ${formatError(error)}`);
     throw error;
   }
 
@@ -103,7 +140,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         groupChannels = discoveredChannels;
       }
     } catch (error) {
-      runtime.error?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Auto-discovery failed: ${formatError(error)}`);
     }
   }
 
@@ -120,15 +157,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     runtime.log?.("[tlon] No group channels to monitor (DMs only)");
   }
 
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const handleIncomingDM = async (update: any) => {
+  const handleIncomingDM = async (update: UrbitUpdate) => {
     try {
       const memo = update?.response?.add?.memo;
       if (!memo) {
         return;
       }
 
-      const messageId = update.id as string | undefined;
+      const messageId = update.id != null ? String(update.id) : undefined;
       if (!processedTracker.mark(messageId)) {
         return;
       }
@@ -156,29 +192,31 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         timestamp: memo.sent || Date.now(),
       });
     } catch (error) {
-      runtime.error?.(`[tlon] Error handling DM: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Error handling DM: ${formatError(error)}`);
     }
   };
 
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const handleIncomingGroupMessage = (channelNest: string) => async (update: any) => {
+  const handleIncomingGroupMessage = (channelNest: string) => async (update: UrbitUpdate) => {
     try {
       const parsed = parseChannelNest(channelNest);
       if (!parsed) {
         return;
       }
 
-      const essay = update?.response?.post?.["r-post"]?.set?.essay;
-      const memo = update?.response?.post?.["r-post"]?.reply?.["r-reply"]?.set?.memo;
+      const post = update?.response?.post?.["r-post"];
+      const essay = post?.set?.essay;
+      const memo = post?.reply?.["r-reply"]?.set?.memo;
       if (!essay && !memo) {
         return;
       }
 
       const content = memo || essay;
+      if (!content) {
+        return;
+      }
       const isThreadReply = Boolean(memo);
-      const messageId = isThreadReply
-        ? update?.response?.post?.["r-post"]?.reply?.id
-        : update?.response?.post?.id;
+      const rawMessageId = isThreadReply ? post?.reply?.id : update?.response?.post?.id;
+      const messageId = rawMessageId != null ? String(rawMessageId) : undefined;
 
       if (!processedTracker.mark(messageId)) {
         return;
@@ -238,7 +276,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         parentId,
       });
     } catch (error) {
-      runtime.error?.(`[tlon] Error handling group message: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Error handling group message: ${formatError(error)}`);
     }
   };
 
@@ -297,7 +335,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           "3. Action items if any\n" +
           "4. Notable participants";
       } catch (error) {
-        const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${error?.message ?? String(error)}`;
+        const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${formatError(error)}`;
         if (isGroup && groupChannel) {
           const parsed = parseChannelNest(groupChannel);
           if (parsed) {
@@ -321,7 +359,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       channel: "tlon",
       accountId: opts.accountId ?? undefined,
       peer: {
-        kind: isGroup ? "group" : "dm",
+        kind: isGroup ? "group" : "direct",
         id: isGroup ? (groupChannel ?? senderShip) : senderShip,
       },
     });
@@ -336,6 +374,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
+      BodyForAgent: messageText,
       RawBody: messageText,
       CommandBody: messageText,
       From: isGroup ? `tlon:group:${groupChannel}` : `tlon:${senderShip}`,
@@ -355,17 +394,19 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const dispatchStartTime = Date.now();
 
-    const responsePrefix = core.channel.reply.resolveEffectiveMessagesConfig(
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
       cfg,
-      route.agentId,
-    ).responsePrefix;
+      agentId: route.agentId,
+      channel: "tlon",
+      accountId: route.accountId,
+    });
     const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
 
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
-        responsePrefix,
+        ...prefixOptions,
         humanDelay,
         deliver: async (payload: ReplyPayload) => {
           let replyText = payload.text;
@@ -376,10 +417,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           const showSignature =
             account.showModelSignature ?? cfg.channels?.tlon?.showModelSignature ?? false;
           if (showSignature) {
+            const extPayload = payload as ReplyPayload & {
+              metadata?: { model?: string };
+              model?: string;
+            };
+            const extRoute = route as typeof route & { model?: string };
             const modelInfo =
-              payload.metadata?.model ||
-              payload.model ||
-              route.model ||
+              extPayload.metadata?.model ||
+              extPayload.model ||
+              extRoute.model ||
               cfg.agents?.defaults?.model?.primary;
             replyText = `${replyText}\n\n_[Generated by ${formatModelName(modelInfo)}]_`;
           }
@@ -408,6 +454,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           );
         },
       },
+      replyOptions: {
+        onModelSelected,
+      },
     });
   };
 
@@ -428,7 +477,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       await api!.subscribe({
         app: "channels",
         path: `/${channelNest}`,
-        event: handleIncomingGroupMessage(channelNest),
+        event: (data: unknown) => {
+          handleIncomingGroupMessage(channelNest)(data as UrbitUpdate);
+        },
         err: (error) => {
           runtime.error?.(`[tlon] Group subscription error for ${channelNest}: ${String(error)}`);
         },
@@ -440,9 +491,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       subscribedChannels.add(channelNest);
       runtime.log?.(`[tlon] Subscribed to group channel: ${channelNest}`);
     } catch (error) {
-      runtime.error?.(
-        `[tlon] Failed to subscribe to ${channelNest}: ${error?.message ?? String(error)}`,
-      );
+      runtime.error?.(`[tlon] Failed to subscribe to ${channelNest}: ${formatError(error)}`);
     }
   }
 
@@ -454,7 +503,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       await api!.subscribe({
         app: "chat",
         path: `/dm/${dmShip}`,
-        event: handleIncomingDM,
+        event: (data: unknown) => {
+          handleIncomingDM(data as UrbitUpdate);
+        },
         err: (error) => {
           runtime.error?.(`[tlon] DM subscription error for ${dmShip}: ${String(error)}`);
         },
@@ -466,9 +517,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       subscribedDMs.add(dmShip);
       runtime.log?.(`[tlon] Subscribed to DM with ${dmShip}`);
     } catch (error) {
-      runtime.error?.(
-        `[tlon] Failed to subscribe to DM with ${dmShip}: ${error?.message ?? String(error)}`,
-      );
+      runtime.error?.(`[tlon] Failed to subscribe to DM with ${dmShip}: ${formatError(error)}`);
     }
   }
 
@@ -488,7 +537,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
       }
     } catch (error) {
-      runtime.error?.(`[tlon] Channel refresh failed: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Channel refresh failed: ${formatError(error)}`);
     }
   }
 
@@ -503,7 +552,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         runtime.log?.(`[tlon] Found ${dmShips.length} DM conversation(s)`);
       }
     } catch (error) {
-      runtime.error?.(`[tlon] Failed to fetch DM list: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Failed to fetch DM list: ${formatError(error)}`);
     }
 
     for (const dmShip of dmShips) {
@@ -522,7 +571,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       () => {
         if (!opts.abortSignal?.aborted) {
           refreshChannelSubscriptions().catch((error) => {
-            runtime.error?.(`[tlon] Channel refresh error: ${error?.message ?? String(error)}`);
+            runtime.error?.(`[tlon] Channel refresh error: ${formatError(error)}`);
           });
         }
       },
@@ -530,8 +579,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     );
 
     if (opts.abortSignal) {
+      const signal = opts.abortSignal;
       await new Promise((resolve) => {
-        opts.abortSignal.addEventListener(
+        signal.addEventListener(
           "abort",
           () => {
             clearInterval(pollInterval);
@@ -547,7 +597,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     try {
       await api?.close();
     } catch (error) {
-      runtime.error?.(`[tlon] Cleanup error: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Cleanup error: ${formatError(error)}`);
     }
   }
 }

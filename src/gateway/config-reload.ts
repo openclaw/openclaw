@@ -1,7 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
-import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { isPlainObject } from "../utils.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
@@ -63,6 +65,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
+  { prefix: "meta", kind: "none" },
   { prefix: "identity", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
@@ -126,15 +129,6 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]",
-  );
-}
-
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
     return [];
@@ -157,7 +151,9 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     return paths;
   }
   if (Array.isArray(prev) && Array.isArray(next)) {
-    if (prev.length === next.length && prev.every((val, idx) => val === next[idx])) {
+    // Arrays can contain object entries (for example memory.qmd.paths/scope.rules);
+    // compare structurally so identical values are not reported as changed.
+    if (isDeepStrictEqual(prev, next)) {
       return [];
     }
   }

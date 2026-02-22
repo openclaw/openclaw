@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -22,6 +22,48 @@ describe("diffConfigPaths", () => {
     const next = { messages: { groupChat: { mentionPatterns: ["b"] } } };
     const paths = diffConfigPaths(prev, next);
     expect(paths).toContain("messages.groupChat.mentionPatterns");
+  });
+
+  it("does not report unchanged arrays of objects as changed", () => {
+    const prev = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.md", name: "docs" }],
+          scope: {
+            rules: [{ when: { channel: "slack" }, include: ["docs"] }],
+          },
+        },
+      },
+    };
+    const next = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.md", name: "docs" }],
+          scope: {
+            rules: [{ when: { channel: "slack" }, include: ["docs"] }],
+          },
+        },
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toEqual([]);
+  });
+
+  it("reports changed arrays of objects", () => {
+    const prev = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.md", name: "docs" }],
+        },
+      },
+    };
+    const next = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.txt", name: "docs" }],
+        },
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths");
   });
 });
 

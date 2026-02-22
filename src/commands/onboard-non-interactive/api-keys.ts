@@ -1,11 +1,12 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   ensureAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 
 export type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
@@ -44,11 +45,13 @@ export async function resolveNonInteractiveApiKey(params: {
   flagValue?: string;
   flagName: string;
   envVar: string;
+  envVarName?: string;
   runtime: RuntimeEnv;
   agentDir?: string;
   allowProfile?: boolean;
+  required?: boolean;
 }): Promise<{ key: string; source: NonInteractiveApiKeySource } | null> {
-  const flagKey = params.flagValue?.trim();
+  const flagKey = normalizeOptionalSecretInput(params.flagValue);
   if (flagKey) {
     return { key: flagKey, source: "flag" };
   }
@@ -56,6 +59,14 @@ export async function resolveNonInteractiveApiKey(params: {
   const envResolved = resolveEnvApiKey(params.provider);
   if (envResolved?.apiKey) {
     return { key: envResolved.apiKey, source: "env" };
+  }
+
+  const explicitEnvVar = params.envVarName?.trim();
+  if (explicitEnvVar) {
+    const explicitEnvKey = normalizeOptionalSecretInput(process.env[explicitEnvVar]);
+    if (explicitEnvKey) {
+      return { key: explicitEnvKey, source: "env" };
+    }
   }
 
   if (params.allowProfile ?? true) {
@@ -67,6 +78,10 @@ export async function resolveNonInteractiveApiKey(params: {
     if (profileKey) {
       return { key: profileKey, source: "profile" };
     }
+  }
+
+  if (params.required === false) {
+    return null;
   }
 
   const profileHint =

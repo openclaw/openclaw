@@ -31,7 +31,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```json5
 {
   env: { ANTHROPIC_API_KEY: "sk-ant-..." },
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
@@ -54,7 +54,7 @@ Use the `cacheRetention` parameter in your model config:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": {
+        "anthropic/claude-opus-4-6": {
           params: { cacheRetention: "long" },
         },
       },
@@ -78,6 +78,28 @@ We recommend migrating to the new `cacheRetention` parameter.
 
 OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
 requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
+
+## 1M context window (Anthropic beta)
+
+Anthropic's 1M context window is beta-gated. In OpenClaw, enable it per model
+with `params.context1m: true` for supported Opus/Sonnet models.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-6": {
+          params: { context1m: true },
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
+requests.
 
 ## Option B: Claude setup-token
 
@@ -103,18 +125,18 @@ If you generated the token on a different machine, paste it:
 openclaw models auth paste-token --provider anthropic
 ```
 
-### CLI setup
+### CLI setup (setup-token)
 
 ```bash
 # Paste a setup-token during onboarding
 openclaw onboard --auth-choice setup-token
 ```
 
-### Config snippet
+### Config snippet (setup-token)
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 

@@ -26,6 +26,8 @@ const TwitchAccountSchema = z.object({
   allowedRoles: z.array(TwitchRoleSchema).optional(),
   /** Require @mention to trigger bot responses */
   requireMention: z.boolean().optional(),
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix: z.string().optional(),
   /** Twitch client secret (required for token refresh via RefreshingAuthProvider) */
   clientSecret: z.string().optional(),
   /** Refresh token (required for automatic token refresh) */

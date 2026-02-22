@@ -5,7 +5,7 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
-import type { NostrProfile as NostrProfileType } from "../types";
+import type { NostrProfile as NostrProfileType } from "../types.ts";
 
 // ============================================================================
 // Types
@@ -247,7 +247,7 @@ export function renderNostrProfileForm(params: {
           @click=${callbacks.onSave}
           ?disabled=${state.saving || !isDirty}
         >
-          ${state.saving ? "Saving..." : "Save & Publish"}
+          ${state.saving ? "Saving..." : "Save"}
         </button>
 
         <button

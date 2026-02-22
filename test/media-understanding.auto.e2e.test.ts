@@ -1,11 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../src/auto-reply/templating.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { resolvePreferredOpenClawTmpDir } from "../src/infra/tmp-openclaw-dir.js";
+import { applyMediaUnderstanding } from "../src/media-understanding/apply.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "../src/media-understanding/runner.js";
 
-const makeTempDir = async (prefix: string) => await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+const makeTempDir = async (prefix: string) => {
+  const baseDir = resolvePreferredOpenClawTmpDir();
+  await fs.mkdir(baseDir, { recursive: true });
+  return await fs.mkdtemp(path.join(baseDir, prefix));
+};
 
 const writeExecutable = async (dir: string, name: string, content: string) => {
   const filePath = path.join(dir, name);
@@ -20,11 +26,6 @@ const makeTempMedia = async (ext: string) => {
   return { dir, filePath };
 };
 
-const loadApply = async () => {
-  vi.resetModules();
-  return await import("../src/media-understanding/apply.js");
-};
-
 const envSnapshot = () => ({
   PATH: process.env.PATH,
   SHERPA_ONNX_MODEL_DIR: process.env.SHERPA_ONNX_MODEL_DIR,
@@ -37,8 +38,33 @@ const restoreEnv = (snapshot: ReturnType<typeof envSnapshot>) => {
   process.env.WHISPER_CPP_MODEL = snapshot.WHISPER_CPP_MODEL;
 };
 
+const withEnvSnapshot = async <T>(run: () => Promise<T>): Promise<T> => {
+  const snapshot = envSnapshot();
+  try {
+    return await run();
+  } finally {
+    restoreEnv(snapshot);
+  }
+};
+
+const createTrackedTempDir = async (tempPaths: string[], prefix: string) => {
+  const dir = await makeTempDir(prefix);
+  tempPaths.push(dir);
+  return dir;
+};
+
+const createTrackedTempMedia = async (tempPaths: string[], ext: string) => {
+  const media = await makeTempMedia(ext);
+  tempPaths.push(media.dir);
+  return media.filePath;
+};
+
 describe("media understanding auto-detect (e2e)", () => {
   let tempPaths: string[] = [];
+
+  beforeEach(() => {
+    clearMediaUnderstandingBinaryCacheForTests();
+  });
 
   afterEach(async () => {
     for (const p of tempPaths) {
@@ -48,11 +74,9 @@ describe("media understanding auto-detect (e2e)", () => {
   });
 
   it("uses sherpa-onnx-offline when available", async () => {
-    const snapshot = envSnapshot();
-    try {
-      const binDir = await makeTempDir("openclaw-bin-sherpa-");
-      const modelDir = await makeTempDir("openclaw-sherpa-model-");
-      tempPaths.push(binDir, modelDir);
+    await withEnvSnapshot(async () => {
+      const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-sherpa-");
+      const modelDir = await createTrackedTempDir(tempPaths, "openclaw-sherpa-model-");
 
       await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
       await fs.writeFile(path.join(modelDir, "encoder.onnx"), "a");
@@ -68,10 +92,8 @@ describe("media understanding auto-detect (e2e)", () => {
       process.env.PATH = `${binDir}:/usr/bin:/bin`;
       process.env.SHERPA_ONNX_MODEL_DIR = modelDir;
 
-      const { filePath } = await makeTempMedia(".wav");
-      tempPaths.push(path.dirname(filePath));
+      const filePath = await createTrackedTempMedia(tempPaths, ".wav");
 
-      const { applyMediaUnderstanding } = await loadApply();
       const ctx: MsgContext = {
         Body: "<media:audio>",
         MediaPath: filePath,
@@ -82,17 +104,13 @@ describe("media understanding auto-detect (e2e)", () => {
       await applyMediaUnderstanding({ ctx, cfg });
 
       expect(ctx.Transcript).toBe("sherpa ok");
-    } finally {
-      restoreEnv(snapshot);
-    }
+    });
   });
 
   it("uses whisper-cli when sherpa is missing", async () => {
-    const snapshot = envSnapshot();
-    try {
-      const binDir = await makeTempDir("openclaw-bin-whispercpp-");
-      const modelDir = await makeTempDir("openclaw-whispercpp-model-");
-      tempPaths.push(binDir, modelDir);
+    await withEnvSnapshot(async () => {
+      const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-whispercpp-");
+      const modelDir = await createTrackedTempDir(tempPaths, "openclaw-whispercpp-model-");
 
       const modelPath = path.join(modelDir, "tiny.bin");
       await fs.writeFile(modelPath, "model");
@@ -113,10 +131,8 @@ describe("media understanding auto-detect (e2e)", () => {
       process.env.PATH = `${binDir}:/usr/bin:/bin`;
       process.env.WHISPER_CPP_MODEL = modelPath;
 
-      const { filePath } = await makeTempMedia(".wav");
-      tempPaths.push(path.dirname(filePath));
+      const filePath = await createTrackedTempMedia(tempPaths, ".wav");
 
-      const { applyMediaUnderstanding } = await loadApply();
       const ctx: MsgContext = {
         Body: "<media:audio>",
         MediaPath: filePath,
@@ -127,29 +143,23 @@ describe("media understanding auto-detect (e2e)", () => {
       await applyMediaUnderstanding({ ctx, cfg });
 
       expect(ctx.Transcript).toBe("whisper cpp ok");
-    } finally {
-      restoreEnv(snapshot);
-    }
+    });
   });
 
   it("uses gemini CLI for images when available", async () => {
-    const snapshot = envSnapshot();
-    try {
-      const binDir = await makeTempDir("openclaw-bin-gemini-");
-      tempPaths.push(binDir);
+    await withEnvSnapshot(async () => {
+      const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-gemini-");
 
       await writeExecutable(
         binDir,
         "gemini",
-        `#!/usr/bin/env bash\necho '{\\"response\\":\\"gemini ok\\"' + "}'\n`,
+        `#!/usr/bin/env bash\necho '{"response":"gemini ok"}'\n`,
       );
 
       process.env.PATH = `${binDir}:/usr/bin:/bin`;
 
-      const { filePath } = await makeTempMedia(".png");
-      tempPaths.push(path.dirname(filePath));
+      const filePath = await createTrackedTempMedia(tempPaths, ".png");
 
-      const { applyMediaUnderstanding } = await loadApply();
       const ctx: MsgContext = {
         Body: "<media:image>",
         MediaPath: filePath,
@@ -160,8 +170,28 @@ describe("media understanding auto-detect (e2e)", () => {
       await applyMediaUnderstanding({ ctx, cfg });
 
       expect(ctx.Body).toContain("gemini ok");
-    } finally {
-      restoreEnv(snapshot);
-    }
+    });
+  });
+
+  it("skips auto-detect when no supported binaries are available", async () => {
+    await withEnvSnapshot(async () => {
+      const emptyBinDir = await createTrackedTempDir(tempPaths, "openclaw-bin-empty-");
+      process.env.PATH = emptyBinDir;
+      delete process.env.SHERPA_ONNX_MODEL_DIR;
+      delete process.env.WHISPER_CPP_MODEL;
+
+      const filePath = await createTrackedTempMedia(tempPaths, ".wav");
+      const ctx: MsgContext = {
+        Body: "<media:audio>",
+        MediaPath: filePath,
+        MediaType: "audio/wav",
+      };
+      const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+
+      await applyMediaUnderstanding({ ctx, cfg });
+
+      expect(ctx.Transcript).toBeUndefined();
+      expect(ctx.Body).toBe("<media:audio>");
+    });
   });
 });

@@ -2,8 +2,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
+import {
+  resolveControlUiDistIndexHealth,
+  resolveControlUiDistIndexPathForRoot,
+} from "./control-ui-assets.js";
+import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { readPackageName, readPackageVersion } from "./package-json.js";
 import { trimLogTail } from "./restart-sentinel.js";
-import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
+import {
+  channelToNpmTag,
+  DEFAULT_PACKAGE_CHANNEL,
+  DEV_BRANCH,
+  isBetaTag,
+  isStableTag,
+  type UpdateChannel,
+} from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
   cleanupGlobalRenameDirs,
@@ -119,27 +132,6 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   return Array.from(new Set(dirs));
 }
 
-async function readPackageVersion(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed?.version === "string" ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readPackageName(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: string };
-    const name = parsed?.name?.trim();
-    return name ? name : null;
-  } catch {
-    return null;
-  }
-}
-
 async function readBranchName(
   runCommand: CommandRunner,
   root: string,
@@ -243,28 +235,7 @@ async function findPackageRoot(candidates: string[]) {
 }
 
 async function detectPackageManager(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { packageManager?: string };
-    const pm = parsed?.packageManager?.split("@")[0]?.trim();
-    if (pm === "pnpm" || pm === "bun" || pm === "npm") {
-      return pm;
-    }
-  } catch {
-    // ignore
-  }
-
-  const files = await fs.readdir(root).catch((): string[] => []);
-  if (files.includes("pnpm-lock.yaml")) {
-    return "pnpm";
-  }
-  if (files.includes("bun.lockb")) {
-    return "bun";
-  }
-  if (files.includes("package-lock.json")) {
-    return "npm";
-  }
-  return "npm";
+  return (await detectPackageManagerImpl(root)) ?? "npm";
 }
 
 type RunStepOptions = {
@@ -420,6 +391,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
     const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+    const buildGitErrorResult = (reason: string): UpdateRunResult => ({
+      status: "error",
+      mode: "git",
+      root: gitRoot,
+      reason,
+      before: { sha: beforeSha, version: beforeVersion },
+      steps,
+      durationMs: Date.now() - startedAt,
+    });
+    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
+      const checkoutStep = await runStep(step(name, argv, gitRoot));
+      steps.push(checkoutStep);
+      if (checkoutStep.exitCode !== 0) {
+        return buildGitErrorResult("checkout-failed");
+      }
+      return null;
+    };
 
     const statusCheck = await runStep(
       step(
@@ -445,24 +433,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const checkoutStep = await runStep(
-          step(
-            `git checkout ${DEV_BRANCH}`,
-            ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
-            gitRoot,
-          ),
-        );
-        steps.push(checkoutStep);
-        if (checkoutStep.exitCode !== 0) {
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "checkout-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          DEV_BRANCH,
+        ]);
+        if (failure) {
+          return failure;
         }
       }
 
@@ -604,19 +583,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
-          }
-
           const buildStep = await runStep(
             step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
           );
           steps.push(buildStep);
           if (buildStep.exitCode !== 0) {
+            continue;
+          }
+
+          const lintStep = await runStep(
+            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
+          );
+          steps.push(lintStep);
+          if (lintStep.exitCode !== 0) {
             continue;
           }
 
@@ -709,20 +688,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const checkoutStep = await runStep(
-        step(`git checkout ${tag}`, ["git", "-C", gitRoot, "checkout", "--detach", tag], gitRoot),
-      );
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "checkout-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        tag,
+      ]);
+      if (failure) {
+        return failure;
       }
     }
 
@@ -730,35 +705,132 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
     steps.push(depsStep);
+    if (depsStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "deps-install-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
     steps.push(buildStep);
+    if (buildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const uiBuildStep = await runStep(
       step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
     );
     steps.push(uiBuildStep);
+    if (uiBuildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "ui-build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
-    // Restore dist/control-ui/ to committed state to prevent dirty repo after update
-    // (ui:build regenerates assets with new hashes, which would block future updates)
-    const restoreUiStep = await runStep(
-      step(
-        "restore control-ui",
-        ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
-        gitRoot,
-      ),
-    );
-    steps.push(restoreUiStep);
+    const doctorEntry = path.join(gitRoot, "openclaw.mjs");
+    const doctorEntryExists = await fs
+      .stat(doctorEntry)
+      .then(() => true)
+      .catch(() => false);
+    if (!doctorEntryExists) {
+      steps.push({
+        name: "openclaw doctor entry",
+        command: `verify ${doctorEntry}`,
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `missing ${doctorEntry}`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "doctor-entry-missing",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
+    // Use --fix so that doctor auto-strips unknown config keys introduced by
+    // schema changes between versions, preventing a startup validation crash.
+    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive", "--fix"];
     const doctorStep = await runStep(
-      step(
-        "openclaw doctor",
-        managerScriptArgs(manager, "openclaw", ["doctor", "--non-interactive"]),
-        gitRoot,
-        { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      ),
+      step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
     );
     steps.push(doctorStep);
+
+    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+    if (!uiIndexHealth.exists) {
+      const repairArgv = managerScriptArgs(manager, "ui:build");
+      const started = Date.now();
+      const repairResult = await runCommand(repairArgv, { cwd: gitRoot, timeoutMs });
+      const repairStep: UpdateStepResult = {
+        name: "ui:build (post-doctor repair)",
+        command: repairArgv.join(" "),
+        cwd: gitRoot,
+        durationMs: Date.now() - started,
+        exitCode: repairResult.code,
+        stdoutTail: trimLogTail(repairResult.stdout, MAX_LOG_CHARS),
+        stderrTail: trimLogTail(repairResult.stderr, MAX_LOG_CHARS),
+      };
+      steps.push(repairStep);
+
+      if (repairResult.code !== 0) {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: repairStep.name,
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+      if (!repairedUiIndexHealth.exists) {
+        const uiIndexPath =
+          repairedUiIndexHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+        steps.push({
+          name: "ui assets verify",
+          command: `verify ${uiIndexPath}`,
+          cwd: gitRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: `missing ${uiIndexPath}`,
+        });
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "ui-assets-missing",
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+    }
 
     const failedStep = steps.find((s) => s.exitCode !== 0);
     const afterShaStep = await runStep(
@@ -800,7 +872,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       globalRoot: path.dirname(pkgRoot),
       packageName,
     });
-    const spec = `${packageName}@${normalizeTag(opts.tag)}`;
+    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
+    const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
+    const spec = `${packageName}@${tag}`;
     const updateStep = await runStep({
       runCommand,
       name: "global update",

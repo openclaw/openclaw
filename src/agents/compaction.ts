@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import { retryAsync } from "../infra/retry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+
+const log = createSubsystemLogger("compaction");
 
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
@@ -13,7 +18,9 @@ const MERGE_SUMMARIES_INSTRUCTIONS =
   " TODOs, open questions, and any constraints.";
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
-  return messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+  // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
+  const safe = stripToolResultDetails(messages);
+  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
 function normalizeParts(parts: number, messageCount: number): number {
@@ -64,6 +71,11 @@ export function splitMessagesByTokenShare(
   return chunks;
 }
 
+// Overhead reserved for summarization prompt, system prompt, previous summary,
+// and serialization wrappers (<conversation> tags, instructions, etc.).
+// generateSummary uses reasoning: "high" which also consumes context budget.
+export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
+
 export function chunkMessagesByMaxTokens(
   messages: AgentMessage[],
   maxTokens: number,
@@ -72,13 +84,17 @@ export function chunkMessagesByMaxTokens(
     return [];
   }
 
+  // Apply safety margin to compensate for estimateTokens() underestimation
+  // (chars/4 heuristic misses multi-byte chars, special tokens, code tokens, etc.)
+  const effectiveMax = Math.max(1, Math.floor(maxTokens / SAFETY_MARGIN));
+
   const chunks: AgentMessage[][] = [];
   let currentChunk: AgentMessage[] = [];
   let currentTokens = 0;
 
   for (const message of messages) {
     const messageTokens = estimateTokens(message);
-    if (currentChunk.length > 0 && currentTokens + messageTokens > maxTokens) {
+    if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
       chunks.push(currentChunk);
       currentChunk = [];
       currentTokens = 0;
@@ -87,7 +103,7 @@ export function chunkMessagesByMaxTokens(
     currentChunk.push(message);
     currentTokens += messageTokens;
 
-    if (messageTokens > maxTokens) {
+    if (messageTokens > effectiveMax) {
       // Split oversized messages to avoid unbounded chunk growth.
       chunks.push(currentChunk);
       currentChunk = [];
@@ -150,18 +166,31 @@ async function summarizeChunks(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  const chunks = chunkMessagesByMaxTokens(params.messages, params.maxChunkTokens);
+  // SECURITY: never feed toolResult.details into summarization prompts.
+  const safeMessages = stripToolResultDetails(params.messages);
+  const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
 
   for (const chunk of chunks) {
-    summary = await generateSummary(
-      chunk,
-      params.model,
-      params.reserveTokens,
-      params.apiKey,
-      params.signal,
-      params.customInstructions,
-      summary,
+    summary = await retryAsync(
+      () =>
+        generateSummary(
+          chunk,
+          params.model,
+          params.reserveTokens,
+          params.apiKey,
+          params.signal,
+          params.customInstructions,
+          summary,
+        ),
+      {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 5000,
+        jitter: 0.2,
+        label: "compaction/generateSummary",
+        shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
+      },
     );
   }
 
@@ -193,7 +222,7 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
-    console.warn(
+    log.warn(
       `Full summarization failed, trying partial: ${
         fullError instanceof Error ? fullError.message : String(fullError)
       }`,
@@ -225,7 +254,7 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
-      console.warn(
+      log.warn(
         `Partial summarization also failed: ${
           partialError instanceof Error ? partialError.message : String(partialError)
         }`,
@@ -333,11 +362,27 @@ export function pruneHistoryForContextShare(params: {
       break;
     }
     const [dropped, ...rest] = chunks;
+    const flatRest = rest.flat();
+
+    // After dropping a chunk, repair tool_use/tool_result pairing to handle
+    // orphaned tool_results (whose tool_use was in the dropped chunk).
+    // repairToolUseResultPairing drops orphaned tool_results, preventing
+    // "unexpected tool_use_id" errors from Anthropic's API.
+    const repairReport = repairToolUseResultPairing(flatRest);
+    const repairedKept = repairReport.messages;
+
+    // Track orphaned tool_results as dropped (they were in kept but their tool_use was dropped)
+    const orphanedCount = repairReport.droppedOrphanCount;
+
     droppedChunks += 1;
-    droppedMessages += dropped.length;
+    droppedMessages += dropped.length + orphanedCount;
     droppedTokens += estimateMessagesTokens(dropped);
+    // Note: We don't have the actual orphaned messages to add to droppedMessagesList
+    // since repairToolUseResultPairing doesn't return them. This is acceptable since
+    // the dropped messages are used for summarization, and orphaned tool_results
+    // without their tool_use context aren't useful for summarization anyway.
     allDroppedMessages.push(...dropped);
-    keptMessages = rest.flat();
+    keptMessages = repairedKept;
   }
 
   return {

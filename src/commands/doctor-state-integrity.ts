@@ -1,16 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -131,6 +133,59 @@ function findOtherStateDirs(stateDir: string): string[] {
   return found;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPairingPolicy(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "pairing";
+}
+
+function hasPairingPolicy(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (isPairingPolicy(value.dmPolicy)) {
+    return true;
+  }
+  if (isRecord(value.dm) && isPairingPolicy(value.dm.policy)) {
+    return true;
+  }
+  if (!isRecord(value.accounts)) {
+    return false;
+  }
+  for (const accountCfg of Object.values(value.accounts)) {
+    if (hasPairingPolicy(accountCfg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (env.OPENCLAW_OAUTH_DIR?.trim()) {
+    return true;
+  }
+  const channels = cfg.channels;
+  if (!isRecord(channels)) {
+    return false;
+  }
+  // WhatsApp auth always uses the credentials tree.
+  if (isRecord(channels.whatsapp)) {
+    return true;
+  }
+  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  for (const [channelId, channelCfg] of Object.entries(channels)) {
+    if (channelId === "defaults" || channelId === "modelByChannel") {
+      continue;
+    }
+    if (hasPairingPolicy(channelCfg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -139,7 +194,7 @@ export async function noteStateIntegrity(
   const warnings: string[] = [];
   const changes: string[] = [];
   const env = process.env;
-  const homedir = os.homedir;
+  const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
@@ -152,6 +207,7 @@ export async function noteStateIntegrity(
   const displaySessionsDir = shortenHomePath(sessionsDir);
   const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
+  const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
 
   let stateDirExists = existsDir(stateDir);
   if (!stateDirExists) {
@@ -222,8 +278,10 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
+      const linkStat = fs.lstatSync(configPath);
       const stat = fs.statSync(configPath);
-      if ((stat.mode & 0o077) !== 0) {
+      const isSymlink = linkStat.isSymbolicLink();
+      if (!isSymlink && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -247,7 +305,13 @@ export async function noteStateIntegrity(
     const dirCandidates = new Map<string, string>();
     dirCandidates.set(sessionsDir, "Sessions dir");
     dirCandidates.set(storeDir, "Session store dir");
-    dirCandidates.set(oauthDir, "OAuth dir");
+    if (requireOAuthDir) {
+      dirCandidates.set(oauthDir, "OAuth dir");
+    } else if (!existsDir(oauthDir)) {
+      warnings.push(
+        `- OAuth dir not present (${displayOauthDir}). Skipping create because no WhatsApp/pairing channel config is active.`,
+      );
+    }
     const displayDirFor = (dir: string) => {
       if (dir === sessionsDir) {
         return displaySessionsDir;
@@ -323,6 +387,7 @@ export async function noteStateIntegrity(
   }
 
   const store = loadSessionStore(storePath);
+  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
@@ -338,9 +403,7 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, {
-        agentId,
-      });
+      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
@@ -352,7 +415,11 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, { agentId });
+      const transcriptPath = resolveSessionFilePath(
+        mainEntry.sessionId,
+        mainEntry,
+        sessionPathOpts,
+      );
       if (!existsFile(transcriptPath)) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,

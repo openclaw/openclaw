@@ -6,10 +6,11 @@ import {
   formatPairingApproveHint,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
@@ -19,17 +20,22 @@ import {
 } from "./group-mentions.js";
 import {
   listMatrixAccountIds,
+  resolveMatrixAccountConfig,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { resolveMatrixAuth } from "./matrix/client.js";
-import { normalizeAllowListLower } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import type { CoreConfig } from "./types.js";
+
+// Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
+let matrixStartupLock: Promise<void> = Promise.resolve();
 
 const meta = {
   id: "matrix",
@@ -142,26 +148,35 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       configured: account.configured,
       baseUrl: account.homeserver,
     }),
-    resolveAllowFrom: ({ cfg }) =>
-      ((cfg as CoreConfig).channels?.matrix?.dm?.allowFrom ?? []).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) => normalizeAllowListLower(allowFrom),
+    resolveAllowFrom: ({ cfg, accountId }) => {
+      const matrixConfig = resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId });
+      return (matrixConfig.dm?.allowFrom ?? []).map((entry: string | number) => String(entry));
+    },
+    formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: account.config.dm?.policy ?? "pairing",
-      allowFrom: account.config.dm?.allowFrom ?? [],
-      policyPath: "channels.matrix.dm.policy",
-      allowFromPath: "channels.matrix.dm.allowFrom",
-      approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) =>
-        raw
-          .replace(/^matrix:/i, "")
-          .trim()
-          .toLowerCase(),
-    }),
+    resolveDmPolicy: ({ account }) => {
+      const accountId = account.accountId;
+      const prefix =
+        accountId && accountId !== "default"
+          ? `channels.matrix.accounts.${accountId}.dm`
+          : "channels.matrix.dm";
+      return {
+        policy: account.config.dm?.policy ?? "pairing",
+        allowFrom: account.config.dm?.allowFrom ?? [],
+        policyPath: `${prefix}.policy`,
+        allowFromPath: `${prefix}.allowFrom`,
+        approveHint: formatPairingApproveHint("matrix"),
+        normalizeEntry: (raw) => normalizeMatrixUserId(raw),
+      };
+    },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg as CoreConfig);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: (cfg as CoreConfig).channels?.matrix !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -175,7 +190,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     resolveToolPolicy: resolveMatrixGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => (cfg as CoreConfig).channels?.matrix?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg, accountId }) =>
+      resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }).replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const currentTarget = context.To;
       return {
@@ -282,10 +298,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         .map((id) => ({ kind: "group", id }) as const);
       return ids;
     },
-    listPeersLive: async ({ cfg, query, limit }) =>
-      listMatrixDirectoryPeersLive({ cfg, query, limit }),
-    listGroupsLive: async ({ cfg, query, limit }) =>
-      listMatrixDirectoryGroupsLive({ cfg, query, limit }),
+    listPeersLive: async ({ cfg, accountId, query, limit }) =>
+      listMatrixDirectoryPeersLive({ cfg, accountId, query, limit }),
+    listGroupsLive: async ({ cfg, accountId, query, limit }) =>
+      listMatrixDirectoryGroupsLive({ cfg, accountId, query, limit }),
   },
   resolver: {
     resolveTargets: async ({ cfg, inputs, kind, runtime }) =>
@@ -387,9 +403,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    probeAccount: async ({ timeoutMs, cfg }) => {
+    probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
-        const auth = await resolveMatrixAuth({ cfg: cfg as CoreConfig });
+        const auth = await resolveMatrixAuth({
+          cfg: cfg as CoreConfig,
+          accountId: account.accountId,
+        });
         return await probeMatrix({
           homeserver: auth.homeserver,
           accessToken: auth.accessToken,
@@ -428,8 +447,32 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         baseUrl: account.homeserver,
       });
       ctx.log?.info(`[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`);
+
+      // Serialize startup: wait for any previous startup to complete import phase.
+      // This works around a race condition with concurrent dynamic imports.
+      //
+      // INVARIANT: The import() below cannot hang because:
+      // 1. It only loads local ESM modules with no circular awaits
+      // 2. Module initialization is synchronous (no top-level await in ./matrix/index.js)
+      // 3. The lock only serializes the import phase, not the provider startup
+      const previousLock = matrixStartupLock;
+      let releaseLock: () => void = () => {};
+      matrixStartupLock = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      await previousLock;
+
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorMatrixProvider } = await import("./matrix/index.js");
+      // Wrap in try/finally to ensure lock is released even if import fails.
+      let monitorMatrixProvider: typeof import("./matrix/index.js").monitorMatrixProvider;
+      try {
+        const module = await import("./matrix/index.js");
+        monitorMatrixProvider = module.monitorMatrixProvider;
+      } finally {
+        // Release lock after import completes or fails
+        releaseLock();
+      }
+
       return monitorMatrixProvider({
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,

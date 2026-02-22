@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderConfig } from "./config";
+import { renderConfig } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -25,6 +25,7 @@ describe("config view", () => {
     searchQuery: "",
     activeSection: null,
     activeSubsection: null,
+    streamMode: false,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onFormPatch: vi.fn(),
@@ -37,7 +38,7 @@ describe("config view", () => {
     onSubsectionChange: vi.fn(),
   });
 
-  it("allows save when form is unsafe", () => {
+  it("allows save with mixed union schemas", () => {
     const container = document.createElement("div");
     render(
       renderConfig({
@@ -194,7 +195,7 @@ describe("config view", () => {
     if (!input) {
       return;
     }
-    input.value = "gateway";
+    (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });

@@ -1,22 +1,18 @@
 import crypto from "node:crypto";
-import type { ExecToolDefaults } from "../../agents/bash-tools.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { buildCommandContext } from "./commands.js";
-import type { InlineDirectives } from "./directive-handling.js";
-import type { createModelSelectionState } from "./model-selection.js";
-import type { TypingController } from "./typing.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -26,6 +22,7 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -36,19 +33,24 @@ import {
   type VerboseLevel,
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
-import { buildGroupIntro } from "./groups.js";
+import type { buildCommandContext } from "./commands.js";
+import type { InlineDirectives } from "./directive-handling.js";
+import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import type { createModelSelectionState } from "./model-selection.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
+import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
+import type { TypingController } from "./typing.js";
+import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
-
-const BARE_SESSION_RESET_PROMPT =
-  "A new session was started via /new or /reset. Greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.";
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;
@@ -170,6 +172,9 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
+  // Always include persistent group chat context (name, participants, reply guidance)
+  const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
+  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
         cfg,
@@ -180,7 +185,12 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
-  const extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
+  const inboundMetaPrompt = buildInboundMetaSystemPrompt(
+    isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+  );
+  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+    .filter(Boolean)
+    .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -199,8 +209,24 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
-  const baseBodyTrimmed = baseBodyFinal.trim();
-  if (!baseBodyTrimmed) {
+  const inboundUserContext = buildInboundUserContextPrefix(
+    isNewSession
+      ? {
+          ...sessionCtx,
+          ...(sessionCtx.ThreadHistoryBody?.trim()
+            ? { InboundHistory: undefined, ThreadStarterBody: undefined }
+            : {}),
+        }
+      : { ...sessionCtx, ThreadStarterBody: undefined },
+  );
+  const baseBodyForPrompt = isBareSessionReset
+    ? baseBodyFinal
+    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+  const baseBodyTrimmed = baseBodyForPrompt.trim();
+  const hasMediaAttachment = Boolean(
+    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
+  );
+  if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
@@ -208,15 +234,19 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
+  // When the user sends media without text, provide a minimal body so the agent
+  // run proceeds and the image/document is injected by the embedded runner.
+  const effectiveBaseBody = baseBodyTrimmed
+    ? baseBodyForPrompt
+    : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
-    baseBody: baseBodyFinal,
+    baseBody: effectiveBaseBody,
     abortedLastRun,
     sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
     abortKey: command.abortKey,
-    messageId: sessionCtx.MessageSid,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -227,11 +257,15 @@ export async function runPreparedReply(
     isNewSession,
     prefixedBodyBase,
   });
+  prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
-  const threadStarterNote =
-    isNewSession && threadStarterBody
-      ? `[Thread starter - for context]\n${threadStarterBody}`
-      : undefined;
+  const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  const threadContextNote =
+    isNewSession && threadHistoryBody
+      ? `[Thread history - for context]\n${threadHistoryBody}`
+      : isNewSession && threadStarterBody
+        ? `[Thread starter - for context]\n${threadStarterBody}`
+        : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -246,7 +280,7 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
@@ -292,10 +326,18 @@ export async function runPreparedReply(
     if (channel && to) {
       const modelLabel = `${provider}/${model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
+      const modelAuthLabel = resolveModelAuthLabel({
+        provider,
+        cfg,
+        sessionEntry,
+        agentDir,
+      });
+      const authSuffix =
+        modelAuthLabel && modelAuthLabel !== "unknown" ? ` · 🔑 ${modelAuthLabel}` : "";
       const text =
         modelLabel === defaultLabel
-          ? `✅ New session started · model: ${modelLabel}`
-          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
+          ? `✅ New session started · model: ${modelLabel}${authSuffix}`
+          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})${authSuffix}`;
       await routeReply({
         payload: { text },
         channel,
@@ -308,16 +350,15 @@ export async function runPreparedReply(
     }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
-  const queueBodyBase = [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
-  const queueMessageId = sessionCtx.MessageSid?.trim();
-  const queueMessageIdHint = queueMessageId ? `[message_id: ${queueMessageId}]` : "";
-  const queueBodyWithId = queueMessageIdHint
-    ? `${queueBodyBase}\n${queueMessageIdHint}`
-    : queueBodyBase;
+  const sessionFile = resolveSessionFilePath(
+    sessionIdFinal,
+    sessionEntry,
+    resolveSessionFilePathOptions({ agentId, storePath }),
+  );
+  const queueBodyBase = [threadContextNote, effectiveBaseBody].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyWithId].filter(Boolean).join("\n").trim()
-    : queueBodyWithId;
+    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
@@ -376,6 +417,7 @@ export async function runPreparedReply(
       senderName: sessionCtx.SenderName?.trim() || undefined,
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
+      senderIsOwner: command.senderIsOwner,
       sessionFile,
       workspaceDir,
       config: cfg,

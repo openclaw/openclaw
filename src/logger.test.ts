@@ -3,16 +3,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "./runtime.js";
-import { setVerbose } from "./globals.js";
+import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
-import { DEFAULT_LOG_DIR, resetLogger, setLoggerOverride } from "./logging.js";
+import {
+  DEFAULT_LOG_DIR,
+  resetLogger,
+  setLoggerOverride,
+  stripRedundantSubsystemPrefixForConsole,
+} from "./logging.js";
+import type { RuntimeEnv } from "./runtime.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
     resetLogger();
     setLoggerOverride(null);
     setVerbose(false);
+    setYes(false);
   });
 
   it("formats messages through runtime log/error", () => {
@@ -67,7 +73,7 @@ describe("logger helpers", () => {
 
   it("uses daily rolling default log file and prunes old ones", () => {
     resetLogger();
-    setLoggerOverride({}); // force defaults regardless of user config
+    setLoggerOverride({ level: "info" }); // force default file path with enabled file logging
     const today = localDateString(new Date());
     const todayPath = path.join(DEFAULT_LOG_DIR, `openclaw-${today}.log`);
 
@@ -85,6 +91,60 @@ describe("logger helpers", () => {
     expect(fs.existsSync(oldPath)).toBe(false);
 
     cleanup(todayPath);
+  });
+});
+
+describe("globals", () => {
+  afterEach(() => {
+    setVerbose(false);
+    setYes(false);
+    vi.restoreAllMocks();
+  });
+
+  it("toggles verbose flag and logs when enabled", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    setVerbose(false);
+    logVerbose("hidden");
+    expect(logSpy).not.toHaveBeenCalled();
+
+    setVerbose(true);
+    logVerbose("shown");
+    expect(isVerbose()).toBe(true);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("shown"));
+  });
+
+  it("stores yes flag", () => {
+    setYes(true);
+    expect(isYes()).toBe(true);
+    setYes(false);
+    expect(isYes()).toBe(false);
+  });
+});
+
+describe("stripRedundantSubsystemPrefixForConsole", () => {
+  it("drops known subsystem prefixes", () => {
+    const cases = [
+      { input: "discord: hello", subsystem: "discord", expected: "hello" },
+      { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
+      { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
+      {
+        input: "[discord] connection stalled",
+        subsystem: "discord",
+        expected: "connection stalled",
+      },
+    ];
+
+    for (const testCase of cases) {
+      expect(stripRedundantSubsystemPrefixForConsole(testCase.input, testCase.subsystem)).toBe(
+        testCase.expected,
+      );
+    }
+  });
+
+  it("keeps messages that do not start with the subsystem", () => {
+    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
+      "discordant: hello",
+    );
   });
 });
 

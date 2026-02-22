@@ -1,90 +1,54 @@
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+import {
+  expandToolGroups,
+  normalizeToolList,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+  TOOL_GROUPS,
+} from "./tool-policy-shared.js";
+import type { AnyAgentTool } from "./tools/common.js";
+export {
+  expandToolGroups,
+  normalizeToolList,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+  TOOL_GROUPS,
+} from "./tool-policy-shared.js";
+export type { ToolProfileId } from "./tool-policy-shared.js";
 
-type ToolProfilePolicy = {
-  allow?: string[];
-  deny?: string[];
-};
-
-const TOOL_NAME_ALIASES: Record<string, string> = {
-  bash: "exec",
-  "apply-patch": "apply_patch",
-};
-
-export const TOOL_GROUPS: Record<string, string[]> = {
-  // NOTE: Keep canonical (lowercase) tool names here.
-  "group:memory": ["memory_search", "memory_get"],
-  "group:web": ["web_search", "web_fetch"],
-  // Basic workspace/file tools
-  "group:fs": ["read", "write", "edit", "apply_patch"],
-  // Host/runtime execution tools
-  "group:runtime": ["exec", "process"],
-  // Session management tools
-  "group:sessions": [
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "sessions_spawn",
-    "session_status",
-  ],
-  // UI helpers
-  "group:ui": ["browser", "canvas"],
-  // Automation + infra
-  "group:automation": ["cron", "gateway"],
-  // Messaging surface
-  "group:messaging": ["message"],
-  // Nodes + device tools
-  "group:nodes": ["nodes"],
-  // All OpenClaw native tools (excludes provider plugins).
-  "group:openclaw": [
-    "browser",
-    "canvas",
-    "nodes",
-    "cron",
-    "message",
-    "gateway",
-    "agents_list",
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "sessions_spawn",
-    "session_status",
-    "memory_search",
-    "memory_get",
-    "web_search",
-    "web_fetch",
-    "image",
-  ],
-};
-
-const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
-  minimal: {
-    allow: ["session_status"],
-  },
-  coding: {
-    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
-  },
-  messaging: {
-    allow: [
-      "group:messaging",
-      "sessions_list",
-      "sessions_history",
-      "sessions_send",
-      "session_status",
-    ],
-  },
-  full: {},
-};
-
-export function normalizeToolName(name: string) {
-  const normalized = name.trim().toLowerCase();
-  return TOOL_NAME_ALIASES[normalized] ?? normalized;
+// Keep tool-policy browser-safe: do not import tools/common at runtime.
+function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
+  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error("Tool restricted to owner senders.");
+    },
+  };
 }
 
-export function normalizeToolList(list?: string[]) {
-  if (!list) {
-    return [];
+const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>(["whatsapp_login", "cron", "gateway"]);
+
+export function isOwnerOnlyToolName(name: string) {
+  return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));
+}
+
+function isOwnerOnlyTool(tool: AnyAgentTool) {
+  return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
+}
+
+export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+  const withGuard = tools.map((tool) => {
+    if (!isOwnerOnlyTool(tool)) {
+      return tool;
+    }
+    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+  });
+  if (senderIsOwner) {
+    return withGuard;
   }
-  return list.map(normalizeToolName).filter(Boolean);
+  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
 }
 
 export type ToolPolicyLike = {
@@ -102,20 +66,6 @@ export type AllowlistResolution = {
   unknownAllowlist: string[];
   strippedAllowlist: boolean;
 };
-
-export function expandToolGroups(list?: string[]) {
-  const normalized = normalizeToolList(list);
-  const expanded: string[] = [];
-  for (const value of normalized) {
-    const group = TOOL_GROUPS[value];
-    if (group) {
-      expanded.push(...group);
-      continue;
-    }
-    expanded.push(value);
-  }
-  return Array.from(new Set(expanded));
-}
 
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
@@ -244,19 +194,12 @@ export function stripPluginOnlyAllowlist(
   };
 }
 
-export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  if (!profile) {
-    return undefined;
+export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
+  policy: TPolicy | undefined,
+  alsoAllow?: string[],
+): TPolicy | undefined {
+  if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
+    return policy;
   }
-  const resolved = TOOL_PROFILES[profile as ToolProfileId];
-  if (!resolved) {
-    return undefined;
-  }
-  if (!resolved.allow && !resolved.deny) {
-    return undefined;
-  }
-  return {
-    allow: resolved.allow ? [...resolved.allow] : undefined,
-    deny: resolved.deny ? [...resolved.deny] : undefined,
-  };
+  return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
 }

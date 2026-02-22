@@ -29,7 +29,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 
 Notes:
 
-- `host` defaults to `sandbox`.
+- `host` defaults to `sandbox` when sandbox runtime is active, and defaults to `gateway` otherwise.
 - `elevated` is ignored when sandboxing is off (exec already runs on the host).
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
@@ -38,20 +38,24 @@ Notes:
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
-- Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
-  the gateway host (no container) and **does not require approvals**. To require approvals, run with
-  `host=gateway` and configure exec approvals (or enable sandboxing).
+- Important: sandboxing is **off by default**. If sandboxing is off and `host=sandbox` is explicitly
+  configured/requested, exec now fails closed instead of silently running on the gateway host.
+  Enable sandboxing or use `host=gateway` with approvals.
+- Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
+  effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
+  that file.
 
 ## Config
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
-- `tools.exec.host` (default: `sandbox`)
+- `tools.exec.host` (default: runtime-aware: `sandbox` when sandbox runtime is active, `gateway` otherwise)
 - `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
-- `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
-- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
+- `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
+- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
+- `tools.exec.safeBinProfiles`: optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).
 
 Example:
 
@@ -75,8 +79,8 @@ Example:
   OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
   `tools.exec.pathPrepend` applies here too.
 - `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are
-  rejected for host execution. Headless node hosts accept `PATH` only when it prepends the node host
-  PATH (no replacement). macOS nodes drop `PATH` overrides entirely.
+  rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node,
+  configure the node host service environment (systemd/launchd) or install tools in standard locations.
 
 Per-agent node binding (use the agent list index in config):
 
@@ -120,7 +124,19 @@ running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` noti
 Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
 `security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
-allowlist mode.
+allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
+Redirections remain unsupported.
+
+Use the two controls for different jobs:
+
+- `tools.exec.safeBins`: small, stdin-only stream filters.
+- `tools.exec.safeBinProfiles`: explicit argv policy for custom safe bins.
+- allowlist: explicit trust for executable paths.
+
+Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). If you need those, use explicit allowlist entries and keep approval prompts enabled.
+`openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries.
+
+For full policy details and examples, see [Exec approvals](/tools/exec-approvals#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals#safe-bins-versus-allowlist).
 
 ## Examples
 
@@ -166,7 +182,7 @@ Enable it explicitly:
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+      applyPatch: { enabled: true, workspaceOnly: true, allowModels: ["gpt-5.2"] },
     },
   },
 }
@@ -177,3 +193,4 @@ Notes:
 - Only available for OpenAI/OpenAI Codex models.
 - Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.
+- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.

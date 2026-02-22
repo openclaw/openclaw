@@ -3,116 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { GatewayClient } from "../src/gateway/client.js";
-import { startGatewayServer } from "../src/gateway/server.js";
-import { getDeterministicFreePortBlock } from "../src/test-utils/ports.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
-
-type OpenAIResponseStreamEvent =
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
-  | {
-      type: "response.completed";
-      response: {
-        status: "completed";
-        usage: {
-          input_tokens: number;
-          output_tokens: number;
-          total_tokens: number;
-        };
-      };
-    };
-
-function buildOpenAIResponsesSse(text: string): Response {
-  const events: OpenAIResponseStreamEvent[] = [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: "msg_test_1",
-        role: "assistant",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: "msg_test_1",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        status: "completed",
-        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-      },
-    },
-  ];
-
-  const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(sse));
-      controller.close();
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-function extractPayloadText(result: unknown): string {
-  const record = result as Record<string, unknown>;
-  const payloads = Array.isArray(record.payloads) ? record.payloads : [];
-  const texts = payloads
-    .map((p) => (p && typeof p === "object" ? (p as Record<string, unknown>).text : undefined))
-    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
-  return texts.join("\n").trim();
-}
-
-async function connectClient(params: { url: string; token: string }) {
-  return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
-    let settled = false;
-    const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(client as InstanceType<typeof GatewayClient>);
-      }
-    };
-    const client = new GatewayClient({
-      url: params.url,
-      token: params.token,
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-timeout-fallback",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      onHelloOk: () => stop(undefined, client),
-      onConnectError: (err) => stop(err),
-      onClose: (code, reason) =>
-        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
-    });
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
-    timer.unref();
-    client.start();
-  });
-}
-
-async function getFreeGatewayPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+import { extractPayloadText } from "../src/gateway/test-helpers.agent-results.js";
+import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
+import { buildOpenAIResponsesTextSse } from "../src/gateway/test-helpers.openai-mock.js";
+import { buildOpenAiResponsesProviderConfig } from "../src/gateway/test-openai-responses-model.js";
 
 describe("provider timeouts (e2e)", () => {
   it(
@@ -146,7 +40,7 @@ describe("provider timeouts (e2e)", () => {
 
         if (url.startsWith(`${fallbackBaseUrl}/responses`)) {
           counts.fallback += 1;
-          return buildOpenAIResponsesSse("fallback-ok");
+          return buildOpenAIResponsesTextSse("fallback-ok");
         }
 
         if (!originalFetch) {
@@ -182,58 +76,18 @@ describe("provider timeouts (e2e)", () => {
         models: {
           mode: "replace",
           providers: {
-            primary: {
-              baseUrl: primaryBaseUrl,
-              apiKey: "test",
-              api: "openai-responses",
-              models: [
-                {
-                  id: "gpt-5.2",
-                  name: "gpt-5.2",
-                  api: "openai-responses",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-            fallback: {
-              baseUrl: fallbackBaseUrl,
-              apiKey: "test",
-              api: "openai-responses",
-              models: [
-                {
-                  id: "gpt-5.2",
-                  name: "gpt-5.2",
-                  api: "openai-responses",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 4096,
-                },
-              ],
-            },
+            primary: buildOpenAiResponsesProviderConfig(primaryBaseUrl),
+            fallback: buildOpenAiResponsesProviderConfig(fallbackBaseUrl),
           },
         },
         gateway: { auth: { token } },
       };
 
-      await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-
-      const port = await getFreeGatewayPort();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-
-      const client = await connectClient({
-        url: `ws://127.0.0.1:${port}`,
+      const { server, client } = await startGatewayWithClient({
+        cfg,
+        configPath,
         token,
+        clientDisplayName: "vitest-timeout-fallback",
       });
 
       try {

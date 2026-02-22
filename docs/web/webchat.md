@@ -24,7 +24,10 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 ## How it works (behavior)
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
+- `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
+- Aborted runs can keep partial assistant output visible in the UI.
+- Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.
 - History is always fetched from the gateway (no local file watching).
 - If the gateway is unreachable, WebChat is read-only.
 
@@ -44,6 +47,7 @@ Channel options:
 Related global options:
 
 - `gateway.port`, `gateway.bind`: WebSocket host/port.
-- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`: WebSocket auth.
+- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`: WebSocket auth (token/password).
+- `gateway.auth.mode: "trusted-proxy"`: reverse-proxy auth for browser clients (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `gateway.remote.url`, `gateway.remote.token`, `gateway.remote.password`: remote gateway target.
 - `session.*`: session storage and main key defaults.

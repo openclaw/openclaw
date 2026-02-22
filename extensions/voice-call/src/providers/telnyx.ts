@@ -13,6 +13,7 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
 
 /**
@@ -21,15 +22,21 @@ import type { VoiceCallProvider } from "./base.js";
  * Uses Telnyx Call Control API v2 for managing calls.
  * @see https://developers.telnyx.com/docs/api/v2/call-control
  */
+export interface TelnyxProviderOptions {
+  /** Skip webhook signature verification (development only, NOT for production) */
+  skipVerification?: boolean;
+}
+
 export class TelnyxProvider implements VoiceCallProvider {
   readonly name = "telnyx" as const;
 
   private readonly apiKey: string;
   private readonly connectionId: string;
   private readonly publicKey: string | undefined;
+  private readonly options: TelnyxProviderOptions;
   private readonly baseUrl = "https://api.telnyx.com/v2";
 
-  constructor(config: TelnyxConfig) {
+  constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
       throw new Error("Telnyx API key is required");
     }
@@ -40,6 +47,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.apiKey = config.apiKey;
     this.connectionId = config.connectionId;
     this.publicKey = config.publicKey;
+    this.options = options;
   }
 
   /**
@@ -75,59 +83,11 @@ export class TelnyxProvider implements VoiceCallProvider {
    * Verify Telnyx webhook signature using Ed25519.
    */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
-    if (!this.publicKey) {
-      // No public key configured, skip verification (not recommended for production)
-      return { ok: true };
-    }
+    const result = verifyTelnyxWebhook(ctx, this.publicKey, {
+      skipVerification: this.options.skipVerification,
+    });
 
-    const signature = ctx.headers["telnyx-signature-ed25519"];
-    const timestamp = ctx.headers["telnyx-timestamp"];
-
-    if (!signature || !timestamp) {
-      return { ok: false, reason: "Missing signature or timestamp header" };
-    }
-
-    const signatureStr = Array.isArray(signature) ? signature[0] : signature;
-    const timestampStr = Array.isArray(timestamp) ? timestamp[0] : timestamp;
-
-    if (!signatureStr || !timestampStr) {
-      return { ok: false, reason: "Empty signature or timestamp" };
-    }
-
-    try {
-      const signedPayload = `${timestampStr}|${ctx.rawBody}`;
-      const signatureBuffer = Buffer.from(signatureStr, "base64");
-      const publicKeyBuffer = Buffer.from(this.publicKey, "base64");
-
-      const isValid = crypto.verify(
-        null, // Ed25519 doesn't use a digest
-        Buffer.from(signedPayload),
-        {
-          key: publicKeyBuffer,
-          format: "der",
-          type: "spki",
-        },
-        signatureBuffer,
-      );
-
-      if (!isValid) {
-        return { ok: false, reason: "Invalid signature" };
-      }
-
-      // Check timestamp is within 5 minutes
-      const eventTime = parseInt(timestampStr, 10) * 1000;
-      const now = Date.now();
-      if (Math.abs(now - eventTime) > 5 * 60 * 1000) {
-        return { ok: false, reason: "Timestamp too old" };
-      }
-
-      return { ok: true };
-    } catch (err) {
-      return {
-        ok: false,
-        reason: `Verification error: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
+    return { ok: result.ok, reason: result.reason };
   }
 
   /**

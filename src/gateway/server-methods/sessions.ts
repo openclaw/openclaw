@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import type { GatewayRequestHandlers } from "./types.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
@@ -12,10 +12,17 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
@@ -26,11 +33,14 @@ import {
 } from "../protocol/index.js";
 import {
   archiveFileOnDisk,
+  archiveSessionTranscripts,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
+  pruneLegacyStoreKeys,
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
@@ -38,18 +48,161 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
+
+function requireSessionKey(key: unknown, respond: RespondFn): string | null {
+  const raw =
+    typeof key === "string"
+      ? key
+      : typeof key === "number"
+        ? String(key)
+        : typeof key === "bigint"
+          ? String(key)
+          : "";
+  const normalized = raw.trim();
+  if (!normalized) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
+    return null;
+  }
+  return normalized;
+}
+
+function resolveGatewaySessionTargetFromKey(key: string) {
+  const cfg = loadConfig();
+  const target = resolveGatewaySessionStoreTarget({ cfg, key });
+  return { cfg, target, storePath: target.storePath };
+}
+
+function rejectWebchatSessionMutation(params: {
+  action: "patch" | "delete";
+  client: GatewayClient | null;
+  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
+  respond: RespondFn;
+}): boolean {
+  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
+    ),
+  );
+  return true;
+}
+
+function migrateAndPruneSessionStoreKey(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  store: Record<string, SessionEntry>;
+}) {
+  const target = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.key,
+    store: params.store,
+  });
+  const primaryKey = target.canonicalKey;
+  if (!params.store[primaryKey]) {
+    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
+    if (existingKey) {
+      params.store[primaryKey] = params.store[existingKey];
+    }
+  }
+  pruneLegacyStoreKeys({
+    store: params.store,
+    canonicalKey: primaryKey,
+    candidates: target.storeKeys,
+  });
+  return { target, primaryKey, entry: params.store[primaryKey] };
+}
+
+function archiveSessionTranscriptsForSession(params: {
+  sessionId: string | undefined;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "reset" | "deleted";
+}): string[] {
+  if (!params.sessionId) {
+    return [];
+  }
+  return archiveSessionTranscripts({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+    reason: params.reason,
+  });
+}
+
+async function emitSessionUnboundLifecycleEvent(params: {
+  targetSessionKey: string;
+  reason: "session-reset" | "session-delete";
+  emitHooks?: boolean;
+}) {
+  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
+  unbindThreadBindingsBySessionKey({
+    targetSessionKey: params.targetSessionKey,
+    targetKind,
+    reason: params.reason,
+    sendFarewell: true,
+  });
+
+  if (params.emitHooks === false) {
+    return;
+  }
+
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("subagent_ended")) {
+    return;
+  }
+  await hookRunner.runSubagentEnded(
+    {
+      targetSessionKey: params.targetSessionKey,
+      targetKind,
+      reason: params.reason,
+      sendFarewell: true,
+      outcome: params.reason === "session-reset" ? "reset" : "deleted",
+    },
+    {
+      childSessionKey: params.targetSessionKey,
+    },
+  );
+}
+
+async function ensureSessionRuntimeCleanup(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  sessionId?: string;
+}) {
+  const queueKeys = new Set<string>(params.target.storeKeys);
+  queueKeys.add(params.target.canonicalKey);
+  if (params.sessionId) {
+    queueKeys.add(params.sessionId);
+  }
+  clearSessionQueues([...queueKeys]);
+  stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
+  if (!params.sessionId) {
+    return undefined;
+  }
+  abortEmbeddedPiRun(params.sessionId);
+  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  if (ended) {
+    return undefined;
+  }
+  return errorShape(
+    ErrorCodes.UNAVAILABLE,
+    `Session ${params.key} is still active; try again in a moment.`,
+  );
+}
 
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
-    if (!validateSessionsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.list params: ${formatValidationErrors(validateSessionsListParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
@@ -64,17 +217,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "sessions.preview": ({ params, respond }) => {
-    if (!validateSessionsPreviewParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.preview params: ${formatValidationErrors(
-            validateSessionsPreviewParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
     }
     const p = params;
@@ -101,12 +244,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     for (const key of keys) {
       try {
-        const target = resolveGatewaySessionStoreTarget({ cfg, key });
-        const store = storeCache.get(target.storePath) ?? loadSessionStore(target.storePath);
-        storeCache.set(target.storePath, store);
-        const entry =
-          target.storeKeys.map((candidate) => store[candidate]).find(Boolean) ??
-          store[target.canonicalKey];
+        const storeTarget = resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false });
+        const store =
+          storeCache.get(storeTarget.storePath) ?? loadSessionStore(storeTarget.storePath);
+        storeCache.set(storeTarget.storePath, store);
+        const target = resolveGatewaySessionStoreTarget({
+          cfg,
+          key,
+          store,
+        });
+        const entry = target.storeKeys.map((candidate) => store[candidate]).find(Boolean);
         if (!entry?.sessionId) {
           previews.push({ key, status: "missing", items: [] });
           continue;
@@ -131,57 +278,36 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
   },
-  "sessions.resolve": ({ params, respond }) => {
-    if (!validateSessionsResolveParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.resolve params: ${formatValidationErrors(validateSessionsResolveParams.errors)}`,
-        ),
-      );
+  "sessions.resolve": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
     const p = params;
     const cfg = loadConfig();
 
-    const resolved = resolveSessionKeyFromResolveParams({ cfg, p });
+    const resolved = await resolveSessionKeyFromResolveParams({ cfg, p });
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;
     }
     respond(true, { ok: true, key: resolved.key }, undefined);
   },
-  "sessions.patch": async ({ params, respond, context }) => {
-    if (!validateSessionsPatchParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.patch params: ${formatValidationErrors(validateSessionsPatchParams.errors)}`,
-        ),
-      );
+  "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = requireSessionKey(p.key, respond);
     if (!key) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
       return;
     }
 
-    const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
-    const storePath = target.storePath;
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const applied = await updateSessionStore(storePath, async (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-      if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
-        store[primaryKey] = store[existingKey];
-        delete store[existingKey];
-      }
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       return await applySessionsPatchToStore({
         cfg,
         store,
@@ -194,44 +320,60 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+    const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
+    const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
       key: target.canonicalKey,
       entry: applied.entry,
+      resolved: {
+        modelProvider: resolved.provider,
+        model: resolved.model,
+      },
     };
     respond(true, result, undefined);
   },
   "sessions.reset": async ({ params, respond }) => {
-    if (!validateSessionsResetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.reset params: ${formatValidationErrors(validateSessionsResetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = requireSessionKey(p.key, respond);
     if (!key) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
 
-    const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
-    const storePath = target.storePath;
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const { entry } = loadSessionEntry(key);
+    const hadExistingEntry = Boolean(entry);
+    const commandReason = p.reason === "new" ? "new" : "reset";
+    const hookEvent = createInternalHookEvent(
+      "command",
+      commandReason,
+      target.canonicalKey ?? key,
+      {
+        sessionEntry: entry,
+        previousSessionEntry: entry,
+        commandSource: "gateway:sessions.reset",
+        cfg,
+      },
+    );
+    await triggerInternalHook(hookEvent);
+    const sessionId = entry?.sessionId;
+    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
+    if (cleanupError) {
+      respond(false, undefined, cleanupError);
+      return;
+    }
+    let oldSessionId: string | undefined;
+    let oldSessionFile: string | undefined;
     const next = await updateSessionStore(storePath, (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-      if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
-        store[primaryKey] = store[existingKey];
-        delete store[existingKey];
-      }
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const entry = store[primaryKey];
+      oldSessionId = entry?.sessionId;
+      oldSessionFile = entry?.sessionFile;
       const now = Date.now();
       const nextEntry: SessionEntry = {
         sessionId: randomUUID(),
@@ -254,34 +396,42 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
+        totalTokensFresh: true,
       };
       store[primaryKey] = nextEntry;
       return nextEntry;
     });
+    // Archive old transcript so it doesn't accumulate on disk (#14869).
+    archiveSessionTranscriptsForSession({
+      sessionId: oldSessionId,
+      storePath,
+      sessionFile: oldSessionFile,
+      agentId: target.agentId,
+      reason: "reset",
+    });
+    if (hadExistingEntry) {
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? key,
+        reason: "session-reset",
+      });
+    }
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
-  "sessions.delete": async ({ params, respond }) => {
-    if (!validateSessionsDeleteParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.delete params: ${formatValidationErrors(validateSessionsDeleteParams.errors)}`,
-        ),
-      );
+  "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = requireSessionKey(p.key, respond);
     if (!key) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
       return;
     }
 
-    const cfg = loadConfig();
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const mainKey = resolveMainSessionKey(cfg);
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
     if (target.canonicalKey === mainKey) {
       respond(
         false,
@@ -293,81 +443,50 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
-    const storePath = target.storePath;
     const { entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
-    const existed = Boolean(entry);
-    const queueKeys = new Set<string>(target.storeKeys);
-    queueKeys.add(target.canonicalKey);
-    if (sessionId) {
-      queueKeys.add(sessionId);
+    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
+    if (cleanupError) {
+      respond(false, undefined, cleanupError);
+      return;
     }
-    clearSessionQueues([...queueKeys]);
-    stopSubagentsForRequester({ cfg, requesterSessionKey: target.canonicalKey });
-    if (sessionId) {
-      abortEmbeddedPiRun(sessionId);
-      const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
-      if (!ended) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Session ${key} is still active; try again in a moment.`,
-          ),
-        );
-        return;
-      }
-    }
-    await updateSessionStore(storePath, (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-      if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
-        store[primaryKey] = store[existingKey];
-        delete store[existingKey];
-      }
-      if (store[primaryKey]) {
+    const deleted = await updateSessionStore(storePath, (store) => {
+      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      const hadEntry = Boolean(store[primaryKey]);
+      if (hadEntry) {
         delete store[primaryKey];
       }
+      return hadEntry;
     });
 
-    const archived: string[] = [];
-    if (deleteTranscript && sessionId) {
-      for (const candidate of resolveSessionTranscriptCandidates(
-        sessionId,
-        storePath,
-        entry?.sessionFile,
-        target.agentId,
-      )) {
-        if (!fs.existsSync(candidate)) {
-          continue;
-        }
-        try {
-          archived.push(archiveFileOnDisk(candidate, "deleted"));
-        } catch {
-          // Best-effort.
-        }
-      }
+    const archived =
+      deleted && deleteTranscript
+        ? archiveSessionTranscriptsForSession({
+            sessionId,
+            storePath,
+            sessionFile: entry?.sessionFile,
+            agentId: target.agentId,
+            reason: "deleted",
+          })
+        : [];
+    if (deleted) {
+      const emitLifecycleHooks = p.emitLifecycleHooks !== false;
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? key,
+        reason: "session-delete",
+        emitHooks: emitLifecycleHooks,
+      });
     }
 
-    respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
+    respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
-    if (!validateSessionsCompactParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.compact params: ${formatValidationErrors(validateSessionsCompactParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = requireSessionKey(p.key, respond);
     if (!key) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
 
@@ -376,18 +495,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? Math.max(1, Math.floor(p.maxLines))
         : 400;
 
-    const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
-    const storePath = target.storePath;
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     // Lock + read in a short critical section; transcript work happens outside.
     const compactTarget = await updateSessionStore(storePath, (store) => {
-      const primaryKey = target.storeKeys[0] ?? key;
-      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-      if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
-        store[primaryKey] = store[existingKey];
-        delete store[existingKey];
-      }
-      return { entry: store[primaryKey], primaryKey };
+      const { entry, primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      return { entry, primaryKey };
     });
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
@@ -454,6 +566,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.inputTokens;
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;
+      delete entryToUpdate.totalTokensFresh;
       entryToUpdate.updatedAt = Date.now();
     });
 

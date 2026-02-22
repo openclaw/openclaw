@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -60,10 +61,14 @@ const normalizePathEntries = (value?: string) =>
     .filter(Boolean);
 
 describe("exec PATH login shell merge", () => {
-  const originalPath = process.env.PATH;
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["PATH"]);
+  });
 
   afterEach(() => {
-    process.env.PATH = originalPath;
+    envSnapshot.restore();
   });
 
   it("merges login-shell PATH for host=gateway", async () => {
@@ -121,5 +126,32 @@ describe("exec host env validation", () => {
         env: { LD_DEBUG: "1" },
       }),
     ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
+  });
+
+  it("defaults to gateway when sandbox runtime is unavailable", async () => {
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({ security: "full", ask: "off" });
+
+    const err = await tool
+      .execute("call1", {
+        command: "echo ok",
+        host: "sandbox",
+      })
+      .then(() => null)
+      .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+    expect(err).toBeTruthy();
+    expect(err?.message).toMatch(/exec host not allowed/);
+    expect(err?.message).toMatch(/tools\.exec\.host=gateway/);
+  });
+
+  it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+      }),
+    ).rejects.toThrow(/sandbox runtime is unavailable/);
   });
 });

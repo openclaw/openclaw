@@ -1,57 +1,14 @@
+import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
+import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
 import { stripReasoningTagsFromText } from "../../../src/shared/text/reasoning-tags.js";
+
+export { formatRelativeTimestamp, formatDurationHuman };
 
 export function formatMs(ms?: number | null): string {
   if (!ms && ms !== 0) {
     return "n/a";
   }
   return new Date(ms).toLocaleString();
-}
-
-export function formatAgo(ms?: number | null): string {
-  if (!ms && ms !== 0) {
-    return "n/a";
-  }
-  const diff = Date.now() - ms;
-  if (diff < 0) {
-    return "just now";
-  }
-  const sec = Math.round(diff / 1000);
-  if (sec < 60) {
-    return `${sec}s ago`;
-  }
-  const min = Math.round(sec / 60);
-  if (min < 60) {
-    return `${min}m ago`;
-  }
-  const hr = Math.round(min / 60);
-  if (hr < 48) {
-    return `${hr}h ago`;
-  }
-  const day = Math.round(hr / 24);
-  return `${day}d ago`;
-}
-
-export function formatDurationMs(ms?: number | null): string {
-  if (!ms && ms !== 0) {
-    return "n/a";
-  }
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) {
-    return `${sec}s`;
-  }
-  const min = Math.round(sec / 60);
-  if (min < 60) {
-    return `${min}m`;
-  }
-  const hr = Math.round(min / 60);
-  if (hr < 48) {
-    return `${hr}h`;
-  }
-  const day = Math.round(hr / 24);
-  return `${day}d`;
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {
@@ -100,4 +57,42 @@ export function parseList(input: string): string[] {
 
 export function stripThinkingTags(value: string): string {
   return stripReasoningTagsFromText(value, { mode: "preserve", trim: "start" });
+}
+
+export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {
+  if (cost == null || !Number.isFinite(cost)) {
+    return fallback;
+  }
+  if (cost === 0) {
+    return "$0.00";
+  }
+  if (cost < 0.01) {
+    return `$${cost.toFixed(4)}`;
+  }
+  if (cost < 1) {
+    return `$${cost.toFixed(3)}`;
+  }
+  return `$${cost.toFixed(2)}`;
+}
+
+export function formatTokens(tokens: number | null | undefined, fallback = "0"): string {
+  if (tokens == null || !Number.isFinite(tokens)) {
+    return fallback;
+  }
+  if (tokens < 1000) {
+    return String(Math.round(tokens));
+  }
+  if (tokens < 1_000_000) {
+    const k = tokens / 1000;
+    return k < 10 ? `${k.toFixed(1)}k` : `${Math.round(k)}k`;
+  }
+  const m = tokens / 1_000_000;
+  return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
+}
+
+export function formatPercent(value: number | null | undefined, fallback = "—"): string {
+  if (value == null || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return `${(value * 100).toFixed(1)}%`;
 }

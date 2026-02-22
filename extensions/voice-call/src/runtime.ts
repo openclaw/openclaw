@@ -1,13 +1,13 @@
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreConfig } from "./core-bridge.js";
-import type { VoiceCallProvider } from "./providers/base.js";
-import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
+import type { CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
+import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
+import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
 import {
@@ -30,7 +30,7 @@ type Logger = {
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
-  debug: (message: string) => void;
+  debug?: (message: string) => void;
 };
 
 function isLoopbackBind(bind: string | undefined): boolean {
@@ -44,15 +44,20 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
     isLoopbackBind(config.serve?.bind) &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass || config.tunnel?.allowNgrokFreeTier || false);
+    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
 
   switch (config.provider) {
     case "telnyx":
-      return new TelnyxProvider({
-        apiKey: config.telnyx?.apiKey,
-        connectionId: config.telnyx?.connectionId,
-        publicKey: config.telnyx?.publicKey,
-      });
+      return new TelnyxProvider(
+        {
+          apiKey: config.telnyx?.apiKey,
+          connectionId: config.telnyx?.connectionId,
+          publicKey: config.telnyx?.publicKey,
+        },
+        {
+          skipVerification: config.skipSignatureVerification,
+        },
+      );
     case "twilio":
       return new TwilioProvider(
         {
@@ -64,6 +69,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           publicUrl: config.publicUrl,
           skipVerification: config.skipSignatureVerification,
           streamPath: config.streaming?.enabled ? config.streaming.streamPath : undefined,
+          webhookSecurity: config.webhookSecurity,
         },
       );
     case "plivo":
@@ -76,6 +82,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           publicUrl: config.publicUrl,
           skipVerification: config.skipSignatureVerification,
           ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
+          webhookSecurity: config.webhookSecurity,
         },
       );
     case "mock":
@@ -103,6 +110,12 @@ export async function createVoiceCallRuntime(params: {
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
+  }
+
+  if (config.skipSignatureVerification) {
+    log.warn(
+      "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification (development only). Do not use in production.",
+    );
   }
 
   const validation = validateProviderConfig(config);

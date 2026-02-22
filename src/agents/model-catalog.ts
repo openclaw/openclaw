@@ -1,6 +1,9 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+
+const log = createSubsystemLogger("model-catalog");
 
 export type ModelCatalogEntry = {
   id: string;
@@ -27,6 +30,35 @@ let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
 
+const CODEX_PROVIDER = "openai-codex";
+const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+
+function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
+  const hasSpark = models.some(
+    (entry) =>
+      entry.provider === CODEX_PROVIDER &&
+      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+  );
+  if (hasSpark) {
+    return;
+  }
+
+  const baseModel = models.find(
+    (entry) =>
+      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
+  );
+  if (!baseModel) {
+    return;
+  }
+
+  models.push({
+    ...baseModel,
+    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+  });
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
@@ -36,6 +68,14 @@ export function resetModelCatalogCacheForTest() {
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
 export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
   importPiSdk = loader ?? defaultImportPiSdk;
+}
+
+function createAuthStorage(AuthStorageLike: unknown, path: string) {
+  const withFactory = AuthStorageLike as { create?: (path: string) => unknown };
+  if (typeof withFactory.create === "function") {
+    return withFactory.create(path);
+  }
+  return new (AuthStorageLike as { new (path: string): unknown })(path);
 }
 
 export async function loadModelCatalog(params?: {
@@ -62,6 +102,9 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
+      await (
+        await import("./pi-auth-json.js")
+      ).ensurePiAuthJsonFromAuthProfiles(resolveOpenClawAgentDir());
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
@@ -69,12 +112,17 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
       const { join } = await import("node:path");
-      const authStorage = new piSdk.AuthStorage(join(agentDir, "auth.json"));
-      const registry = new piSdk.ModelRegistry(authStorage, join(agentDir, "models.json")) as
-        | {
-            getAll: () => Array<DiscoveredModel>;
-          }
-        | Array<DiscoveredModel>;
+      const authStorage = createAuthStorage(piSdk.AuthStorage, join(agentDir, "auth.json"));
+      const registry = new (piSdk.ModelRegistry as unknown as {
+        new (
+          authStorage: unknown,
+          modelsFile: string,
+        ):
+          | Array<DiscoveredModel>
+          | {
+              getAll: () => Array<DiscoveredModel>;
+            };
+      })(authStorage, join(agentDir, "models.json"));
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
@@ -94,6 +142,7 @@ export async function loadModelCatalog(params?: {
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
+      applyOpenAICodexSparkFallback(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
@@ -104,7 +153,7 @@ export async function loadModelCatalog(params?: {
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
-        console.warn(`[model-catalog] Failed to load model catalog: ${String(error)}`);
+        log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
       modelCatalogPromise = null;

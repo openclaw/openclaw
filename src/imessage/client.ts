@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageRpcError = {
   code?: number;
@@ -36,6 +37,14 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
+function isTestEnv(): boolean {
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
+  const vitest = process.env.VITEST?.trim().toLowerCase();
+  return Boolean(vitest);
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
   private readonly dbPath?: string;
@@ -61,6 +70,9 @@ export class IMessageRpcClient {
   async start(): Promise<void> {
     if (this.child) {
       return;
+    }
+    if (isTestEnv()) {
+      throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
     }
     const args = ["rpc"];
     if (this.dbPath) {
@@ -149,7 +161,7 @@ export class IMessageRpcClient {
       params: params ?? {},
     };
     const line = `${JSON.stringify(payload)}\n`;
-    const timeoutMs = opts?.timeoutMs ?? 10_000;
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
     const response = new Promise<T>((resolve, reject) => {
       const key = String(id);

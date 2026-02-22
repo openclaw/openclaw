@@ -1,9 +1,15 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+import { isWithinDir } from "../infra/path-safety.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  type ControlUiBootstrapConfig,
+} from "./control-ui-contract.js";
+import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
@@ -17,34 +23,13 @@ export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
+  root?: ControlUiRootState;
 };
 
-function resolveControlUiRoot(): string | null {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const execDir = (() => {
-    try {
-      return path.dirname(fs.realpathSync(process.execPath));
-    } catch {
-      return null;
-    }
-  })();
-  const candidates = [
-    // Packaged app: control-ui lives alongside the executable.
-    execDir ? path.resolve(execDir, "control-ui") : null,
-    // Running from dist: dist/gateway/control-ui.js -> dist/control-ui
-    path.resolve(here, "../control-ui"),
-    // Running from source: src/gateway/control-ui.ts -> dist/control-ui
-    path.resolve(here, "../../dist/control-ui"),
-    // Fallback to cwd (dev)
-    path.resolve(process.cwd(), "dist", "control-ui"),
-  ].filter((dir): dir is string => Boolean(dir));
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, "index.html"))) {
-      return dir;
-    }
-  }
-  return null;
-}
+export type ControlUiRootState =
+  | { kind: "resolved"; path: string }
+  | { kind: "invalid"; path: string }
+  | { kind: "missing" };
 
 function contentTypeForExt(ext: string): string {
   switch (ext) {
@@ -77,6 +62,28 @@ function contentTypeForExt(ext: string): string {
   }
 }
 
+/**
+ * Extensions recognised as static assets.  Missing files with these extensions
+ * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
+ * excluded — actual HTML files on disk are served earlier, and missing `.html`
+ * paths should fall through to the SPA router (client-side routers may use
+ * `.html`-suffixed routes).
+ */
+const STATIC_ASSET_EXTENSIONS = new Set([
+  ".js",
+  ".css",
+  ".json",
+  ".map",
+  ".svg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".txt",
+]);
+
 export type ControlUiAvatarResolution =
   | { kind: "none"; reason: string }
   | { kind: "local"; filePath: string }
@@ -86,6 +93,13 @@ export type ControlUiAvatarResolution =
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
+
+function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -120,6 +134,8 @@ export function handleControlUiAvatarRequest(
   if (!pathname.startsWith(pathWithBase)) {
     return false;
   }
+
+  applyControlUiSecurityHeaders(res);
 
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
@@ -164,75 +180,84 @@ function respondNotFound(res: ServerResponse) {
   res.end("Not Found");
 }
 
-function serveFile(res: ServerResponse, filePath: string) {
+function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
   res.setHeader("Cache-Control", "no-cache");
+}
+
+function serveFile(res: ServerResponse, filePath: string) {
+  setStaticFileHeaders(res, filePath);
   res.end(fs.readFileSync(filePath));
 }
 
-interface ControlUiInjectionOpts {
-  basePath: string;
-  assistantName?: string;
-  assistantAvatar?: string;
+function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
+  setStaticFileHeaders(res, filePath);
+  res.end(body);
 }
 
-function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): string {
-  const { basePath, assistantName, assistantAvatar } = opts;
-  const script =
-    `<script>` +
-    `window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};` +
-    `window.__OPENCLAW_ASSISTANT_NAME__=${JSON.stringify(
-      assistantName ?? DEFAULT_ASSISTANT_IDENTITY.name,
-    )};` +
-    `window.__OPENCLAW_ASSISTANT_AVATAR__=${JSON.stringify(
-      assistantAvatar ?? DEFAULT_ASSISTANT_IDENTITY.avatar,
-    )};` +
-    `</script>`;
-  // Check if already injected
-  if (html.includes("__OPENCLAW_ASSISTANT_NAME__")) {
-    return html;
-  }
-  const headClose = html.indexOf("</head>");
-  if (headClose !== -1) {
-    return `${html.slice(0, headClose)}${script}${html.slice(headClose)}`;
-  }
-  return `${script}${html}`;
-}
-
-interface ServeIndexHtmlOpts {
-  basePath: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-}
-
-function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndexHtmlOpts) {
-  const { basePath, config, agentId } = opts;
-  const identity = config
-    ? resolveAssistantIdentity({ cfg: config, agentId })
-    : DEFAULT_ASSISTANT_IDENTITY;
-  const resolvedAgentId =
-    typeof (identity as { agentId?: string }).agentId === "string"
-      ? (identity as { agentId?: string }).agentId
-      : agentId;
-  const avatarValue =
-    resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
-      agentId: resolvedAgentId,
-      basePath,
-    }) ?? identity.avatar;
+function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  const raw = fs.readFileSync(indexPath, "utf8");
-  res.end(
-    injectControlUiConfig(raw, {
-      basePath,
-      assistantName: identity.name,
-      assistantAvatar: avatarValue,
-    }),
-  );
+  res.end(body);
+}
+
+function isContainedPath(baseDir: string, targetPath: string): boolean {
+  const relative = path.relative(baseDir, targetPath);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function isExpectedSafePathError(error: unknown): boolean {
+  const code =
+    typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
+}
+
+function areSameFileIdentity(preOpen: fs.Stats, opened: fs.Stats): boolean {
+  return preOpen.dev === opened.dev && preOpen.ino === opened.ino;
+}
+
+function resolveSafeControlUiFile(
+  rootReal: string,
+  filePath: string,
+): { path: string; fd: number } | null {
+  let fd: number | null = null;
+  try {
+    const fileReal = fs.realpathSync(filePath);
+    if (!isContainedPath(rootReal, fileReal)) {
+      return null;
+    }
+
+    const preOpenStat = fs.lstatSync(fileReal);
+    if (!preOpenStat.isFile()) {
+      return null;
+    }
+
+    const openFlags =
+      fs.constants.O_RDONLY |
+      (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
+    fd = fs.openSync(fileReal, openFlags);
+    const openedStat = fs.fstatSync(fd);
+    // Compare inode identity so swaps between validation and open are rejected.
+    if (!openedStat.isFile() || !areSameFileIdentity(preOpenStat, openedStat)) {
+      return null;
+    }
+
+    const resolved = { path: fileReal, fd };
+    fd = null;
+    return resolved;
+  } catch (error) {
+    if (isExpectedSafePathError(error)) {
+      return null;
+    }
+    throw error;
+  } finally {
+    if (fd !== null) {
+      fs.closeSync(fd);
+    }
+  }
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -240,6 +265,9 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   const normalized = path.posix.normalize(relPath);
+  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
+    return false;
+  }
   if (normalized.startsWith("../") || normalized === "..") {
     return false;
   }
@@ -271,6 +299,7 @@ export function handleControlUiHttpRequest(
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+      applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
     }
@@ -278,6 +307,7 @@ export function handleControlUiHttpRequest(
 
   if (basePath) {
     if (pathname === basePath) {
+      applyControlUiSecurityHeaders(res);
       res.statusCode = 302;
       res.setHeader("Location", `${basePath}/${url.search}`);
       res.end();
@@ -288,8 +318,83 @@ export function handleControlUiHttpRequest(
     }
   }
 
-  const root = resolveControlUiRoot();
+  applyControlUiSecurityHeaders(res);
+
+  const bootstrapConfigPath = basePath
+    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
+    : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
+  if (pathname === bootstrapConfigPath) {
+    const config = opts?.config;
+    const identity = config
+      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
+      : DEFAULT_ASSISTANT_IDENTITY;
+    const avatarValue = resolveAssistantAvatarUrl({
+      avatar: identity.avatar,
+      agentId: identity.agentId,
+      basePath,
+    });
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.end();
+      return true;
+    }
+    sendJson(res, 200, {
+      basePath,
+      assistantName: identity.name,
+      assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAgentId: identity.agentId,
+    } satisfies ControlUiBootstrapConfig);
+    return true;
+  }
+
+  const rootState = opts?.root;
+  if (rootState?.kind === "invalid") {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      `Control UI assets not found at ${rootState.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
+    );
+    return true;
+  }
+  if (rootState?.kind === "missing") {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+    );
+    return true;
+  }
+
+  const root =
+    rootState?.kind === "resolved"
+      ? rootState.path
+      : resolveControlUiRootSync({
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        });
   if (!root) {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+    );
+    return true;
+  }
+
+  const rootReal = (() => {
+    try {
+      return fs.realpathSync(root);
+    } catch (error) {
+      if (isExpectedSafePathError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  })();
+  if (!rootReal) {
     res.statusCode = 503;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end(
@@ -317,34 +422,58 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const filePath = path.join(root, fileRel);
-  if (!filePath.startsWith(root)) {
+  const filePath = path.resolve(root, fileRel);
+  if (!isWithinDir(root, filePath)) {
     respondNotFound(res);
     return true;
   }
 
-  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-    if (path.basename(filePath) === "index.html") {
-      serveIndexHtml(res, filePath, {
-        basePath,
-        config: opts?.config,
-        agentId: opts?.agentId,
-      });
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  if (safeFile) {
+    try {
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        setStaticFileHeaders(res, safeFile.path);
+        res.end();
+        return true;
+      }
+      if (path.basename(safeFile.path) === "index.html") {
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        return true;
+      }
+      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
       return true;
+    } finally {
+      fs.closeSync(safeFile.fd);
     }
-    serveFile(res, filePath);
+  }
+
+  // If the requested path looks like a static asset (known extension), return
+  // 404 rather than falling through to the SPA index.html fallback.  We check
+  // against the same set of extensions that contentTypeForExt() recognises so
+  // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
+  // client-side router fallback.
+  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+    respondNotFound(res);
     return true;
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  if (fs.existsSync(indexPath)) {
-    serveIndexHtml(res, indexPath, {
-      basePath,
-      config: opts?.config,
-      agentId: opts?.agentId,
-    });
-    return true;
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  if (safeIndex) {
+    try {
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        setStaticFileHeaders(res, safeIndex.path);
+        res.end();
+        return true;
+      }
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      return true;
+    } finally {
+      fs.closeSync(safeIndex.fd);
+    }
   }
 
   respondNotFound(res);

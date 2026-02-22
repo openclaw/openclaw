@@ -1,21 +1,12 @@
-import { cancel, confirm, isCancel, select } from "@clack/prompts";
-import type { RuntimeEnv } from "../runtime.js";
+import { cancel, confirm, isCancel } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  isNixMode,
-  loadConfig,
-  resolveConfigPath,
-  resolveOAuthDir,
-  resolveStateDir,
-} from "../config/config.js";
+import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  collectWorkspaceDirs,
-  isPathWithin,
-  listAgentSessionDirs,
-  removePath,
-} from "./cleanup-utils.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { selectStyled } from "../terminal/prompt-select-styled.js";
+import { stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { listAgentSessionDirs, removePath } from "./cleanup-utils.js";
 
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 
@@ -25,15 +16,6 @@ export type ResetOptions = {
   nonInteractive?: boolean;
   dryRun?: boolean;
 };
-
-const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
-  select({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
 
 async function stopGatewayIfRunning(runtime: RuntimeEnv) {
   if (isNixMode) {
@@ -119,13 +101,8 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const cfg = loadConfig();
-  const stateDir = resolveStateDir();
-  const configPath = resolveConfigPath();
-  const oauthDir = resolveOAuthDir();
-  const configInsideState = isPathWithin(configPath, stateDir);
-  const oauthInsideState = isPathWithin(oauthDir, stateDir);
-  const workspaceDirs = collectWorkspaceDirs(cfg);
+  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+    resolveCleanupPlanFromDisk();
 
   if (scope !== "config") {
     if (dryRun) {

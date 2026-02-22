@@ -1,14 +1,14 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
-import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
-  parseAtMs,
+  parseAt,
   parseDurationMs,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -68,39 +68,39 @@ export function registerCronAddCommand(cron: Command) {
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
+      .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
-      .option("--session <target>", "Session target (main|isolated)", "main")
-      .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option("--session <target>", "Session target (main|isolated)")
+      .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
-      .option("--cron <expr>", "Cron expression (5-field)")
+      .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
       .option("--tz <iana>", "Timezone for cron expressions (IANA)", "")
+      .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
+      .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
-      .option(
-        "--deliver",
-        "Deliver agent output (required when using last-route delivery without --to)",
-        false,
-      )
+      .option("--announce", "Announce summary to a chat (subagent-style)", false)
+      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
+      .option("--no-deliver", "Disable announce delivery and skip main-session summary")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
-      .option("--post-prefix <prefix>", "Prefix for main-session post", "Cron")
-      .option(
-        "--post-mode <mode>",
-        "What to post back to main for isolated jobs (summary|full)",
-        "summary",
-      )
-      .option("--post-max-chars <n>", "Max chars when --post-mode=full (default 8000)", "8000")
       .option("--json", "Output JSON", false)
-      .action(async (opts: GatewayRpcOpts & Record<string, unknown>) => {
+      .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
+          const staggerRaw = typeof opts.stagger === "string" ? opts.stagger.trim() : "";
+          const useExact = Boolean(opts.exact);
+          if (staggerRaw && useExact) {
+            throw new Error("Choose either --stagger or --exact, not both");
+          }
+
           const schedule = (() => {
             const at = typeof opts.at === "string" ? opts.at : "";
             const every = typeof opts.every === "string" ? opts.every : "";
@@ -109,12 +109,15 @@ export function registerCronAddCommand(cron: Command) {
             if (chosen !== 1) {
               throw new Error("Choose exactly one schedule: --at, --every, or --cron");
             }
+            if ((useExact || staggerRaw) && !cronExpr) {
+              throw new Error("--stagger/--exact are only valid with --cron");
+            }
             if (at) {
-              const atMs = parseAtMs(at);
-              if (!atMs) {
+              const atIso = parseAt(at);
+              if (!atIso) {
                 throw new Error("Invalid --at; use ISO time or duration like 20m");
               }
-              return { kind: "at" as const, atMs };
+              return { kind: "at" as const, at: atIso };
             }
             if (every) {
               const everyMs = parseDurationMs(every);
@@ -123,21 +126,29 @@ export function registerCronAddCommand(cron: Command) {
               }
               return { kind: "every" as const, everyMs };
             }
+            const staggerMs = (() => {
+              if (useExact) {
+                return 0;
+              }
+              if (!staggerRaw) {
+                return undefined;
+              }
+              const parsed = parseDurationMs(staggerRaw);
+              if (!parsed) {
+                throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
+              }
+              return parsed;
+            })();
             return {
               kind: "cron" as const,
               expr: cronExpr,
               tz: typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined,
+              staggerMs,
             };
           })();
 
-          const sessionTargetRaw = typeof opts.session === "string" ? opts.session : "main";
-          const sessionTarget = sessionTargetRaw.trim() || "main";
-          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
-            throw new Error("--session must be main or isolated");
-          }
-
-          const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "next-heartbeat";
-          const wakeMode = wakeModeRaw.trim() || "next-heartbeat";
+          const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "now";
+          const wakeMode = wakeModeRaw.trim() || "now";
           if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
             throw new Error("--wake must be now or next-heartbeat");
           }
@@ -146,6 +157,13 @@ export function registerCronAddCommand(cron: Command) {
             typeof opts.agent === "string" && opts.agent.trim()
               ? sanitizeAgentId(opts.agent.trim())
               : undefined;
+
+          const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
+          const hasNoDeliver = opts.deliver === false;
+          const deliveryFlagCount = [hasAnnounce, hasNoDeliver].filter(Boolean).length;
+          if (deliveryFlagCount > 1) {
+            throw new Error("Choose at most one of --announce or --no-deliver");
+          }
 
           const payload = (() => {
             const systemEvent = typeof opts.systemEvent === "string" ? opts.systemEvent.trim() : "";
@@ -169,12 +187,25 @@ export function registerCronAddCommand(cron: Command) {
                   : undefined,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
-              deliver: opts.deliver ? true : undefined,
-              channel: typeof opts.channel === "string" ? opts.channel : "last",
-              to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-              bestEffortDeliver: opts.bestEffortDeliver ? true : undefined,
             };
           })();
+
+          const optionSource =
+            typeof cmd?.getOptionValueSource === "function"
+              ? (name: string) => cmd.getOptionValueSource(name)
+              : () => undefined;
+          const sessionSource = optionSource("session");
+          const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
+          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const sessionTarget =
+            sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
+          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
+            throw new Error("--session must be main or isolated");
+          }
+
+          if (opts.deleteAfterRun && opts.keepAfterRun) {
+            throw new Error("Choose --delete-after-run or --keep-after-run, not both");
+          }
 
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
@@ -182,23 +213,20 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
           }
+          if (
+            (opts.announce || typeof opts.deliver === "boolean") &&
+            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+          ) {
+            throw new Error("--announce/--no-deliver require --session isolated.");
+          }
 
-          const isolation =
-            sessionTarget === "isolated"
-              ? {
-                  postToMainPrefix:
-                    typeof opts.postPrefix === "string" && opts.postPrefix.trim()
-                      ? opts.postPrefix.trim()
-                      : "Cron",
-                  postToMainMode:
-                    opts.postMode === "full" || opts.postMode === "summary"
-                      ? opts.postMode
-                      : undefined,
-                  postToMainMaxChars:
-                    typeof opts.postMaxChars === "string" && /^\d+$/.test(opts.postMaxChars)
-                      ? Number.parseInt(opts.postMaxChars, 10)
-                      : undefined,
-                }
+          const deliveryMode =
+            sessionTarget === "isolated" && payload.kind === "agentTurn"
+              ? hasAnnounce
+                ? "announce"
+                : hasNoDeliver
+                  ? "none"
+                  : "announce"
               : undefined;
 
           const nameRaw = typeof opts.name === "string" ? opts.name : "";
@@ -216,13 +244,23 @@ export function registerCronAddCommand(cron: Command) {
             name,
             description,
             enabled: !opts.disabled,
-            deleteAfterRun: Boolean(opts.deleteAfterRun),
+            deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
             agentId,
             schedule,
             sessionTarget,
             wakeMode,
             payload,
-            isolation,
+            delivery: deliveryMode
+              ? {
+                  mode: deliveryMode,
+                  channel:
+                    typeof opts.channel === "string" && opts.channel.trim()
+                      ? opts.channel.trim()
+                      : undefined,
+                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  bestEffort: opts.bestEffortDeliver ? true : undefined,
+                }
+              : undefined,
           };
 
           const res = await callGatewayFromCli("cron.add", opts, params);

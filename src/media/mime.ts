@@ -1,5 +1,5 @@
-import { fileTypeFromBuffer } from "file-type";
 import path from "node:path";
+import { fileTypeFromBuffer } from "file-type";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 // Map common mimes to preferred file extensions.
@@ -42,6 +42,7 @@ const MIME_BY_EXT: Record<string, string> = {
 
 const AUDIO_FILE_EXTENSIONS = new Set([
   ".aac",
+  ".caf",
   ".flac",
   ".m4a",
   ".mp3",
@@ -51,7 +52,7 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
-function normalizeHeaderMime(mime?: string | null): string | undefined {
+export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
   }
@@ -119,7 +120,7 @@ async function detectMimeImpl(opts: {
   const ext = getFileExtension(opts.filePath);
   const extMime = ext ? MIME_BY_EXT[ext] : undefined;
 
-  const headerMime = normalizeHeaderMime(opts.headerMime);
+  const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
 
   // Prefer sniffed types, but don't let generic container types override a more
@@ -144,10 +145,11 @@ async function detectMimeImpl(opts: {
 }
 
 export function extensionForMime(mime?: string | null): string | undefined {
-  if (!mime) {
+  const normalized = normalizeMimeType(mime);
+  if (!normalized) {
     return undefined;
   }
-  return EXT_BY_MIME[mime.toLowerCase()];
+  return EXT_BY_MIME[normalized];
 }
 
 export function isGifMedia(opts: {

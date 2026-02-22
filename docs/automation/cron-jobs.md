@@ -17,14 +17,18 @@ the right time, and can optionally deliver output back to a chat.
 If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
 cron is the mechanism.
 
+Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+
 ## TL;DR
 
 - Cron runs **inside the Gateway** (not inside the model).
 - Jobs persist under `~/.openclaw/cron/` so restarts don’t lose schedules.
 - Two execution styles:
   - **Main session**: enqueue a system event, then run on the next heartbeat.
-  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, optionally deliver output.
+  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
+- Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
+- Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
 
 ## Quick start (actionable)
 
@@ -40,7 +44,7 @@ openclaw cron add \
   --delete-after-run
 
 openclaw cron list
-openclaw cron run <job-id> --force
+openclaw cron run <job-id>
 openclaw cron runs --id <job-id>
 ```
 
@@ -53,7 +57,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize overnight updates." \
-  --deliver \
+  --announce \
   --channel slack \
   --to "channel:C1234567890"
 ```
@@ -86,7 +90,8 @@ Think of a cron job as: **when** to run + **what** to do.
    - Main session → `payload.kind = "systemEvent"`
    - Isolated session → `payload.kind = "agentTurn"`
 
-Optional: `deleteAfterRun: true` removes successful one-shot jobs from the store.
+Optional: one-shot jobs (`schedule.kind = "at"`) delete after success by default. Set
+`deleteAfterRun: false` to keep them (they will disable after success).
 
 ## Concepts
 
@@ -96,24 +101,35 @@ A cron job is a stored record with:
 
 - a **schedule** (when it should run),
 - a **payload** (what it should do),
-- optional **delivery** (where output should be sent).
+- optional **delivery mode** (`announce`, `webhook`, or `none`).
 - optional **agent binding** (`agentId`): run the job under a specific agent; if
   missing or unknown, the gateway falls back to the default agent.
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
 In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
-Jobs can optionally auto-delete after a successful one-shot run via `deleteAfterRun: true`.
+One-shot jobs auto-delete after success by default; set `deleteAfterRun: false` to keep them.
 
 ### Schedules
 
 Cron supports three schedule kinds:
 
-- `at`: one-shot timestamp (ms since epoch). Gateway accepts ISO 8601 and coerces to UTC.
+- `at`: one-shot timestamp via `schedule.at` (ISO 8601).
 - `every`: fixed interval (ms).
-- `cron`: 5-field cron expression with optional IANA timezone.
+- `cron`: 5-field cron expression (or 6-field with seconds) with optional IANA timezone.
 
 Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
 local timezone is used.
+
+To reduce top-of-hour load spikes across many gateways, OpenClaw applies a
+deterministic per-job stagger window of up to 5 minutes for recurring
+top-of-hour expressions (for example `0 * * * *`, `0 */2 * * *`). Fixed-hour
+expressions such as `0 7 * * *` remain exact.
+
+For any cron schedule, you can set an explicit stagger window with `schedule.staggerMs`
+(`0` keeps exact timing). CLI shortcuts:
+
+- `--stagger 30s` (or `1m`, `5m`) to set an explicit stagger window.
+- `--exact` to force `staggerMs = 0`.
 
 ### Main vs isolated execution
 
@@ -122,8 +138,8 @@ local timezone is used.
 Main jobs enqueue a system event and optionally wake the heartbeat runner.
 They must use `payload.kind = "systemEvent"`.
 
-- `wakeMode: "next-heartbeat"` (default): event waits for the next scheduled heartbeat.
-- `wakeMode: "now"`: event triggers an immediate heartbeat run.
+- `wakeMode: "now"` (default): event triggers an immediate heartbeat run.
+- `wakeMode: "next-heartbeat"`: event waits for the next scheduled heartbeat.
 
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
@@ -136,9 +152,14 @@ Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
 - Each run starts a **fresh session id** (no prior conversation carry-over).
-- A summary is posted to the main session (prefix `Cron`, configurable).
-- `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
-- If `payload.deliver: true`, output is delivered to a channel; otherwise it stays internal.
+- Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
+- `delivery.mode` chooses what happens:
+  - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
+  - `webhook`: POST the finished event payload to `delivery.to` when the finished event includes a summary.
+  - `none`: internal only (no delivery, no main-session summary).
+- `wakeMode` controls when the main-session summary posts:
+  - `now`: immediate heartbeat.
+  - `next-heartbeat`: waits for the next scheduled heartbeat.
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
@@ -155,16 +176,47 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
-- `deliver`: `true` to send output to a channel target.
-- `channel`: `last` or a specific channel.
-- `to`: channel-specific target (phone/chat/channel id).
-- `bestEffortDeliver`: avoid failing the job if delivery fails.
 
-Isolation options (only for `session=isolated`):
+Delivery config:
 
-- `postToMainPrefix` (CLI: `--post-prefix`): prefix for the system event in main.
-- `postToMainMode`: `summary` (default) or `full`.
-- `postToMainMaxChars`: max chars when `postToMainMode=full` (default 8000).
+- `delivery.mode`: `none` | `announce` | `webhook`.
+- `delivery.channel`: `last` or a specific channel.
+- `delivery.to`: channel-specific target (announce) or webhook URL (webhook mode).
+- `delivery.bestEffort`: avoid failing the job if announce delivery fails.
+
+Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
+to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
+
+If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
+
+#### Announce delivery flow
+
+When `delivery.mode = "announce"`, cron delivers directly via the outbound channel adapters.
+The main agent is not spun up to craft or forward the message.
+
+Behavior details:
+
+- Content: delivery uses the isolated run's outbound payloads (text/media) with normal chunking and
+  channel formatting.
+- Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
+- If the isolated run already sent a message to the same target via the message tool, delivery is
+  skipped to avoid duplicates.
+- Missing or invalid delivery targets fail the job unless `delivery.bestEffort = true`.
+- A short summary is posted to the main session only when `delivery.mode = "announce"`.
+- The main-session summary respects `wakeMode`: `now` triggers an immediate heartbeat and
+  `next-heartbeat` waits for the next scheduled heartbeat.
+
+#### Webhook delivery flow
+
+When `delivery.mode = "webhook"`, cron posts the finished event payload to `delivery.to` when the finished event includes a summary.
+
+Behavior details:
+
+- The endpoint must be a valid HTTP(S) URL.
+- No channel delivery is attempted in webhook mode.
+- No main-session summary is posted in webhook mode.
+- If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
+- Deprecated fallback: stored legacy jobs with `notify: true` still post to `cron.webhook` (if configured), with a warning so you can migrate to `delivery.mode = "webhook"`.
 
 ### Model and thinking overrides
 
@@ -185,19 +237,17 @@ Resolution priority:
 
 ### Delivery (channel + target)
 
-Isolated jobs can deliver output to a channel. The job payload can specify:
+Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
-- `channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`
-- `to`: channel-specific recipient target
+- `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
+- `delivery.to`: channel-specific recipient target.
 
-If `channel` or `to` is omitted, cron can fall back to the main session’s “last route”
-(the last place the agent replied).
+`announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
+`webhook` delivery is valid for both main and isolated jobs.
 
-Delivery notes:
-
-- If `to` is set, cron auto-delivers the agent’s final output even if `deliver` is omitted.
-- Use `deliver: true` when you want last-route delivery without an explicit `to`.
-- Use `deliver: false` to keep output internal even if a `to` is present.
+If `delivery.channel` or `delivery.to` is omitted, cron can fall back to the main session’s
+“last route” (the last place the agent replied).
 
 Target format reminders:
 
@@ -220,8 +270,8 @@ Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 ## JSON schema for tool calls
 
 Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).
-CLI flags accept human durations like `20m`, but tool calls use epoch milliseconds for
-`atMs` and `everyMs` (ISO timestamps are accepted for `at` times).
+CLI flags accept human durations like `20m`, but tool calls should use an ISO 8601 string
+for `schedule.at` and milliseconds for `schedule.everyMs`.
 
 ### cron.add params
 
@@ -230,7 +280,7 @@ One-shot, main session job (system event):
 ```json
 {
   "name": "Reminder",
-  "schedule": { "kind": "at", "atMs": 1738262400000 },
+  "schedule": { "kind": "at", "at": "2026-02-01T16:00:00Z" },
   "sessionTarget": "main",
   "wakeMode": "now",
   "payload": { "kind": "systemEvent", "text": "Reminder text" },
@@ -248,23 +298,26 @@ Recurring, isolated job with delivery:
   "wakeMode": "next-heartbeat",
   "payload": {
     "kind": "agentTurn",
-    "message": "Summarize overnight updates.",
-    "deliver": true,
+    "message": "Summarize overnight updates."
+  },
+  "delivery": {
+    "mode": "announce",
     "channel": "slack",
     "to": "channel:C1234567890",
-    "bestEffortDeliver": true
-  },
-  "isolation": { "postToMainPrefix": "Cron", "postToMainMode": "summary" }
+    "bestEffort": true
+  }
 }
 ```
 
 Notes:
 
-- `schedule.kind`: `at` (`atMs`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
-- `atMs` and `everyMs` are epoch milliseconds.
+- `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
+- `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
+- `everyMs` is milliseconds.
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
-- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun`, `isolation`.
-- `wakeMode` defaults to `"next-heartbeat"` when omitted.
+- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
+  `delivery`.
+- `wakeMode` defaults to `"now"` when omitted.
 
 ### cron.update params
 
@@ -307,9 +360,20 @@ Notes:
     enabled: true, // default true
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 1, // default 1
+    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
+    webhookToken: "replace-with-dedicated-webhook-token", // optional bearer token for webhook mode
   },
 }
 ```
+
+Webhook behavior:
+
+- Preferred: set `delivery.mode: "webhook"` with `delivery.to: "https://..."` per job.
+- Webhook URLs must be valid `http://` or `https://` URLs.
+- When posted, payload is the cron finished event JSON.
+- If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
+- If `cron.webhookToken` is not set, no `Authorization` header is sent.
+- Deprecated fallback: stored legacy jobs with `notify: true` still use `cron.webhook` when present.
 
 Disable cron entirely:
 
@@ -341,7 +405,7 @@ openclaw cron add \
   --wake now
 ```
 
-Recurring isolated job (deliver to WhatsApp):
+Recurring isolated job (announce to WhatsApp):
 
 ```bash
 openclaw cron add \
@@ -350,9 +414,22 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize inbox + calendar for today." \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
+```
+
+Recurring cron job with explicit 30-second stagger:
+
+```bash
+openclaw cron add \
+  --name "Minute watcher" \
+  --cron "0 * * * * *" \
+  --tz "UTC" \
+  --stagger 30s \
+  --session isolated \
+  --message "Run minute watcher checks." \
+  --announce
 ```
 
 Recurring isolated job (deliver to a Telegram topic):
@@ -364,7 +441,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize today; send to the nightly topic." \
-  --deliver \
+  --announce \
   --channel telegram \
   --to "-1001234567890:topic:123"
 ```
@@ -380,7 +457,7 @@ openclaw cron add \
   --message "Weekly deep analysis of project progress." \
   --model "opus" \
   --thinking high \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```
@@ -396,10 +473,11 @@ openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
-Manual run (debug):
+Manual run (force is the default, use `--due` to only run when due):
 
 ```bash
-openclaw cron run <jobId> --force
+openclaw cron run <jobId>
+openclaw cron run <jobId> --due
 ```
 
 Edit an existing job (patch fields):
@@ -409,6 +487,12 @@ openclaw cron edit <jobId> \
   --message "Updated prompt" \
   --model "opus" \
   --thinking low
+```
+
+Force an existing cron job to run exactly on schedule (no stagger):
+
+```bash
+openclaw cron edit <jobId> --exact
 ```
 
 Run history:
@@ -437,8 +521,22 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - Check the Gateway is running continuously (cron runs inside the Gateway process).
 - For `cron` schedules: confirm timezone (`--tz`) vs the host timezone.
 
+### A recurring job keeps delaying after failures
+
+- OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
+  30s, 1m, 5m, 15m, then 60m between retries.
+- Backoff resets automatically after the next successful run.
+- One-shot (`at`) jobs disable after a terminal run (`ok`, `error`, or `skipped`) and do not retry.
+
 ### Telegram delivers to the wrong place
 
 - For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
 - If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
   cron delivery accepts them and still parses topic IDs correctly.
+
+### Subagent announce delivery retries
+
+- When a subagent run completes, the gateway announces the result to the requester session.
+- If the announce flow returns `false` (e.g. requester session is busy), the gateway retries up to 3 times with tracking via `announceRetryCount`.
+- Announces older than 5 minutes past `endedAt` are force-expired to prevent stale entries from looping indefinitely.
+- If you see repeated announce deliveries in logs, check the subagent registry for entries with high `announceRetryCount` values.

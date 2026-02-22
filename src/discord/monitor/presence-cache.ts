@@ -3,7 +3,9 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 /**
  * In-memory cache of Discord user presence data.
  * Populated by PRESENCE_UPDATE gateway events when the GuildPresences intent is enabled.
+ * Per-account maps are capped to prevent unbounded growth (#4948).
  */
+const MAX_PRESENCE_PER_ACCOUNT = 5000;
 const presenceCache = new Map<string, Map<string, GatewayPresenceUpdate>>();
 
 function resolveAccountKey(accountId?: string): string {
@@ -23,6 +25,13 @@ export function setPresence(
     presenceCache.set(accountKey, accountCache);
   }
   accountCache.set(userId, data);
+  // Evict oldest entries if cache exceeds limit
+  if (accountCache.size > MAX_PRESENCE_PER_ACCOUNT) {
+    const oldest = accountCache.keys().next().value;
+    if (oldest !== undefined) {
+      accountCache.delete(oldest);
+    }
+  }
 }
 
 /** Get cached presence for a user. Returns undefined if not cached. */

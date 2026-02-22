@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveGitHeadPath } from "./git-root.js";
 
 const formatCommit = (value?: string | null) => {
   if (!value) {
@@ -11,35 +12,6 @@ const formatCommit = (value?: string | null) => {
     return null;
   }
   return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
-};
-
-const resolveGitHead = (startDir: string) => {
-  let current = startDir;
-  for (let i = 0; i < 12; i += 1) {
-    const gitPath = path.join(current, ".git");
-    try {
-      const stat = fs.statSync(gitPath);
-      if (stat.isDirectory()) {
-        return path.join(gitPath, "HEAD");
-      }
-      if (stat.isFile()) {
-        const raw = fs.readFileSync(gitPath, "utf-8");
-        const match = raw.match(/gitdir:\s*(.+)/i);
-        if (match?.[1]) {
-          const resolved = path.resolve(current, match[1].trim());
-          return path.join(resolved, "HEAD");
-        }
-      }
-    } catch {
-      // ignore missing .git at this level
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
-  }
-  return null;
 };
 
 let cachedCommit: string | null | undefined;
@@ -60,10 +32,21 @@ const readCommitFromPackageJson = () => {
 const readCommitFromBuildInfo = () => {
   try {
     const require = createRequire(import.meta.url);
-    const info = require("../build-info.json") as {
-      commit?: string | null;
-    };
-    return formatCommit(info.commit ?? null);
+    const candidates = ["../build-info.json", "./build-info.json"];
+    for (const candidate of candidates) {
+      try {
+        const info = require(candidate) as {
+          commit?: string | null;
+        };
+        const formatted = formatCommit(info.commit ?? null);
+        if (formatted) {
+          return formatted;
+        }
+      } catch {
+        // ignore missing candidate
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -91,7 +74,7 @@ export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessE
     return cachedCommit;
   }
   try {
-    const headPath = resolveGitHead(options.cwd ?? process.cwd());
+    const headPath = resolveGitHeadPath(options.cwd ?? process.cwd());
     if (!headPath) {
       cachedCommit = null;
       return cachedCommit;

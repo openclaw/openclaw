@@ -1,20 +1,20 @@
-import { cancel, isCancel } from "@clack/prompts";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   CONFIG_DIR,
@@ -25,11 +25,13 @@ import {
 } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
+import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
+    throw new Error("unreachable");
   }
   return value;
 }
@@ -72,7 +74,27 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim();
+  const trimmed = value.trim();
+  // Reject the literal string "undefined" — a common bug when JS undefined
+  // gets coerced to a string via template literals or String(undefined).
+  if (trimmed === "undefined" || trimmed === "null") {
+    return "";
+  }
+  return trimmed;
+}
+
+export function validateGatewayPasswordInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return "Required";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Required";
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return 'Cannot be the literal string "undefined" or "null"';
+  }
+  return undefined;
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {
@@ -187,8 +209,9 @@ export function formatControlUiSshHint(params: {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const tokenParam = params.token ? `?token=${encodeURIComponent(params.token)}` : "";
-  const authedUrl = params.token ? `${localUrl}${tokenParam}` : undefined;
+  const authedUrl = params.token
+    ? `${localUrl}#token=${encodeURIComponent(params.token)}`
+    : undefined;
   const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",
@@ -449,6 +472,9 @@ export function resolveControlUiLinks(params: {
     if (bind === "tailnet" && tailnetIPv4) {
       return tailnetIPv4 ?? "127.0.0.1";
     }
+    if (bind === "lan") {
+      return pickPrimaryLanIPv4() ?? "127.0.0.1";
+    }
     return "127.0.0.1";
   })();
   const basePath = normalizeControlUiBasePath(params.basePath);
@@ -458,15 +484,4 @@ export function resolveControlUiLinks(params: {
     httpUrl: `http://${host}:${port}${uiPath}`,
     wsUrl: `ws://${host}:${port}${wsPath}`,
   };
-}
-
-function isValidIPv4(host: string): boolean {
-  const parts = host.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  return parts.every((part) => {
-    const n = Number.parseInt(part, 10);
-    return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
-  });
 }
