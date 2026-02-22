@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
 
@@ -142,14 +142,10 @@ describe("createOpenClawCodingTools safeBins", () => {
       },
       async ({ tmpDir, execTool }) => {
         const marker = `safe-bins-${Date.now()}`;
-        const result = await withEnvAsync(
-          { OPENCLAW_SHELL_ENV_TIMEOUT_MS: "1000" },
-          async () =>
-            await execTool.execute("call1", {
-              command: `echo ${marker}`,
-              workdir: tmpDir,
-            }),
-        );
+        const result = await execTool.execute("call1", {
+          command: `echo ${marker}`,
+          workdir: tmpDir,
+        });
         const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
         const resultDetails = result.details as { status?: string };
