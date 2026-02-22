@@ -16,6 +16,7 @@ export {
   stripImageBlocksFromMessages,
   stripImageBlocksFromSessionFile,
   isEmptyAssistantContent,
+  isVisionRelatedError,
   type ImageStripResult,
 } from "./src/image-strip.js";
 

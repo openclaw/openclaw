@@ -15,6 +15,18 @@ export type ImageStripResult = {
 };
 
 /**
+ * Detect whether an error message indicates a vision-not-enabled or
+ * vision-not-supported error from the provider.  Used by the runner to decide
+ * whether to fire the on_empty_response hook for image stripping.
+ */
+const VISION_ERROR_RE =
+  /vision is not enabled|vision[- ]?not[- ]?supported|does not support (vision|image)|image[_ ]?input.*not[_ ]?supported|cannot process images/i;
+
+export function isVisionRelatedError(errorMessage: string): boolean {
+  return VISION_ERROR_RE.test(errorMessage);
+}
+
+/**
  * Check whether an assistant message has empty content (no meaningful blocks).
  */
 export function isEmptyAssistantContent(msg: MessageLike): boolean {
