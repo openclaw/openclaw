@@ -4,11 +4,10 @@ import {
   agentAvatarHue,
   agentBadgeText,
   buildModelOptions,
-  normalizeAgentLabel,
   normalizeModelValue,
   parseFallbackList,
+  resolveAgentAvatarUrl,
   resolveAgentConfig,
-  resolveAgentEmoji,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
@@ -17,6 +16,7 @@ import type { AgentsPanel } from "./agents.ts";
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];
+  basePath: string;
   defaultId: string | null;
   configForm: Record<string, unknown> | null;
   agentFilesList: AgentsFilesListResult | null;
@@ -71,8 +71,7 @@ export function renderAgentOverview(params: {
     agent.name?.trim() ||
     config.entry?.name ||
     "-";
-  const resolvedEmoji = resolveAgentEmoji(agent, agentIdentity);
-  const identityEmoji = resolvedEmoji || "-";
+  const avatarUrl = resolveAgentAvatarUrl(agent, agentIdentity);
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   const identityStatus = agentIdentityLoading
@@ -83,7 +82,6 @@ export function renderAgentOverview(params: {
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const badge = agentBadgeText(agent.id, params.defaultId);
   const hue = agentAvatarHue(agent.id);
-  const displayName = normalizeAgentLabel(agent);
   const subtitle = agent.identity?.theme?.trim() || "";
   const disabled = !configForm || configLoading || configSaving;
 
@@ -111,12 +109,12 @@ export function renderAgentOverview(params: {
 
       <div class="agent-identity-card" style="margin-top: 16px;">
         <div class="agent-avatar" style="--agent-hue: ${hue}">
-          ${resolvedEmoji || displayName.slice(0, 1)}
+          ${avatarUrl ? html`<img src=${avatarUrl} alt="" class="agent-avatar__img" />` : "🦞"}
         </div>
         <div class="agent-identity-details">
           <div class="agent-identity-name">${identityName}</div>
           <div class="agent-identity-meta">
-            ${identityEmoji !== "-" ? html`<span>${identityEmoji}</span>` : nothing}
+            
             ${subtitle ? html`<span>${subtitle}</span>` : nothing}
             ${badge ? html`<span class="agent-pill">${badge}</span>` : nothing}
             ${identityStatus ? html`<span class="muted">${identityStatus}</span>` : nothing}
