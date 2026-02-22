@@ -31,6 +31,9 @@ const MattermostAccountSchemaBase = z
     actions: z
       .object({
         reactions: z.boolean().optional(),
+        messages: z.boolean().optional(),
+        search: z.boolean().optional(),
+        channelInfo: z.boolean().optional(),
       })
       .optional(),
   })

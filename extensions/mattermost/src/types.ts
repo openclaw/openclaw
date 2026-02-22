@@ -48,6 +48,12 @@ export type MattermostAccountConfig = {
   actions?: {
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
+    /** Enable reading channel message history. Default: true. */
+    messages?: boolean;
+    /** Enable searching posts across channels. Default: true. */
+    search?: boolean;
+    /** Enable channel-list and channel-info lookups. Default: true. */
+    channelInfo?: boolean;
   };
 };
 

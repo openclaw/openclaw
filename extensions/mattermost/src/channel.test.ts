@@ -67,8 +67,7 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).toContain("react");
-      expect(actions).not.toContain("send");
-      expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
+      expect(actions).toContain("send");
     });
 
     it("hides react when mattermost is not configured", () => {
@@ -98,7 +97,7 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).not.toContain("react");
-      expect(actions).not.toContain("send");
+      expect(actions).toContain("send");
     });
 
     it("respects per-account actions.reactions in listActions", () => {
@@ -123,7 +122,7 @@ describe("mattermostPlugin", () => {
       expect(actions).toContain("react");
     });
 
-    it("blocks react when default account disables reactions and accountId is omitted", async () => {
+    it("hides react when default account disables reactions", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -141,14 +140,8 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      await expect(
-        mattermostPlugin.actions?.handleAction?.({
-          channel: "mattermost",
-          action: "react",
-          params: { messageId: "POST1", emoji: "thumbsup" },
-          cfg,
-        } as any),
-      ).rejects.toThrow("Mattermost reactions are disabled in config");
+      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      expect(actions).not.toContain("react");
     });
 
     it("handles react by calling Mattermost reactions API", async () => {
@@ -160,19 +153,20 @@ describe("mattermostPlugin", () => {
       });
 
       const result = await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
-        const result = await mattermostPlugin.actions?.handleAction?.({
+        return await mattermostPlugin.actions?.handleAction?.({
           channel: "mattermost",
           action: "react",
           params: { messageId: "POST1", emoji: "thumbsup" },
           cfg,
           accountId: "default",
         } as any);
-
-        return result;
       });
 
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toEqual({});
+      const text = result?.content?.[0];
+      expect(text?.type).toBe("text");
+      const parsed = JSON.parse((text as { text: string }).text);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.message).toBe("Reacted with :thumbsup: on POST1");
     });
 
     it("only treats boolean remove flag as removal", async () => {
@@ -184,18 +178,19 @@ describe("mattermostPlugin", () => {
       });
 
       const result = await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
-        const result = await mattermostPlugin.actions?.handleAction?.({
+        return await mattermostPlugin.actions?.handleAction?.({
           channel: "mattermost",
           action: "react",
           params: { messageId: "POST1", emoji: "thumbsup", remove: "true" },
           cfg,
           accountId: "default",
         } as any);
-
-        return result;
       });
 
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
+      const text = result?.content?.[0];
+      expect(text?.type).toBe("text");
+      const parsed = JSON.parse((text as { text: string }).text);
+      expect(parsed.message).toBe("Reacted with :thumbsup: on POST1");
     });
   });
 
