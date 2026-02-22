@@ -18,6 +18,22 @@ const {
   summarizeWindowsAcl,
 } = await import("./windows-acl.js");
 
+function aclEntry(params: {
+  principal: string;
+  rights?: string[];
+  rawRights?: string;
+  canRead?: boolean;
+  canWrite?: boolean;
+}): WindowsAclEntry {
+  return {
+    principal: params.principal,
+    rights: params.rights ?? ["F"],
+    rawRights: params.rawRights ?? "(F)",
+    canRead: params.canRead ?? true,
+    canWrite: params.canWrite ?? true,
+  };
+}
+
 describe("windows-acl", () => {
   describe("resolveWindowsUserPrincipal", () => {
     it("returns DOMAIN\\USERNAME when both are present", () => {
@@ -81,6 +97,7 @@ Successfully processed 1 files`;
 
     it("skips status messages", () => {
       const output = `Successfully processed 1 files
+                     Processed file: C:\\test\\file.txt
                      Failed processing 0 files
                      No mapping between account names`;
       const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
@@ -105,6 +122,14 @@ Successfully processed 1 files`;
       expect(entries).toHaveLength(2);
       expect(entries[0].principal).toBe("S-1-5-18");
       expect(entries[1].principal).toBe("S-1-5-21-1824257776-4070701511-781240313-1001");
+    });
+
+    it("ignores malformed ACL lines that contain ':' but no rights tokens", () => {
+      const output = `C:\\test\\file.txt random:message
+                     C:\\test\\file.txt BUILTIN\\Administrators:(F)`;
+      const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].principal).toBe("BUILTIN\\Administrators");
     });
 
     it("handles quoted target paths", () => {
@@ -140,20 +165,8 @@ Successfully processed 1 files`;
   describe("summarizeWindowsAcl", () => {
     it("classifies trusted principals", () => {
       const entries: WindowsAclEntry[] = [
-        {
-          principal: "NT AUTHORITY\\SYSTEM",
-          rights: ["F"],
-          rawRights: "(F)",
-          canRead: true,
-          canWrite: true,
-        },
-        {
-          principal: "BUILTIN\\Administrators",
-          rights: ["F"],
-          rawRights: "(F)",
-          canRead: true,
-          canWrite: true,
-        },
+        aclEntry({ principal: "NT AUTHORITY\\SYSTEM" }),
+        aclEntry({ principal: "BUILTIN\\Administrators" }),
       ];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(2);
@@ -163,20 +176,8 @@ Successfully processed 1 files`;
 
     it("classifies world principals", () => {
       const entries: WindowsAclEntry[] = [
-        {
-          principal: "Everyone",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
-        {
-          principal: "BUILTIN\\Users",
-          rights: ["R"],
-          rawRights: "(R)",
-          canRead: true,
-          canWrite: false,
-        },
+        aclEntry({ principal: "Everyone", rights: ["R"], rawRights: "(R)", canWrite: false }),
+        aclEntry({ principal: "BUILTIN\\Users", rights: ["R"], rawRights: "(R)", canWrite: false }),
       ];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(0);
@@ -185,15 +186,7 @@ Successfully processed 1 files`;
     });
 
     it("classifies current user as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "WORKGROUP\\TestUser",
-          rights: ["F"],
-          rawRights: "(F)",
-          canRead: true,
-          canWrite: true,
-        },
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "WORKGROUP\\TestUser" })];
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
       const summary = summarizeWindowsAcl(entries, env);
       expect(summary.trusted).toHaveLength(1);
@@ -217,15 +210,7 @@ Successfully processed 1 files`;
 
   describe("summarizeWindowsAcl — SID-based classification", () => {
     it("classifies SYSTEM SID (S-1-5-18) as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "S-1-5-18",
-          rights: ["F"],
-          rawRights: "(F)",
-          canRead: true,
-          canWrite: true,
-        },
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-18" })];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(1);
       expect(summary.untrustedWorld).toHaveLength(0);
@@ -233,15 +218,7 @@ Successfully processed 1 files`;
     });
 
     it("classifies BUILTIN\\Administrators SID (S-1-5-32-544) as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: "S-1-5-32-544",
-          rights: ["F"],
-          rawRights: "(F)",
-          canRead: true,
-          canWrite: true,
-        },
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-32-544" })];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(1);
       expect(summary.untrustedGroup).toHaveLength(0);
@@ -249,16 +226,18 @@ Successfully processed 1 files`;
 
     it("classifies caller SID from USERSID env var as trusted", () => {
       const callerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
-      const entries: WindowsAclEntry[] = [
-        {
-          principal: callerSid,
-          rights: ["F"],
-          rawRights: "(F)",
-          canRead: true,
-          canWrite: true,
-        },
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: callerSid })];
       const env = { USERSID: callerSid };
+      const summary = summarizeWindowsAcl(entries, env);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("matches SIDs case-insensitively and trims USERSID", () => {
+      const entries: WindowsAclEntry[] = [
+        aclEntry({ principal: "s-1-5-21-1824257776-4070701511-781240313-1001" }),
+      ];
+      const env = { USERSID: "  S-1-5-21-1824257776-4070701511-781240313-1001  " };
       const summary = summarizeWindowsAcl(entries, env);
       expect(summary.trusted).toHaveLength(1);
       expect(summary.untrustedGroup).toHaveLength(0);
