@@ -1,5 +1,8 @@
 import { html, nothing } from "lit";
-import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -52,17 +55,21 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
+import { renderBottomTabs } from "./views/bottom-tabs.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
+import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderConfig } from "./views/config.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderInstances } from "./views/instances.ts";
+import { renderLoginGate } from "./views/login-gate.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
@@ -89,6 +96,15 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  // Gate: require successful gateway connection before showing the dashboard.
+  // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
+  if (!state.connected) {
+    return html`
+      ${renderLoginGate(state)}
+      ${renderGatewayUrlConfirmation(state)}
+    `;
+  }
+
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -108,83 +124,165 @@ export function renderApp(state: AppViewState) {
     null;
 
   return html`
+    ${renderCommandPalette({
+      open: state.paletteOpen,
+      query: (state as unknown as { paletteQuery?: string }).paletteQuery ?? "",
+      activeIndex: (state as unknown as { paletteActiveIndex?: number }).paletteActiveIndex ?? 0,
+      onToggle: () => {
+        state.paletteOpen = !state.paletteOpen;
+      },
+      onQueryChange: (q) => {
+        (state as unknown as { paletteQuery: string }).paletteQuery = q;
+      },
+      onActiveIndexChange: (i) => {
+        (state as unknown as { paletteActiveIndex: number }).paletteActiveIndex = i;
+      },
+      onNavigate: (tab) => {
+        state.setTab(tab as import("./navigation.ts").Tab);
+      },
+      onSlashCommand: (_cmd) => {
+        state.setTab("chat" as import("./navigation.ts").Tab);
+      },
+    })}
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
       <header class="topbar">
-        <div class="topbar-left">
-          <button
-            class="nav-collapse-toggle"
-            @click=${() =>
-              state.applySettings({
-                ...state.settings,
-                navCollapsed: !state.settings.navCollapsed,
-              })}
-            title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-            aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-          >
-            <span class="nav-collapse-toggle__icon">${icons.menu}</span>
-          </button>
-          <div class="brand">
-            <div class="brand-logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
-            </div>
-            <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
-            </div>
-          </div>
-        </div>
+        <dashboard-header .tab=${state.tab}></dashboard-header>
+        <button
+          class="topbar-search"
+          @click=${() => {
+            state.paletteOpen = !state.paletteOpen;
+          }}
+          title="Search or jump to… (⌘K)"
+          aria-label="Open command palette"
+        >
+          <span class="topbar-search__label">${t("common.search")}</span>
+          <kbd class="topbar-search__kbd">⌘K</kbd>
+        </button>
         <div class="topbar-status">
-          <div class="pill">
-            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>${t("common.health")}</span>
-            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
+          <button
+            class="topbar-redact ${state.streamMode ? "topbar-redact--active" : ""}"
+            @click=${() => {
+              state.streamMode = !state.streamMode;
+              try {
+                localStorage.setItem("openclaw:stream-mode", String(state.streamMode));
+              } catch {
+                /* */
+              }
+            }}
+            title="${state.streamMode ? "Sensitive data hidden — click to reveal" : "Sensitive data visible — click to hide"}"
+            aria-label="Toggle redaction"
+            aria-pressed=${state.streamMode}
+          >
+            ${state.streamMode ? icons.eye : icons.eyeOff}
+          </button>
+          <span class="topbar-divider"></span>
+          <div class="topbar-connection ${state.connected ? "topbar-connection--ok" : ""}">
+            <span class="topbar-connection__dot"></span>
+            <span class="topbar-connection__label">${state.connected ? t("common.ok") : t("common.offline")}</span>
           </div>
+          <span class="topbar-divider"></span>
           ${renderThemeToggle(state)}
         </div>
       </header>
-      <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
-        ${TAB_GROUPS.map((group) => {
-          const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-          const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
-          return html`
-            <div class="nav-group ${isGroupCollapsed && !hasActiveTab ? "nav-group--collapsed" : ""}">
-              <button
-                class="nav-label"
-                @click=${() => {
-                  const next = { ...state.settings.navGroupsCollapsed };
-                  next[group.label] = !isGroupCollapsed;
-                  state.applySettings({
-                    ...state.settings,
-                    navGroupsCollapsed: next,
-                  });
-                }}
-                aria-expanded=${!isGroupCollapsed}
-              >
-                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
-                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
-              </button>
-              <div class="nav-group__items">
-                ${group.tabs.map((tab) => renderTab(state, tab))}
+      <aside class="sidebar ${state.settings.navCollapsed ? "sidebar--collapsed" : ""}">
+      <div class="sidebar-header">
+        ${
+          state.settings.navCollapsed
+            ? nothing
+            : html`
+          <div class="sidebar-brand">
+            <img class="sidebar-brand__logo" src="${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"}" alt="OpenClaw" />
+            <span class="sidebar-brand__title">OpenClaw</span>
+          </div>
+        `
+        }
+        <button
+          class="sidebar-collapse-btn"
+          @click=${() =>
+            state.applySettings({
+              ...state.settings,
+              navCollapsed: !state.settings.navCollapsed,
+            })}
+          title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+          aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+        >
+          ${state.settings.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+        </button>
+      </div>
+ 
+          
+          <nav class="sidebar-nav">
+          ${TAB_GROUPS.map((group) => {
+            const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
+            const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+            const showItems = hasActiveTab || !isGroupCollapsed;
+
+            return html`
+              <div class="nav-group ${!showItems ? "nav-group--collapsed" : ""}">
+                ${
+                  !state.settings.navCollapsed
+                    ? html`
+                  <button
+                    class="nav-group__label"
+                    @click=${() => {
+                      const next = { ...state.settings.navGroupsCollapsed };
+                      next[group.label] = !isGroupCollapsed;
+                      state.applySettings({
+                        ...state.settings,
+                        navGroupsCollapsed: next,
+                      });
+                    }}
+                    aria-expanded=${showItems}
+                  >
+                    <span class="nav-group__label-text">${t(`nav.${group.label}`)}</span>
+                    <span class="nav-group__chevron">${showItems ? icons.chevronDown : icons.chevronRight}</span>
+                  </button>
+                `
+                    : nothing
+                }
+                <div class="nav-group__items">
+                  ${group.tabs.map((tab) => renderTab(state, tab))}
+                </div>
               </div>
-            </div>
-          `;
-        })}
-        <div class="nav-group nav-group--links">
-          <div class="nav-label nav-label--static">
-            <span class="nav-label__text">${t("common.resources")}</span>
-          </div>
-          <div class="nav-group__items">
-            <a
-              class="nav-item nav-item--external"
-              href="https://docs.openclaw.ai"
-              target="_blank"
-              rel="noreferrer"
-              title="${t("common.docs")} (opens in new tab)"
-            >
-              <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+            `;
+          })}
+        </nav>
+
+        <div class="sidebar-footer">
+          <a
+            class="nav-item nav-item--external"
+            href="https://docs.openclaw.ai"
+            target="_blank"
+            rel="noreferrer"
+            title="${t("common.docs")} (opens in new tab)"
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+            ${
+              !state.settings.navCollapsed
+                ? html`
               <span class="nav-item__text">${t("common.docs")}</span>
-            </a>
-          </div>
+              <span class="nav-item__external-icon">${icons.externalLink}</span>
+            `
+                : nothing
+            }
+          </a>
+          ${(() => {
+            const snapshot = state.hello?.snapshot as { server?: { version?: string } } | undefined;
+            const version = snapshot?.server?.version ?? "";
+            return version
+              ? html`
+                <div class="sidebar-version" title=${`v${version}`}>
+                  ${
+                    !state.settings.navCollapsed
+                      ? html`<span class="sidebar-version__text">v${version}</span>`
+                      : html`
+                          <span class="sidebar-version__dot"></span>
+                        `
+                  }
+                </div>
+              `
+              : nothing;
+          })()}
         </div>
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
@@ -225,6 +323,15 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                usageResult: state.usageResult,
+                sessionsResult: state.sessionsResult,
+                skillsReport: state.skillsReport,
+                cronJobs: state.cronJobs,
+                cronStatus: state.cronStatus,
+                attentionItems: state.attentionItems,
+                eventLog: state.eventLog,
+                overviewLogLines: state.overviewLogLines,
+                streamMode: state.streamMode,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -240,6 +347,16 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
+                onRefreshLogs: () => state.loadOverview(),
+                onToggleStreamMode: () => {
+                  state.streamMode = !state.streamMode;
+                  try {
+                    localStorage.setItem("openclaw:stream-mode", String(state.streamMode));
+                  } catch {
+                    /* */
+                  }
+                },
               })
             : nothing
         }
@@ -290,6 +407,7 @@ export function renderApp(state: AppViewState) {
                 entries: state.presenceEntries,
                 lastError: state.presenceError,
                 statusMessage: state.presenceStatus,
+                streamMode: state.streamMode,
                 onRefresh: () => loadPresence(state),
               })
             : nothing
@@ -358,33 +476,47 @@ export function renderApp(state: AppViewState) {
                 agentsList: state.agentsList,
                 selectedAgentId: resolvedAgentId,
                 activePanel: state.agentsPanel,
-                configForm: configValue,
-                configLoading: state.configLoading,
-                configSaving: state.configSaving,
-                configDirty: state.configFormDirty,
-                channelsLoading: state.channelsLoading,
-                channelsError: state.channelsError,
-                channelsSnapshot: state.channelsSnapshot,
-                channelsLastSuccess: state.channelsLastSuccess,
-                cronLoading: state.cronLoading,
-                cronStatus: state.cronStatus,
-                cronJobs: state.cronJobs,
-                cronError: state.cronError,
-                agentFilesLoading: state.agentFilesLoading,
-                agentFilesError: state.agentFilesError,
-                agentFilesList: state.agentFilesList,
-                agentFileActive: state.agentFileActive,
-                agentFileContents: state.agentFileContents,
-                agentFileDrafts: state.agentFileDrafts,
-                agentFileSaving: state.agentFileSaving,
+                config: {
+                  form: configValue,
+                  loading: state.configLoading,
+                  saving: state.configSaving,
+                  dirty: state.configFormDirty,
+                },
+                channels: {
+                  snapshot: state.channelsSnapshot,
+                  loading: state.channelsLoading,
+                  error: state.channelsError,
+                  lastSuccess: state.channelsLastSuccess,
+                },
+                cron: {
+                  status: state.cronStatus,
+                  jobs: state.cronJobs,
+                  loading: state.cronLoading,
+                  error: state.cronError,
+                },
+                agentFiles: {
+                  list: state.agentFilesList,
+                  loading: state.agentFilesLoading,
+                  error: state.agentFilesError,
+                  active: state.agentFileActive,
+                  contents: state.agentFileContents,
+                  drafts: state.agentFileDrafts,
+                  saving: state.agentFileSaving,
+                },
                 agentIdentityLoading: state.agentIdentityLoading,
                 agentIdentityError: state.agentIdentityError,
                 agentIdentityById: state.agentIdentityById,
-                agentSkillsLoading: state.agentSkillsLoading,
-                agentSkillsReport: state.agentSkillsReport,
-                agentSkillsError: state.agentSkillsError,
-                agentSkillsAgentId: state.agentSkillsAgentId,
-                skillsFilter: state.skillsFilter,
+                agentSkills: {
+                  report: state.agentSkillsReport,
+                  loading: state.agentSkillsLoading,
+                  error: state.agentSkillsError,
+                  agentId: state.agentSkillsAgentId,
+                  filter: state.skillsFilter,
+                },
+                sidebarFilter: state.agentsSidebarFilter,
+                onSidebarFilterChange: (value) => {
+                  state.agentsSidebarFilter = value;
+                },
                 onRefresh: async () => {
                   await loadAgents(state);
                   const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
@@ -523,6 +655,9 @@ export function renderApp(state: AppViewState) {
                 onConfigSave: () => saveConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
+                onCronRunNow: (_jobId) => {
+                  // Stub: backend support pending
+                },
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),
                 onSkillsRefresh: () => {
                   if (resolvedAgentId) {
@@ -692,6 +827,12 @@ export function renderApp(state: AppViewState) {
                     : { fallbacks: normalized };
                   updateConfigFormValue(state, basePath, next);
                 },
+                onSetDefault: (agentId) => {
+                  if (!configValue) {
+                    return;
+                  }
+                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                },
               })
             : nothing
         }
@@ -860,6 +1001,45 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                onClearHistory: async () => {
+                  if (!state.client || !state.connected) {
+                    return;
+                  }
+                  try {
+                    await state.client.request("sessions.reset", { key: state.sessionKey });
+                    state.chatMessages = [];
+                    state.chatStream = null;
+                    state.chatRunId = null;
+                    await loadChatHistory(state);
+                  } catch (err) {
+                    state.lastError = String(err);
+                  }
+                },
+                agentsList: state.agentsList,
+                currentAgentId: resolvedAgentId ?? "main",
+                onAgentChange: (agentId: string) => {
+                  state.sessionKey = buildAgentMainSessionKey({ agentId });
+                  state.chatMessages = [];
+                  state.chatStream = null;
+                  state.chatRunId = null;
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey: state.sessionKey,
+                    lastActiveSessionKey: state.sessionKey,
+                  });
+                  void loadChatHistory(state);
+                  void state.loadAssistantIdentity();
+                },
+                onNavigateToAgent: () => {
+                  state.agentsSelectedId = resolvedAgentId;
+                  state.setTab("agents" as import("./navigation.ts").Tab);
+                },
+                onSessionSelect: (key: string) => {
+                  state.setSessionKey(key);
+                  state.chatMessages = [];
+                  void loadChatHistory(state);
+                  void state.loadAssistantIdentity();
+                },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing
@@ -897,6 +1077,7 @@ export function renderApp(state: AppViewState) {
                 searchQuery: state.configSearchQuery,
                 activeSection: state.configActiveSection,
                 activeSubsection: state.configActiveSubsection,
+                streamMode: state.streamMode,
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
@@ -962,6 +1143,10 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      ${renderBottomTabs({
+        activeTab: state.tab,
+        onTabChange: (tab) => state.setTab(tab),
+      })}
     </div>
   `;
 }
