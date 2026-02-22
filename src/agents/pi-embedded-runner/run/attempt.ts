@@ -776,6 +776,17 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Apply plugin-registered streamFn wrappers
+      {
+        const { getGlobalPluginRegistry } = await import("../../../plugins/hook-runner-global.js");
+        const pluginRegistry = getGlobalPluginRegistry();
+        if (pluginRegistry?.streamFnWrappers?.length) {
+          for (const { wrapper } of pluginRegistry.streamFnWrappers) {
+            activeSession.agent.streamFn = wrapper(activeSession.agent.streamFn);
+          }
+        }
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,

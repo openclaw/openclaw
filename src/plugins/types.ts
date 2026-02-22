@@ -19,6 +19,16 @@ import type { PluginRuntime } from "./runtime/types.js";
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 
+// Re-export StreamFn from pi-agent-core for plugin authors
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type StreamFnInternal = (...args: any[]) => any;
+
+/**
+ * A function that wraps the agent's streamFn to intercept, modify, or proxy LLM API calls.
+ * Multiple wrappers compose in registration order.
+ */
+export type StreamFnWrapperFn = (next: StreamFnInternal) => StreamFnInternal;
+
 export type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -280,6 +290,21 @@ export type OpenClawPluginApi = {
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
   ) => void;
+  /**
+   * Register a wrapper around the agent's streamFn to intercept, modify, or proxy LLM API calls.
+   * Multiple wrappers compose in registration order (after internal wrappers like cache trace).
+   * Use cases: memory proxy, observability, cost tracking, custom routing, header injection.
+   */
+  registerStreamFnWrapper: (wrapper: StreamFnWrapperFn) => void;
+  /**
+   * Write to the plugin's own config section (plugins.entries.<pluginId>.config).
+   * Scoped to own config only — cannot modify other plugins or core settings.
+   */
+  updatePluginConfig: (config: Record<string, unknown>) => Promise<void>;
+  /**
+   * Enable or disable this plugin in the config.
+   */
+  updatePluginEnabled: (enabled: boolean) => Promise<void>;
 };
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";

@@ -22,6 +22,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  streamFnWrappers: [],
   diagnostics,
 });
 

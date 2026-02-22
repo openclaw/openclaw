@@ -17,6 +17,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  streamFnWrappers: [],
   diagnostics: [],
 });
 

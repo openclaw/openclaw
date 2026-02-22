@@ -16,6 +16,7 @@ export const registryState: { registry: PluginRegistry } = {
     cliRegistrars: [],
     services: [],
     commands: [],
+    streamFnWrappers: [],
     diagnostics: [],
   } as PluginRegistry,
 };

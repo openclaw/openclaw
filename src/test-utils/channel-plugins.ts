@@ -25,6 +25,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   cliRegistrars: [],
   services: [],
   commands: [],
+  streamFnWrappers: [],
   diagnostics: [],
 });
 
