@@ -41,22 +41,6 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 
-let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
-
-async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-  const previous = qmdEmbedQueueTail;
-  let release: (() => void) | undefined;
-  qmdEmbedQueueTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    release?.();
-  }
-}
-
 type CollectionRoot = {
   path: string;
   kind: MemorySource;
@@ -136,6 +120,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedBackoffUntil: number | null = null;
   private embedFailureCount = 0;
   private attemptedNullByteCollectionRepair = false;
+  private qmdEmbedQueueTail: Promise<void> = Promise.resolve();
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -734,7 +719,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       await this.runQmdUpdateWithRetry(reason);
       if (this.shouldRunEmbed(force)) {
         try {
-          await runWithQmdEmbedLock(async () => {
+          await this.runWithEmbedLock(async () => {
             await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
           });
           this.lastEmbedAt = Date.now();
@@ -819,6 +804,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     log.warn(
       `qmd embed failed (${reason}): ${String(err)}; backing off for ${Math.ceil(delayMs / 1000)}s`,
     );
+  }
+
+  private async runWithEmbedLock<T>(task: () => Promise<T>): Promise<T> {
+    const previous = this.qmdEmbedQueueTail;
+    let release: (() => void) | undefined;
+    this.qmdEmbedQueueTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
+    try {
+      return await task();
+    } finally {
+      release?.();
+    }
   }
 
   private enqueueForcedUpdate(reason: string): Promise<void> {
