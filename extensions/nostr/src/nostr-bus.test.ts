@@ -1,3 +1,4 @@
+import { nip19 } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 import {
   validatePrivateKey,
@@ -9,7 +10,9 @@ import {
 
 // Test private key (DO NOT use in production - this is a known test key)
 const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_NSEC = "nsec1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
+// Convert hex to bytes for nsec encoding
+const TEST_KEY_BYTES = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((b) => parseInt(b, 16)));
+const TEST_NSEC = nip19.nsecEncode(TEST_KEY_BYTES);
 
 describe("validatePrivateKey", () => {
   describe("hex format", () => {
@@ -78,6 +81,18 @@ describe("validatePrivateKey", () => {
   });
 
   describe("nsec format", () => {
+    it("accepts valid nsec and returns Uint8Array", () => {
+      const result = validatePrivateKey(TEST_NSEC);
+      expect(result).toBeInstanceOf(Uint8Array);
+      expect(result.length).toBe(32);
+    });
+
+    it("returns same bytes for nsec and equivalent hex key", () => {
+      const fromHex = validatePrivateKey(TEST_HEX_KEY);
+      const fromNsec = validatePrivateKey(TEST_NSEC);
+      expect(fromNsec).toEqual(fromHex);
+    });
+
     it("rejects invalid nsec (wrong checksum)", () => {
       const badNsec = "nsec1invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid";
       expect(() => validatePrivateKey(badNsec)).toThrow();
@@ -155,6 +170,22 @@ describe("normalizePubkey", () => {
 
     it("rejects invalid hex", () => {
       expect(() => normalizePubkey("invalid")).toThrow("Pubkey must be 64 hex characters");
+    });
+  });
+
+  describe("npub format", () => {
+    it("converts npub to 64-char lowercase hex", () => {
+      const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const npub = pubkeyToNpub(hex);
+      const result = normalizePubkey(npub);
+      expect(result).toBe(hex);
+      expect(result).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it("roundtrips with pubkeyToNpub", () => {
+      const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const npub = pubkeyToNpub(hex);
+      expect(normalizePubkey(npub)).toBe(hex);
     });
   });
 });
