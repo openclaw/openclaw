@@ -1,8 +1,9 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
+import type { CronEvent, CronServiceState } from "./state.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -10,7 +11,6 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -169,6 +169,25 @@ export function armTimer(state: CronServiceState) {
     const withNextRun =
       state.store?.jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number")
         .length ?? 0;
+    if (enabledCount > 0) {
+      // There are enabled jobs but none have nextRunAtMs set — this is a
+      // transient state (e.g. jobs are running, store was reloaded with
+      // stale data, or schedule computation failed).  Arm a maintenance
+      // timer so the scheduler keeps ticking and can self-heal once the
+      // jobs' nextRunAtMs values are recomputed.  Without this fallback
+      // the scheduler silently stops and jobs never fire until the next
+      // gateway restart.  See: https://github.com/openclaw/openclaw/issues/23628
+      state.timer = setTimeout(() => {
+        void onTimer(state).catch((err) => {
+          state.deps.log.error({ err: String(err) }, "cron: maintenance timer tick failed");
+        });
+      }, MAX_TIMER_DELAY_MS);
+      state.deps.log.debug(
+        { jobCount, enabledCount, withNextRun },
+        "cron: armTimer maintenance fallback - enabled jobs without nextRunAtMs",
+      );
+      return;
+    }
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
