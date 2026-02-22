@@ -120,6 +120,14 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /**
+   * Whether subagent announce results are auto-delivered to the chat channel.
+   * When `false`, the announce trigger is still injected into the requester
+   * session but the agent's reply is **not** automatically sent — the agent
+   * must use its own tools (e.g. a card API) to deliver user-facing output.
+   * Default: `true` (auto-deliver).
+   */
+  announceDeliver?: boolean;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
 };

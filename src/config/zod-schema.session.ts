@@ -73,6 +73,7 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    announceDeliver: z.boolean().optional(),
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
