@@ -48,6 +48,9 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return { ...mod, resolveExecApprovals: () => approvals };
 });
 
+const { createExecTool } = await import("./bash-tools.exec.js");
+const { getShellPathFromLoginShell } = await import("../infra/shell-env.js");
+
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -77,8 +80,6 @@ describe("exec PATH login shell merge", () => {
     }
     process.env.PATH = "/usr/bin";
 
-    const { createExecTool } = await import("./bash-tools.exec.js");
-    const { getShellPathFromLoginShell } = await import("../infra/shell-env.js");
     const shellPathMock = vi.mocked(getShellPathFromLoginShell);
     shellPathMock.mockClear();
     shellPathMock.mockReturnValue("/custom/bin:/opt/bin");
@@ -97,8 +98,6 @@ describe("exec PATH login shell merge", () => {
     }
     process.env.PATH = "/usr/bin";
 
-    const { createExecTool } = await import("./bash-tools.exec.js");
-    const { getShellPathFromLoginShell } = await import("../infra/shell-env.js");
     const shellPathMock = vi.mocked(getShellPathFromLoginShell);
     shellPathMock.mockClear();
 
@@ -117,7 +116,6 @@ describe("exec PATH login shell merge", () => {
 
 describe("exec host env validation", () => {
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
-    const { createExecTool } = await import("./bash-tools.exec.js");
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
     await expect(
@@ -129,7 +127,6 @@ describe("exec host env validation", () => {
   });
 
   it("defaults to gateway when sandbox runtime is unavailable", async () => {
-    const { createExecTool } = await import("./bash-tools.exec.js");
     const tool = createExecTool({ security: "full", ask: "off" });
 
     const err = await tool
@@ -145,7 +142,6 @@ describe("exec host env validation", () => {
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
-    const { createExecTool } = await import("./bash-tools.exec.js");
     const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
 
     await expect(
