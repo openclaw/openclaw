@@ -84,59 +84,18 @@ export function renderTab(state: AppViewState, tab: Tab) {
   `;
 }
 
-export function renderChatSessionSelect(state: AppViewState) {
+export function renderChatControls(state: AppViewState) {
   const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
   const sessionOptions = resolveSessionOptions(
     state.sessionKey,
     state.sessionsResult,
     mainSessionKey,
   );
-  return html`
-    <label class="field chat-controls__session">
-      <select
-        .value=${state.sessionKey}
-        ?disabled=${!state.connected}
-        @change=${(e: Event) => {
-          const next = (e.target as HTMLSelectElement).value;
-          state.sessionKey = next;
-          state.chatMessage = "";
-          state.chatStream = null;
-          (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-          state.chatRunId = null;
-          (state as unknown as OpenClawApp).resetToolStream();
-          (state as unknown as OpenClawApp).resetChatScroll();
-          state.applySettings({
-            ...state.settings,
-            sessionKey: next,
-            lastActiveSessionKey: next,
-          });
-          void state.loadAssistantIdentity();
-          syncUrlWithSessionKey(
-            state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-            next,
-            true,
-          );
-          void loadChatHistory(state as unknown as ChatState);
-        }}
-      >
-        ${repeat(
-          sessionOptions,
-          (entry) => entry.key,
-          (entry) =>
-            html`<option value=${entry.key} title=${entry.key}>
-              ${entry.displayName ?? entry.key}
-            </option>`,
-        )}
-      </select>
-    </label>
-  `;
-}
-
-export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  // Refresh icon
   const refreshIcon = html`
     <svg
       width="18"
@@ -172,6 +131,43 @@ export function renderChatControls(state: AppViewState) {
   `;
   return html`
     <div class="chat-controls">
+      <label class="field chat-controls__session">
+        <select
+          .value=${state.sessionKey}
+          ?disabled=${!state.connected}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            state.sessionKey = next;
+            state.chatMessage = "";
+            state.chatStream = null;
+            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+            state.chatRunId = null;
+            (state as unknown as OpenClawApp).resetToolStream();
+            (state as unknown as OpenClawApp).resetChatScroll();
+            state.applySettings({
+              ...state.settings,
+              sessionKey: next,
+              lastActiveSessionKey: next,
+            });
+            void state.loadAssistantIdentity();
+            syncUrlWithSessionKey(
+              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+              next,
+              true,
+            );
+            void loadChatHistory(state as unknown as ChatState);
+          }}
+        >
+          ${repeat(
+            sessionOptions,
+            (entry) => entry.key,
+            (entry) =>
+              html`<option value=${entry.key} title=${entry.key}>
+                ${entry.displayName ?? entry.key}
+              </option>`,
+          )}
+        </select>
+      </label>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -400,30 +396,56 @@ function resolveSessionOptions(
   return options;
 }
 
-type ThemeOption = { id: ThemeMode; label: string };
+type ThemeOption = { id: ThemeMode; label: string; iconKey: keyof typeof icons };
 const THEME_OPTIONS: ThemeOption[] = [
-  { id: "dark", label: "Claw" },
-  { id: "light", label: "Light" },
-  { id: "openknot", label: "Knot" },
-  { id: "fieldmanual", label: "Field" },
-  { id: "clawdash", label: "Chrome" },
+  { id: "dark", label: "Dark", iconKey: "monitor" },
+  { id: "light", label: "Light", iconKey: "book" },
+  { id: "openknot", label: "Knot", iconKey: "zap" },
+  { id: "fieldmanual", label: "Field", iconKey: "terminal" },
+  { id: "openai", label: "Ember", iconKey: "loader" },
+  { id: "clawdash", label: "Chrome", iconKey: "settings" },
 ];
 
 export function renderThemeToggle(state: AppViewState) {
+  const app = state as unknown as OpenClawApp;
+  const applyTheme = (next: ThemeMode) => (event: MouseEvent) => {
+    const element = event.currentTarget as HTMLElement;
+    const context: ThemeTransitionContext = { element };
+    if (event.clientX || event.clientY) {
+      context.pointerClientX = event.clientX;
+      context.pointerClientY = event.clientY;
+    }
+    state.setTheme(next, context);
+  };
+
+  const handleCollapse = () => app.handleThemeToggleCollapse();
+
   return html`
-    <select
-      class="theme-select"
-      .value=${state.theme}
-      aria-label="Theme"
-      title="Theme"
-      @change=${(e: Event) => {
-        const select = e.target as HTMLSelectElement;
-        const next = select.value as ThemeMode;
-        const context: ThemeTransitionContext = { element: select };
-        state.setTheme(next, context);
+    <div
+      class="theme-toggle"
+      @mouseleave=${handleCollapse}
+      @focusout=${(e: FocusEvent) => {
+        const toggle = e.currentTarget as HTMLElement;
+        requestAnimationFrame(() => {
+          if (!toggle.contains(document.activeElement)) {
+            handleCollapse();
+          }
+        });
       }}
     >
-      ${THEME_OPTIONS.map((opt) => html`<option value=${opt.id}>${opt.label}</option>`)}
-    </select>
+      ${state.themeOrder.map((id) => {
+        const opt = THEME_OPTIONS.find((o) => o.id === id)!;
+        return html`
+          <button
+            class="theme-btn ${state.theme === id ? "active" : ""}"
+            @click=${applyTheme(id)}
+            aria-pressed=${state.theme === id}
+            title=${opt.label}
+          >
+            ${icons[opt.iconKey]}
+          </button>
+        `;
+      })}
+    </div>
   `;
 }
