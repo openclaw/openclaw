@@ -63,6 +63,9 @@ importers:
         specifier: 0.54.0
         version: 0.54.0(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui':
+        specifier: 0.53.0
+        version: 0.53.0
+      '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: 0.54.0
         version: 0.54.0
       '@mozilla/readability':
@@ -80,6 +83,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.14.1
         version: 7.14.1
+      '@vector-im/matrix-bot-sdk':
+        specifier: 0.8.0-element.3
+        version: 0.8.0-element.3
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
@@ -137,6 +143,9 @@ importers:
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
+      music-metadata:
+        specifier: ^11.12.1
+        version: 11.12.1
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
