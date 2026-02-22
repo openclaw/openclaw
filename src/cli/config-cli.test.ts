@@ -9,11 +9,14 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
  */
 
 const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
-const mockWriteConfigFile = vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async () => {});
+const mockWriteConfigFile = vi.fn<
+  (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
+>(async () => {});
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-  writeConfigFile: (cfg: OpenClawConfig) => mockWriteConfigFile(cfg),
+  writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
+    mockWriteConfigFile(cfg, options),
 }));
 
 const mockLog = vi.fn();
@@ -216,6 +219,9 @@ describe("config cli", () => {
       expect(written.gateway).toEqual(resolved.gateway);
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+        unsetPaths: [["tools", "alsoAllow"]],
+      });
     });
   });
 });
