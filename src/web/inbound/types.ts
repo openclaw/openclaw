@@ -30,6 +30,7 @@ export type WebInboundMessage = {
   groupParticipants?: string[];
   mentionedJids?: string[];
   selfJid?: string | null;
+  selfLid?: string | null;
   selfE164?: string | null;
   location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
