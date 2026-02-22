@@ -31,7 +31,10 @@ function resolveInlineButtonsScopeFromCapabilities(
     const enabled = capabilities.some(
       (entry) => String(entry).trim().toLowerCase() === "inlinebuttons",
     );
-    return enabled ? "all" : "off";
+    // Legacy array format: ["inlineButtons"] explicitly enables all-scope.
+    // An array that does not include "inlinebuttons" should fall back to the
+    // default scope rather than silently disabling callbacks entirely.
+    return enabled ? "all" : DEFAULT_INLINE_BUTTONS_SCOPE;
   }
   if (typeof capabilities === "object") {
     const inlineButtons = (capabilities as { inlineButtons?: unknown }).inlineButtons;
