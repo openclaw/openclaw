@@ -140,6 +140,14 @@ export async function monitorWebChannel(
 
   let reconnectAttempts = 0;
 
+  // Shared mutable socket reference.  Reply closures created inside
+  // monitorWebInbox() dereference this at send time, so when the outer
+  // loop reconnects and creates a new socket, in-flight replies from the
+  // previous connection automatically pick up the live socket.
+  const socketRef: { current: import("@whiskeysockets/baileys").WASocket | null } = {
+    current: null,
+  };
+
   while (true) {
     if (stopRequested()) {
       break;
@@ -197,6 +205,7 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      socketRef,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -400,6 +409,9 @@ export async function monitorWebChannel(
       await closeListener();
       break;
     }
+
+    // Mark socket as dead so in-flight retries know reconnection is pending.
+    socketRef.current = null;
 
     reconnectAttempts += 1;
     status.reconnectAttempts = reconnectAttempts;
