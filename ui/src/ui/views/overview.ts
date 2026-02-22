@@ -17,7 +17,6 @@ import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
-import { renderOverviewQuickActions } from "./overview-quick-actions.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -349,11 +348,6 @@ export function renderOverview(props: OverviewProps) {
         onRefreshLogs: props.onRefreshLogs,
       })}
     </div>
-
-    ${renderOverviewQuickActions({
-      onNavigate: props.onNavigate,
-      onRefresh: props.onRefresh,
-    })}
 
   `;
 }

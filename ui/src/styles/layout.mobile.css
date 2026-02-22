@@ -306,11 +306,13 @@
     font-size: 11px;
   }
 
-  /* Theme toggle */
   .theme-toggle {
-    --theme-item: 24px;
-    --theme-gap: 2px;
-    --theme-pad: 3px;
+    height: 28px;
+  }
+
+  .theme-btn svg {
+    width: 12px;
+    height: 12px;
   }
 
   .theme-icon {
@@ -379,9 +381,7 @@
   }
 
   .theme-toggle {
-    --theme-item: 22px;
-    --theme-gap: 2px;
-    --theme-pad: 2px;
+    height: 26px;
   }
 
   .theme-icon {

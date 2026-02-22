@@ -172,6 +172,7 @@ export function renderApp(state: AppViewState) {
             : html`
           <div class="sidebar-brand">
             <img class="sidebar-brand__logo" src="${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"}" alt="OpenClaw" />
+            <span class="sidebar-brand__title">OpenClaw</span>
           </div>
         `
         }

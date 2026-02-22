@@ -225,21 +225,6 @@
   stroke-width: 2px;
 }
 
-/* Light theme attachment overrides */
-:root[data-theme="light"] .chat-attachments {
-  background: #f8fafc;
-  border-color: rgba(16, 24, 40, 0.1);
-}
-
-:root[data-theme="light"] .chat-attachment {
-  border-color: rgba(16, 24, 40, 0.15);
-  background: #fff;
-}
-
-:root[data-theme="light"] .chat-attachment__remove {
-  background: rgba(0, 0, 0, 0.6);
-}
-
 /* Message images (sent images displayed in chat) */
 .chat-message-images {
   display: flex;
@@ -272,10 +257,6 @@
   align-items: stretch;
   gap: 12px;
   flex: 1;
-}
-
-:root[data-theme="light"] .chat-compose {
-  background: linear-gradient(to bottom, transparent, var(--bg-content) 20%);
 }
 
 .chat-compose__field {
@@ -368,14 +349,10 @@
 
 /* Controls separator */
 .chat-controls__separator {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--border);
   font-size: 18px;
   margin: 0 8px;
   font-weight: 300;
-}
-
-:root[data-theme="light"] .chat-controls__separator {
-  color: rgba(16, 24, 40, 0.3);
 }
 
 .btn--icon:hover {
@@ -388,27 +365,6 @@
   border-color: var(--accent);
   background: var(--accent-subtle);
   color: var(--accent);
-}
-
-/* Light theme icon button overrides */
-:root[data-theme="light"] .btn--icon {
-  background: #ffffff;
-  border-color: var(--border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-  color: var(--muted);
-}
-
-:root[data-theme="light"] .btn--icon:hover {
-  background: #ffffff;
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
-:root[data-theme="light"] .chat-controls .btn--icon.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-subtle);
 }
 
 .btn--icon svg {
@@ -439,12 +395,6 @@
   background: color-mix(in srgb, var(--secondary) 90%, transparent);
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-}
-
-/* Light theme thinking indicator override */
-:root[data-theme="light"] .chat-controls__thinking {
-  background: rgba(255, 255, 255, 0.95);
-  border-color: rgba(16, 24, 40, 0.12);
 }
 
 @media (max-width: 640px) {

@@ -27,10 +27,6 @@
   overflow: hidden;
 }
 
-:root[data-theme="light"] .config-sidebar {
-  background: var(--bg-hover);
-}
-
 .config-sidebar__header {
   display: flex;
   align-items: center;
@@ -93,14 +89,6 @@
   background: var(--bg-hover);
 }
 
-:root[data-theme="light"] .config-search__input {
-  background: white;
-}
-
-:root[data-theme="light"] .config-search__input:focus {
-  background: white;
-}
-
 .config-search__clear {
   position: absolute;
   right: 22px;
@@ -159,10 +147,6 @@
   color: var(--text);
 }
 
-:root[data-theme="light"] .config-nav__item:hover {
-  background: var(--bg-hover);
-}
-
 .config-nav__item.active {
   background: var(--accent-subtle);
   color: var(--accent);
@@ -204,10 +188,6 @@
   background: var(--bg-elevated);
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-}
-
-:root[data-theme="light"] .config-mode-toggle {
-  background: white;
 }
 
 .config-mode-toggle__btn {
@@ -258,10 +238,6 @@
   padding: 14px 22px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
-}
-
-:root[data-theme="light"] .config-actions {
-  background: var(--bg-hover);
 }
 
 .config-actions__left,
@@ -343,10 +319,6 @@
   font-family: var(--mono);
 }
 
-:root[data-theme="light"] .config-diff__item {
-  background: white;
-}
-
 .config-diff__path {
   font-weight: 600;
   color: var(--text);
@@ -382,10 +354,6 @@
   padding: 16px 22px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-accent);
-}
-
-:root[data-theme="light"] .config-section-hero {
-  background: var(--bg-hover);
 }
 
 .config-section-hero__icon {
@@ -434,10 +402,6 @@
   overflow-x: auto;
 }
 
-:root[data-theme="light"] .config-subnav {
-  background: var(--bg-hover);
-}
-
 .config-subnav__item {
   border: 1px solid transparent;
   border-radius: var(--radius-full);
@@ -452,10 +416,6 @@
     color var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
   white-space: nowrap;
-}
-
-:root[data-theme="light"] .config-subnav__item {
-  background: white;
 }
 
 .config-subnav__item:hover {
@@ -551,10 +511,6 @@
   border-color: var(--border-strong);
 }
 
-:root[data-theme="light"] .config-section-card {
-  background: white;
-}
-
 .config-section-card__header {
   display: flex;
   align-items: flex-start;
@@ -562,10 +518,6 @@
   padding: 20px 22px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
-}
-
-:root[data-theme="light"] .config-section-card__header {
-  background: var(--bg-hover);
 }
 
 .config-section-card__icon {
@@ -675,14 +627,6 @@
   background: var(--bg-hover);
 }
 
-:root[data-theme="light"] .cfg-input {
-  background: white;
-}
-
-:root[data-theme="light"] .cfg-input:focus {
-  background: white;
-}
-
 .cfg-input--sm {
   padding: 9px 12px;
   font-size: 13px;
@@ -733,10 +677,6 @@
   box-shadow: var(--focus-ring);
 }
 
-:root[data-theme="light"] .cfg-textarea {
-  background: white;
-}
-
 .cfg-textarea--sm {
   padding: 10px 12px;
   font-size: 12px;
@@ -749,10 +689,6 @@
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg-accent);
-}
-
-:root[data-theme="light"] .cfg-number {
-  background: white;
 }
 
 .cfg-number__btn {
@@ -773,14 +709,6 @@
 .cfg-number__btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-:root[data-theme="light"] .cfg-number__btn {
-  background: var(--bg-hover);
-}
-
-:root[data-theme="light"] .cfg-number__btn:hover:not(:disabled) {
-  background: var(--border);
 }
 
 .cfg-number__input {
@@ -825,10 +753,6 @@
   box-shadow: var(--focus-ring);
 }
 
-:root[data-theme="light"] .cfg-select {
-  background-color: white;
-}
-
 /* Segmented Control */
 .cfg-segmented {
   display: inline-flex;
@@ -836,10 +760,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-accent);
-}
-
-:root[data-theme="light"] .cfg-segmented {
-  background: var(--bg-hover);
 }
 
 .cfg-segmented__btn {
@@ -898,14 +818,6 @@
   cursor: not-allowed;
 }
 
-:root[data-theme="light"] .cfg-toggle-row {
-  background: white;
-}
-
-:root[data-theme="light"] .cfg-toggle-row:hover:not(.disabled) {
-  background: var(--bg-hover);
-}
-
 .cfg-toggle-row__content {
   flex: 1;
   min-width: 0;
@@ -952,10 +864,6 @@
     border-color var(--duration-normal) ease;
 }
 
-:root[data-theme="light"] .cfg-toggle__track {
-  background: var(--border);
-}
-
 .cfg-toggle__track::after {
   content: "";
   position: absolute;
@@ -991,10 +899,6 @@
   border-radius: var(--radius-lg);
   background: var(--bg-accent);
   overflow: hidden;
-}
-
-:root[data-theme="light"] .cfg-object {
-  background: white;
 }
 
 .cfg-object__header {
@@ -1066,10 +970,6 @@
   border-bottom: 1px solid var(--border);
 }
 
-:root[data-theme="light"] .cfg-array__header {
-  background: var(--bg-hover);
-}
-
 .cfg-array__label {
   flex: 1;
   font-size: 14px;
@@ -1083,10 +983,6 @@
   padding: 4px 10px;
   background: var(--bg-elevated);
   border-radius: var(--radius-full);
-}
-
-:root[data-theme="light"] .cfg-array__count {
-  background: white;
 }
 
 .cfg-array__add {
@@ -1156,10 +1052,6 @@
   border-bottom: 1px solid var(--border);
 }
 
-:root[data-theme="light"] .cfg-array__item-header {
-  background: var(--bg-hover);
-}
-
 .cfg-array__item-index {
   font-size: 11px;
   font-weight: 600;
@@ -1218,10 +1110,6 @@
   padding: 14px 18px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
-}
-
-:root[data-theme="light"] .cfg-map__header {
-  background: var(--bg-hover);
 }
 
 .cfg-map__label {
