@@ -188,6 +188,36 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("stops runner before retry on 409 conflict (#18671)", async () => {
+    const events: string[] = [];
+
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () =>
+          Promise.reject(
+            Object.assign(new Error("Conflict: terminated by other getUpdates request"), {
+              error_code: 409,
+              method: "getUpdates",
+            }),
+          ),
+        stop: vi.fn(async () => {
+          events.push("runner-1-stopped");
+        }),
+      }))
+      .mockImplementationOnce(() => {
+        events.push("runner-2-started");
+        return {
+          task: () => Promise.resolve(),
+          stop: vi.fn(async () => {}),
+        };
+      });
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    // First runner must be fully stopped before second runner starts
+    expect(events).toEqual(["runner-1-stopped", "runner-2-started"]);
+  });
+
   it("surfaces non-recoverable errors", async () => {
     runSpy.mockImplementationOnce(() => ({
       task: () => Promise.reject(new Error("bad token")),

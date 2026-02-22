@@ -209,6 +209,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         }
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+        // Fully stop the runner before retry or return to prevent duplicate getUpdates.
+        try {
+          await runner.stop();
+        } catch {
+          // already stopped
+        }
       }
     }
   } finally {
