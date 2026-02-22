@@ -247,11 +247,13 @@ describe("sessions tools", () => {
       truncated?: boolean;
       droppedMessages?: boolean;
       contentTruncated?: boolean;
+      contentRedacted?: boolean;
       bytes?: number;
     };
     expect(details.truncated).toBe(true);
     expect(details.droppedMessages).toBe(true);
     expect(details.contentTruncated).toBe(true);
+    expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
     expect((details.bytes ?? 0) <= 80 * 1024).toBe(true);
     expect(details.messages && details.messages.length > 0).toBe(true);
@@ -309,17 +311,96 @@ describe("sessions tools", () => {
       truncated?: boolean;
       droppedMessages?: boolean;
       contentTruncated?: boolean;
+      contentRedacted?: boolean;
       bytes?: number;
     };
     expect(details.truncated).toBe(true);
     expect(details.droppedMessages).toBe(true);
     expect(details.contentTruncated).toBe(false);
+    expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
     expect((details.bytes ?? 0) <= 80 * 1024).toBe(true);
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.content).toContain(
       "[sessions_history omitted: message too large]",
     );
+  });
+
+  it("sessions_history sets contentRedacted when sensitive data is redacted", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "Use sk-1234567890abcdef1234 to authenticate with the API." },
+              ],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-redact-1", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      truncated?: boolean;
+      contentTruncated?: boolean;
+      contentRedacted?: boolean;
+    };
+    expect(details.contentRedacted).toBe(true);
+    expect(details.contentTruncated).toBe(false);
+    expect(details.truncated).toBe(false);
+    const msg = details.messages?.[0] as { content?: Array<{ type?: string; text?: string }> };
+    const textBlock = msg?.content?.find((b) => b.type === "text");
+    expect(typeof textBlock?.text).toBe("string");
+    expect(textBlock?.text).not.toContain("sk-1234567890abcdef1234");
+  });
+
+  it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {
+    callGatewayMock.mockReset();
+    const longPrefix = "safe text ".repeat(420);
+    const sensitiveText = `${longPrefix} sk-9876543210fedcba9876 end`;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: sensitiveText }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-redact-2", { sessionKey: "main" });
+    const details = result.details as {
+      truncated?: boolean;
+      contentTruncated?: boolean;
+      contentRedacted?: boolean;
+    };
+    expect(details.contentRedacted).toBe(true);
+    expect(details.contentTruncated).toBe(true);
+    expect(details.truncated).toBe(true);
   });
 
   it("sessions_history resolves sessionId inputs", async () => {
