@@ -297,6 +297,10 @@ export function startGatewayConfigReloader(opts: {
     }
     try {
       const snapshot = await opts.readSnapshot();
+      if (!snapshot.exists) {
+        opts.log.warn("config reload skipped (config file not found; may be mid-write)");
+        return;
+      }
       if (!snapshot.valid) {
         const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
         opts.log.warn(`config reload skipped (invalid config): ${issues}`);
