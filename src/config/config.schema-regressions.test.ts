@@ -91,4 +91,16 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
+
+  it('accepts session.reset.mode "off"', () => {
+    const res = validateConfigObject({
+      session: {
+        reset: {
+          mode: "off",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
