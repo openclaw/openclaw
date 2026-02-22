@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   browserAct,
   browserArmDialog,
@@ -54,14 +55,17 @@ function wrapBrowserExternalJson(params: {
   };
 }
 
-function formatTabsToolResult(tabs: unknown[]) {
+function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
     payload: { tabs },
     includeWarning: false,
   });
+  const content: AgentToolResult<unknown>["content"] = [
+    { type: "text", text: wrapped.wrappedText },
+  ];
   return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
+    content,
     details: { ...wrapped.safeDetails, tabCount: tabs.length },
   };
 }

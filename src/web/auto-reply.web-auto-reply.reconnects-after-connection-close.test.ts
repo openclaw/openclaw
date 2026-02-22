@@ -127,6 +127,7 @@ describe("web auto-reply", () => {
     try {
       const sleep = vi.fn(async () => {});
       const closeResolvers: Array<(reason: unknown) => void> = [];
+      const signalCloseSpy = vi.fn();
       let capturedOnMessage:
         | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
         | undefined;
@@ -143,11 +144,14 @@ describe("web auto-reply", () => {
           return {
             close: vi.fn(),
             onClose,
-            signalClose: (reason?: unknown) => resolveClose(reason),
+            signalClose: (reason?: unknown) => {
+              signalCloseSpy(reason);
+              resolveClose(reason);
+            },
           };
         },
       );
-      const { controller, run } = startMonitorWebChannel({
+      const { runtime, controller, run } = startMonitorWebChannel({
         monitorWebChannelFn: monitorWebChannel as never,
         listenerFactory,
         sleep,
@@ -179,8 +183,15 @@ describe("web auto-reply", () => {
       await Promise.resolve();
 
       await vi.advanceTimersByTimeAsync(1);
-      await Promise.resolve();
-      expect(listenerFactory).toHaveBeenCalledTimes(2);
+      expect(signalCloseSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 499, isLoggedOut: false, error: "watchdog-timeout" }),
+      );
+      for (let i = 0; i < 20 && listenerFactory.mock.calls.length < 2; i += 1) {
+        await vi.advanceTimersByTimeAsync(50);
+        await Promise.resolve();
+      }
+      expect(listenerFactory.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
 
       controller.abort();
       closeResolvers[1]?.({ status: 499, isLoggedOut: false });

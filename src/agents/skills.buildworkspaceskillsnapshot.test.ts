@@ -76,8 +76,15 @@ describe("buildWorkspaceSkillSnapshot", () => {
       config,
       managedSkillsDir: path.join(workspaceDir, ".managed"),
       bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      eligibility: { remote: { note: "Remote note" } },
-    } as const;
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: (_bin: string) => true,
+          hasAnyBin: (_bins: string[]) => true,
+          note: "Remote note",
+        },
+      },
+    };
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, opts);
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, opts);
