@@ -121,6 +121,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     let lastUpdateId = await readTelegramUpdateOffset({
       accountId: account.accountId,
+      token,
     });
     const persistUpdateId = async (updateId: number) => {
       if (lastUpdateId !== null && updateId <= lastUpdateId) {
@@ -131,6 +132,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         await writeTelegramUpdateOffset({
           accountId: account.accountId,
           updateId,
+          token,
         });
       } catch (err) {
         (opts.runtime?.error ?? console.error)(
