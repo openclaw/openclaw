@@ -445,6 +445,83 @@ describe("createTelegramBot", () => {
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
+
+  it("does not persist update offset past pending updates", async () => {
+    // For this test we need sequentialize(...) to behave like a normal middleware and call next().
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 100,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    let releaseUpdate101: (() => void) | undefined;
+    const update101Gate = new Promise<void>((resolve) => {
+      releaseUpdate101 = resolve;
+    });
+
+    // Start processing update 101 but keep it pending (simulates an update queued behind sequentialize()).
+    const p101 = runMiddlewareChain({ update: { update_id: 101 } }, async () => update101Gate);
+    // Let update 101 enter the chain and mark itself pending before 102 completes.
+    await Promise.resolve();
+
+    // Complete update 102 while 101 is still pending. The persisted watermark must not jump to 102.
+    await runMiddlewareChain({ update: { update_id: 102 } }, async () => {});
+
+    const persistedValues = onUpdateId.mock.calls.map((call) => Number(call[0]));
+    const maxPersisted = persistedValues.length > 0 ? Math.max(...persistedValues) : -Infinity;
+    expect(maxPersisted).toBeLessThan(101);
+
+    releaseUpdate101?.();
+    await p101;
+
+    // Once the pending update finishes, the watermark can safely catch up.
+    const persistedAfterDrain = onUpdateId.mock.calls.map((call) => Number(call[0]));
+    const maxPersistedAfterDrain =
+      persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
+    expect(maxPersistedAfterDrain).toBe(102);
+  });
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
       channels: {
