@@ -87,7 +87,9 @@ function resolveSettings(): ResolvedSettings {
   }
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
-  const level = normalizeLogLevel(cfg?.level, defaultLevel);
+  const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
+  const envLevel = process.env.OPENCLAW_LOG_LEVEL?.trim();
+  const level = envLevel ? normalizeLogLevel(envLevel, fromConfig) : fromConfig;
   const file = cfg?.file ?? defaultRollingPathForToday();
   return { level, file };
 }

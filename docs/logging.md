@@ -118,7 +118,12 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 - `logging.level`: **file logs** (JSONL) level.
 - `logging.consoleLevel`: **console** verbosity level.
 
-`--verbose` only affects console output; it does not change file log levels.
+You can override both via:
+
+- **`OPENCLAW_LOG_LEVEL`** environment variable (e.g. `OPENCLAW_LOG_LEVEL=debug`).
+- **`--log-level <level>`** on `openclaw gateway run` (e.g. `openclaw gateway run --log-level debug`). Applies to that run only.
+
+The env var and the flag take precedence over the config file. `--verbose` only affects console output; it does not change file log levels.
 
 ### Console styles
 

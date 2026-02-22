@@ -91,7 +91,10 @@ function resolveConsoleSettings(): ConsoleSettings {
       }
     }
   }
-  const level = normalizeConsoleLevel(cfg?.consoleLevel);
+  const envLevel = process.env.OPENCLAW_LOG_LEVEL?.trim();
+  const level = envLevel
+    ? normalizeLogLevel(envLevel, "info")
+    : normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
 }
