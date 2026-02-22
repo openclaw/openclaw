@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { VoiceCallConfig } from "./config.js";
-import type { CallManagerContext } from "./manager/context.js";
+import type { CallManagerContext, CallManagerHooks } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
@@ -57,10 +57,16 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private onCallEnded?: CallManagerHooks["onCallEnded"];
 
-  constructor(config: VoiceCallConfig, storePath?: string) {
+  constructor(
+    config: VoiceCallConfig,
+    storePath?: string,
+    onCallEnded?: (call: CallRecord) => void,
+  ) {
     this.config = config;
     this.storePath = resolveDefaultStoreBase(config, storePath);
+    this.onCallEnded = onCallEnded;
   }
 
   /**
@@ -144,6 +150,7 @@ export class CallManager {
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
+      onCallEnded: this.onCallEnded,
     };
   }
 

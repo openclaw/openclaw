@@ -10,6 +10,7 @@ import { TwilioProvider } from "./providers/twilio.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
+import type { CallRecord } from "./types.js";
 import {
   cleanupTailscaleExposure,
   setupTailscaleExposure,
@@ -97,8 +98,9 @@ export async function createVoiceCallRuntime(params: {
   coreConfig: CoreConfig;
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
+  onCallEnded?: (call: CallRecord) => void;
 }): Promise<VoiceCallRuntime> {
-  const { config: rawConfig, coreConfig, ttsRuntime, logger } = params;
+  const { config: rawConfig, coreConfig, ttsRuntime, logger, onCallEnded } = params;
   const log = logger ?? {
     info: console.log,
     warn: console.warn,
@@ -124,7 +126,7 @@ export async function createVoiceCallRuntime(params: {
   }
 
   const provider = resolveProvider(config);
-  const manager = new CallManager(config);
+  const manager = new CallManager(config, undefined, onCallEnded);
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
   const localUrl = await webhookServer.start();

@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -481,5 +481,134 @@ describe("CallManager", () => {
     expect(metadata.turnCount).toBe(5);
     expect(provider.startListeningCalls).toHaveLength(5);
     expect(provider.stopListeningCalls).toHaveLength(5);
+  });
+});
+
+describe("onCallEnded callback", () => {
+  function createManagerWithCallback() {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      plivo: { authId: "test", authToken: "test" },
+      inboundPolicy: "open",
+    });
+    const onCallEnded = vi.fn();
+    const provider = new FakeProvider();
+    const storePath = path.join(os.tmpdir(), `voice-test-ended-${Date.now()}`);
+    const manager = new CallManager(config, storePath, onCallEnded);
+    manager.initialize(provider, "http://localhost:3000/voice");
+    return { manager, provider, onCallEnded };
+  }
+
+  it("fires onCallEnded when call.ended event is received", async () => {
+    const { manager, onCallEnded } = createManagerWithCallback();
+    const started = await manager.initiateCall("+15551234567");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "e1",
+      type: "call.answered",
+      callId: started.callId,
+      direction: "outbound",
+      timestamp: Date.now(),
+    });
+
+    manager.processEvent({
+      id: "e2",
+      type: "call.ended",
+      callId: started.callId,
+      direction: "outbound",
+      reason: "completed",
+      timestamp: Date.now(),
+    });
+
+    expect(onCallEnded).toHaveBeenCalledOnce();
+    expect(onCallEnded.mock.calls[0][0].callId).toBe(started.callId);
+    expect(onCallEnded.mock.calls[0][0].endReason).toBe("completed");
+  });
+
+  it("fires onCallEnded when endCall is called (bot hangup)", async () => {
+    const { manager, onCallEnded } = createManagerWithCallback();
+    const started = await manager.initiateCall("+15551234567");
+    expect(started.success).toBe(true);
+
+    manager.processEvent({
+      id: "e1",
+      type: "call.answered",
+      callId: started.callId,
+      direction: "outbound",
+      timestamp: Date.now(),
+    });
+
+    await manager.endCall(started.callId);
+
+    expect(onCallEnded).toHaveBeenCalledOnce();
+    expect(onCallEnded.mock.calls[0][0].endReason).toBe("hangup-bot");
+  });
+
+  it("fires onCallEnded on non-retryable call.error", async () => {
+    const { manager, onCallEnded } = createManagerWithCallback();
+    const started = await manager.initiateCall("+15551234567");
+
+    manager.processEvent({
+      id: "e1",
+      type: "call.error",
+      callId: started.callId,
+      direction: "outbound",
+      error: "network failure",
+      retryable: false,
+      timestamp: Date.now(),
+    });
+
+    expect(onCallEnded).toHaveBeenCalledOnce();
+    expect(onCallEnded.mock.calls[0][0].endReason).toBe("error");
+  });
+
+  it("does not fire onCallEnded on retryable call.error", async () => {
+    const { manager, onCallEnded } = createManagerWithCallback();
+    const started = await manager.initiateCall("+15551234567");
+
+    manager.processEvent({
+      id: "e1",
+      type: "call.error",
+      callId: started.callId,
+      direction: "outbound",
+      error: "transient",
+      retryable: true,
+      timestamp: Date.now(),
+    });
+
+    expect(onCallEnded).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when callback throws", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      plivo: { authId: "test", authToken: "test" },
+      inboundPolicy: "open",
+    });
+    const onCallEnded = vi.fn(() => {
+      throw new Error("callback boom");
+    });
+    const provider = new FakeProvider();
+    const storePath = path.join(os.tmpdir(), `voice-test-ended-throw-${Date.now()}`);
+    const manager = new CallManager(config, storePath, onCallEnded);
+    manager.initialize(provider, "http://localhost:3000/voice");
+
+    const started = await manager.initiateCall("+15551234567");
+    manager.processEvent({
+      id: "e1",
+      type: "call.ended",
+      callId: started.callId,
+      direction: "outbound",
+      reason: "completed",
+      timestamp: Date.now(),
+    });
+
+    // Should not throw even though callback throws
+    expect(onCallEnded).toHaveBeenCalledOnce();
   });
 });
