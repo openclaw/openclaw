@@ -142,7 +142,10 @@ async function fetchWithAuthFallback(params: {
         } catch {
           continue; // Skip this redirect — resolves to private IP
         }
-        const redirectRes = await fetchFn(redirectUrl, params.requestInit);
+        const redirectRes = await fetchFn(redirectUrl, {
+          ...params.requestInit,
+          redirect: "manual",
+        });
         if (redirectRes.ok) {
           return redirectRes;
         }

@@ -317,7 +317,7 @@ export async function downloadMSTeamsGraphMedia(params: {
                 const redirectHost = new URL(redirectUrl).hostname;
                 await resolveAndValidateIP(redirectHost);
 
-                const redirectRes = await fetchFn(redirectUrl, init);
+                const redirectRes = await fetchFn(redirectUrl, { ...init, redirect: "manual" });
                 return redirectRes;
               }
               return res;

@@ -54,7 +54,25 @@ describe("isPrivateOrReservedIP", () => {
     ["fd12:3456::1", true],
     ["2001:0db8::1", false],
     ["2620:1ec:c11::200", false],
+    // IPv4-mapped IPv6 addresses
+    ["::ffff:127.0.0.1", true],
+    ["::ffff:10.0.0.1", true],
+    ["::ffff:192.168.1.1", true],
+    ["::ffff:169.254.169.254", true],
+    ["::ffff:8.8.8.8", false],
+    ["::ffff:13.107.136.10", false],
   ] as const)("IPv6 %s → %s", (ip, expected) => {
+    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  });
+
+  it.each([
+    ["999.999.999.999", true],
+    ["256.0.0.1", true],
+    ["10.0.0.256", true],
+    ["-1.0.0.1", false],
+    ["1.2.3.4.5", false],
+    ["0:0:0:0:0:0:0:1", true],
+  ] as const)("malformed/expanded %s → %s (SDK fails closed)", (ip, expected) => {
     expect(isPrivateOrReservedIP(ip)).toBe(expected);
   });
 });

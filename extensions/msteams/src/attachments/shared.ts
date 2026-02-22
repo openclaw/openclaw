@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import { isPrivateIpAddress } from "openclaw/plugin-sdk";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -307,30 +308,12 @@ export function isUrlAllowed(url: string, allowlist: string[]): boolean {
 /**
  * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
  * or link-local range that must never be reached from media downloads.
+ *
+ * Delegates to the SDK's `isPrivateIpAddress` which handles IPv4-mapped IPv6,
+ * expanded notation, NAT64, 6to4, Teredo, octal IPv4, and fails closed on
+ * parse errors.
  */
-export function isPrivateOrReservedIP(ip: string): boolean {
-  // IPv4 checks
-  const v4Parts = ip.split(".");
-  if (v4Parts.length === 4) {
-    const a = Number(v4Parts[0]);
-    const b = Number(v4Parts[1]);
-    if (a === 10) return true; // 10.0.0.0/8
-    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-    if (a === 192 && b === 168) return true; // 192.168.0.0/16
-    if (a === 127) return true; // 127.0.0.0/8
-    if (a === 169 && b === 254) return true; // 169.254.0.0/16
-    if (a === 0) return true; // 0.0.0.0/8
-  }
-
-  // IPv6 checks
-  const normalized = ip.toLowerCase();
-  if (normalized === "::1") return true;
-  if (normalized === "::") return true;
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fe80")) return true;
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
-
-  return false;
-}
+export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Resolve a hostname via DNS and reject private/reserved IPs.
