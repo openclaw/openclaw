@@ -20,6 +20,15 @@ import {
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+import {
+  listMattermostDirectoryGroups,
+  listMattermostDirectoryPeers,
+} from "./mattermost/directory.js";
+import {
+  buildButtonAttachments,
+  resolveInteractionCallbackUrl,
+  setInteractionSecret,
+} from "./mattermost/interactions.js";
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
@@ -30,62 +39,91 @@ import { getMattermostRuntime } from "./runtime.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
-    const baseReactions = actionsConfig?.reactions;
-    const hasReactionCapableAccount = listMattermostAccountIds(cfg)
+    const enabledAccounts = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()))
-      .some((account) => {
-        const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-        return (accountActions?.reactions ?? baseReactions ?? true) !== false;
-      });
+      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 
-    if (!hasReactionCapableAccount) {
-      return [];
+    const actions: ChannelMessageActionName[] = [];
+
+    // Send (buttons) is available whenever there's at least one enabled account
+    if (enabledAccounts.length > 0) {
+      actions.push("send");
     }
 
-    return ["react"];
+    // React requires per-account reactions config check
+    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+    const baseReactions = actionsConfig?.reactions;
+    const hasReactionCapableAccount = enabledAccounts.some((account) => {
+      const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+      return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+    });
+    if (hasReactionCapableAccount) {
+      actions.push("react");
+    }
+
+    return actions;
   },
   supportsAction: ({ action }) => {
-    return action === "react";
+    return action === "send" || action === "react";
+  },
+  supportsButtons: ({ cfg }) => {
+    const accounts = listMattermostAccountIds(cfg)
+      .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
+      .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
+    return accounts.length > 0;
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
-    if (action !== "react") {
-      throw new Error(`Mattermost action ${action} not supported`);
-    }
-    // Check reactions gate: per-account config takes precedence over base config
-    const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-    const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-    const acctConfig = accounts?.[resolvedAccountId];
-    const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
-    const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-    const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
-    if (!reactionsEnabled) {
-      throw new Error("Mattermost reactions are disabled in config");
-    }
+    if (action === "react") {
+      // Check reactions gate: per-account config takes precedence over base config
+      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
+      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
+      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+      const acctConfig = accounts?.[resolvedAccountId];
+      const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
+      const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
+      const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+      if (!reactionsEnabled) {
+        throw new Error("Mattermost reactions are disabled in config");
+      }
 
-    const postIdRaw =
-      typeof (params as any)?.messageId === "string"
-        ? (params as any).messageId
-        : typeof (params as any)?.postId === "string"
-          ? (params as any).postId
-          : "";
-    const postId = postIdRaw.trim();
-    if (!postId) {
-      throw new Error("Mattermost react requires messageId (post id)");
-    }
+      const postIdRaw =
+        typeof (params as any)?.messageId === "string"
+          ? (params as any).messageId
+          : typeof (params as any)?.postId === "string"
+            ? (params as any).postId
+            : "";
+      const postId = postIdRaw.trim();
+      if (!postId) {
+        throw new Error("Mattermost react requires messageId (post id)");
+      }
 
-    const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
-    const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
-    if (!emojiName) {
-      throw new Error("Mattermost react requires emoji");
-    }
+      const emojiRaw = typeof (params as any)?.emoji === "string" ? (params as any).emoji : "";
+      const emojiName = emojiRaw.trim().replace(/^:+|:+$/g, "");
+      if (!emojiName) {
+        throw new Error("Mattermost react requires emoji");
+      }
 
-    const remove = (params as any)?.remove === true;
-    if (remove) {
-      const result = await removeMattermostReaction({
+      const remove = (params as any)?.remove === true;
+      if (remove) {
+        const result = await removeMattermostReaction({
+          cfg,
+          postId,
+          emojiName,
+          accountId: resolvedAccountId,
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        return {
+          content: [
+            { type: "text" as const, text: `Removed reaction :${emojiName}: from ${postId}` },
+          ],
+          details: {},
+        };
+      }
+
+      const result = await addMattermostReaction({
         cfg,
         postId,
         emojiName,
@@ -94,26 +132,91 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       if (!result.ok) {
         throw new Error(result.error);
       }
+
       return {
-        content: [
-          { type: "text" as const, text: `Removed reaction :${emojiName}: from ${postId}` },
-        ],
+        content: [{ type: "text" as const, text: `Reacted with :${emojiName}: on ${postId}` }],
         details: {},
       };
     }
 
-    const result = await addMattermostReaction({
-      cfg,
-      postId,
-      emojiName,
-      accountId: resolvedAccountId,
-    });
-    if (!result.ok) {
-      throw new Error(result.error);
+    if (action !== "send") {
+      throw new Error(`Unsupported Mattermost action: ${action}`);
     }
 
+    // Send action with optional interactive buttons
+    const to =
+      typeof params.to === "string"
+        ? params.to.trim()
+        : typeof params.target === "string"
+          ? params.target.trim()
+          : "";
+    if (!to) {
+      throw new Error("Mattermost send requires a target (to).");
+    }
+
+    const message = typeof params.message === "string" ? params.message : "";
+    const replyToId = typeof params.replyToId === "string" ? params.replyToId : undefined;
+    const resolvedAccountId = accountId || undefined;
+
+    // Build props with button attachments if buttons are provided
+    let props: Record<string, unknown> | undefined;
+    if (params.buttons && Array.isArray(params.buttons)) {
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      if (account.botToken) setInteractionSecret(account.botToken);
+      const callbackUrl = resolveInteractionCallbackUrl(account.accountId, cfg);
+
+      // Flatten 2D array (rows of buttons) to 1D — core schema sends Array<Array<Button>>
+      // but Mattermost doesn't have row layout, so we flatten all rows into a single list.
+      // Also supports 1D arrays for backward compatibility.
+      const rawButtons = (params.buttons as Array<unknown>).flatMap((item) =>
+        Array.isArray(item) ? item : [item],
+      ) as Array<Record<string, unknown>>;
+
+      const buttons = rawButtons
+        .map((btn) => ({
+          id: String(btn.id ?? btn.callback_data ?? ""),
+          name: String(btn.text ?? btn.name ?? btn.label ?? ""),
+          style: (btn.style as "default" | "primary" | "danger") ?? "default",
+          context:
+            typeof btn.context === "object" && btn.context !== null
+              ? (btn.context as Record<string, unknown>)
+              : undefined,
+        }))
+        .filter((btn) => btn.id && btn.name);
+
+      const attachmentText =
+        typeof params.attachmentText === "string" ? params.attachmentText : undefined;
+      props = {
+        attachments: buildButtonAttachments({
+          callbackUrl,
+          buttons,
+          text: attachmentText,
+        }),
+      };
+    }
+
+    const mediaUrl =
+      typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+
+    const result = await sendMessageMattermost(to, message, {
+      accountId: resolvedAccountId,
+      replyToId,
+      props,
+      mediaUrl,
+    });
+
     return {
-      content: [{ type: "text" as const, text: `Reacted with :${emojiName}: on ${postId}` }],
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            ok: true,
+            channel: "mattermost",
+            messageId: result.messageId,
+            channelId: result.channelId,
+          }),
+        },
+      ],
       details: {},
     };
   },
@@ -242,6 +345,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     resolveRequireMention: resolveMattermostGroupRequireMention,
   },
   actions: mattermostMessageActions,
+  directory: {
+    listGroups: async (params) => listMattermostDirectoryGroups(params),
+    listGroupsLive: async (params) => listMattermostDirectoryGroups(params),
+    listPeers: async (params) => listMattermostDirectoryPeers(params),
+    listPeersLive: async (params) => listMattermostDirectoryPeers(params),
+  },
   messaging: {
     normalizeTarget: normalizeMattermostMessagingTarget,
     targetResolver: {
