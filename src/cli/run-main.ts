@@ -79,6 +79,14 @@ export async function runCli(argv: string[] = process.argv) {
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
   enableConsoleCapture();
 
+  // For completion command, route all logs to stderr immediately to prevent
+  // plugin/config logs from corrupting the generated completion script.
+  const [primaryCmd] = getCommandPath(normalizedArgv, 1);
+  if (primaryCmd === "completion") {
+    const { routeLogsToStderr } = await import("../logging/console.js");
+    routeLogsToStderr();
+  }
+
   const { buildProgram } = await import("./program.js");
   const program = buildProgram();
 
