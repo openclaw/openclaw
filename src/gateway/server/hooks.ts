@@ -86,11 +86,19 @@ export function createGatewayHooksRequestHandler(params: {
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-          sessionKey: mainSessionKey,
-        });
-        if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}` });
+        // Skip the summary + heartbeat wake when the isolated run already
+        // delivered its output to the target channel (via the announce flow
+        // or direct outbound delivery).  Posting the summary to the main
+        // session would wake the main agent and cause a duplicate message.
+        // This mirrors the same guard in executeJobCore (cron service path).
+        // See: https://github.com/openclaw/openclaw/issues/15692
+        if (!result.delivered) {
+          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+            sessionKey: mainSessionKey,
+          });
+          if (value.wakeMode === "now") {
+            requestHeartbeatNow({ reason: `hook:${jobId}` });
+          }
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
