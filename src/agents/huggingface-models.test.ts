@@ -4,6 +4,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
   isHuggingfacePolicyLocked,
+  modelIdForHfInferenceClient,
 } from "./huggingface-models.js";
 
 describe("huggingface-models", () => {
@@ -39,6 +40,36 @@ describe("huggingface-models", () => {
     it("returns false for base ref and :provider refs", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1")).toBe(false);
       expect(isHuggingfacePolicyLocked("huggingface/foo:together")).toBe(false);
+    });
+  });
+
+  describe("modelIdForHfInferenceClient", () => {
+    it("strips huggingface/ prefix so HF client never receives it", () => {
+      expect(modelIdForHfInferenceClient("huggingface/deepseek-ai/DeepSeek-R1")).toBe(
+        "deepseek-ai/DeepSeek-R1",
+      );
+      expect(modelIdForHfInferenceClient("huggingface/Qwen/Qwen3-8B")).toBe("Qwen/Qwen3-8B");
+    });
+    it("preserves routing tags (:cheapest, :fastest, :provider)", () => {
+      expect(modelIdForHfInferenceClient("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(
+        "deepseek-ai/DeepSeek-R1:cheapest",
+      );
+      expect(modelIdForHfInferenceClient("huggingface/deepseek-ai/DeepSeek-R1:fastest")).toBe(
+        "deepseek-ai/DeepSeek-R1:fastest",
+      );
+      expect(modelIdForHfInferenceClient("huggingface/deepseek-ai/DeepSeek-R1:together")).toBe(
+        "deepseek-ai/DeepSeek-R1:together",
+      );
+    });
+    it("returns id unchanged when no prefix", () => {
+      expect(modelIdForHfInferenceClient("deepseek-ai/DeepSeek-R1")).toBe(
+        "deepseek-ai/DeepSeek-R1",
+      );
+      expect(modelIdForHfInferenceClient("Qwen/Qwen3-8B:cheapest")).toBe("Qwen/Qwen3-8B:cheapest");
+    });
+    it("handles mixed-case prefix correctly", () => {
+      expect(modelIdForHfInferenceClient("HuggingFace/model")).toBe("model");
+      expect(modelIdForHfInferenceClient("HUGGINGFACE/model:cheapest")).toBe("model:cheapest");
     });
   });
 });

@@ -78,41 +78,6 @@ function buildConfig(params: {
   } as ClawdbotConfig;
 }
 
-async function withRunningWebhookMonitor(
-  params: {
-    accountId: string;
-    path: string;
-    verificationToken: string;
-  },
-  run: (url: string) => Promise<void>,
-) {
-  const port = await getFreePort();
-  const cfg = buildConfig({
-    accountId: params.accountId,
-    path: params.path,
-    port,
-    verificationToken: params.verificationToken,
-  });
-
-  const abortController = new AbortController();
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const monitorPromise = monitorFeishuProvider({
-    config: cfg,
-    runtime,
-    abortSignal: abortController.signal,
-  });
-
-  const url = `http://127.0.0.1:${port}${params.path}`;
-  await waitUntilServerReady(url);
-
-  try {
-    await run(url);
-  } finally {
-    abortController.abort();
-    await monitorPromise;
-  }
-}
-
 afterEach(() => {
   stopFeishuMonitor();
 });
@@ -134,50 +99,76 @@ describe("Feishu webhook security hardening", () => {
 
   it("returns 415 for POST requests without json content type", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-    await withRunningWebhookMonitor(
-      {
-        accountId: "content-type",
-        path: "/hook-content-type",
-        verificationToken: "verify_token",
-      },
-      async (url) => {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "text/plain" },
-          body: "{}",
-        });
+    const port = await getFreePort();
+    const path = "/hook-content-type";
+    const cfg = buildConfig({
+      accountId: "content-type",
+      path,
+      port,
+      verificationToken: "verify_token",
+    });
 
-        expect(response.status).toBe(415);
-        expect(await response.text()).toBe("Unsupported Media Type");
-      },
-    );
+    const abortController = new AbortController();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
+
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(415);
+    expect(await response.text()).toBe("Unsupported Media Type");
+
+    abortController.abort();
+    await monitorPromise;
   });
 
   it("rate limits webhook burst traffic with 429", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-    await withRunningWebhookMonitor(
-      {
-        accountId: "rate-limit",
-        path: "/hook-rate-limit",
-        verificationToken: "verify_token",
-      },
-      async (url) => {
-        let saw429 = false;
-        for (let i = 0; i < 130; i += 1) {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: { "content-type": "text/plain" },
-            body: "{}",
-          });
-          if (response.status === 429) {
-            saw429 = true;
-            expect(await response.text()).toBe("Too Many Requests");
-            break;
-          }
-        }
+    const port = await getFreePort();
+    const path = "/hook-rate-limit";
+    const cfg = buildConfig({
+      accountId: "rate-limit",
+      path,
+      port,
+      verificationToken: "verify_token",
+    });
 
-        expect(saw429).toBe(true);
-      },
-    );
+    const abortController = new AbortController();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
+
+    let saw429 = false;
+    for (let i = 0; i < 130; i += 1) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "{}",
+      });
+      if (response.status === 429) {
+        saw429 = true;
+        expect(await response.text()).toBe("Too Many Requests");
+        break;
+      }
+    }
+
+    expect(saw429).toBe(true);
+
+    abortController.abort();
+    await monitorPromise;
   });
 });

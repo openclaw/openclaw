@@ -1,7 +1,6 @@
 import type { MSTeamsConfig } from "openclaw/plugin-sdk";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type GraphUser = {
@@ -22,6 +21,18 @@ export type GraphChannel = {
 };
 
 export type GraphResponse<T> = { value?: T[] };
+
+function readAccessToken(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const token =
+      (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
+    return typeof token === "string" ? token : null;
+  }
+  return null;
+}
 
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
