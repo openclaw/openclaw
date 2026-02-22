@@ -2005,8 +2005,8 @@
 
 .agents-overview-grid {
   display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
 .agent-kv {
@@ -2659,6 +2659,67 @@
 }
 
 /* ===========================================
+   Debug Event Log
+   =========================================== */
+
+.debug-event-log-scroll {
+  margin-top: 12px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.debug-event-entry {
+  border-bottom: 1px solid var(--border);
+}
+
+.debug-event-entry:last-child {
+  border-bottom: none;
+}
+
+.debug-event-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 13px;
+  list-style: none;
+}
+
+.debug-event-summary::-webkit-details-marker {
+  display: none;
+}
+
+.debug-event-summary::before {
+  content: "▸";
+  flex-shrink: 0;
+  width: 12px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.debug-event-entry[open] > .debug-event-summary::before {
+  transform: rotate(90deg);
+}
+
+.debug-event-name {
+  font-weight: 600;
+}
+
+.debug-event-ts {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.debug-event-payload {
+  margin: 0 0 8px 22px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ===========================================
    Overview Event Log
    =========================================== */
 
@@ -2838,8 +2899,10 @@
 
 .ov-bottom-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 14px;
+  max-height: 420px;
+  overflow-y: auto;
 }
 
 @media (max-width: 768px) {
