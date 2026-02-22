@@ -104,4 +104,19 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
   });
+
+  it("clarifies approvals.exec forwarding-only behavior", async () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: false,
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("disables approval forwarding only");
+    expect(message).toContain("exec-approvals.json");
+    expect(message).toContain("openclaw approvals get --gateway");
+  });
 });
