@@ -1430,6 +1430,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterDisplayKey: "agent:main:subagent:orchestrator",
       ...defaultOutcomeAnnounce,
+      timeoutMs: 100,
     });
 
     expect(didAnnounce).toBe(true);

@@ -124,6 +124,10 @@ are treated as allowlisted on nodes (macOS node or headless node host). This use
 `tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
 that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
 positional file args and path-like tokens, so they can only operate on the incoming stream.
+Treat this as a narrow fast-path for stream filters, not a general trust list.
+Do **not** add interpreter or runtime binaries (for example `python3`, `node`, `ruby`, `bash`, `sh`, `zsh`) to `safeBins`.
+If a command can evaluate code, execute subcommands, or read files by design, prefer explicit allowlist entries and keep approval prompts enabled.
+Custom safe bins must define an explicit profile in `tools.exec.safeBinProfiles.<bin>`.
 Validation is deterministic from argv shape only (no host filesystem existence checks), which
 prevents file-existence oracle behavior from allow/deny differences.
 File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
@@ -155,6 +159,8 @@ double quotes; use single quotes if you need literal `$()` text.
 On macOS companion-app approvals, raw shell text containing shell control or expansion syntax
 (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss unless
 the shell binary itself is allowlisted.
+For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped env overrides are reduced to a
+small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
 
 Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
@@ -162,6 +168,44 @@ Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 their non-stdin workflows.
 For `grep` in safe-bin mode, provide the pattern with `-e`/`--regexp`; positional pattern form is
 rejected so file operands cannot be smuggled as ambiguous positionals.
+
+### Safe bins versus allowlist
+
+| Topic            | `tools.exec.safeBins`                                  | Allowlist (`exec-approvals.json`)                            |
+| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------ |
+| Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                        |
+| Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob pattern                        |
+| Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility |
+| Typical examples | `jq`, `head`, `tail`, `wc`                             | `python3`, `node`, `ffmpeg`, custom CLIs                     |
+| Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects               |
+
+Configuration location:
+
+- `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
+- `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
+- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
+- `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
+- `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
+
+Custom profile example:
+
+```json5
+{
+  tools: {
+    exec: {
+      safeBins: ["jq", "myfilter"],
+      safeBinProfiles: {
+        myfilter: {
+          minPositional: 0,
+          maxPositional: 0,
+          allowedValueFlags: ["-n", "--limit"],
+          deniedFlags: ["-f", "--file", "-c", "--command"],
+        },
+      },
+    },
+  },
+}
+```
 
 ## Control UI editing
 

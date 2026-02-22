@@ -14,6 +14,7 @@ const allowedTags = [
   "br",
   "code",
   "del",
+  "details",
   "em",
   "h1",
   "h2",
@@ -26,6 +27,7 @@ const allowedTags = [
   "p",
   "pre",
   "strong",
+  "summary",
   "table",
   "tbody",
   "td",
@@ -131,6 +133,35 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
 // pages) as formatted output is confusing UX (#13937).
 const htmlEscapeRenderer = new marked.Renderer();
 htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
+
+htmlEscapeRenderer.code = ({
+  text,
+  lang,
+  escaped,
+}: {
+  text: string;
+  lang?: string;
+  escaped?: boolean;
+}) => {
+  const langClass = lang ? ` class="language-${lang}"` : "";
+  const safeText = escaped ? text : escapeHtml(text);
+  const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
+
+  const trimmed = text.trim();
+  const isJson =
+    lang === "json" ||
+    (!lang &&
+      ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))));
+
+  if (isJson) {
+    const lineCount = text.split("\n").length;
+    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
+    return `<details class="json-collapse"><summary>${label}</summary>${codeBlock}</details>`;
+  }
+
+  return codeBlock;
+};
 
 function escapeHtml(value: string): string {
   return value

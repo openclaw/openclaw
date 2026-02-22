@@ -133,6 +133,19 @@ export type {
   MSTeamsTeamConfig,
 } from "../config/types.js";
 export {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resetMissingProviderGroupPolicyFallbackWarningsForTesting,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveRuntimeGroupPolicy,
+  type GroupPolicyDefaultsConfig,
+  type RuntimeGroupPolicyResolution,
+  type RuntimeGroupPolicyParams,
+  type ResolveProviderRuntimeGroupPolicyParams,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
+export {
   DiscordConfigSchema,
   GoogleChatConfigSchema,
   IMessageConfigSchema,

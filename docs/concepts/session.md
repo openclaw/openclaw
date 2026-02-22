@@ -49,6 +49,7 @@ Use `session.dmScope` to control how **direct messages** are grouped:
 Notes:
 
 - Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
+- Local CLI onboarding writes `session.dmScope: "per-channel-peer"` by default when unset (existing explicit values are preserved).
 - For multi-account inboxes on the same channel, prefer `per-account-channel-peer`.
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
 - You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).

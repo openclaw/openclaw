@@ -217,7 +217,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
 
-    let message = request.message.trim();
+    let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
       try {
@@ -695,7 +695,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const runId = p.runId.trim();
+    const runId = (p.runId ?? "").trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))

@@ -148,6 +148,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries must be numeric Telegram user IDs.
+    Runtime note: if `channels.telegram` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group policy evaluation (even if `channels.defaults.groupPolicy` is set).
 
     Example: allow any member in one specific group:
 
@@ -670,6 +671,25 @@ openclaw message send --channel telegram --target @name --message "hi"
 
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.
     - Some hosts resolve `api.telegram.org` to IPv6 first; broken IPv6 egress can cause intermittent Telegram API failures.
+    - If logs include `TypeError: fetch failed` or `Network request for 'getUpdates' failed!`, OpenClaw now retries these as recoverable network errors.
+    - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through `channels.telegram.proxy`:
+
+```yaml
+channels:
+  telegram:
+    proxy: socks5://user:pass@proxy-host:1080
+```
+
+    - If DNS/IPv6 selection is unstable, force Node family selection behavior explicitly:
+
+```yaml
+channels:
+  telegram:
+    network:
+      autoSelectFamily: false
+```
+
+    - Environment override (temporary): set `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`.
     - Validate DNS answers:
 
 ```bash

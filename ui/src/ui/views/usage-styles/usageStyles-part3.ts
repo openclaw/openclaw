@@ -121,7 +121,7 @@ export const usageStylesPart3 = `
   .sessions-card .session-bar-row.selected {
     border-color: var(--accent);
     background: var(--accent-subtle);
-    box-shadow: inset 0 0 0 1px rgba(255, 77, 77, 0.15);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent);
   }
   .sessions-card .session-bar-label {
     flex: 1 1 auto;
@@ -139,7 +139,7 @@ export const usageStylesPart3 = `
     opacity: 0.5;
   }
   .sessions-card .session-bar-fill {
-    background: rgba(255, 77, 77, 0.55);
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
   }
   .sessions-clear-btn {
     margin-left: auto;

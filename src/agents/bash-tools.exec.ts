@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, maxAsk, minSecurity, resolveSafeBins } from "../infra/exec-approvals.js";
-import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -163,8 +163,28 @@ export function createExecTool(
       ? defaults.timeoutSec
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
-  const safeBins = resolveSafeBins(defaults?.safeBins);
-  const trustedSafeBinDirs = getTrustedSafeBinDirs();
+  const {
+    safeBins,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    unprofiledSafeBins,
+    unprofiledInterpreterSafeBins,
+  } = resolveExecSafeBinRuntimePolicy({
+    local: {
+      safeBins: defaults?.safeBins,
+      safeBinProfiles: defaults?.safeBinProfiles,
+    },
+  });
+  if (unprofiledSafeBins.length > 0) {
+    logInfo(
+      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+    );
+  }
+  if (unprofiledInterpreterSafeBins.length > 0) {
+    logInfo(
+      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+    );
+  }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
@@ -404,6 +424,7 @@ export function createExecTool(
           security,
           ask,
           safeBins,
+          safeBinProfiles,
           agentId,
           sessionKey: defaults?.sessionKey,
           scopeKey: defaults?.scopeKey,

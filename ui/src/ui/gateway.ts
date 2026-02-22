@@ -61,6 +61,13 @@ export type GatewayBrowserClientOptions = {
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+const DEFAULT_OPERATOR_CONNECT_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.pairing",
+];
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
@@ -102,6 +109,13 @@ export class GatewayBrowserClient {
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason });
+      // 1008 = Policy Violation (gateway auth rejection).
+      // Don't auto-reconnect on auth failures — surface the login gate
+      // so the user can fix their token/password instead of looping.
+      if (ev.code === 1008) {
+        this.closed = true;
+        return;
+      }
       this.scheduleReconnect();
     });
     this.ws.addEventListener("error", () => {
@@ -145,10 +159,9 @@ export class GatewayBrowserClient {
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
 
-    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+    const scopes = DEFAULT_OPERATOR_CONNECT_SCOPES;
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
-    let canFallbackToShared = false;
     let authToken = this.opts.token;
 
     if (isSecureContext) {
@@ -158,7 +171,6 @@ export class GatewayBrowserClient {
         role,
       })?.token;
       authToken = storedToken ?? this.opts.token;
-      canFallbackToShared = Boolean(storedToken && this.opts.token);
     }
     const auth =
       authToken || this.opts.password
@@ -232,7 +244,11 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch(() => {
-        if (canFallbackToShared && deviceIdentity) {
+        // Clear stale device token on any connect failure so the next attempt
+        // falls back to the shared gateway token (if present) or retries without
+        // a cached device token. Without this, a rotated/revoked device token
+        // causes an infinite mismatch loop when no shared token is configured.
+        if (deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
