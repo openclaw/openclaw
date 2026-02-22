@@ -11,6 +11,10 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
@@ -692,6 +696,65 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         "With sandbox mode off, exec runs directly on the gateway host.",
       remediation:
         'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+    });
+  }
+
+  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    return Array.from(
+      new Set(
+        entries
+          .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+          .filter((entry) => entry.length > 0),
+      ),
+    ).toSorted();
+  };
+  const interpreterHits: string[] = [];
+  const globalExec = cfg.tools?.exec;
+  const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
+  if (globalSafeBins.length > 0) {
+    const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length > 0) {
+      interpreterHits.push(`- tools.exec.safeBins: ${interpreters.join(", ")}`);
+    }
+  }
+
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const agentExec = entry.tools?.exec;
+    const agentSafeBins = normalizeConfiguredSafeBins(agentExec?.safeBins);
+    if (agentSafeBins.length === 0) {
+      continue;
+    }
+    const merged =
+      resolveMergedSafeBinProfileFixtures({
+        global: globalExec,
+        local: agentExec,
+      }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length === 0) {
+      continue;
+    }
+    interpreterHits.push(
+      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+    );
+  }
+
+  if (interpreterHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bins_interpreter_unprofiled",
+      severity: "warn",
+      title: "safeBins includes interpreter/runtime binaries without explicit profiles",
+      detail:
+        `Detected interpreter-like safeBins entries missing explicit profiles:\n${interpreterHits.join("\n")}\n` +
+        "These entries can turn safeBins into a broad execution surface when used with permissive argv profiles.",
+      remediation:
+        "Remove interpreter/runtime bins from safeBins (prefer allowlist entries) or define hardened tools.exec.safeBinProfiles.<bin> rules.",
     });
   }
 

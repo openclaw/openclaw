@@ -11,15 +11,13 @@ import {
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
-  resolveSafeBins,
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
-import { resolveSafeBinProfiles } from "../infra/exec-safe-bin-policy.js";
-import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type {
@@ -116,12 +114,10 @@ export async function handleSystemRunInvoke(opts: {
     shellWrapper: shellCommand !== null,
   });
   const env = opts.sanitizeEnv(envOverrides);
-  const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
-  const safeBinProfiles = resolveSafeBinProfiles({
-    ...cfg.tools?.exec?.safeBinProfiles,
-    ...agentExec?.safeBinProfiles,
+  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
+    global: cfg.tools?.exec,
+    local: agentExec,
   });
-  const trustedSafeBinDirs = getTrustedSafeBinDirs();
   const bins = autoAllowSkills ? await opts.skillBins.current() : new Set<string>();
   let analysisOk = false;
   let allowlistMatches: ExecAllowlistEntry[] = [];
