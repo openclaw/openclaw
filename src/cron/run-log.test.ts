@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendCronRunLog, readCronRunLogEntries, resolveCronRunLogPath } from "./run-log.js";
+import {
+  appendCronRunLog,
+  getPendingCronRunLogWriteCountForTests,
+  readCronRunLogEntries,
+  resolveCronRunLogPath,
+} from "./run-log.js";
 
 describe("cron run log", () => {
   async function withRunLogDir(prefix: string, run: (dir: string) => Promise<void>) {
@@ -183,6 +188,20 @@ describe("cron run log", () => {
       expect(entries[1]?.model).toBeUndefined();
       expect(entries[1]?.provider).toBeUndefined();
       expect(entries[1]?.usage?.input_tokens).toBeUndefined();
+    });
+  });
+
+  it("cleans up pending-write bookkeeping after appends complete", async () => {
+    await withRunLogDir("openclaw-cron-log-pending-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-cleanup.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-cleanup",
+        action: "finished",
+        status: "ok",
+      });
+
+      expect(getPendingCronRunLogWriteCountForTests()).toBe(0);
     });
   });
 });
