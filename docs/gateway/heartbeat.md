@@ -85,6 +85,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
     defaults: {
       heartbeat: {
         every: "30m", // default: 30m (0m disables)
+        agentId: "ops", // optional: route default heartbeat to a specific agent
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         target: "last", // last | none | <channel id> (core or plugin, e.g. "bluebubbles")
@@ -97,6 +98,34 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
   },
 }
 ```
+
+### Default heartbeat agent routing
+
+By default, when no per-agent `heartbeat` blocks exist, the heartbeat runs as the
+default agent. Set `agents.defaults.heartbeat.agentId` to route the default
+heartbeat to a different agent — without needing to duplicate the heartbeat config
+into per-agent blocks:
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m",
+        agentId: "ops", // heartbeat runs as "ops" agent
+        target: "last",
+      },
+    },
+    list: [{ id: "main", default: true }, { id: "ops" }],
+  },
+}
+```
+
+This is simpler than the alternative of disabling the main heartbeat (`every: "0m"`)
+and adding a separate `heartbeat` block to the ops agent.
+
+**Note:** if any `agents.list[]` entry has a `heartbeat` block, `agentId` is
+ignored — per-agent blocks take full control of which agents run heartbeats.
 
 ### Scope and precedence
 
@@ -204,6 +233,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 ### Field notes
 
+- `agentId`: optional agent id to run the default heartbeat as. Ignored when per-agent heartbeat blocks exist.
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).

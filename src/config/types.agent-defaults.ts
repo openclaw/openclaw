@@ -200,6 +200,20 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
+    /**
+     * Agent id to run heartbeats as (when no per-agent heartbeat blocks exist).
+     *
+     * By default, the heartbeat runs as the default agent. Set this to route
+     * the default heartbeat to a different agent without needing to duplicate
+     * the heartbeat config into `agents.list[].heartbeat`.
+     *
+     * Example: `agentId: "ops"` — heartbeats run as the "ops" agent using
+     * the defaults heartbeat config, without needing a per-agent block.
+     *
+     * Note: if any `agents.list[]` entry has a `heartbeat` block, this field
+     * is ignored (per-agent heartbeat blocks take full control).
+     */
+    agentId?: string;
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */

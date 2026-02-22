@@ -133,6 +133,11 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
+  // When agents.defaults.heartbeat.agentId is set, only that agent runs heartbeats.
+  const defaultHeartbeatAgentId = cfg.agents?.defaults?.heartbeat?.agentId;
+  if (defaultHeartbeatAgentId) {
+    return resolvedAgentId === normalizeAgentId(defaultHeartbeatAgentId);
+  }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
 
@@ -210,7 +215,11 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       })
       .filter((entry) => entry.agentId);
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
+  // Use agents.defaults.heartbeat.agentId if set, otherwise fall back to the default agent.
+  const defaultHeartbeatAgentId = cfg.agents?.defaults?.heartbeat?.agentId;
+  const fallbackId = defaultHeartbeatAgentId
+    ? normalizeAgentId(defaultHeartbeatAgentId)
+    : resolveDefaultAgentId(cfg);
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
 }
 
