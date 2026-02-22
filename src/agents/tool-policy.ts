@@ -7,6 +7,28 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
+/** Canonical list of all Hanzo Bot native tools (excludes provider plugins). */
+const BOT_NATIVE_TOOLS: string[] = [
+  "browser",
+  "canvas",
+  "nodes",
+  "cron",
+  "message",
+  "gateway",
+  "agents_list",
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+  "subagents",
+  "session_status",
+  "memory_search",
+  "memory_get",
+  "web_search",
+  "web_fetch",
+  "image",
+];
+
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
@@ -38,26 +60,11 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   // Nodes + device tools
   "group:nodes": ["nodes"],
   // All Hanzo Bot native tools (excludes provider plugins).
-  "group:bot": [
-    "browser",
-    "canvas",
-    "nodes",
-    "cron",
-    "message",
-    "gateway",
-    "agents_list",
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "sessions_spawn",
-    "subagents",
-    "session_status",
-    "memory_search",
-    "memory_get",
-    "web_search",
-    "web_fetch",
-    "image",
-  ],
+  "group:bot": BOT_NATIVE_TOOLS,
+  // Legacy aliases for formal-model conformance (clawdbot -> moltbot -> openclaw -> bot).
+  "group:clawdbot": BOT_NATIVE_TOOLS,
+  "group:openclaw": BOT_NATIVE_TOOLS,
+  "group:moltbot": BOT_NATIVE_TOOLS,
 };
 
 const OWNER_ONLY_TOOL_NAMES = new Set<string>(["whatsapp_login"]);

@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           cd bot-formal-models
-          export BOT_REPO_DIR="${GITHUB_WORKSPACE}/bot"
+          export OPENCLAW_REPO_DIR="${GITHUB_WORKSPACE}/bot"
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
 
