@@ -17,6 +17,7 @@ import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-mode
 
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
+const GATEWAY_E2E_TIMEOUT_MS = 30_000;
 
 describe("gateway e2e", () => {
   beforeAll(async () => {
@@ -25,7 +26,7 @@ describe("gateway e2e", () => {
 
   it(
     "runs a mock OpenAI tool call end-to-end via gateway agent loop",
-    { timeout: 90_000 },
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
       const envSnapshot = captureEnv([
         "HOME",
@@ -120,119 +121,123 @@ describe("gateway e2e", () => {
     },
   );
 
-  it("runs wizard over ws and writes auth token config", { timeout: 90_000 }, async () => {
-    const envSnapshot = captureEnv([
-      "HOME",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_SKIP_CHANNELS",
-      "OPENCLAW_SKIP_GMAIL_WATCHER",
-      "OPENCLAW_SKIP_CRON",
-      "OPENCLAW_SKIP_CANVAS_HOST",
-      "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-    ]);
+  it(
+    "runs wizard over ws and writes auth token config",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const envSnapshot = captureEnv([
+        "HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_SKIP_CHANNELS",
+        "OPENCLAW_SKIP_GMAIL_WATCHER",
+        "OPENCLAW_SKIP_CRON",
+        "OPENCLAW_SKIP_CANVAS_HOST",
+        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+      ]);
 
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-    process.env.OPENCLAW_SKIP_CRON = "1";
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-    process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_SKIP_CHANNELS = "1";
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+      process.env.OPENCLAW_SKIP_CRON = "1";
+      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
-    process.env.HOME = tempHome;
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
+      process.env.HOME = tempHome;
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_CONFIG_PATH;
 
-    const wizardToken = `wiz-${randomUUID()}`;
-    const port = await getFreeGatewayPort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token: wizardToken },
-      controlUiEnabled: false,
-      wizardRunner: async (_opts, _runtime, prompter) => {
-        await prompter.intro("Wizard E2E");
-        await prompter.note("write token");
-        const token = await prompter.text({ message: "token" });
-        await writeConfigFile({
-          gateway: { auth: { mode: "token", token: String(token) } },
-        });
-        await prompter.outro("ok");
-      },
-    });
+      const wizardToken = `wiz-${randomUUID()}`;
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizardToken },
+        controlUiEnabled: false,
+        wizardRunner: async (_opts, _runtime, prompter) => {
+          await prompter.intro("Wizard E2E");
+          await prompter.note("write token");
+          const token = await prompter.text({ message: "token" });
+          await writeConfigFile({
+            gateway: { auth: { mode: "token", token: String(token) } },
+          });
+          await prompter.outro("ok");
+        },
+      });
 
-    const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token: wizardToken,
-      clientDisplayName: "vitest-wizard",
-    });
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: wizardToken,
+        clientDisplayName: "vitest-wizard",
+      });
 
-    try {
-      const start = await client.request<{
-        sessionId?: string;
-        done: boolean;
-        status: "running" | "done" | "cancelled" | "error";
-        step?: {
-          id: string;
-          type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress";
-        };
-        error?: string;
-      }>("wizard.start", { mode: "local" });
-      const sessionId = start.sessionId;
-      expect(typeof sessionId).toBe("string");
+      try {
+        const start = await client.request<{
+          sessionId?: string;
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          step?: {
+            id: string;
+            type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress";
+          };
+          error?: string;
+        }>("wizard.start", { mode: "local" });
+        const sessionId = start.sessionId;
+        expect(typeof sessionId).toBe("string");
 
-      let next = start;
-      let didSendToken = false;
-      while (!next.done) {
-        const step = next.step;
-        if (!step) {
-          throw new Error("wizard missing step");
+        let next = start;
+        let didSendToken = false;
+        while (!next.done) {
+          const step = next.step;
+          if (!step) {
+            throw new Error("wizard missing step");
+          }
+          const value = step.type === "text" ? wizardToken : null;
+          if (step.type === "text") {
+            didSendToken = true;
+          }
+          next = await client.request("wizard.next", {
+            sessionId,
+            answer: { stepId: step.id, value },
+          });
         }
-        const value = step.type === "text" ? wizardToken : null;
-        if (step.type === "text") {
-          didSendToken = true;
-        }
-        next = await client.request("wizard.next", {
-          sessionId,
-          answer: { stepId: step.id, value },
-        });
+
+        expect(didSendToken).toBe(true);
+        expect(next.status).toBe("done");
+
+        const parsed = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8"));
+        const token = (parsed as Record<string, unknown>)?.gateway as
+          | Record<string, unknown>
+          | undefined;
+        expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
+      } finally {
+        client.stop();
+        await server.close({ reason: "wizard e2e complete" });
       }
 
-      expect(didSendToken).toBe(true);
-      expect(next.status).toBe("done");
-
-      const parsed = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8"));
-      const token = (parsed as Record<string, unknown>)?.gateway as
-        | Record<string, unknown>
-        | undefined;
-      expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
-    } finally {
-      client.stop();
-      await server.close({ reason: "wizard e2e complete" });
-    }
-
-    const port2 = await getFreeGatewayPort();
-    const server2 = await startGatewayServer(port2, {
-      bind: "loopback",
-      controlUiEnabled: false,
-    });
-    try {
-      const resNoToken = await connectDeviceAuthReq({
-        url: `ws://127.0.0.1:${port2}`,
+      const port2 = await getFreeGatewayPort();
+      const server2 = await startGatewayServer(port2, {
+        bind: "loopback",
+        controlUiEnabled: false,
       });
-      expect(resNoToken.ok).toBe(false);
-      expect(resNoToken.error?.message ?? "").toContain("unauthorized");
+      try {
+        const resNoToken = await connectDeviceAuthReq({
+          url: `ws://127.0.0.1:${port2}`,
+        });
+        expect(resNoToken.ok).toBe(false);
+        expect(resNoToken.error?.message ?? "").toContain("unauthorized");
 
-      const resToken = await connectDeviceAuthReq({
-        url: `ws://127.0.0.1:${port2}`,
-        token: wizardToken,
-      });
-      expect(resToken.ok).toBe(true);
-    } finally {
-      await server2.close({ reason: "wizard auth verify" });
-      await fs.rm(tempHome, { recursive: true, force: true });
-      envSnapshot.restore();
-    }
-  });
+        const resToken = await connectDeviceAuthReq({
+          url: `ws://127.0.0.1:${port2}`,
+          token: wizardToken,
+        });
+        expect(resToken.ok).toBe(true);
+      } finally {
+        await server2.close({ reason: "wizard auth verify" });
+        await fs.rm(tempHome, { recursive: true, force: true });
+        envSnapshot.restore();
+      }
+    },
+  );
 });

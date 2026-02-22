@@ -45,6 +45,23 @@ function resolve(obj: unknown, files: Record<string, unknown> = {}, basePath = D
   return resolveConfigIncludes(obj, basePath, createMockResolver(files));
 }
 
+function expectResolveIncludeError(
+  run: () => unknown,
+  expectedPattern?: RegExp,
+): ConfigIncludeError {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ConfigIncludeError);
+  if (expectedPattern) {
+    expect((thrown as Error).message).toMatch(expectedPattern);
+  }
+  return thrown as ConfigIncludeError;
+}
+
 describe("resolveConfigIncludes", () => {
   it("passes through primitives unchanged", () => {
     expect(resolve("hello")).toBe("hello");
@@ -74,8 +91,7 @@ describe("resolveConfigIncludes", () => {
     const absolute = etcOpenClawPath("agents.json");
     const files = { [absolute]: { list: [{ id: "main" }] } };
     const obj = { agents: { $include: absolute } };
-    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj, files)).toThrow(/escapes config directory/);
+    expectResolveIncludeError(() => resolve(obj, files), /escapes config directory/);
   });
 
   it("resolves array $include with deep merge", () => {
@@ -126,8 +142,8 @@ describe("resolveConfigIncludes", () => {
     for (const testCase of cases) {
       const files = { [configPath(testCase.includeFile)]: testCase.included };
       const obj = { $include: `./${testCase.includeFile}`, extra: true };
-      expect(() => resolve(obj, files), testCase.includeFile).toThrow(ConfigIncludeError);
-      expect(() => resolve(obj, files), testCase.includeFile).toThrow(
+      expectResolveIncludeError(
+        () => resolve(obj, files),
         /Sibling keys require included content to be an object/,
       );
     }
@@ -146,8 +162,7 @@ describe("resolveConfigIncludes", () => {
 
   it("throws ConfigIncludeError for missing file", () => {
     const obj = { $include: "./missing.json" };
-    expect(() => resolve(obj)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj)).toThrow(/Failed to read include file/);
+    expectResolveIncludeError(() => resolve(obj), /Failed to read include file/);
   });
 
   it("throws ConfigIncludeError for invalid JSON", () => {
@@ -156,10 +171,8 @@ describe("resolveConfigIncludes", () => {
       parseJson: JSON.parse,
     };
     const obj = { $include: "./bad.json" };
-    expect(() => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver)).toThrow(
-      ConfigIncludeError,
-    );
-    expect(() => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver)).toThrow(
+    expectResolveIncludeError(
+      () => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
       /Failed to parse include file/,
     );
   });
@@ -215,8 +228,7 @@ describe("resolveConfigIncludes", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(() => resolve(testCase.obj, files)).toThrow(ConfigIncludeError);
-      expect(() => resolve(testCase.obj, files)).toThrow(testCase.expectedPattern);
+      expectResolveIncludeError(() => resolve(testCase.obj, files), testCase.expectedPattern);
     }
   });
 
@@ -230,8 +242,7 @@ describe("resolveConfigIncludes", () => {
     files[configPath("level15.json")] = { done: true };
 
     const obj = { $include: "./level0.json" };
-    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj, files)).toThrow(/Maximum include depth/);
+    expectResolveIncludeError(() => resolve(obj, files), /Maximum include depth/);
   });
 
   it("allows depth 10 but rejects depth 11", () => {
@@ -251,8 +262,10 @@ describe("resolveConfigIncludes", () => {
       };
     }
     failFiles[configPath("fail10.json")] = { done: true };
-    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(ConfigIncludeError);
-    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(/Maximum include depth/);
+    expectResolveIncludeError(
+      () => resolve({ $include: "./fail0.json" }, failFiles),
+      /Maximum include depth/,
+    );
   });
 
   it("handles relative paths correctly", () => {
@@ -279,10 +292,8 @@ describe("resolveConfigIncludes", () => {
   it("rejects parent directory traversal escaping config directory (CWE-22)", () => {
     const files = { [sharedPath("common.json")]: { shared: true } };
     const obj = { $include: "../../shared/common.json" };
-    expect(() => resolve(obj, files, configPath("sub", "openclaw.json"))).toThrow(
-      ConfigIncludeError,
-    );
-    expect(() => resolve(obj, files, configPath("sub", "openclaw.json"))).toThrow(
+    expectResolveIncludeError(
+      () => resolve(obj, files, configPath("sub", "openclaw.json")),
       /escapes config directory/,
     );
   });
@@ -388,9 +399,9 @@ describe("security: path traversal protection (CWE-22)", () => {
       ] as const;
       for (const testCase of cases) {
         const obj = { $include: testCase.includePath };
-        expect(() => resolve(obj, {}), testCase.includePath).toThrow(ConfigIncludeError);
+        expectResolveIncludeError(() => resolve(obj, {}));
         if (testCase.expectEscapesMessage) {
-          expect(() => resolve(obj, {}), testCase.includePath).toThrow(/escapes config directory/);
+          expectResolveIncludeError(() => resolve(obj, {}), /escapes config directory/);
         }
       }
     });
@@ -407,9 +418,9 @@ describe("security: path traversal protection (CWE-22)", () => {
       ] as const;
       for (const testCase of cases) {
         const obj = { $include: testCase.includePath };
-        expect(() => resolve(obj, {}), testCase.includePath).toThrow(ConfigIncludeError);
+        expectResolveIncludeError(() => resolve(obj, {}));
         if (testCase.expectEscapesMessage) {
-          expect(() => resolve(obj, {}), testCase.includePath).toThrow(/escapes config directory/);
+          expectResolveIncludeError(() => resolve(obj, {}), /escapes config directory/);
         }
       }
     });
@@ -558,7 +569,7 @@ describe("security: path traversal protection (CWE-22)", () => {
       for (const testCase of cases) {
         const obj = { $include: testCase.includePath };
         if (testCase.expectedError) {
-          expect(() => resolve(obj, {}), testCase.includePath).toThrow(testCase.expectedError);
+          expectResolveIncludeError(() => resolve(obj, {}));
           continue;
         }
         // Path with null byte should be rejected or handled safely.

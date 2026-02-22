@@ -1,5 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
+import { typedCases } from "../test-utils/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -66,31 +67,55 @@ describe("registerDiscordListener", () => {
 });
 
 describe("DiscordMessageListener", () => {
-  it("returns before the handler finishes", async () => {
-    let handlerResolved = false;
-    let resolveHandler: (() => void) | null = null;
-    const handlerPromise = new Promise<void>((resolve) => {
-      resolveHandler = () => {
-        handlerResolved = true;
-        resolve();
-      };
+  function createDeferred() {
+    let resolve: (() => void) | null = null;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
     });
-    const handler = vi.fn(() => handlerPromise);
+    return {
+      promise,
+      resolve: () => {
+        if (typeof resolve === "function") {
+          (resolve as () => void)();
+        }
+      },
+    };
+  }
+
+  async function expectPending(promise: Promise<unknown>) {
+    let resolved = false;
+    void promise.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+  }
+
+  it("awaits the handler before returning", async () => {
+    let handlerResolved = false;
+    const deferred = createDeferred();
+    const handler = vi.fn(async () => {
+      await deferred.promise;
+      handlerResolved = true;
+    });
     const listener = new DiscordMessageListener(handler);
 
-    await listener.handle(
+    const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
 
+    // Handler should be called but not yet resolved
     expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
+    await expectPending(handlePromise);
 
-    const release = resolveHandler;
-    if (typeof release === "function") {
-      (release as () => void)();
-    }
-    await handlerPromise;
+    // Release the handler
+    deferred.resolve();
+
+    // Now await handle() - it should complete only after handler resolves
+    await handlePromise;
+    expect(handlerResolved).toBe(true);
   });
 
   it("logs handler failures", async () => {
@@ -117,29 +142,29 @@ describe("DiscordMessageListener", () => {
     vi.setSystemTime(0);
 
     try {
-      let resolveHandler: (() => void) | null = null;
-      const handlerPromise = new Promise<void>((resolve) => {
-        resolveHandler = resolve;
-      });
-      const handler = vi.fn(() => handlerPromise);
+      const deferred = createDeferred();
+      const handler = vi.fn(() => deferred.promise);
       const logger = {
         warn: vi.fn(),
         error: vi.fn(),
       } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
       const listener = new DiscordMessageListener(handler, logger);
 
-      await listener.handle(
+      // Start handle() but don't await yet
+      const handlePromise = listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
         {} as unknown as import("@buape/carbon").Client,
       );
+      await expectPending(handlePromise);
 
+      // Advance time past the slow listener threshold
       vi.setSystemTime(31_000);
-      const release = resolveHandler;
-      if (typeof release === "function") {
-        (release as () => void)();
-      }
-      await handlerPromise;
-      await Promise.resolve();
+
+      // Release the handler
+      deferred.resolve();
+
+      // Now await handle() - it should complete and log the slow listener
+      await handlePromise;
 
       expect(logger.warn).toHaveBeenCalled();
       const warnMock = logger.warn as unknown as { mock: { calls: unknown[][] } };
@@ -637,7 +662,11 @@ describe("discord autoThread name sanitization", () => {
 
 describe("discord reaction notification gating", () => {
   it("applies mode-specific reaction notification rules", () => {
-    const cases = [
+    const cases = typedCases<{
+      name: string;
+      input: Parameters<typeof shouldEmitDiscordReactionNotification>[0];
+      expected: boolean;
+    }>([
       {
         name: "unset defaults to own (author is bot)",
         input: {
@@ -705,7 +734,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
-          allowlist: [],
+          allowlist: [] as string[],
         },
         expected: false,
       },
@@ -717,16 +746,23 @@ describe("discord reaction notification gating", () => {
           messageAuthorId: "user-1",
           userId: "123",
           userName: "steipete",
-          allowlist: ["123", "other"],
+          allowlist: ["123", "other"] as string[],
         },
         expected: true,
       },
-    ] as const;
+    ]);
 
     for (const testCase of cases) {
-      expect(shouldEmitDiscordReactionNotification(testCase.input), testCase.name).toBe(
-        testCase.expected,
-      );
+      expect(
+        shouldEmitDiscordReactionNotification({
+          ...testCase.input,
+          allowlist:
+            "allowlist" in testCase.input && testCase.input.allowlist
+              ? [...testCase.input.allowlist]
+              : undefined,
+        }),
+        testCase.name,
+      ).toBe(testCase.expected);
     }
   });
 });
@@ -956,7 +992,18 @@ describe("discord reaction notification modes", () => {
   const guild = fakeGuild(guildId, "Mode Guild");
 
   it("applies message-fetch behavior across notification modes and channel types", async () => {
-    const cases = [
+    const cases = typedCases<{
+      name: string;
+      reactionNotifications: "off" | "all" | "allowlist" | "own";
+      users: string[] | undefined;
+      userId: string | undefined;
+      channelType: ChannelType;
+      channelId: string | undefined;
+      parentId: string | undefined;
+      messageAuthorId: string;
+      expectedMessageFetchCalls: number;
+      expectedEnqueueCalls: number;
+    }>([
       {
         name: "off mode",
         reactionNotifications: "off" as const,
@@ -984,7 +1031,7 @@ describe("discord reaction notification modes", () => {
       {
         name: "allowlist mode",
         reactionNotifications: "allowlist" as const,
-        users: ["123"],
+        users: ["123"] as string[],
         userId: "123",
         channelType: ChannelType.GuildText,
         channelId: undefined,
@@ -1017,7 +1064,7 @@ describe("discord reaction notification modes", () => {
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
-    ] as const;
+    ]);
 
     for (const testCase of cases) {
       enqueueSystemEventSpy.mockClear();
@@ -1040,7 +1087,7 @@ describe("discord reaction notification modes", () => {
       const guildEntries = makeEntries({
         [guildId]: {
           reactionNotifications: testCase.reactionNotifications,
-          users: testCase.users,
+          users: testCase.users ? [...testCase.users] : undefined,
         },
       });
       const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));

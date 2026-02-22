@@ -166,7 +166,7 @@ describe("buildModelsKeyboard", () => {
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
         provider: "anthropic",
-        models: testCase.params.models,
+        models: [...testCase.params.models],
         currentPage: testCase.params.currentPage,
         totalPages: 3,
         pageSize: 2,

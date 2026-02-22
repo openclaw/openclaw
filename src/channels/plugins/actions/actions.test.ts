@@ -34,6 +34,51 @@ function telegramCfg(): OpenClawConfig {
   return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
 }
 
+type TelegramActionInput = Parameters<NonNullable<typeof telegramMessageActions.handleAction>>[0];
+
+async function runTelegramAction(
+  action: TelegramActionInput["action"],
+  params: TelegramActionInput["params"],
+  options?: { cfg?: OpenClawConfig; accountId?: string },
+) {
+  const cfg = options?.cfg ?? telegramCfg();
+  const handleAction = telegramMessageActions.handleAction;
+  if (!handleAction) {
+    throw new Error("telegram handleAction unavailable");
+  }
+  await handleAction({
+    channel: "telegram",
+    action,
+    params,
+    cfg,
+    accountId: options?.accountId,
+  });
+  return { cfg };
+}
+
+type SignalActionInput = Parameters<NonNullable<typeof signalMessageActions.handleAction>>[0];
+
+async function runSignalAction(
+  action: SignalActionInput["action"],
+  params: SignalActionInput["params"],
+  options?: { cfg?: OpenClawConfig; accountId?: string },
+) {
+  const cfg =
+    options?.cfg ?? ({ channels: { signal: { account: "+15550001111" } } } as OpenClawConfig);
+  const handleAction = signalMessageActions.handleAction;
+  if (!handleAction) {
+    throw new Error("signal handleAction unavailable");
+  }
+  await handleAction({
+    channel: "signal",
+    action,
+    params,
+    cfg,
+    accountId: options?.accountId,
+  });
+  return { cfg };
+}
+
 function slackHarness() {
   const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
   const actions = createSlackActions("slack");
@@ -190,168 +235,137 @@ describe("discord message actions", () => {
 });
 
 describe("handleDiscordMessageAction", () => {
-  it("forwards context accountId for send", async () => {
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        to: "channel:123",
-        message: "hi",
+  const embeds = [{ title: "Legacy", description: "Use components v2." }];
+  const forwardingCases = [
+    {
+      name: "forwards context accountId for send",
+      input: {
+        action: "send" as const,
+        params: { to: "channel:123", message: "hi" },
+        accountId: "ops",
       },
-      cfg: {} as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expected: {
         action: "sendMessage",
         accountId: "ops",
         to: "channel:123",
         content: "hi",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards legacy embeds for send", async () => {
-    const embeds = [{ title: "Legacy", description: "Use components v2." }];
-
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        to: "channel:123",
-        message: "hi",
-        embeds,
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards legacy embeds for send",
+      input: {
+        action: "send" as const,
+        params: { to: "channel:123", message: "hi", embeds },
+      },
+      expected: {
         action: "sendMessage",
         to: "channel:123",
         content: "hi",
         embeds,
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("falls back to params accountId when context missing", async () => {
-    await handleDiscordMessageAction({
-      action: "poll",
-      params: {
-        to: "channel:123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-        accountId: "marve",
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "falls back to params accountId when context missing",
+      input: {
+        action: "poll" as const,
+        params: {
+          to: "channel:123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          accountId: "marve",
+        },
+      },
+      expected: {
         action: "poll",
         accountId: "marve",
         to: "channel:123",
         question: "Ready?",
         answers: ["Yes", "No"],
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards accountId for thread replies", async () => {
-    await handleDiscordMessageAction({
-      action: "thread-reply",
-      params: {
-        channelId: "123",
-        message: "hi",
       },
-      cfg: {} as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards accountId for thread replies",
+      input: {
+        action: "thread-reply" as const,
+        params: { channelId: "123", message: "hi" },
+        accountId: "ops",
+      },
+      expected: {
         action: "threadReply",
         accountId: "ops",
         channelId: "123",
         content: "hi",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("accepts threadId for thread replies (tool compatibility)", async () => {
-    await handleDiscordMessageAction({
-      action: "thread-reply",
-      params: {
-        // The `message` tool uses `threadId`.
-        threadId: "999",
-        // Include a conflicting channelId to ensure threadId takes precedence.
-        channelId: "123",
-        message: "hi",
       },
-      cfg: {} as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "accepts threadId for thread replies (tool compatibility)",
+      input: {
+        action: "thread-reply" as const,
+        params: {
+          threadId: "999",
+          channelId: "123",
+          message: "hi",
+        },
+        accountId: "ops",
+      },
+      expected: {
         action: "threadReply",
         accountId: "ops",
         channelId: "999",
         content: "hi",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards thread-create message as content", async () => {
-    await handleDiscordMessageAction({
-      action: "thread-create",
-      params: {
-        to: "channel:123456789",
-        threadName: "Forum thread",
-        message: "Initial forum post body",
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards thread-create message as content",
+      input: {
+        action: "thread-create" as const,
+        params: {
+          to: "channel:123456789",
+          threadName: "Forum thread",
+          message: "Initial forum post body",
+        },
+      },
+      expected: {
         action: "threadCreate",
         channelId: "123456789",
         name: "Forum thread",
         content: "Initial forum post body",
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("forwards thread edit fields for channel-edit", async () => {
-    await handleDiscordMessageAction({
-      action: "channel-edit",
-      params: {
-        channelId: "123456789",
-        archived: true,
-        locked: false,
-        autoArchiveDuration: 1440,
       },
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+    {
+      name: "forwards thread edit fields for channel-edit",
+      input: {
+        action: "channel-edit" as const,
+        params: {
+          channelId: "123456789",
+          archived: true,
+          locked: false,
+          autoArchiveDuration: 1440,
+        },
+      },
+      expected: {
         action: "channelEdit",
         channelId: "123456789",
         archived: true,
         locked: false,
         autoArchiveDuration: 1440,
-      }),
-      expect.any(Object),
-    );
-  });
+      },
+    },
+  ] as const;
+
+  for (const testCase of forwardingCases) {
+    it(testCase.name, async () => {
+      await handleDiscordMessageAction({
+        ...testCase.input,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(handleDiscordAction).toHaveBeenCalledWith(
+        expect.objectContaining(testCase.expected),
+        expect.any(Object),
+      );
+    });
+  }
 
   it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
     await handleDiscordMessageAction({
@@ -429,86 +443,83 @@ describe("telegramMessageActions", () => {
     }
   });
 
-  it("allows media-only sends and passes asVoice", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "123",
-        media: "https://example.com/voice.ogg",
-        asVoice: true,
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "123",
-        content: "",
-        mediaUrl: "https://example.com/voice.ogg",
-        asVoice: true,
-      }),
-      cfg,
-    );
-  });
-
-  it("passes silent flag for silent sends", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "456",
-        message: "Silent notification test",
-        silent: true,
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "456",
-        content: "Silent notification test",
-        silent: true,
-      }),
-      cfg,
-    );
-  });
-
-  it("maps edit action params into editMessage", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "edit",
-      params: {
-        chatId: "123",
-        messageId: 42,
-        message: "Updated",
-        buttons: [],
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
+  it("maps action params into telegram actions", async () => {
+    const cases = [
       {
-        action: "editMessage",
-        chatId: "123",
-        messageId: 42,
-        content: "Updated",
-        buttons: [],
-        accountId: undefined,
+        name: "media-only send preserves asVoice",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/voice.ogg",
+          asVoice: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          content: "",
+          mediaUrl: "https://example.com/voice.ogg",
+          asVoice: true,
+        }),
       },
-      cfg,
-    );
+      {
+        name: "silent send forwards silent flag",
+        action: "send" as const,
+        params: {
+          to: "456",
+          message: "Silent notification test",
+          silent: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "456",
+          content: "Silent notification test",
+          silent: true,
+        }),
+      },
+      {
+        name: "edit maps to editMessage",
+        action: "edit" as const,
+        params: {
+          chatId: "123",
+          messageId: 42,
+          message: "Updated",
+          buttons: [],
+        },
+        expectedPayload: {
+          action: "editMessage",
+          chatId: "123",
+          messageId: 42,
+          content: "Updated",
+          buttons: [],
+          accountId: undefined,
+        },
+      },
+      {
+        name: "topic-create maps to createForumTopic",
+        action: "topic-create" as const,
+        params: {
+          to: "telegram:group:-1001234567890:topic:271",
+          name: "Build Updates",
+        },
+        expectedPayload: {
+          action: "createForumTopic",
+          chatId: "telegram:group:-1001234567890:topic:271",
+          name: "Build Updates",
+          iconColor: undefined,
+          iconCustomEmojiId: undefined,
+          accountId: undefined,
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      handleTelegramAction.mockClear();
+      const { cfg } = await runTelegramAction(testCase.action, testCase.params);
+      expect(handleTelegramAction, testCase.name).toHaveBeenCalledWith(
+        testCase.expectedPayload,
+        cfg,
+      );
+    }
   });
 
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
@@ -579,33 +590,6 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
-
-  it("maps topic-create params into createForumTopic", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "topic-create",
-      params: {
-        to: "telegram:group:-1001234567890:topic:271",
-        name: "Build Updates",
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      {
-        action: "createForumTopic",
-        chatId: "telegram:group:-1001234567890:topic:271",
-        name: "Build Updates",
-        iconColor: undefined,
-        iconCustomEmojiId: undefined,
-        accountId: undefined,
-      },
-      cfg,
-    );
-  });
 });
 
 describe("signalMessageActions", () => {
@@ -672,54 +656,67 @@ describe("signalMessageActions", () => {
     ).rejects.toThrow(/actions\.reactions/);
   });
 
-  it("uses account-level actions when enabled", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          actions: { reactions: false },
-          accounts: {
-            work: { account: "+15550001111", actions: { reactions: true } },
+  it("maps reaction targets into signal sendReaction calls", async () => {
+    const cases = [
+      {
+        name: "uses account-level actions when enabled",
+        cfg: {
+          channels: {
+            signal: {
+              actions: { reactions: false },
+              accounts: {
+                work: { account: "+15550001111", actions: { reactions: true } },
+              },
+            },
           },
+        } as OpenClawConfig,
+        accountId: "work",
+        params: { to: "+15550001111", messageId: "123", emoji: "👍" },
+        expectedArgs: ["+15550001111", 123, "👍", { accountId: "work" }],
+      },
+      {
+        name: "normalizes uuid recipients",
+        cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
+        accountId: undefined,
+        params: {
+          recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          messageId: "123",
+          emoji: "🔥",
         },
+        expectedArgs: ["123e4567-e89b-12d3-a456-426614174000", 123, "🔥", { accountId: undefined }],
       },
-    } as OpenClawConfig;
-
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "react",
-      params: { to: "+15550001111", messageId: "123", emoji: "👍" },
-      cfg,
-      accountId: "work",
-    });
-
-    expect(sendReactionSignal).toHaveBeenCalledWith("+15550001111", 123, "👍", {
-      accountId: "work",
-    });
-  });
-
-  it("normalizes uuid recipients", async () => {
-    const cfg = {
-      channels: { signal: { account: "+15550001111" } },
-    } as OpenClawConfig;
-
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "react",
-      params: {
-        recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
-        messageId: "123",
-        emoji: "🔥",
+      {
+        name: "passes groupId and targetAuthor for group reactions",
+        cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
+        accountId: undefined,
+        params: {
+          to: "signal:group:group-id",
+          targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          messageId: "123",
+          emoji: "✅",
+        },
+        expectedArgs: [
+          "",
+          123,
+          "✅",
+          {
+            accountId: undefined,
+            groupId: "group-id",
+            targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+            targetAuthorUuid: undefined,
+          },
+        ],
       },
-      cfg,
-      accountId: undefined,
-    });
+    ] as const;
 
-    expect(sendReactionSignal).toHaveBeenCalledWith(
-      "123e4567-e89b-12d3-a456-426614174000",
-      123,
-      "🔥",
-      { accountId: undefined },
-    );
+    for (const testCase of cases) {
+      sendReactionSignal.mockClear();
+      await runSignalAction("react", testCase.params, {
+        cfg: testCase.cfg,
+        accountId: testCase.accountId,
+      });
+      expect(sendReactionSignal, testCase.name).toHaveBeenCalledWith(...testCase.expectedArgs);
+    }
   });
 
   it("requires targetAuthor for group reactions", async () => {
@@ -740,32 +737,6 @@ describe("signalMessageActions", () => {
         accountId: undefined,
       }),
     ).rejects.toThrow(/targetAuthor/);
-  });
-
-  it("passes groupId and targetAuthor for group reactions", async () => {
-    const cfg = {
-      channels: { signal: { account: "+15550001111" } },
-    } as OpenClawConfig;
-
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "react",
-      params: {
-        to: "signal:group:group-id",
-        targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-        messageId: "123",
-        emoji: "✅",
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(sendReactionSignal).toHaveBeenCalledWith("", 123, "✅", {
-      accountId: undefined,
-      groupId: "group-id",
-      targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-      targetAuthorUuid: undefined,
-    });
   });
 });
 

@@ -18,6 +18,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const NODE_CONNECT_TIMEOUT_MS = 3_000;
 
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
   // Yield a couple of macrotasks so any accidental async forwarding would fire.
@@ -176,94 +177,79 @@ describe("node.invoke approval bypass", () => {
     client.start();
     await Promise.race([
       ready,
-      sleep(10_000).then(() => {
+      sleep(NODE_CONNECT_TIMEOUT_MS).then(() => {
         throw new Error("timeout waiting for node to connect");
       }),
     ]);
     return client;
   };
 
-  test("rejects rawCommand/command mismatch before forwarding to node", async () => {
+  test("rejects malformed/forbidden node.invoke payloads before forwarding", async () => {
     let sawInvoke = false;
     const node = await connectLinuxNode(() => {
       sawInvoke = true;
     });
     const ws = await connectOperator(["operator.write"]);
-    const nodeId = await getConnectedNodeId(ws);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const cases = [
+        {
+          name: "rawCommand mismatch",
+          payload: {
+            nodeId,
+            command: "system.run",
+            params: {
+              command: ["uname", "-a"],
+              rawCommand: "echo hi",
+            },
+            idempotencyKey: crypto.randomUUID(),
+          },
+          expectedError: "rawCommand does not match command",
+        },
+        {
+          name: "approval flags without runId",
+          payload: {
+            nodeId,
+            command: "system.run",
+            params: {
+              command: ["echo", "hi"],
+              rawCommand: "echo hi",
+              approved: true,
+              approvalDecision: "allow-once",
+            },
+            idempotencyKey: crypto.randomUUID(),
+          },
+          expectedError: "params.runId",
+        },
+        {
+          name: "forbidden execApprovals tool",
+          payload: {
+            nodeId,
+            command: "system.execApprovals.set",
+            params: { file: { version: 1, agents: {} }, baseHash: "nope" },
+            idempotencyKey: crypto.randomUUID(),
+          },
+          expectedError: "exec.approvals.node",
+        },
+      ] as const;
 
-    const res = await rpcReq(ws, "node.invoke", {
-      nodeId,
-      command: "system.run",
-      params: {
-        command: ["uname", "-a"],
-        rawCommand: "echo hi",
-      },
-      idempotencyKey: crypto.randomUUID(),
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("rawCommand does not match command");
-
-    await expectNoForwardedInvoke(() => sawInvoke);
-
-    ws.close();
-    node.stop();
+      for (const testCase of cases) {
+        const res = await rpcReq(ws, "node.invoke", testCase.payload);
+        expect(res.ok, testCase.name).toBe(false);
+        expect(res.error?.message ?? "", testCase.name).toContain(testCase.expectedError);
+        await expectNoForwardedInvoke(() => sawInvoke);
+      }
+    } finally {
+      ws.close();
+      node.stop();
+    }
   });
 
-  test("rejects injecting approved/approvalDecision without approval id", async () => {
-    let sawInvoke = false;
-    const node = await connectLinuxNode(() => {
-      sawInvoke = true;
-    });
-    const ws = await connectOperator(["operator.write"]);
-    const nodeId = await getConnectedNodeId(ws);
-
-    const res = await rpcReq(ws, "node.invoke", {
-      nodeId,
-      command: "system.run",
-      params: {
-        command: ["echo", "hi"],
-        rawCommand: "echo hi",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      idempotencyKey: crypto.randomUUID(),
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("params.runId");
-
-    // Ensure the node didn't receive the invoke (gateway should fail early).
-    await expectNoForwardedInvoke(() => sawInvoke);
-
-    ws.close();
-    node.stop();
-  });
-
-  test("rejects invoking system.execApprovals.set via node.invoke", async () => {
-    let sawInvoke = false;
-    const node = await connectLinuxNode(() => {
-      sawInvoke = true;
-    });
-    const ws = await connectOperator(["operator.write"]);
-    const nodeId = await getConnectedNodeId(ws);
-
-    const res = await rpcReq(ws, "node.invoke", {
-      nodeId,
-      command: "system.execApprovals.set",
-      params: { file: { version: 1, agents: {} }, baseHash: "nope" },
-      idempotencyKey: crypto.randomUUID(),
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("exec.approvals.node");
-
-    await expectNoForwardedInvoke(() => sawInvoke);
-
-    ws.close();
-    node.stop();
-  });
-
-  test("binds system.run approval flags to exec.approval decision (ignores caller escalation)", async () => {
+  test("binds approvals to decision/device and blocks cross-device replay", async () => {
+    let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
     const node = await connectLinuxNode((payload) => {
+      invokeCount += 1;
       const obj = payload as { paramsJSON?: unknown };
       const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
       if (!raw) {
@@ -273,71 +259,56 @@ describe("node.invoke approval bypass", () => {
       lastInvokeParams = JSON.parse(raw) as Record<string, unknown>;
     });
 
-    const ws = await connectOperator(["operator.write", "operator.approvals"]);
-    const ws2 = await connectOperator(["operator.write"]);
-
-    const nodeId = await getConnectedNodeId(ws);
-    const approvalId = await requestAllowOnceApproval(ws, "echo hi");
-
-    // Use a second WebSocket connection to simulate per-call clients (callGatewayTool/callGatewayCli).
-    // Approval binding should be based on device identity, not the ephemeral connId.
-    const invoke = await rpcReq(ws2, "node.invoke", {
-      nodeId,
-      command: "system.run",
-      params: {
-        command: ["echo", "hi"],
-        rawCommand: "echo hi",
-        runId: approvalId,
-        approved: true,
-        // Try to escalate to allow-always; gateway should clamp to allow-once from record.
-        approvalDecision: "allow-always",
-        injected: "nope",
-      },
-      idempotencyKey: crypto.randomUUID(),
-    });
-    expect(invoke.ok).toBe(true);
-
-    const invokeParams = lastInvokeParams as Record<string, unknown> | null;
-    expect(invokeParams).toBeTruthy();
-    expect(invokeParams?.["approved"]).toBe(true);
-    expect(invokeParams?.["approvalDecision"]).toBe("allow-once");
-    expect(invokeParams?.["injected"]).toBeUndefined();
-
-    ws.close();
-    ws2.close();
-    node.stop();
-  });
-
-  test("rejects replaying approval id from another device", async () => {
-    let sawInvoke = false;
-    const node = await connectLinuxNode(() => {
-      sawInvoke = true;
-    });
-
-    const ws = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsCaller = await connectOperator(["operator.write"]);
     const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
 
-    const nodeId = await getConnectedNodeId(ws);
-    const approvalId = await requestAllowOnceApproval(ws, "echo hi");
+    try {
+      const nodeId = await getConnectedNodeId(wsApprover);
 
-    const invoke = await rpcReq(wsOtherDevice, "node.invoke", {
-      nodeId,
-      command: "system.run",
-      params: {
-        command: ["echo", "hi"],
-        rawCommand: "echo hi",
-        runId: approvalId,
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      idempotencyKey: crypto.randomUUID(),
-    });
-    expect(invoke.ok).toBe(false);
-    expect(invoke.error?.message ?? "").toContain("not valid for this device");
-    await expectNoForwardedInvoke(() => sawInvoke);
+      const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi");
+      // Separate caller connection simulates per-call clients.
+      const invoke = await rpcReq(wsCaller, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "hi"],
+          rawCommand: "echo hi",
+          runId: approvalId,
+          approved: true,
+          approvalDecision: "allow-always",
+          injected: "nope",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(invoke.ok).toBe(true);
+      expect(lastInvokeParams).toBeTruthy();
+      expect(lastInvokeParams?.["approved"]).toBe(true);
+      expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");
+      expect(lastInvokeParams?.["injected"]).toBeUndefined();
 
-    ws.close();
-    wsOtherDevice.close();
-    node.stop();
+      const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi");
+      const invokeCountBeforeReplay = invokeCount;
+      const replay = await rpcReq(wsOtherDevice, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "hi"],
+          rawCommand: "echo hi",
+          runId: replayApprovalId,
+          approved: true,
+          approvalDecision: "allow-once",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(replay.ok).toBe(false);
+      expect(replay.error?.message ?? "").toContain("not valid for this device");
+      await expectNoForwardedInvoke(() => invokeCount > invokeCountBeforeReplay);
+    } finally {
+      wsApprover.close();
+      wsCaller.close();
+      wsOtherDevice.close();
+      node.stop();
+    }
   });
 });

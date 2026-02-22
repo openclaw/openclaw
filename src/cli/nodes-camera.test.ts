@@ -141,36 +141,49 @@ describe("nodes camera helpers", () => {
     });
   });
 
-  it("rejects non-https url payload", async () => {
-    await expect(writeUrlToFile("/tmp/ignored", "http://example.com/x.bin")).rejects.toThrow(
-      /only https/i,
-    );
-  });
+  it("rejects invalid url payload responses", async () => {
+    const cases: Array<{
+      name: string;
+      url: string;
+      response?: Response;
+      expectedMessage: RegExp;
+    }> = [
+      {
+        name: "non-https url",
+        url: "http://example.com/x.bin",
+        expectedMessage: /only https/i,
+      },
+      {
+        name: "oversized content-length",
+        url: "https://example.com/huge.bin",
+        response: new Response("tiny", {
+          status: 200,
+          headers: { "content-length": String(999_999_999) },
+        }),
+        expectedMessage: /exceeds max/i,
+      },
+      {
+        name: "non-ok status",
+        url: "https://example.com/down.bin",
+        response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
+        expectedMessage: /503/i,
+      },
+      {
+        name: "empty response body",
+        url: "https://example.com/empty.bin",
+        response: new Response(null, { status: 200 }),
+        expectedMessage: /empty response body/i,
+      },
+    ];
 
-  it("rejects oversized content-length for url payload", async () => {
-    stubFetchResponse(
-      new Response("tiny", {
-        status: 200,
-        headers: { "content-length": String(999_999_999) },
-      }),
-    );
-    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/huge.bin")).rejects.toThrow(
-      /exceeds max/i,
-    );
-  });
-
-  it("rejects non-ok https url payload responses", async () => {
-    stubFetchResponse(new Response("down", { status: 503, statusText: "Service Unavailable" }));
-    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/down.bin")).rejects.toThrow(
-      /503/i,
-    );
-  });
-
-  it("rejects empty https response body", async () => {
-    stubFetchResponse(new Response(null, { status: 200 }));
-    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/empty.bin")).rejects.toThrow(
-      /empty response body/i,
-    );
+    for (const testCase of cases) {
+      if (testCase.response) {
+        stubFetchResponse(testCase.response);
+      }
+      await expect(writeUrlToFile("/tmp/ignored", testCase.url), testCase.name).rejects.toThrow(
+        testCase.expectedMessage,
+      );
+    }
   });
 
   it("removes partially written file when url stream fails", async () => {

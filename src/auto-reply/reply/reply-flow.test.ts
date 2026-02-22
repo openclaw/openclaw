@@ -415,6 +415,7 @@ describe("parseLineDirectives", () => {
           expectedAltText: "🎵 Bohemian Rhapsody - Queen",
           expectedText: "Now playing:",
           expectFooter: true,
+          expectBodyContents: false,
         },
         {
           name: "minimal",
@@ -422,6 +423,7 @@ describe("parseLineDirectives", () => {
           expectedAltText: "🎵 Unknown Track",
           expectedText: undefined,
           expectFooter: false,
+          expectBodyContents: false,
         },
         {
           name: "paused status",
@@ -449,7 +451,7 @@ describe("parseLineDirectives", () => {
         if (testCase.expectFooter) {
           expect(flexMessage?.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
         }
-        if (testCase.expectBodyContents) {
+        if ("expectBodyContents" in testCase && testCase.expectBodyContents) {
           expect(flexMessage?.contents?.body?.contents, testCase.name).toBeDefined();
         }
       }

@@ -62,6 +62,31 @@ struct OpenClawConfigFileTests {
         }
     }
 
+    @MainActor
+    @Test
+    func clearRemoteGatewayUrlRemovesOnlyUrlField() async {
+        let override = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
+            .appendingPathComponent("openclaw.json")
+            .path
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "url": "wss://old-host:111",
+                        "token": "tok",
+                    ],
+                ],
+            ])
+            OpenClawConfigFile.clearRemoteGatewayUrl()
+            let root = OpenClawConfigFile.loadDict()
+            let remote = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
+            #expect((remote["url"] as? String) == nil)
+            #expect((remote["token"] as? String) == "tok")
+        }
+    }
+
     @Test
     func stateDirOverrideSetsConfigPath() async {
         let dir = FileManager().temporaryDirectory

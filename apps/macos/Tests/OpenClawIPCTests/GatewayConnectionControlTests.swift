@@ -15,10 +15,6 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func send(_: URLSessionWebSocketTask.Message) async throws {}
 
-    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        pongReceiveHandler(nil)
-    }
-
     func receive() async throws -> URLSessionWebSocketTask.Message {
         throw URLError(.cannotConnectToHost)
     }

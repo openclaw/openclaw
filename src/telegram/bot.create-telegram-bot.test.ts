@@ -196,9 +196,6 @@ describe("createTelegramBot", () => {
     ).toBe("telegram:123");
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
@@ -227,9 +224,6 @@ describe("createTelegramBot", () => {
   });
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
-      onSpy.mockReset();
-      replySpy.mockReset();
-
       createTelegramBot({ token: "tok" });
       expect(onSpy).toHaveBeenCalledWith("message", expect.any(Function));
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -262,85 +256,69 @@ describe("createTelegramBot", () => {
       expect(payload.Body).toContain("hello world");
     });
   });
-  it("requests pairing by default for unknown DM senders", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
-
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({
-      code: "PAIRME12",
-      created: true,
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 1234, type: "private" },
-        text: "hello",
-        date: 1736380800,
-        from: { id: 999, username: "random" },
+  it("handles pairing DM flows for new and already-pending requests", async () => {
+    const cases = [
+      {
+        name: "new unknown sender",
+        upsertResults: [{ code: "PAIRME12", created: true }],
+        messages: ["hello"],
+        expectedSendCount: 1,
+        expectPairingText: true,
       },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+      {
+        name: "already pending request",
+        upsertResults: [
+          { code: "PAIRME12", created: true },
+          { code: "PAIRME12", created: false },
+        ],
+        messages: ["hello", "hello again"],
+        expectedSendCount: 1,
+        expectPairingText: false,
+      },
+    ] as const;
 
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy.mock.calls[0]?.[0]).toBe(1234);
-    const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-    expect(pairingText).toContain("Your Telegram user id: 999");
-    expect(pairingText).toContain("Pairing code:");
-    expect(pairingText).toContain("PAIRME12");
-    expect(pairingText).toContain("openclaw pairing approve telegram PAIRME12");
-    expect(pairingText).not.toContain("<code>");
-  });
-  it("does not resend pairing code when a request is already pending", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
+    for (const testCase of cases) {
+      onSpy.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "pairing" } },
+      });
+      readChannelAllowFromStore.mockResolvedValue([]);
+      upsertChannelPairingRequest.mockReset();
+      for (const result of testCase.upsertResults) {
+        upsertChannelPairingRequest.mockResolvedValueOnce(result);
+      }
 
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest
-      .mockResolvedValueOnce({ code: "PAIRME12", created: true })
-      .mockResolvedValueOnce({ code: "PAIRME12", created: false });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      for (const text of testCase.messages) {
+        await handler({
+          message: {
+            chat: { id: 1234, type: "private" },
+            text,
+            date: 1736380800,
+            from: { id: 999, username: "random" },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+        });
+      }
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    const message = {
-      chat: { id: 1234, type: "private" },
-      text: "hello",
-      date: 1736380800,
-      from: { id: 999, username: "random" },
-    };
-
-    await handler({
-      message,
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-    await handler({
-      message: { ...message, text: "hello again" },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(replySpy, testCase.name).not.toHaveBeenCalled();
+      expect(sendMessageSpy, testCase.name).toHaveBeenCalledTimes(testCase.expectedSendCount);
+      if (testCase.expectPairingText) {
+        expect(sendMessageSpy.mock.calls[0]?.[0], testCase.name).toBe(1234);
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText, testCase.name).toContain("Your Telegram user id: 999");
+        expect(pairingText, testCase.name).toContain("Pairing code:");
+        expect(pairingText, testCase.name).toContain("PAIRME12");
+        expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram PAIRME12");
+        expect(pairingText, testCase.name).not.toContain("<code>");
+      }
+    }
   });
   it("triggers typing cue via onReplyStart", async () => {
-    onSpy.mockReset();
-    sendChatActionSpy.mockReset();
-
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     await handler({
@@ -467,9 +445,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
   it("allows distinct callback_query ids without update_id", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -649,9 +624,6 @@ describe("createTelegramBot", () => {
   });
 
   it("routes DMs by telegram accountId binding", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -875,9 +847,6 @@ describe("createTelegramBot", () => {
   });
 
   it("sends GIF replies as animations", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     replySpy.mockResolvedValueOnce({
       text: "caption",
       mediaUrl: "https://example.com/fun",
@@ -914,11 +883,11 @@ describe("createTelegramBot", () => {
   });
 
   function resetHarnessSpies() {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    sendMessageSpy.mockReset();
-    setMessageReactionSpy.mockReset();
-    setMyCommandsSpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
+    sendMessageSpy.mockClear();
+    setMessageReactionSpy.mockClear();
+    setMyCommandsSpy.mockClear();
   }
   function getMessageHandler() {
     createTelegramBot({ token: "tok" });
@@ -1200,8 +1169,6 @@ describe("createTelegramBot", () => {
     }
   });
   it("allows control commands with TG-prefixed groupAllowFrom entries", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -1246,7 +1213,7 @@ describe("createTelegramBot", () => {
 
     for (const testCase of forumCases) {
       resetHarnessSpies();
-      sendChatActionSpy.mockReset();
+      sendChatActionSpy.mockClear();
       loadConfig.mockReturnValue({
         channels: {
           telegram: {
@@ -1430,9 +1397,6 @@ describe("createTelegramBot", () => {
     }
   });
   it("sends replies without native reply threading", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
     replySpy.mockResolvedValue({ text: "a".repeat(4500) });
 
     createTelegramBot({ token: "tok" });
@@ -1456,9 +1420,6 @@ describe("createTelegramBot", () => {
     }
   });
   it("prefixes final replies with responsePrefix", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
     replySpy.mockResolvedValue({ text: "final reply" });
     loadConfig.mockReturnValue({
       channels: {
@@ -1487,9 +1448,9 @@ describe("createTelegramBot", () => {
       ["first", 101],
       ["all", 102],
     ] as const) {
-      onSpy.mockReset();
-      sendMessageSpy.mockReset();
-      replySpy.mockReset();
+      onSpy.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
       replySpy.mockResolvedValue({
         text: "a".repeat(4500),
         replyToId: String(messageId),
@@ -1517,8 +1478,6 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
     const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-"));
     const storePath = path.join(storeDir, "sessions.json");
     fs.writeFileSync(
@@ -1564,9 +1523,6 @@ describe("createTelegramBot", () => {
   });
 
   it("applies topic skill filters and system prompts", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -1600,10 +1556,7 @@ describe("createTelegramBot", () => {
     expect(opts?.skillFilter).toEqual([]);
   });
   it("threads native command replies inside topics", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    commandSpy.mockReset();
-    replySpy.mockReset();
+    commandSpy.mockClear();
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
@@ -1633,10 +1586,7 @@ describe("createTelegramBot", () => {
     );
   });
   it("skips tool summaries for native slash commands", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    commandSpy.mockReset();
-    replySpy.mockReset();
+    commandSpy.mockClear();
     replySpy.mockImplementation(async (_ctx, opts) => {
       await opts?.onToolResult?.({ text: "tool update" });
       return { text: "final reply" };
@@ -1675,9 +1625,6 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("final reply");
   });
   it("buffers channel_post media groups and processes them together", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -1752,9 +1699,6 @@ describe("createTelegramBot", () => {
     }
   });
   it("coalesces channel_post near-limit text fragments into one message", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -1813,9 +1757,6 @@ describe("createTelegramBot", () => {
     }
   });
   it("drops oversized channel_post media instead of dispatching a placeholder message", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
     loadConfig.mockReturnValue({
       channels: {
         telegram: {

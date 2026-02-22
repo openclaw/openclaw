@@ -1212,40 +1212,52 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
-  it("returns empty text when a qmd workspace file does not exist", async () => {
-    const { manager } = await createManager();
-    const result = await manager.readFile({ relPath: "ghost.md" });
-    expect(result).toEqual({ text: "", path: "ghost.md" });
-    await manager.close();
-  });
-
-  it("returns empty text when a qmd file disappears before partial read", async () => {
+  it("returns empty text when qmd files are missing before or during read", async () => {
     const relPath = "qmd-window.md";
     const absPath = path.join(workspaceDir, relPath);
     await fs.writeFile(absPath, "one\ntwo\nthree", "utf-8");
 
-    const { manager } = await createManager();
+    const cases = [
+      {
+        name: "missing before read",
+        request: { relPath: "ghost.md" },
+        expectedPath: "ghost.md",
+      },
+      {
+        name: "disappears before partial read",
+        request: { relPath, from: 2, lines: 1 },
+        expectedPath: relPath,
+        installOpenSpy: () => {
+          const realOpen = fs.open;
+          let injected = false;
+          const openSpy = vi
+            .spyOn(fs, "open")
+            .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+              const [target, options] = args;
+              if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+                injected = true;
+                const err = new Error("gone") as NodeJS.ErrnoException;
+                err.code = "ENOENT";
+                throw err;
+              }
+              return realOpen(target, options);
+            });
+          return () => openSpy.mockRestore();
+        },
+      },
+    ] as const;
 
-    const realOpen = fs.open;
-    let injected = false;
-    const openSpy = vi
-      .spyOn(fs, "open")
-      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
-        const [target, options] = args;
-        if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
-          injected = true;
-          const err = new Error("gone") as NodeJS.ErrnoException;
-          err.code = "ENOENT";
-          throw err;
-        }
-        return realOpen(target, options);
-      });
-
-    const result = await manager.readFile({ relPath, from: 2, lines: 1 });
-    expect(result).toEqual({ text: "", path: relPath });
-
-    openSpy.mockRestore();
-    await manager.close();
+    for (const testCase of cases) {
+      const { manager } = await createManager();
+      const restoreOpen = "installOpenSpy" in testCase ? testCase.installOpenSpy() : undefined;
+      try {
+        const result = await manager.readFile(testCase.request);
+        expect(result, testCase.name).toEqual({ text: "", path: testCase.expectedPath });
+      } finally {
+        restoreOpen?.();
+        await manager.close();
+      }
+    }
   });
 
   it("reuses exported session markdown files when inputs are unchanged", async () => {
@@ -1295,67 +1307,86 @@ describe("QmdMemoryManager", () => {
     writeFileSpy.mockRestore();
   });
 
-  it("throws when sqlite index is busy", async () => {
-    const { manager } = await createManager();
-    const inner = manager as unknown as {
-      db: {
-        prepare: () => {
-          all: () => never;
-          get: () => never;
-        };
-        close: () => void;
-      } | null;
-      resolveDocLocation: (docid?: string) => Promise<unknown>;
-    };
-    const busyStmt: { all: () => never; get: () => never } = {
-      all: () => {
-        throw new Error("SQLITE_BUSY: database is locked");
-      },
-      get: () => {
-        throw new Error("SQLITE_BUSY: database is locked");
-      },
-    };
-
-    inner.db = {
-      prepare: () => busyStmt,
-      close: () => {},
-    };
-    await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
-      "qmd index busy while reading results",
-    );
-    await manager.close();
-  });
-
-  it("fails search when sqlite index is busy so caller can fallback", async () => {
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
-        );
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-    const inner = manager as unknown as {
-      db: { prepare: () => { all: () => never }; close: () => void } | null;
-    };
-    inner.db = {
-      prepare: () => ({
-        all: () => {
-          throw new Error("SQLITE_BUSY: database is locked");
+  it("fails closed when sqlite index is busy during doc lookup or search", async () => {
+    const cases = [
+      {
+        name: "resolveDocLocation",
+        run: async (manager: QmdMemoryManager) => {
+          const inner = manager as unknown as {
+            db: {
+              prepare: () => {
+                all: () => never;
+                get: () => never;
+              };
+              close: () => void;
+            } | null;
+            resolveDocLocation: (docid?: string) => Promise<unknown>;
+          };
+          const busyStmt: { all: () => never; get: () => never } = {
+            all: () => {
+              throw new Error("SQLITE_BUSY: database is locked");
+            },
+            get: () => {
+              throw new Error("SQLITE_BUSY: database is locked");
+            },
+          };
+          inner.db = {
+            prepare: () => busyStmt,
+            close: () => {},
+          };
+          await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
+            "qmd index busy while reading results",
+          );
         },
-      }),
-      close: () => {},
-    };
-    await expect(
-      manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).rejects.toThrow("qmd index busy while reading results");
-    await manager.close();
+      },
+      {
+        name: "search",
+        run: async (manager: QmdMemoryManager) => {
+          spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+            if (args[0] === "search") {
+              const child = createMockChild({ autoClose: false });
+              emitAndClose(
+                child,
+                "stdout",
+                JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
+              );
+              return child;
+            }
+            return createMockChild();
+          });
+          const inner = manager as unknown as {
+            db: { prepare: () => { all: () => never }; close: () => void } | null;
+          };
+          inner.db = {
+            prepare: () => ({
+              all: () => {
+                throw new Error("SQLITE_BUSY: database is locked");
+              },
+            }),
+            close: () => {},
+          };
+          await expect(
+            manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
+          ).rejects.toThrow("qmd index busy while reading results");
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      spawnMock.mockReset();
+      spawnMock.mockImplementation(() => createMockChild());
+      const { manager } = await createManager();
+      try {
+        await testCase.run(manager);
+      } catch (error) {
+        throw new Error(
+          `${testCase.name}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      } finally {
+        await manager.close();
+      }
+    }
   });
 
   it("prefers exact docid match before prefix fallback for qmd document lookups", async () => {
@@ -1581,56 +1612,68 @@ describe("QmdMemoryManager", () => {
       }
     });
 
-    it("symlinks default model cache into custom XDG_CACHE_HOME on first run", async () => {
-      const { manager } = await createManager({ mode: "full" });
-      expect(manager).toBeTruthy();
+    it("handles first-run symlink, existing dir preservation, and missing default cache", async () => {
+      const cases: Array<{
+        name: string;
+        setup?: () => Promise<void>;
+        assert: () => Promise<void>;
+      }> = [
+        {
+          name: "symlinks default cache on first run",
+          assert: async () => {
+            const stat = await fs.lstat(customModelsDir);
+            expect(stat.isSymbolicLink()).toBe(true);
+            const target = await fs.readlink(customModelsDir);
+            expect(target).toBe(defaultModelsDir);
+            const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
+            expect(content).toBe("fake-model");
+          },
+        },
+        {
+          name: "does not overwrite existing models directory",
+          setup: async () => {
+            await fs.mkdir(customModelsDir, { recursive: true });
+            await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
+          },
+          assert: async () => {
+            const stat = await fs.lstat(customModelsDir);
+            expect(stat.isSymbolicLink()).toBe(false);
+            expect(stat.isDirectory()).toBe(true);
+            const content = await fs.readFile(
+              path.join(customModelsDir, "custom-model.bin"),
+              "utf-8",
+            );
+            expect(content).toBe("custom");
+          },
+        },
+        {
+          name: "skips symlink when default models are absent",
+          setup: async () => {
+            await fs.rm(defaultModelsDir, { recursive: true, force: true });
+          },
+          assert: async () => {
+            await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+            expect(logWarnMock).not.toHaveBeenCalledWith(
+              expect.stringContaining("failed to symlink qmd models directory"),
+            );
+          },
+        },
+      ];
 
-      const stat = await fs.lstat(customModelsDir);
-      expect(stat.isSymbolicLink()).toBe(true);
-      const target = await fs.readlink(customModelsDir);
-      expect(target).toBe(defaultModelsDir);
-
-      // Models are accessible through the symlink.
-      const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
-      expect(content).toBe("fake-model");
-
-      await manager.close();
-    });
-
-    it("does not overwrite existing models directory", async () => {
-      // Pre-create the custom models dir with different content.
-      await fs.mkdir(customModelsDir, { recursive: true });
-      await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
-
-      const { manager } = await createManager({ mode: "full" });
-      expect(manager).toBeTruthy();
-
-      // Should still be a real directory, not a symlink.
-      const stat = await fs.lstat(customModelsDir);
-      expect(stat.isSymbolicLink()).toBe(false);
-      expect(stat.isDirectory()).toBe(true);
-
-      // Custom content should be preserved.
-      const content = await fs.readFile(path.join(customModelsDir, "custom-model.bin"), "utf-8");
-      expect(content).toBe("custom");
-
-      await manager.close();
-    });
-
-    it("skips symlink when no default models exist", async () => {
-      // Remove the default models dir.
-      await fs.rm(defaultModelsDir, { recursive: true, force: true });
-
-      const { manager } = await createManager({ mode: "full" });
-      expect(manager).toBeTruthy();
-
-      // Custom models dir should not exist (no symlink created).
-      await expect(fs.lstat(customModelsDir)).rejects.toThrow();
-      expect(logWarnMock).not.toHaveBeenCalledWith(
-        expect.stringContaining("failed to symlink qmd models directory"),
-      );
-
-      await manager.close();
+      for (const testCase of cases) {
+        await fs.rm(customModelsDir, { recursive: true, force: true });
+        await fs.mkdir(defaultModelsDir, { recursive: true });
+        await fs.writeFile(path.join(defaultModelsDir, "model.bin"), "fake-model");
+        logWarnMock.mockReset();
+        await testCase.setup?.();
+        const { manager } = await createManager({ mode: "full" });
+        expect(manager, testCase.name).toBeTruthy();
+        try {
+          await testCase.assert();
+        } finally {
+          await manager.close();
+        }
+      }
     });
   });
 });
