@@ -38,7 +38,7 @@ describe("cron tool", () => {
   }
 
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     callGatewayMock.mockResolvedValue({ ok: true });
   });
 
