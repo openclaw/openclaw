@@ -185,6 +185,19 @@ describe("isContextOverflowError", () => {
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
   });
+
+  it("matches Anthropic 'exceed context limit' error from extended thinking", () => {
+    // When using extended thinking with large contexts, Anthropic returns this error:
+    // "input length and max_tokens exceed context limit: 156321 + 48384 > 200000"
+    const samples = [
+      "input length and max_tokens exceed context limit: 156321 + 48384 > 200000",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"input length and max_tokens exceed context limit: 100000 + 16000 > 100000"}}',
+      "exceed context limit: 50000 + 10000 > 50000",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
 });
 
 describe("error classifiers", () => {
