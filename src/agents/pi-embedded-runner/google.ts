@@ -25,7 +25,7 @@ import {
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, isAssistantMessageWithContent } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -73,15 +73,11 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
+    if (!isAssistantMessageWithContent(msg)) {
       out.push(msg);
       continue;
     }
     const assistant = msg;
-    if (!Array.isArray(assistant.content)) {
-      out.push(msg);
-      continue;
-    }
     type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
     const nextContent: AssistantContentBlock[] = [];
     let contentChanged = false;

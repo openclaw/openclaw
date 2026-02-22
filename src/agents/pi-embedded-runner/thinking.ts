@@ -1,6 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
+  return (
+    !!message &&
+    typeof message === "object" &&
+    message.role === "assistant" &&
+    Array.isArray(message.content)
+  );
+}
 
 /**
  * Strip all `type: "thinking"` content blocks from assistant messages.
@@ -16,11 +26,7 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
-      out.push(msg);
-      continue;
-    }
-    if (!Array.isArray(msg.content)) {
+    if (!isAssistantMessageWithContent(msg)) {
       out.push(msg);
       continue;
     }
