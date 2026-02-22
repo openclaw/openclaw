@@ -239,7 +239,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       }
     }
     if (state === "final") {
-      void loadChatHistory(host as unknown as OpenClawApp);
+      // Preserve local user messages that may not be on server yet
+      void loadChatHistory(host as unknown as OpenClawApp, { preserveLocalUser: true });
     }
     return;
   }

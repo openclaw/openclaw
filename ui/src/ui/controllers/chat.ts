@@ -27,10 +27,11 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
-export async function loadChatHistory(state: ChatState) {
+export async function loadChatHistory(state: ChatState, opts?: { preserveLocalUser?: boolean }) {
   if (!state.client || !state.connected) {
     return;
   }
+
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -41,7 +42,53 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    const serverMessages = Array.isArray(res.messages) ? res.messages : [];
+
+    // Re-capture local user messages AFTER async call to handle race condition
+    // where user sends a message while history is loading
+    if (opts?.preserveLocalUser) {
+      const localUserMessages = state.chatMessages.filter((m: unknown) => {
+        const msg = m as Record<string, unknown>;
+        return msg.role === "user" && msg._localOnly === true;
+      });
+
+      if (localUserMessages.length > 0) {
+        // Build a set of server message signatures for deduplication
+        // Use both timestamp and content text for reliable matching
+        const serverSignatures = new Set(
+          serverMessages.map((m: unknown) => {
+            const msg = m as Record<string, unknown>;
+            const content = msg.content as Array<{ text?: string }> | undefined;
+            const text = content?.[0]?.text ?? "";
+            const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : 0;
+            return `${timestamp}:${text}`;
+          }),
+        );
+
+        const missingLocal = localUserMessages.filter((m: unknown) => {
+          const msg = m as Record<string, unknown>;
+          const content = msg.content as Array<{ text?: string }> | undefined;
+          const text = content?.[0]?.text ?? "";
+          const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : 0;
+          const signature = `${timestamp}:${text}`;
+          return !serverSignatures.has(signature);
+        });
+
+        // Merge and sort by timestamp to maintain chronological order
+        const merged = [...serverMessages, ...missingLocal];
+        merged.sort((a, b) => {
+          const aTime = (a as Record<string, unknown>).timestamp as number;
+          const bTime = (b as Record<string, unknown>).timestamp as number;
+          return aTime - bTime;
+        });
+        state.chatMessages = merged;
+      } else {
+        state.chatMessages = serverMessages;
+      }
+    } else {
+      state.chatMessages = serverMessages;
+    }
+
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
@@ -109,6 +156,7 @@ export async function sendChatMessage(
       role: "user",
       content: contentBlocks,
       timestamp: now,
+      _localOnly: true, // Mark as locally created, not yet confirmed by server
     },
   ];
 
