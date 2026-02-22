@@ -243,8 +243,24 @@ function looksLikeLegacyTextBytes(buffer: Buffer): boolean {
   return printableRatio > 0.95 && wordishRatio > 0.3;
 }
 
+const BINARY_MAGIC_BYTES: Array<{ prefix: number[]; label: string }> = [
+  { prefix: [0x25, 0x50, 0x44, 0x46, 0x2d], label: "PDF" },
+  { prefix: [0x50, 0x4b, 0x03, 0x04], label: "ZIP/OOXML" },
+  { prefix: [0x50, 0x4b, 0x05, 0x06], label: "ZIP(empty)" },
+  { prefix: [0x50, 0x4b, 0x07, 0x08], label: "ZIP(spanned)" },
+];
+
+function hasBinaryMagicBytes(buffer: Buffer): boolean {
+  return BINARY_MAGIC_BYTES.some(
+    ({ prefix }) => buffer.length >= prefix.length && prefix.every((byte, i) => buffer[i] === byte),
+  );
+}
+
 function looksLikeUtf8Text(buffer?: Buffer): boolean {
   if (!buffer || buffer.length === 0) {
+    return false;
+  }
+  if (hasBinaryMagicBytes(buffer)) {
     return false;
   }
   const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
