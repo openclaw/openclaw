@@ -25,6 +25,56 @@ describe("extractTextCached", () => {
   });
 });
 
+describe("extractText strips reply tags from assistant messages", () => {
+  it("strips [[reply_to_current]] from assistant string content", () => {
+    const message = {
+      role: "assistant",
+      content: "[[reply_to_current]] Hello there",
+    };
+    expect(extractText(message)).toBe("Hello there");
+  });
+
+  it("strips [[reply_to_current]] from assistant content array", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current]] Hello there" }],
+    };
+    expect(extractText(message)).toBe("Hello there");
+  });
+
+  it("strips [[reply_to:<id>]] from assistant messages", () => {
+    const message = {
+      role: "assistant",
+      content: "[[reply_to: msg_123]] Hello there",
+    };
+    expect(extractText(message)).toBe("Hello there");
+  });
+
+  it("strips [[audio_as_voice]] from assistant messages", () => {
+    const message = {
+      role: "assistant",
+      content: "[[audio_as_voice]] Hello there",
+    };
+    expect(extractText(message)).toBe("Hello there");
+  });
+
+  it("strips reply tag from assistant .text field", () => {
+    const message = {
+      role: "assistant",
+      text: "[[reply_to_current]] Hello there",
+    };
+    expect(extractText(message)).toBe("Hello there");
+  });
+
+  it("does not strip reply tags from user messages", () => {
+    const message = {
+      role: "user",
+      content: "[[reply_to_current]] Hello there",
+    };
+    expect(extractText(message)).toBe("[[reply_to_current]] Hello there");
+  });
+});
+
 describe("extractThinkingCached", () => {
   it("matches extractThinking output", () => {
     const message = {
