@@ -380,39 +380,42 @@ describe("exec notifyOnExit", () => {
     expect(hasEvent).toBe(true);
   });
 
-  it("skips no-op completion events when command succeeds without output", async () => {
-    const tool = createTestExecTool({
-      allowBackground: true,
-      backgroundMs: 0,
-      notifyOnExit: true,
-      sessionKey: "agent:main:main",
-    });
+  it("handles no-op completion events based on notifyOnExitEmptySuccess", async () => {
+    for (const testCase of [
+      {
+        label: "default behavior skips no-op completion events",
+        notifyOnExitEmptySuccess: false,
+      },
+      {
+        label: "explicitly enabling no-op completion emits completion events",
+        notifyOnExitEmptySuccess: true,
+      },
+    ]) {
+      resetSystemEventsForTest();
+      const tool = createTestExecTool({
+        allowBackground: true,
+        backgroundMs: 0,
+        notifyOnExit: true,
+        ...(testCase.notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {}),
+        sessionKey: "agent:main:main",
+      });
 
-    await runBackgroundAndWaitForCompletion({
-      tool,
-      callId: "call2",
-      command: shortDelayCmd,
-    });
-    expect(peekSystemEvents("agent:main:main")).toEqual([]);
-  });
-
-  it("can re-enable no-op completion events via notifyOnExitEmptySuccess", async () => {
-    const tool = createTestExecTool({
-      allowBackground: true,
-      backgroundMs: 0,
-      notifyOnExit: true,
-      notifyOnExitEmptySuccess: true,
-      sessionKey: "agent:main:main",
-    });
-
-    await runBackgroundAndWaitForCompletion({
-      tool,
-      callId: "call3",
-      command: shortDelayCmd,
-    });
-    const events = peekSystemEvents("agent:main:main");
-    expect(events.length).toBeGreaterThan(0);
-    expect(events.some((event) => event.includes("Exec completed"))).toBe(true);
+      await runBackgroundAndWaitForCompletion({
+        tool,
+        callId: "call-noop",
+        command: shortDelayCmd,
+      });
+      const events = peekSystemEvents("agent:main:main");
+      if (!testCase.notifyOnExitEmptySuccess) {
+        expect(events, testCase.label).toEqual([]);
+      } else {
+        expect(events.length, testCase.label).toBeGreaterThan(0);
+        expect(
+          events.some((event) => event.includes("Exec completed")),
+          testCase.label,
+        ).toBe(true);
+      }
+    }
   });
 });
 
