@@ -311,7 +311,10 @@ describe("createSynologyChatPlugin", () => {
       };
       const result = plugin.gateway.startAccount(ctx);
       expect(result).toBeInstanceOf(Promise);
-      const resolved = await Promise.race([result, new Promise((r) => setTimeout(() => r("pending"), 50))]);
+      const resolved = await Promise.race([
+        result,
+        new Promise((r) => setTimeout(() => r("pending"), 50)),
+      ]);
       expect(resolved).toBe("pending");
     });
 
@@ -326,7 +329,10 @@ describe("createSynologyChatPlugin", () => {
       };
       const result = plugin.gateway.startAccount(ctx);
       expect(result).toBeInstanceOf(Promise);
-      const resolved = await Promise.race([result, new Promise((r) => setTimeout(() => r("pending"), 50))]);
+      const resolved = await Promise.race([
+        result,
+        new Promise((r) => setTimeout(() => r("pending"), 50)),
+      ]);
       expect(resolved).toBe("pending");
     });
 
