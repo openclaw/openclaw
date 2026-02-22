@@ -47,6 +47,8 @@ export type AppViewState = {
   theme: ThemeMode;
   themeResolved: ResolvedTheme;
   themeOrder: ThemeMode[];
+  mode: "basic" | "advanced" | "configure";
+  tabVisibility: Record<string, boolean>;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   eventLog: EventLogEntry[];
@@ -241,7 +243,9 @@ export type AppViewState = {
   connect: () => void;
   setTab: (tab: Tab) => void;
   setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
+  setTabVisibility: (tab: Tab, visible: boolean) => void;
   applySettings: (next: UiSettings) => void;
+  setTabVisibility: (tab: Tab, visible: boolean) => void;
   loadOverview: () => Promise<void>;
   loadAssistantIdentity: () => Promise<void>;
   loadCron: () => Promise<void>;

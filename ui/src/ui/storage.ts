@@ -15,6 +15,8 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
+  mode?: "basic" | "advanced" | "configure";
+  tabVisibility?: Record<string, boolean>;
 };
 
 export function loadSettings(): UiSettings {
@@ -29,6 +31,7 @@ export function loadSettings(): UiSettings {
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: "dark",
+    mode: "advanced",
     chatFocusMode: false,
     chatShowThinking: true,
     splitRatio: 0.6,

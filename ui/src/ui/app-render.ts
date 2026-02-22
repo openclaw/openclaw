@@ -6,8 +6,12 @@ import {
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
-import type { AppViewState } from "./app-view-state.ts";
+import {
+  renderChatControls,
+  renderTab,
+  renderThemeToggle,
+  renderModeToggle,
+} from "./app-render.helpers.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -57,7 +61,12 @@ import {
 } from "./controllers/skills.ts";
 import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  normalizeBasePath,
+  subtitleForTab,
+  titleForTab,
+  getVisibleTabsWithOverrides,
+} from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderBottomTabs } from "./views/bottom-tabs.ts";
 import { renderChannels } from "./views/channels.ts";
@@ -188,6 +197,7 @@ export function renderApp(state: AppViewState) {
             <span class="topbar-connection__label">${state.connected ? t("common.ok") : t("common.offline")}</span>
           </div>
           <span class="topbar-divider"></span>
+          ${renderModeToggle(state)}
           ${renderThemeToggle(state)}
         </div>
       </header>
@@ -216,10 +226,12 @@ export function renderApp(state: AppViewState) {
           ${state.settings.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
         </button>
       </div>
- 
-          
+
           <nav class="sidebar-nav">
-          ${TAB_GROUPS.map((group) => {
+          ${getVisibleTabsWithOverrides(
+            state.settings.mode ?? "advanced",
+            state.settings.tabVisibility ?? {},
+          ).map((group) => {
             const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
             const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
             const showItems = hasActiveTab || !isGroupCollapsed;

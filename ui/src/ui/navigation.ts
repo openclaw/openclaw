@@ -26,6 +26,96 @@ export type Tab =
   | "debug"
   | "logs";
 
+export type AppMode = "basic" | "advanced" | "configure";
+export type TabVisibility = Partial<Record<Tab, boolean>>;
+
+// Tabs visible in Basic mode (simplified view for regular developers)
+const BASIC_TABS: Tab[] = ["chat", "overview", "sessions", "instances", "config"];
+
+// Tabs visible in Advanced mode (full functionality for power users)
+const ADVANCED_TABS: Tab[] = [
+  "chat",
+  "overview",
+  "channels",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "agents",
+  "skills",
+  "nodes",
+  "config",
+  "debug",
+  "logs",
+];
+
+// All tabs (for configure mode)
+const ALL_TABS: Tab[] = [
+  "chat",
+  "overview",
+  "channels",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "agents",
+  "skills",
+  "nodes",
+  "config",
+  "debug",
+  "logs",
+];
+
+/**
+ * Returns the tabs visible for the given mode.
+ * @param mode - The current app mode ("basic", "advanced", or "configure")
+ * @returns Array of visible tabs based on mode
+ */
+export function getVisibleTabs(
+  mode: AppMode,
+): ReadonlyArray<{ readonly label: string; readonly tabs: readonly Tab[] }> {
+  const visibleSet = mode === "basic" ? BASIC_TABS : mode === "advanced" ? ADVANCED_TABS : ALL_TABS;
+  return TAB_GROUPS.map((group) => ({
+    ...group,
+    tabs: group.tabs.filter((tab) => visibleSet.includes(tab)),
+  })).filter((group) => group.tabs.length > 0);
+}
+
+/**
+ * Returns the tabs visible for the given mode with user overrides.
+ * @param mode - The current app mode
+ * @param overrides - User-specific tab visibility overrides
+ * @returns Array of visible tabs based on mode and overrides
+ */
+export function getVisibleTabsWithOverrides(
+  mode: AppMode,
+  overrides: TabVisibility,
+): ReadonlyArray<{ readonly label: string; readonly tabs: readonly Tab[] }> {
+  if (mode === "configure") {
+    // In configure mode, show all tabs so user can toggle them
+    return TAB_GROUPS.map((group) => ({
+      ...group,
+      tabs: group.tabs.filter((tab) => ALL_TABS.includes(tab)),
+    })).filter((group) => group.tabs.length > 0);
+  }
+
+  // For basic/advanced modes, start with default tabs for that mode
+  const baseSet = mode === "basic" ? BASIC_TABS : ADVANCED_TABS;
+
+  // Apply user overrides
+  const filteredTabs = new Set(
+    baseSet.filter((tab) => {
+      // If override exists, use it; otherwise default to visible
+      return overrides[tab] !== false;
+    }),
+  );
+
+  return TAB_GROUPS.map((group) => ({
+    ...group,
+    tabs: group.tabs.filter((tab) => filteredTabs.has(tab)),
+  })).filter((group) => group.tabs.length > 0);
+}
+
 const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
   overview: "/overview",
