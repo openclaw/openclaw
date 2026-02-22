@@ -3,11 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  createThrowingRuntime,
-  readJsonFile,
-  runNonInteractiveOnboarding,
-} from "./onboard-non-interactive.test-helpers.js";
+import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -52,6 +48,11 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
   };
 });
+
+const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
+const { resolveConfigPath } = await import("../config/config.js");
+const { callGateway } = await import("../gateway/call.js");
 
 function getPseudoPort(base: number): number {
   return base + (process.pid % 1000);
@@ -136,8 +137,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
+      const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
         gateway?: { auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
@@ -165,7 +165,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/config.js");
       const cfg = await readJsonFile<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
       }>(resolveConfigPath());
@@ -175,7 +174,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.remote?.token).toBe(token);
 
       gatewayClientCalls.length = 0;
-      const { callGateway } = await import("../gateway/call.js");
       const health = await callGateway<{ ok?: boolean }>({ method: "health" });
       expect(health?.ok).toBe(true);
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
@@ -211,8 +209,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
+      const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
         gateway?: {
           bind?: string;

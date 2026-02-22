@@ -29,6 +29,8 @@ vi.mock("../infra/outbound/targets.js", async () => {
   };
 });
 
+const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+
 describe("deliverAgentCommandResult", () => {
   function createRuntime(): RuntimeEnv {
     return {
@@ -54,7 +56,6 @@ describe("deliverAgentCommandResult", () => {
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
     const result = createResult(params.resultText);
-    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
 
     await deliverAgentCommandResult({
       cfg,
