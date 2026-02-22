@@ -573,6 +573,86 @@ describe("discord groupPolicy gating", () => {
   });
 });
 
+describe("channelConfig fallback × groupPolicy interaction (#4555)", () => {
+  // When a guild has a channels block but the message channel doesn't match any entry,
+  // resolveDiscordChannelConfigWithFallback returns { allowed: false }.
+  // This should NOT block messages when groupPolicy is "open".
+
+  it("resolveDiscordChannelConfigWithFallback returns allowed:false for unmatched channel", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: { "some-other-channel": { allow: true } },
+    };
+    const config = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "unmatched-channel-id",
+      channelName: "unmatched",
+      channelSlug: "unmatched",
+    });
+    expect(config).not.toBeNull();
+    expect(config!.allowed).toBe(false);
+  });
+
+  it("resolveDiscordChannelConfigWithFallback returns null when no channels configured", () => {
+    const guildInfo: DiscordGuildEntryResolved = {};
+    const config = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "any-channel-id",
+      channelName: "any",
+      channelSlug: "any",
+    });
+    expect(config).toBeNull();
+  });
+
+  it("resolveDiscordChannelConfigWithFallback returns allowed:true for matched channel", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: { "my-channel": { allow: true } },
+    };
+    const config = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "my-channel",
+      channelName: "My Channel",
+      channelSlug: "my-channel",
+    });
+    expect(config).not.toBeNull();
+    expect(config!.allowed).toBe(true);
+  });
+
+  it("groupPolicy open + channels configured + unmatched channel: policy allows", () => {
+    // The bug: isDiscordGroupAllowedByPolicy returns true for open policy,
+    // but the separate channelConfig.allowed===false check was blocking anyway
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "open",
+        guildAllowlisted: false,
+        channelAllowlistConfigured: true,
+        channelAllowed: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("groupPolicy allowlist + channels configured + unmatched channel: policy blocks", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        guildAllowlisted: true,
+        channelAllowlistConfigured: true,
+        channelAllowed: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("groupPolicy allowlist + no channels configured: policy allows (guild-level allowlist)", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        guildAllowlisted: true,
+        channelAllowlistConfigured: false,
+        channelAllowed: false,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("discord group DM gating", () => {
   it("allows all when no allowlist", () => {
     expect(
