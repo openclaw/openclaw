@@ -939,12 +939,54 @@ export async function handleFeishuMessage(params: {
       ...mediaPayload,
     });
 
+    // 修复：当 root_id 为空且是群组消息时，等待并重新获取 root_id
+    // 这是为了解决飞书新建话题时的时序问题
+    let resolvedReplyToMessageId = ctx.rootId ?? ctx.messageId;
+    
+    if (isGroup && !ctx.rootId && ctx.messageId) {
+      // 新建话题的首条消息可能还没有 root_id
+      // 等待一小段时间后重新获取，确保 root_id 已被飞书设置
+      log(`feishu[${account.accountId}]: no root_id for group message, waiting to resolve...`);
+      
+      const resolveRootId = async (): Promise<string | undefined> => {
+        // 等待飞书处理
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        try {
+          // 重新获取消息详情，检查是否有 root_id
+          // 飞书 API 返回的消息中，root_id 会作为单独字段
+          const client = createFeishuClient(account);
+          const response: any = await client.im.message.get({
+            path: { message_id: ctx.messageId },
+          });
+          
+          if (response?.data?.items?.[0]) {
+            const item = response.data.items[0];
+            const resolvedRootId = (item as any).root_id;
+            if (resolvedRootId) {
+              log(`feishu[${account.accountId}]: resolved root_id=${resolvedRootId}`);
+              return resolvedRootId;
+            }
+          }
+        } catch (err) {
+          log(`feishu[${account.accountId}]: failed to resolve root_id: ${String(err)}`);
+        }
+        
+        return undefined;
+      };
+      
+      const resolvedRootId = await resolveRootId();
+      if (resolvedRootId) {
+        resolvedReplyToMessageId = resolvedRootId;
+      }
+    }
+
     const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
       cfg,
       agentId: route.agentId,
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
-      replyToMessageId: ctx.rootId ?? ctx.messageId,
+      replyToMessageId: resolvedReplyToMessageId,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
     });
