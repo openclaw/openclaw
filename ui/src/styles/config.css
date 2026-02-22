@@ -1404,3 +1404,13 @@
 .config-env-peek-btn svg {
   flex-shrink: 0;
 }
+
+/* Raw JSON redaction blur */
+
+.config-raw-redacted {
+  color: transparent !important;
+  text-shadow: 0 0 8px var(--text);
+  transition:
+    color var(--duration-normal, 250ms) ease,
+    text-shadow var(--duration-normal, 250ms) ease;
+}

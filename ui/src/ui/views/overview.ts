@@ -17,7 +17,6 @@ import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
-import { renderOverviewQuickActions } from "./overview-quick-actions.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -162,7 +161,7 @@ export function renderOverview(props: OverviewProps) {
       <div class="card">
         <div class="card-title">${t("overview.access.title")}</div>
         <div class="card-sub">${t("overview.access.subtitle")}</div>
-        <div class="form-grid" style="margin-top: 16px;">
+        <div class="form-grid ${props.streamMode ? "redacted" : ""}" style="margin-top: 16px;">
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
             <input
@@ -349,11 +348,6 @@ export function renderOverview(props: OverviewProps) {
         onRefreshLogs: props.onRefreshLogs,
       })}
     </div>
-
-    ${renderOverviewQuickActions({
-      onNavigate: props.onNavigate,
-      onRefresh: props.onRefresh,
-    })}
 
   `;
 }

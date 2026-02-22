@@ -2305,6 +2305,7 @@
   filter: blur(5px);
   user-select: none;
   pointer-events: none;
+  transition: filter var(--duration-normal, 250ms) ease;
 }
 
 /* Recent sessions */

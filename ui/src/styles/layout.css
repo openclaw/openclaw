@@ -6,7 +6,7 @@
   --shell-pad: 16px;
   --shell-gap: 16px;
   --shell-nav-width: 240px;
-  --shell-topbar-height: 56px;
+  --shell-topbar-height: 62px;
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: 100vh;
@@ -64,7 +64,7 @@
   padding-top: 0;
 }
 
-.shell--chat-focus .content>*+* {
+.shell--chat-focus .content > * + * {
   margin-top: 0;
 }
 
@@ -83,10 +83,10 @@
   gap: 12px;
   padding: 0 20px;
   height: var(--shell-topbar-height);
-  background: var(--chrome);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
+  background: var(--topbar-bg);
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  border-bottom: var(--topbar-border);
 }
 
 /* --- Left: Dashboard Header --- */
@@ -256,17 +256,57 @@
   line-height: 1;
 }
 
+/* Redact / stream-mode toggle */
+
+.topbar-redact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    background 180ms ease,
+    border-color 180ms ease;
+  flex-shrink: 0;
+}
+
+.topbar-redact svg {
+  width: 15px;
+  height: 15px;
+}
+
+.topbar-redact:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--secondary) 80%, transparent);
+  border-color: var(--border);
+}
+
+.topbar-redact--active {
+  color: var(--warn);
+}
+
+.topbar-redact--active:hover {
+  color: var(--warn);
+  background: var(--warn-subtle);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
 /* Topbar theme toggle sizing */
 
 .topbar-status .theme-toggle {
-  --theme-item: 24px;
-  --theme-gap: 2px;
-  --theme-pad: 3px;
+  height: 30px;
 }
 
-.topbar-status .theme-icon {
-  width: 12px;
-  height: 12px;
+.topbar-status .theme-btn svg {
+  width: 13px;
+  height: 13px;
 }
 
 /* ===========================================
@@ -280,13 +320,15 @@
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
-  background: var(--panel-strong);
+  background: var(--sidebar-bg);
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
   transition:
     width var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease),
     opacity var(--shell-focus-duration) var(--shell-focus-ease);
   min-height: 0;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--glass-border);
 }
 
 .sidebar::-webkit-scrollbar {
@@ -308,7 +350,8 @@
 
 .sidebar--collapsed .sidebar-header {
   justify-content: center;
-  padding: 8px;
+  padding: 10px 8px;
+  min-height: 54px;
 }
 
 .sidebar--collapsed .nav-group__items {
@@ -359,17 +402,28 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  padding: 8px;
+  padding: 10px 8px;
   gap: 0;
   flex-shrink: 0;
+  min-height: 54px;
 }
 
 .sidebar-brand {
   flex: 2;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
   min-width: 0;
+
+  max-height: 28px;
+
+  padding-left: 10px;
+  padding-right: 10px;
+
+  @media (max-width: 1100px) {
+    padding-left: 0;
+    padding-right: 0;
+  }
 }
 
 .sidebar-brand__logo {
@@ -379,13 +433,27 @@
   object-fit: contain;
 }
 
+.sidebar-brand__title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--text-strong);
+  white-space: nowrap;
+}
+
 .sidebar-collapse-btn {
   flex: 1;
-  height: 44px;
+  height: 32px;
+
+  @media (max-width: 1100px) {
+    height: 28px;
+  }
+
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-hover);
+  background: var(--bg);
   border: var(--border) 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -403,7 +471,7 @@
 }
 
 .sidebar-collapse-btn:hover {
-  background: var(--bg-hover);
+  background: var(--bg);
   border-color: var(--border);
   color: var(--text);
 }
@@ -635,7 +703,7 @@
   overflow-x: hidden;
 }
 
-.content>*+* {
+.content > * + * {
   margin-top: 24px;
 }
 
@@ -647,7 +715,7 @@
   padding-bottom: 0;
 }
 
-.content--chat>*+* {
+.content--chat > * + * {
   margin-top: 0;
 }
 
@@ -705,7 +773,7 @@
   gap: 16px;
 }
 
-.content--chat .content-header>div:first-child {
+.content--chat .content-header > div:first-child {
   text-align: left;
 }
 
