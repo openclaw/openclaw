@@ -127,6 +127,14 @@ private enum ConnectChallengeError: Error {
     case timeout
 }
 
+private let defaultOperatorConnectScopes: [String] = [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+]
+
 public actor GatewayChannelActor {
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
@@ -318,7 +326,7 @@ public actor GatewayChannelActor {
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
-            scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+            scopes: defaultOperatorConnectScopes,
             caps: [],
             commands: [],
             permissions: [:],
