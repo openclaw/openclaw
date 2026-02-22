@@ -230,6 +230,11 @@ Each event includes:
     content?: string,
     channelId?: string,
     success?: boolean,         // message:sent
+    tool?: string,             // tool:before, tool:after
+    toolCallId?: string,       // tool:before, tool:after
+    arguments?: unknown,       // tool:before, tool:after
+    durationMs?: number,       // tool:after
+    error?: string,            // tool:after (failed runs)
   }
 }
 ```
@@ -317,6 +322,39 @@ const handler: HookHandler = async (event) => {
 };
 
 export default handler;
+```
+
+### Tool Events
+
+Triggered around tool execution in the agent loop:
+
+- **`tool`**: All tool events (general listener)
+- **`tool:before`**: Right before a tool executes
+- **`tool:after`**: After a tool succeeds or fails
+
+#### Tool Event Context
+
+```typescript
+// tool:before context
+{
+  tool: string,          // Tool name (e.g., "exec", "read")
+  toolCallId?: string,   // Tool call id from provider/model
+  arguments: unknown,    // Input arguments for the tool call
+  agentId?: string,      // Agent id when available
+  abort: () => void,     // Call to block execution
+}
+
+// tool:after context
+{
+  tool: string,          // Tool name
+  toolCallId?: string,   // Tool call id
+  arguments: unknown,    // Arguments that were executed
+  agentId?: string,      // Agent id when available
+  success: boolean,      // Whether execution succeeded
+  durationMs: number,    // End-to-end tool duration
+  result?: unknown,      // Tool result payload (on success)
+  error?: string,        // Error message (on failure)
+}
 ```
 
 ### Tool Result Hooks (Plugin API)

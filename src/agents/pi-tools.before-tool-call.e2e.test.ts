@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearInternalHooks,
+  isToolAfterEvent,
+  isToolBeforeEvent,
+  registerInternalHook,
+} from "../hooks/internal-hooks.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
@@ -16,6 +22,7 @@ describe("before_tool_call hook integration", () => {
   };
 
   beforeEach(() => {
+    clearInternalHooks();
     resetDiagnosticSessionStateForTest();
     hookRunner = {
       hasHooks: vi.fn(),
@@ -133,6 +140,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   };
 
   beforeEach(() => {
+    clearInternalHooks();
     resetDiagnosticSessionStateForTest();
     hookRunner = {
       hasHooks: vi.fn(() => true),
@@ -197,6 +205,7 @@ describe("before_tool_call hook integration for client tools", () => {
   };
 
   beforeEach(() => {
+    clearInternalHooks();
     resetDiagnosticSessionStateForTest();
     hookRunner = {
       hasHooks: vi.fn(),
@@ -231,5 +240,75 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+  });
+});
+
+describe("tool hook events integration", () => {
+  beforeEach(() => {
+    clearInternalHooks();
+    resetDiagnosticSessionStateForTest();
+    const emptyHookRunner = {
+      hasHooks: vi.fn(() => false),
+      runBeforeToolCall: vi.fn(),
+    };
+    mockGetGlobalHookRunner.mockReturnValue({
+      ...emptyHookRunner,
+    } as unknown as ReturnType<typeof getGlobalHookRunner>);
+  });
+
+  it("emits tool:before and tool:after for successful execution", async () => {
+    const beforeHandler = vi.fn();
+    const afterHandler = vi.fn();
+    registerInternalHook("tool:before", beforeHandler);
+    registerInternalHook("tool:after", afterHandler);
+
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "ReAd", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-main",
+    });
+
+    await tool.execute("tool-call-1", { path: "README.md" }, undefined, undefined);
+
+    const beforeEvent = beforeHandler.mock.calls[0]?.[0];
+    const afterEvent = afterHandler.mock.calls[0]?.[0];
+
+    expect(isToolBeforeEvent(beforeEvent)).toBe(true);
+    expect(beforeEvent.context.tool).toBe("read");
+    expect(beforeEvent.context.arguments).toEqual({ path: "README.md" });
+
+    expect(isToolAfterEvent(afterEvent)).toBe(true);
+    expect(afterEvent.context.tool).toBe("read");
+    expect(afterEvent.context.success).toBe(true);
+    expect(afterEvent.context.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("supports aborting execution from tool:before hooks", async () => {
+    registerInternalHook("tool:before", (event) => {
+      if (!isToolBeforeEvent(event)) {
+        return;
+      }
+      event.messages.push("blocked by tool hook");
+      event.context.abort();
+    });
+    const afterHandler = vi.fn();
+    registerInternalHook("tool:after", afterHandler);
+
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      sessionKey: "session-main",
+    });
+
+    await expect(
+      tool.execute("tool-call-2", { command: "ls" }, undefined, undefined),
+    ).rejects.toThrow("blocked by tool hook");
+    expect(execute).not.toHaveBeenCalled();
+
+    const afterEvent = afterHandler.mock.calls[0]?.[0];
+    expect(isToolAfterEvent(afterEvent)).toBe(true);
+    expect(afterEvent.context.success).toBe(false);
+    expect(afterEvent.context.error).toContain("blocked by tool hook");
   });
 });
