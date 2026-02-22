@@ -585,6 +585,27 @@ describe("runMessageAction sandboxed media validation", () => {
     });
   });
 
+  it("rewrites /workspace media paths to host sandbox root", async () => {
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "/workspace/data/file.txt",
+          message: "",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
+    });
+  });
+
   it("rewrites MEDIA directives under sandbox", async () => {
     await withSandbox(async (sandboxDir) => {
       const result = await runDrySend({
