@@ -34,6 +34,13 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Plugins
+
+- **Sentinel** — Real-time endpoint security monitoring powered by osquery. Detects unauthorized access, suspicious processes, privilege escalation, and system anomalies.
+  npm: `openclaw-sentinel`
+  repo: `https://github.com/sunil-sadasivan/openclaw-sentinel`
+  install: `openclaw plugins install openclaw-sentinel`
+
 ## Candidate format
 
 Use this format when adding entries:
