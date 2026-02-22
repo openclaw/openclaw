@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "postgres";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,6 +8,51 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  postgres?: MemoryPostgresConfig;
+};
+
+export type MemoryPostgresConfig = {
+  /** PostgreSQL connection string (e.g. postgresql://user:pass@host:5432/dbname). */
+  connectionString?: string;
+  /** Individual connection fields (alternative to connectionString). */
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+  /** SSL mode for the connection. */
+  ssl?: boolean | "require" | "prefer" | "disable";
+  /** Table name prefix for multi-agent isolation (default: "openclaw_memory"). */
+  tablePrefix?: string;
+  /** Embedding configuration. */
+  embedding?: MemoryPostgresEmbeddingConfig;
+  /** Hybrid search weights. */
+  hybrid?: {
+    enabled?: boolean;
+    vectorWeight?: number;
+    textWeight?: number;
+  };
+  /** Paths to index (same format as QMD paths). */
+  paths?: MemoryQmdIndexPath[];
+  /** Include default MEMORY.md and memory/ directory. */
+  includeDefaultMemory?: boolean;
+  /** Session transcript indexing. */
+  sessions?: MemoryQmdSessionConfig;
+  /** Update/sync intervals. */
+  update?: MemoryQmdUpdateConfig;
+  /** Search limits. */
+  limits?: MemoryQmdLimitsConfig;
+  /** Scope policy. */
+  scope?: SessionSendPolicyConfig;
+};
+
+export type MemoryPostgresEmbeddingConfig = {
+  /** Embedding provider to use (reuses OpenClaw's provider infrastructure). */
+  provider?: "openai" | "voyage" | "gemini";
+  /** Embedding model name. */
+  model?: string;
+  /** Vector dimensions (must match the model output). */
+  dimensions?: number;
 };
 
 export type MemoryQmdConfig = {

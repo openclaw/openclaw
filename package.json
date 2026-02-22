@@ -214,7 +214,8 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.15.1"
+    "node-llama-cpp": "3.15.1",
+    "pg": "^8.13.0"
   },
   "engines": {
     "node": ">=22.12.0"

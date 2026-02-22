@@ -94,11 +94,50 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryPostgresEmbeddingSchema = z
+  .object({
+    provider: z.union([z.literal("openai"), z.literal("voyage"), z.literal("gemini")]).optional(),
+    model: z.string().optional(),
+    dimensions: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const MemoryPostgresSchema = z
+  .object({
+    connectionString: z.string().optional(),
+    host: z.string().optional(),
+    port: z.number().int().positive().optional(),
+    database: z.string().optional(),
+    user: z.string().optional(),
+    password: z.string().optional(),
+    ssl: z
+      .union([z.boolean(), z.literal("require"), z.literal("prefer"), z.literal("disable")])
+      .optional(),
+    tablePrefix: z.string().optional(),
+    embedding: MemoryPostgresEmbeddingSchema.optional(),
+    hybrid: z
+      .object({
+        enabled: z.boolean().optional(),
+        vectorWeight: z.number().min(0).max(1).optional(),
+        textWeight: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .optional(),
+    paths: z.array(MemoryQmdPathSchema).optional(),
+    includeDefaultMemory: z.boolean().optional(),
+    sessions: MemoryQmdSessionSchema.optional(),
+    update: MemoryQmdUpdateSchema.optional(),
+    limits: MemoryQmdLimitsSchema.optional(),
+    scope: SessionSendPolicySchema.optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z.union([z.literal("builtin"), z.literal("qmd"), z.literal("postgres")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    postgres: MemoryPostgresSchema.optional(),
   })
   .strict()
   .optional();

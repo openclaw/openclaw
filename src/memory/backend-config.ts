@@ -6,6 +6,7 @@ import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
+  MemoryPostgresConfig,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
   MemoryQmdMcporterConfig,
@@ -14,10 +15,38 @@ import type {
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+export type ResolvedPostgresConfig = {
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+  ssl?: boolean | "require" | "prefer" | "disable";
+  tablePrefix: string;
+  embedding: {
+    provider: "openai" | "voyage" | "gemini";
+    model: string;
+    dimensions: number;
+  };
+  hybrid: {
+    enabled: boolean;
+    vectorWeight: number;
+    textWeight: number;
+  };
+  collections: ResolvedQmdCollection[];
+  includeDefaultMemory: boolean;
+  sessions: ResolvedQmdSessionConfig;
+  update: ResolvedQmdUpdateConfig;
+  limits: ResolvedQmdLimitsConfig;
+  scope?: SessionSendPolicyConfig;
+};
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  postgres?: ResolvedPostgresConfig;
 };
 
 export type ResolvedQmdCollection = {
@@ -294,12 +323,81 @@ function resolveDefaultCollections(
   }));
 }
 
+function sanitizeTablePrefix(raw: string | undefined): string {
+  const trimmed = raw?.trim() || "openclaw_memory";
+  // Only allow alphanumeric + underscores to prevent SQL injection.
+  return trimmed.replace(/[^a-zA-Z0-9_]/g, "_") || "openclaw_memory";
+}
+
+function resolvePostgresConfig(
+  pgCfg: MemoryPostgresConfig | undefined,
+  workspaceDir: string,
+  agentId: string,
+): ResolvedPostgresConfig {
+  const nameSet = new Set<string>();
+  const includeDefaultMemory = pgCfg?.includeDefaultMemory !== false;
+  const collections = [
+    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, agentId),
+    ...resolveCustomPaths(pgCfg?.paths, workspaceDir, nameSet, agentId),
+  ];
+
+  return {
+    connectionString: pgCfg?.connectionString,
+    host: pgCfg?.host,
+    port: pgCfg?.port,
+    database: pgCfg?.database,
+    user: pgCfg?.user,
+    password: pgCfg?.password,
+    ssl: pgCfg?.ssl,
+    tablePrefix: sanitizeTablePrefix(pgCfg?.tablePrefix),
+    embedding: {
+      provider: pgCfg?.embedding?.provider ?? "voyage",
+      model: pgCfg?.embedding?.model ?? "voyage-3-lite",
+      dimensions: pgCfg?.embedding?.dimensions ?? 512,
+    },
+    hybrid: {
+      enabled: pgCfg?.hybrid?.enabled !== false,
+      vectorWeight: pgCfg?.hybrid?.vectorWeight ?? 0.7,
+      textWeight: pgCfg?.hybrid?.textWeight ?? 0.3,
+    },
+    collections,
+    includeDefaultMemory,
+    sessions: resolveSessionConfig(pgCfg?.sessions, workspaceDir),
+    update: {
+      intervalMs: resolveIntervalMs(pgCfg?.update?.interval),
+      debounceMs: resolveDebounceMs(pgCfg?.update?.debounceMs),
+      onBoot: pgCfg?.update?.onBoot !== false,
+      waitForBootSync: pgCfg?.update?.waitForBootSync === true,
+      embedIntervalMs: resolveEmbedIntervalMs(pgCfg?.update?.embedInterval),
+      commandTimeoutMs: resolveTimeoutMs(
+        pgCfg?.update?.commandTimeoutMs,
+        DEFAULT_QMD_COMMAND_TIMEOUT_MS,
+      ),
+      updateTimeoutMs: resolveTimeoutMs(
+        pgCfg?.update?.updateTimeoutMs,
+        DEFAULT_QMD_UPDATE_TIMEOUT_MS,
+      ),
+      embedTimeoutMs: resolveTimeoutMs(pgCfg?.update?.embedTimeoutMs, DEFAULT_QMD_EMBED_TIMEOUT_MS),
+    },
+    limits: resolveLimits(pgCfg?.limits),
+    scope: pgCfg?.scope ?? DEFAULT_QMD_SCOPE,
+  };
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+  if (backend === "postgres") {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    return {
+      backend: "postgres",
+      citations,
+      postgres: resolvePostgresConfig(params.cfg.memory?.postgres, workspaceDir, params.agentId),
+    };
+  }
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
