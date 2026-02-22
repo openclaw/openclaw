@@ -18,9 +18,10 @@ import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skill
 import {
   agentAvatarHue,
   agentBadgeText,
+  agentLogoUrl,
   buildAgentContext,
   normalizeAgentLabel,
-  resolveAgentEmoji,
+  resolveAgentAvatarUrl,
 } from "./agents-utils.ts";
 
 export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
@@ -65,6 +66,7 @@ export type AgentSkillsState = {
 };
 
 export type AgentsProps = {
+  basePath: string;
   loading: boolean;
   error: string | null;
   agentsList: AgentsListResult | null;
@@ -174,8 +176,12 @@ export function renderAgents(props: AgentsProps) {
                 `
               : filteredAgents.map((agent) => {
                   const badge = agentBadgeText(agent.id, defaultId);
-                  const emoji = resolveAgentEmoji(agent, props.agentIdentityById[agent.id] ?? null);
+                  const avatarUrl = resolveAgentAvatarUrl(
+                    agent,
+                    props.agentIdentityById[agent.id] ?? null,
+                  );
                   const hue = agentAvatarHue(agent.id);
+                  const logoUrl = agentLogoUrl(props.basePath);
                   return html`
                     <button
                       type="button"
@@ -183,7 +189,11 @@ export function renderAgents(props: AgentsProps) {
                       @click=${() => props.onSelectAgent(agent.id)}
                     >
                       <div class="agent-avatar" style="--agent-hue: ${hue}">
-                        ${emoji || normalizeAgentLabel(agent).slice(0, 1)}
+                        ${
+                          avatarUrl
+                            ? html`<img src=${avatarUrl} alt="" class="agent-avatar__img" />`
+                            : html`<img src=${logoUrl} alt="" class="agent-avatar__img agent-avatar__logo" />`
+                        }
                       </div>
                       <div class="agent-info">
                         <div class="agent-title">${normalizeAgentLabel(agent)}</div>
@@ -211,6 +221,7 @@ export function renderAgents(props: AgentsProps) {
                   defaultId,
                   props.agentIdentityById[selectedAgent.id] ?? null,
                   props.onSetDefault,
+                  props.basePath,
                 )}
                 ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel), tabCounts)}
                 ${
@@ -341,11 +352,12 @@ function renderAgentHeader(
   defaultId: string | null,
   agentIdentity: AgentIdentityResult | null,
   onSetDefault: (agentId: string) => void,
+  basePath: string,
 ) {
   const badge = agentBadgeText(agent.id, defaultId);
   const displayName = normalizeAgentLabel(agent);
   const subtitle = agent.identity?.theme?.trim() || "Agent workspace and routing.";
-  const emoji = resolveAgentEmoji(agent, agentIdentity);
+  const avatarUrl = resolveAgentAvatarUrl(agent, agentIdentity);
   const hue = agentAvatarHue(agent.id);
   const isDefault = Boolean(defaultId && agent.id === defaultId);
 
@@ -354,11 +366,16 @@ function renderAgentHeader(
     actionsMenuOpen = false;
   };
 
+  const logoUrl = agentLogoUrl(basePath);
   return html`
     <section class="card agent-header">
       <div class="agent-header-main">
         <div class="agent-avatar agent-avatar--lg" style="--agent-hue: ${hue}">
-          ${emoji || displayName.slice(0, 1)}
+          ${
+            avatarUrl
+              ? html`<img src=${avatarUrl} alt="" class="agent-avatar__img" />`
+              : html`<img src=${logoUrl} alt="" class="agent-avatar__img agent-avatar__logo" />`
+          }
         </div>
         <div>
           <div class="card-title">${displayName}</div>
