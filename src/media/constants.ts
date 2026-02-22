@@ -5,9 +5,9 @@ export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024; // 100MB
 
 export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
-export function mediaKindFromMime(mime?: string | null): MediaKind {
+export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (!mime) {
-    return "unknown";
+    return undefined;
   }
   if (mime.startsWith("image/")) {
     return "image";
