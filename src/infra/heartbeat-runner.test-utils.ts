@@ -21,17 +21,13 @@ export async function seedSessionStore(
 ): Promise<void> {
   await fs.writeFile(
     storePath,
-    JSON.stringify(
-      {
-        [sessionKey]: {
-          sessionId: session.sessionId ?? "sid",
-          updatedAt: session.updatedAt ?? Date.now(),
-          ...session,
-        },
+    JSON.stringify({
+      [sessionKey]: {
+        sessionId: session.sessionId ?? "sid",
+        updatedAt: session.updatedAt ?? Date.now(),
+        ...session,
       },
-      null,
-      2,
-    ),
+    }),
   );
 }
 
