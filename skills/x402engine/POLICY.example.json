@@ -1,0 +1,57 @@
+{
+  "version": "1",
+  "mode": "enforce",
+  "allowedChains": [
+    "eip155:8453",
+    "eip155:4326",
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+  ],
+  "assets": {
+    "eip155:8453": {
+      "USDC": {
+        "maxPerTx": "50000000",
+        "dailyCap": {
+          "enabled": false,
+          "amount": "500000000",
+          "timezone": "America/Los_Angeles"
+        }
+      }
+    },
+    "eip155:4326": {
+      "USDm": {
+        "maxPerTx": "50000000",
+        "dailyCap": {
+          "enabled": false,
+          "amount": "500000000",
+          "timezone": "America/Los_Angeles"
+        }
+      }
+    },
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": {
+      "USDC": {
+        "maxPerTx": "50000000",
+        "dailyCap": {
+          "enabled": false,
+          "amount": "500000000",
+          "timezone": "America/Los_Angeles"
+        }
+      }
+    }
+  },
+  "recipientPolicy": {
+    "mode": "allowlist",
+    "allow": [
+      "0x7dd5Be069f2d2eAd75eC7C3423B116fF043c2629",
+      "Gzehfseq1k9AcHFSoV7qHmDGQx92nLMw78XXdqVWQQWa"
+    ]
+  },
+  "rateLimits": {
+    "minIntervalSeconds": 1,
+    "maxTxPerHour": 240
+  },
+  "actions": {
+    "allowTransfers": true,
+    "allowApprovals": false,
+    "allowContractCalls": false
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "x402engine-skill",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test ./test/*.test.js",
+    "discover": "node ./cli.js discover",
+    "budget": "node ./cli.js budget"
+  },
+  "dependencies": {
+    "@x402/fetch": "^2.4.0",
+    "@x402/evm": "^2.4.0",
+    "viem": "^2.0.0"
+  }
+}
