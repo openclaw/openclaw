@@ -56,6 +56,23 @@ describe("gateway hooks helpers", () => {
     expect(resolved?.basePath).toBe("/hooks");
     expect(resolved?.token).toBe("secret");
     expect(resolved?.sessionPolicy.allowRequestSessionKey).toBe(false);
+    expect(resolved?.requireTimestamp).toBe(false);
+    expect(resolved?.replayCacheSize).toBe(1024);
+  });
+
+  test("resolveHooksConfig enables replay protection options", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        requireTimestamp: true,
+        replayCacheSize: 32,
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfigOrThrow(cfg);
+    expect(resolved.requireTimestamp).toBe(true);
+    expect(resolved.replayCacheSize).toBe(32);
+    expect(resolved.timestampWindowMs).toBeGreaterThan(0);
   });
 
   test("resolveHooksConfig rejects root path", () => {

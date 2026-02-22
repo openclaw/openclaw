@@ -66,6 +66,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
+const HOOK_NONCE_MAX_BYTES = 256;
 
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
@@ -89,6 +90,51 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+function readSingleHeader(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name];
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (Array.isArray(raw) && raw.length > 0) {
+    const first = raw[0];
+    if (typeof first === "string") {
+      const trimmed = first.trim();
+      return trimmed ? trimmed : undefined;
+    }
+  }
+  return undefined;
+}
+
+function parseHookTimestampMs(raw: string): number | null {
+  if (!/^[0-9]+$/.test(raw)) {
+    return null;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  // Support unix seconds and unix milliseconds.
+  return parsed >= 1_000_000_000_000 ? Math.trunc(parsed) : Math.trunc(parsed * 1000);
+}
+
+function rememberHookReplayNonce(cache: Map<string, true>, nonce: string, limit: number) {
+  if (limit <= 0) {
+    return;
+  }
+  if (cache.has(nonce)) {
+    cache.delete(nonce);
+  }
+  cache.set(nonce, true);
+  while (cache.size > limit) {
+    const oldest = cache.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    cache.delete(oldest);
+  }
 }
 
 function isCanvasPath(pathname: string): boolean {
@@ -230,6 +276,8 @@ export function createHooksRequestHandler(
     // Handler lifetimes are tied to gateway runtime/tests; skip background timer fanout.
     pruneIntervalMs: 0,
   });
+  const hookReplayNonceCache = new Map<string, true>();
+  let hookReplayNonceCacheLimit = 0;
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
     return normalizeRateLimitClientIp(req.socket?.remoteAddress);
@@ -275,6 +323,47 @@ export function createHooksRequestHandler(
       return true;
     }
     hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+
+    if (hooksConfig.requireTimestamp) {
+      const rawTimestamp = readSingleHeader(req, "x-openclaw-timestamp");
+      const nonce = readSingleHeader(req, "x-openclaw-nonce");
+      if (!rawTimestamp) {
+        sendJson(res, 400, { ok: false, error: "x-openclaw-timestamp required" });
+        return true;
+      }
+      if (!nonce) {
+        sendJson(res, 400, { ok: false, error: "x-openclaw-nonce required" });
+        return true;
+      }
+      if (Buffer.byteLength(nonce, "utf-8") > HOOK_NONCE_MAX_BYTES) {
+        sendJson(res, 400, { ok: false, error: "x-openclaw-nonce too large" });
+        return true;
+      }
+      const timestampMs = parseHookTimestampMs(rawTimestamp);
+      if (timestampMs === null) {
+        sendJson(res, 400, {
+          ok: false,
+          error: "x-openclaw-timestamp must be unix seconds or milliseconds",
+        });
+        return true;
+      }
+      if (Math.abs(Date.now() - timestampMs) > hooksConfig.timestampWindowMs) {
+        sendJson(res, 401, {
+          ok: false,
+          error: "x-openclaw-timestamp outside allowed window",
+        });
+        return true;
+      }
+      if (hookReplayNonceCacheLimit !== hooksConfig.replayCacheSize) {
+        hookReplayNonceCache.clear();
+        hookReplayNonceCacheLimit = hooksConfig.replayCacheSize;
+      }
+      if (hookReplayNonceCache.has(nonce)) {
+        sendJson(res, 409, { ok: false, error: "replay detected" });
+        return true;
+      }
+      rememberHookReplayNonce(hookReplayNonceCache, nonce, hookReplayNonceCacheLimit);
+    }
 
     if (req.method !== "POST") {
       res.statusCode = 405;

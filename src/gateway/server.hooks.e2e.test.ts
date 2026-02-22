@@ -411,6 +411,60 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("rejects replayed webhook requests when timestamp protection is enabled", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: "hook-secret",
+      requireTimestamp: true,
+      replayCacheSize: 8,
+    };
+    await withGatewayServer(async ({ port }) => {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const first = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+          "X-OpenClaw-Timestamp": timestamp,
+          "X-OpenClaw-Nonce": "nonce-replay-1",
+        },
+        body: JSON.stringify({ text: "allowed" }),
+      });
+      expect(first.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const replay = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+          "X-OpenClaw-Timestamp": timestamp,
+          "X-OpenClaw-Nonce": "nonce-replay-1",
+        },
+        body: JSON.stringify({ text: "blocked" }),
+      });
+      expect(replay.status).toBe(409);
+      const replayBody = (await replay.json()) as { error?: string };
+      expect(replayBody.error).toBe("replay detected");
+
+      const staleTimestamp = String(Math.floor((Date.now() - 10 * 60_000) / 1000));
+      const stale = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+          "X-OpenClaw-Timestamp": staleTimestamp,
+          "X-OpenClaw-Nonce": "nonce-stale-1",
+        },
+        body: JSON.stringify({ text: "blocked" }),
+      });
+      expect(stale.status).toBe(401);
+      const staleBody = (await stale.json()) as { error?: string };
+      expect(staleBody.error).toBe("x-openclaw-timestamp outside allowed window");
+    });
+  });
+
   test("throttles repeated hook auth failures and resets after success", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
     await withGatewayServer(async ({ port }) => {

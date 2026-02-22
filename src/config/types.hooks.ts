@@ -143,6 +143,10 @@ export type HooksConfig = {
    * Omit or include `*` to allow any agent. Set `[]` to deny all explicit `agentId` routing.
    */
   allowedAgentIds?: string[];
+  /** Require timestamp + nonce headers and reject stale/replayed requests. */
+  requireTimestamp?: boolean;
+  /** Max remembered nonces for replay detection when timestamp protection is enabled. */
+  replayCacheSize?: number;
   maxBodyBytes?: number;
   presets?: string[];
   transformsDir?: string;

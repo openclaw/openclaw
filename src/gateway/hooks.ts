@@ -11,11 +11,16 @@ import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.j
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
+const DEFAULT_HOOKS_REPLAY_CACHE_SIZE = 1024;
+const DEFAULT_HOOKS_TIMESTAMP_WINDOW_MS = 5 * 60_000;
 
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
   maxBodyBytes: number;
+  requireTimestamp: boolean;
+  replayCacheSize: number;
+  timestampWindowMs: number;
   mappings: HookMappingResolved[];
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
@@ -51,6 +56,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
       ? cfg.hooks.maxBodyBytes
       : DEFAULT_HOOKS_MAX_BODY_BYTES;
+  const requireTimestamp = cfg.hooks?.requireTimestamp === true;
+  const replayCacheSize =
+    cfg.hooks?.replayCacheSize && cfg.hooks.replayCacheSize > 0
+      ? Math.trunc(cfg.hooks.replayCacheSize)
+      : DEFAULT_HOOKS_REPLAY_CACHE_SIZE;
   const mappings = resolveHookMappings(cfg.hooks);
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
@@ -79,6 +89,9 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     basePath: trimmed,
     token,
     maxBodyBytes,
+    requireTimestamp,
+    replayCacheSize,
+    timestampWindowMs: DEFAULT_HOOKS_TIMESTAMP_WINDOW_MS,
     mappings,
     agentPolicy: {
       defaultAgentId,
