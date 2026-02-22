@@ -91,7 +91,7 @@ import {
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
 
-export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
+export { resetGatewayModelCatalogCache } from "./server-model-catalog.js";
 
 ensureOpenClawCliOnPath();
 

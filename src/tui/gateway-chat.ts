@@ -223,6 +223,17 @@ export class GatewayChatClient {
     const res = await this.client.request<{ models?: GatewayModelChoice[] }>("models.list");
     return Array.isArray(res?.models) ? res.models : [];
   }
+
+  async addProvider(params: {
+    baseUrl: string;
+    apiKey?: string;
+    api: "openai-completions" | "anthropic-messages";
+    providerId: string;
+    modelId: string;
+    alias?: string;
+  }): Promise<{ ok: boolean; providerId: string; modelId: string; modelRef: string }> {
+    return await this.client.request("models.addProvider", params);
+  }
 }
 
 export function resolveGatewayConnection(opts: GatewayConnectionOptions) {

@@ -9,6 +9,7 @@ import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
+import { AddProviderWizard } from "./components/add-provider-wizard.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -75,19 +76,34 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openModelSelector = async () => {
     try {
       const models = await client.listModels();
-      if (models.length === 0) {
-        chatLog.addSystem("no models available");
-        tui.requestRender();
-        return;
-      }
-      const items = models.map((model) => ({
-        value: `${model.provider}/${model.id}`,
-        label: `${model.provider}/${model.id}`,
-        description: model.name && model.name !== model.id ? model.name : "",
-      }));
+
+      // Add "Add my provider" as the first option
+      const addProviderItem = {
+        value: "__add_provider__",
+        label: "+ Add my provider",
+        description: "Configure a custom model provider",
+      };
+
+      const items = [
+        addProviderItem,
+        ...models.map((model) => ({
+          value: `${model.provider}/${model.id}`,
+          label: `${model.provider}/${model.id}`,
+          description: model.name && model.name !== model.id ? model.name : "",
+        })),
+      ];
+
       const selector = createSearchableSelectList(items, 9);
       selector.onSelect = (item) => {
         void (async () => {
+          if (item.value === "__add_provider__") {
+            // Open add provider wizard
+            closeOverlay();
+            openAddProviderWizard();
+            tui.requestRender();
+            return;
+          }
+
           try {
             const result = await client.patchSession({
               key: state.currentSessionKey,
@@ -113,6 +129,48 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       chatLog.addSystem(`model list failed: ${String(err)}`);
       tui.requestRender();
     }
+  };
+
+  const openAddProviderWizard = () => {
+    const wizard = new AddProviderWizard(chatLog);
+    wizard.onSelect = async (result) => {
+      try {
+        chatLog.addSystem(`Adding provider ${result.providerId}...`);
+        const addResult = await client.addProvider({
+          baseUrl: result.baseUrl,
+          apiKey: result.apiKey,
+          api: result.api,
+          providerId: result.providerId,
+          modelId: result.modelId,
+          alias: result.alias,
+        });
+
+        if (addResult.ok) {
+          chatLog.addSystem(`Provider added: ${addResult.providerId}/${addResult.modelId}`);
+
+          // Set the newly added model as current
+          const patchResult = await client.patchSession({
+            key: state.currentSessionKey,
+            model: addResult.modelRef,
+          });
+          applySessionInfoFromPatch(patchResult);
+          await refreshSessionInfo();
+
+          closeOverlay();
+          tui.requestRender();
+        }
+      } catch (err) {
+        chatLog.addSystem(`Failed to add provider: ${String(err)}`);
+        closeOverlay();
+        tui.requestRender();
+      }
+    };
+    wizard.onCancel = () => {
+      closeOverlay();
+      tui.requestRender();
+    };
+    openOverlay(wizard);
+    tui.requestRender();
   };
 
   const openAgentSelector = async () => {

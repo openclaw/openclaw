@@ -173,6 +173,28 @@ export const ModelsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ModelsAddProviderParamsSchema = Type.Object(
+  {
+    baseUrl: NonEmptyString,
+    apiKey: Type.Optional(Type.String()),
+    api: Type.Union([Type.Literal("openai-completions"), Type.Literal("anthropic-messages")]),
+    providerId: NonEmptyString,
+    modelId: NonEmptyString,
+    alias: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsAddProviderResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    providerId: NonEmptyString,
+    modelId: NonEmptyString,
+    modelRef: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsStatusParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),

@@ -7,10 +7,9 @@ import { loadConfig } from "../config/config.js";
 
 export type GatewayModelChoice = ModelCatalogEntry;
 
-// Test-only escape hatch: model catalog is cached at module scope for the
-// process lifetime, which is fine for the real gateway daemon, but makes
-// isolated unit tests harder. Keep this intentionally obscure.
-export function __resetModelCatalogCacheForTest() {
+// Manual cache reset for the model catalog. Used when the configuration
+// changes (e.g. adding a new provider) so the catalog is reloaded.
+export function resetGatewayModelCatalogCache() {
   resetModelCatalogCacheForTest();
 }
 

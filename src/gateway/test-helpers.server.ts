@@ -159,7 +159,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   resetAgentRunContextForTest();
   const mod = await getServerModule();
-  mod.__resetModelCatalogCacheForTest();
+  mod.resetGatewayModelCatalogCache();
   piSdkMock.enabled = false;
   piSdkMock.discoverCalls = 0;
   piSdkMock.models = [];
