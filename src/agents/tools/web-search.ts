@@ -457,6 +457,47 @@ function isValidIsoDate(value: string): boolean {
   );
 }
 
+/**
+ * Normalize search_lang codes for Brave API.
+ * Brave requires specific enum values like `zh-hans`, `zh-hant` for Chinese.
+ * Common ISO codes like `zh`, `zh-cn`, `zh-tw` are mapped to Brave-compatible values.
+ */
+function normalizeBraveSearchLang(lang: string | undefined): string | undefined {
+  if (!lang) {
+    return undefined;
+  }
+  const lower = lang.toLowerCase().trim();
+  if (lower === "zh" || lower === "zh-cn") {
+    return "zh-hans";
+  }
+  if (lower === "zh-tw" || lower === "zh-hk") {
+    return "zh-hant";
+  }
+  return lang;
+}
+
+/**
+ * Normalize ui_lang codes for Brave API.
+ * Brave requires specific enum values like `zh-CN`, `zh-TW` for Chinese UI.
+ * Common ISO codes are mapped to Brave-compatible values.
+ */
+function normalizeBraveUiLang(lang: string | undefined): string | undefined {
+  if (!lang) {
+    return undefined;
+  }
+  const lower = lang.toLowerCase().trim();
+  if (lower === "zh" || lower === "zh-cn") {
+    return "zh-CN";
+  }
+  if (lower === "zh-tw") {
+    return "zh-TW";
+  }
+  if (lower === "zh-hk") {
+    return "zh-HK";
+  }
+  return lang;
+}
+
 function resolveSiteName(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
@@ -669,11 +710,13 @@ async function runWebSearch(params: {
   if (params.country) {
     url.searchParams.set("country", params.country);
   }
-  if (params.search_lang) {
-    url.searchParams.set("search_lang", params.search_lang);
+  const normalizedSearchLang = normalizeBraveSearchLang(params.search_lang);
+  if (normalizedSearchLang) {
+    url.searchParams.set("search_lang", normalizedSearchLang);
   }
-  if (params.ui_lang) {
-    url.searchParams.set("ui_lang", params.ui_lang);
+  const normalizedUiLang = normalizeBraveUiLang(params.ui_lang);
+  if (normalizedUiLang) {
+    url.searchParams.set("ui_lang", normalizedUiLang);
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
@@ -821,6 +864,8 @@ export const __testing = {
   resolvePerplexityRequestModel,
   normalizeFreshness,
   freshnessToPerplexityRecency,
+  normalizeBraveSearchLang,
+  normalizeBraveUiLang,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
