@@ -88,6 +88,18 @@ describe("sessions", () => {
     ).toBe("discord:friends-of-openclaw#general");
   });
 
+  it("appends topic name to group display name (telegram preserves subject/topic casing)", () => {
+    expect(
+      buildGroupDisplayName({
+        provider: "telegram",
+        subject: "OpenClawBot",
+        topicName: "General",
+        id: "123",
+        key: "telegram:group:123",
+      }),
+    ).toBe("telegram : OpenClawBot : General");
+  });
+
   const resolveSessionKeyCases = [
     {
       name: "keeps explicit provider when provided in group key",

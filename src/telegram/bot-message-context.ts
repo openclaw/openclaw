@@ -175,6 +175,11 @@ export const buildTelegramMessageContext = async ({
   });
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
+  const topicName =
+    (msg as { forum_topic_created?: { name?: string } }).forum_topic_created?.name ??
+    (msg as { reply_to_message?: { forum_topic_created?: { name?: string } } }).reply_to_message
+      ?.forum_topic_created?.name ??
+    undefined;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
@@ -703,6 +708,7 @@ export const buildTelegramMessageContext = async ({
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+    TopicName: isForum ? topicName : undefined,
     GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
