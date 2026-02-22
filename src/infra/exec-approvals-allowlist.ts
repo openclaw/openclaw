@@ -16,6 +16,11 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+
+function hasShellLineContinuation(command: string): boolean {
+  return /\\(?:\r\n|\n|\r)/.test(command);
+}
+
 export function normalizeSafeBins(entries?: string[]): Set<string> {
   if (!Array.isArray(entries)) {
     return new Set();
@@ -374,6 +379,12 @@ export function evaluateShellAllowlist(params: {
     segments: [],
     segmentSatisfiedBy: [],
   });
+
+  // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
+  // and can rewrite token boundaries at runtime.
+  if (hasShellLineContinuation(params.command)) {
+    return analysisFailure();
+  }
 
   const chainParts = isWindowsPlatform(params.platform) ? null : splitCommandChain(params.command);
   if (!chainParts) {
