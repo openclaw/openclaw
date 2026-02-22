@@ -172,6 +172,7 @@ export function createExecTool(
   } = resolveExecSafeBinRuntimePolicy({
     local: {
       safeBins: defaults?.safeBins,
+      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
     },
   });
