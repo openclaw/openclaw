@@ -1,11 +1,12 @@
 import AppKit
 import SwiftUI
 
-final class HighlightedMenuItemHostView: NSView {
+class HighlightedMenuItemHostView: NSView {
     private var baseView: AnyView
     private let hosting: NSHostingView<AnyView>
     private var targetWidth: CGFloat
     private var tracking: NSTrackingArea?
+    var showsHighlight: Bool = true
     private var hovered = false {
         didSet { self.updateHighlight() }
     }
@@ -48,11 +49,13 @@ final class HighlightedMenuItemHostView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         _ = event
+        guard self.showsHighlight else { return }
         self.hovered = true
     }
 
     override func mouseExited(with event: NSEvent) {
         _ = event
+        guard self.showsHighlight else { return }
         self.hovered = false
     }
 
@@ -61,10 +64,25 @@ final class HighlightedMenuItemHostView: NSView {
         self.hosting.frame = self.bounds
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard self.window != nil, self.showsHighlight else { return }
+        let isHighlighted = self.enclosingMenuItem?.isHighlighted == true
+        if isHighlighted != self.hovered {
+            self.hovered = isHighlighted
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        if self.hovered {
-            NSColor.selectedContentBackgroundColor.setFill()
-            self.bounds.fill()
+        if self.showsHighlight {
+            let isHighlighted = self.enclosingMenuItem?.isHighlighted == true
+            if isHighlighted {
+                let path = NSBezierPath(
+                    roundedRect: self.bounds.insetBy(dx: 4, dy: 1),
+                    xRadius: 6, yRadius: 6)
+                NSColor.unemphasizedSelectedContentBackgroundColor.setFill()
+                path.fill()
+            }
         }
         super.draw(dirtyRect)
     }

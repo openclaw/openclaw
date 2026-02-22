@@ -3,17 +3,21 @@ import SwiftUI
 struct MenuUsageHeaderView: View {
     let count: Int
 
-    private let paddingTop: CGFloat = 8
-    private let paddingBottom: CGFloat = 6
+    private let paddingTop: CGFloat = 5
+    private let paddingBottom: CGFloat = 3
     private let paddingTrailing: CGFloat = 10
-    private let paddingLeading: CGFloat = 20
+    private let paddingLeading: CGFloat = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
+                Image(systemName: "bolt")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 16, height: 16, alignment: .center)
                 Text("Usage")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 10)
                 Text(self.subtitle)
                     .font(.caption)

@@ -9,8 +9,19 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     private let tag = 9_415_557
     private let nodesTag = 9_415_558
+    private let activeHeaderTag = 9_415_559
+    private let quickSettingsTag = 9_415_561
+    private let actionsTag = 9_415_562
+    private let appLabelTag = 9_415_563
+    private let nativeItemsTag = 9_415_564
     private let fallbackWidth: CGFloat = 320
     private let activeWindowSeconds: TimeInterval = 24 * 60 * 60
+
+    private var quickSettingsBrowserControlEnabled: Bool = true
+    private var quickSettingsHostedViews: [ClickableMenuItemHostView] = []
+    private var execApprovalsHostedView: HighlightedMenuItemHostView?
+    private var voiceWakePendingIsOn: Bool?
+    private var activeHeaderHostedView: ClickableMenuItemHostView?
 
     private weak var originalDelegate: NSMenuDelegate?
     private weak var statusItem: NSStatusItem?
@@ -43,6 +54,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.statusItem = statusItem
         guard let menu = statusItem.menu else { return }
 
+        // Lock in a minimum width so the menu never shrinks when injected
+        // items change (e.g. gateway disconnect → reconnect).
+        menu.minimumWidth = self.fallbackWidth
+
         // Preserve SwiftUI's internal NSMenuDelegate, otherwise it may stop populating menu items.
         if menu.delegate !== self {
             self.originalDelegate = menu.delegate
@@ -50,7 +65,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
 
         if self.loadTask == nil {
-            self.loadTask = Task { await self.refreshCache(force: true) }
+            self.loadTask = Task {
+                await self.refreshCache(force: true)
+                await self.refreshQuickSettingsBrowserControl()
+            }
         }
 
         self.startControlChannelObservation()
@@ -62,8 +80,13 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.isMenuOpen = true
         self.menuOpenWidth = self.currentMenuWidth(for: menu)
 
-        self.inject(into: menu)
+        self.injectActiveHeader(into: menu)
         self.injectNodes(into: menu)
+        self.inject(into: menu)
+        self.injectQuickSettings(into: menu)
+        self.injectActionsLabel(into: menu)
+        self.injectAppLabel(into: menu)
+        self.injectNativeItemViews(into: menu)
 
         // Refresh in background for the next open; keep width stable while open.
         self.loadTask?.cancel()
@@ -73,10 +96,16 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             await self.refreshCache(force: forceRefresh)
             await self.refreshUsageCache(force: forceRefresh)
             await self.refreshCostUsageCache(force: forceRefresh)
+            await self.refreshQuickSettingsBrowserControl()
             await MainActor.run {
                 guard self.isMenuOpen else { return }
-                self.inject(into: menu)
+                self.injectActiveHeader(into: menu)
                 self.injectNodes(into: menu)
+                self.inject(into: menu)
+                self.injectQuickSettings(into: menu)
+                self.injectActionsLabel(into: menu)
+                self.injectAppLabel(into: menu)
+                self.injectNativeItemViews(into: menu)
             }
         }
 
@@ -126,10 +155,16 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             await self.refreshCache(force: true)
             await self.refreshUsageCache(force: true)
             await self.refreshCostUsageCache(force: true)
+            await self.refreshQuickSettingsBrowserControl()
             await MainActor.run {
                 guard self.isMenuOpen else { return }
-                self.inject(into: menu)
+                self.injectActiveHeader(into: menu)
                 self.injectNodes(into: menu)
+                self.inject(into: menu)
+                self.injectQuickSettings(into: menu)
+                self.injectActionsLabel(into: menu)
+                self.injectAppLabel(into: menu)
+                self.injectNativeItemViews(into: menu)
             }
         }
 
@@ -178,6 +213,17 @@ extension MenuSessionsInjector {
         var cursor = insertIndex
         var headerView: NSView?
 
+        // "Activity" section label wraps Context (sessions) + Usage together.
+        let activityLabel = NSMenuItem()
+        activityLabel.tag = self.tag
+        activityLabel.isEnabled = false
+        activityLabel.view = self.makeHostedView(
+            rootView: AnyView(MenuSectionLabelView(title: "Activity", width: width)),
+            width: width,
+            highlighted: false)
+        menu.insertItem(activityLabel, at: cursor)
+        cursor += 1
+
         if let snapshot = self.cachedSnapshot {
             let now = Date()
             let mainKey = self.mainSessionKey
@@ -209,7 +255,7 @@ extension MenuSessionsInjector {
                     count: rows.count,
                     statusText: statusText)),
                 width: width,
-                highlighted: false)
+                highlighted: true)
             headerItem.view = hosted
             headerView = hosted
             menu.insertItem(headerItem, at: cursor)
@@ -246,7 +292,7 @@ extension MenuSessionsInjector {
                     count: 0,
                     statusText: statusText)),
                 width: width,
-                highlighted: false)
+                highlighted: true)
             headerItem.view = hosted
             headerView = hosted
             menu.insertItem(headerItem, at: cursor)
@@ -264,7 +310,6 @@ extension MenuSessionsInjector {
         }
 
         cursor = self.insertUsageSection(into: menu, at: cursor, width: width)
-        cursor = self.insertCostUsageSection(into: menu, at: cursor, width: width)
 
         DispatchQueue.main.async { [weak self, weak headerView] in
             guard let self, let headerView else { return }
@@ -272,78 +317,456 @@ extension MenuSessionsInjector {
         }
     }
 
+    private func injectActiveHeader(into menu: NSMenu) {
+        for item in menu.items where item.tag == self.activeHeaderTag {
+            menu.removeItem(item)
+        }
+        self.activeHeaderHostedView = nil
+
+        let width = self.initialWidth(for: menu)
+        let state = AppStateStore.shared
+
+        let hosted = ClickableMenuItemHostView(
+            rootView: self.makeActiveHeaderView(state: state, width: width),
+            width: width)
+        hosted.showsHighlight = false
+        self.activeHeaderHostedView = hosted
+        hosted.onClick = { [weak self] in
+            state.isPaused.toggle()
+            // Update the existing view in place so SwiftUI can animate the toggle.
+            guard let self else { return }
+            self.refreshActiveHeader()
+        }
+
+        let item = NSMenuItem()
+        item.tag = self.activeHeaderTag
+        item.isEnabled = true
+        item.view = hosted
+        menu.insertItem(item, at: 0)
+
+        let separator = NSMenuItem.separator()
+        separator.tag = self.activeHeaderTag
+        menu.insertItem(separator, at: 1)
+    }
+
+    private func makeActiveHeaderView(state: AppState, width: CGFloat) -> AnyView {
+        AnyView(MenuActiveHeaderView(state: state, width: width))
+    }
+
+    private func refreshActiveHeader() {
+        let w = self.currentWidth
+        let state = AppStateStore.shared
+        self.activeHeaderHostedView?.update(rootView: self.makeActiveHeaderView(state: state, width: w), width: w)
+    }
+
     private func injectNodes(into menu: NSMenu) {
         for item in menu.items where item.tag == self.nodesTag {
             menu.removeItem(item)
         }
 
-        guard let insertIndex = self.findNodesInsertIndex(in: menu) else { return }
+        // Status section is pinned right after the active header (positions 2+).
+        var cursor = self.statusInsertIndex(in: menu)
         let width = self.initialWidth(for: menu)
-        var cursor = insertIndex
 
         let entries = self.sortedNodeEntries()
-        let topSeparator = NSMenuItem.separator()
-        topSeparator.tag = self.nodesTag
-        menu.insertItem(topSeparator, at: cursor)
+        let deviceCount = entries.count
+        let isConnecting = { if case .connecting = ControlChannel.shared.state { return true }; return false }()
+
+        // "Status" section label
+        let sectionLabel = NSMenuItem()
+        sectionLabel.tag = self.nodesTag
+        sectionLabel.isEnabled = false
+        sectionLabel.view = self.makeHostedView(
+            rootView: AnyView(MenuSectionLabelView(title: "Status", width: width)),
+            width: width,
+            highlighted: false)
+        menu.insertItem(sectionLabel, at: cursor)
         cursor += 1
 
+        // Gateway row — compact single line with status dot
         if let gatewayEntry = self.gatewayEntry() {
-            let gatewayItem = self.makeNodeItem(entry: gatewayEntry, width: width)
+            let gatewayItem = self.makeGatewayItem(entry: gatewayEntry, width: width)
             menu.insertItem(gatewayItem, at: cursor)
             cursor += 1
         }
 
+        // Connected Devices row with submenu
+        let submenu = self.buildDevicesSubmenu(entries: entries, width: width)
+        let devicesView = AnyView(ConnectedDevicesMenuRowView(
+            count: deviceCount,
+            isConnecting: isConnecting,
+            isConnected: self.isControlChannelConnected,
+            width: width))
+        let devicesHosted = HighlightedMenuItemHostView(rootView: devicesView, width: width)
+
+        let item = NSMenuItem()
+        item.tag = self.nodesTag
+        item.isEnabled = true
+        item.view = devicesHosted
+        item.submenu = submenu
+        menu.insertItem(item, at: cursor)
+        cursor += 1
+
+        // Bottom separator separates Status from Activity section.
+        let sep = NSMenuItem.separator()
+        sep.tag = self.nodesTag
+        menu.insertItem(sep, at: cursor)
+    }
+
+    // MARK: - Quick Settings injection
+
+    private func injectQuickSettings(into menu: NSMenu) {
+        for item in menu.items where item.tag == self.quickSettingsTag {
+            menu.removeItem(item)
+        }
+        self.quickSettingsHostedViews = []
+        self.execApprovalsHostedView = nil
+
+        guard let insertIndex = self.findQuickSettingsInsertIndex(in: menu) else { return }
+        let width = self.initialWidth(for: menu)
+        var cursor = insertIndex
+
+        // Separator before Quick Settings section.
+        let sep = NSMenuItem.separator()
+        sep.tag = self.quickSettingsTag
+        menu.insertItem(sep, at: cursor)
+        cursor += 1
+
+        // "Quick Settings" section label.
+        let sectionLabel = NSMenuItem()
+        sectionLabel.tag = self.quickSettingsTag
+        sectionLabel.isEnabled = false
+        sectionLabel.view = self.makeHostedView(
+            rootView: AnyView(MenuSectionLabelView(title: "Quick Settings", width: width)),
+            width: width,
+            highlighted: false)
+        menu.insertItem(sectionLabel, at: cursor)
+        cursor += 1
+
+        let state = AppStateStore.shared
+
+        // Send Heartbeats — index 0
+        cursor = self.appendToggle(
+            into: menu, at: cursor, width: width,
+            icon: "waveform.path.ecg", label: "Send Heartbeats",
+            isOn: state.heartbeatsEnabled) {
+                state.heartbeatsEnabled.toggle()
+            }
+
+        // Browser Control — index 1
+        cursor = self.appendToggle(
+            into: menu, at: cursor, width: width,
+            icon: "globe", label: "Browser Control",
+            isOn: self.quickSettingsBrowserControlEnabled) { [weak self] in
+                guard let self else { return }
+                let newValue = !self.quickSettingsBrowserControlEnabled
+                self.quickSettingsBrowserControlEnabled = newValue
+                self.refreshQuickSettingsVisuals()
+                Task {
+                    var root = await ConfigStore.load()
+                    var browser = root["browser"] as? [String: Any] ?? [:]
+                    browser["enabled"] = newValue
+                    root["browser"] = browser
+                    do {
+                        try await ConfigStore.save(root)
+                    } catch {
+                        await MainActor.run { [weak self] in
+                            guard let self else { return }
+                            self.quickSettingsBrowserControlEnabled = !newValue
+                            self.refreshQuickSettingsVisuals()
+                        }
+                    }
+                }
+            }
+
+        // Allow Camera — index 2
+        cursor = self.appendToggle(
+            into: menu, at: cursor, width: width,
+            icon: "camera", label: "Allow Camera",
+            isOn: UserDefaults.standard.bool(forKey: cameraEnabledKey)) {
+                let current = UserDefaults.standard.bool(forKey: cameraEnabledKey)
+                UserDefaults.standard.set(!current, forKey: cameraEnabledKey)
+            }
+
+        // Allow Canvas — index 3
+        cursor = self.appendToggle(
+            into: menu, at: cursor, width: width,
+            icon: "rectangle.and.pencil.and.ellipsis", label: "Allow Canvas",
+            isOn: state.canvasEnabled) {
+                state.canvasEnabled.toggle()
+                if !state.canvasEnabled {
+                    CanvasManager.shared.hideAll()
+                }
+            }
+
+        // Voice Wake — index 4
+        let voiceWakeIsOn = self.voiceWakePendingIsOn ?? state.swabbleEnabled
+        cursor = self.appendToggle(
+            into: menu, at: cursor, width: width,
+            icon: "mic.fill", label: "Voice Wake",
+            isOn: voiceWakeIsOn) { [weak self] in
+                guard let self else { return }
+                let current = self.voiceWakePendingIsOn ?? state.swabbleEnabled
+                let newValue = !current
+                self.voiceWakePendingIsOn = newValue
+                self.refreshQuickSettingsVisuals()
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await state.setVoiceWakeEnabled(newValue)
+                    self.voiceWakePendingIsOn = nil
+                    self.refreshQuickSettingsVisuals()
+                }
+            }
+
+        // Exec Approvals — submenu row (not a toggle), placed last
+        let execView = AnyView(MenuSubMenuRow(
+            icon: "terminal",
+            label: "Exec Approvals",
+            currentValue: state.execApprovalMode.title,
+            width: width))
+        let execHosted = HighlightedMenuItemHostView(rootView: execView, width: width)
+        self.execApprovalsHostedView = execHosted
+        let execItem = NSMenuItem()
+        execItem.tag = self.quickSettingsTag
+        execItem.isEnabled = true
+        execItem.view = execHosted
+        execItem.submenu = self.buildExecApprovalsSubmenu(state: state, width: width)
+        menu.insertItem(execItem, at: cursor)
+        cursor += 1
+        _ = cursor
+    }
+
+    /// Creates a toggle row, appends its hosted view to `quickSettingsHostedViews`,
+    /// and inserts the menu item at `cursor`. Returns the next cursor position.
+    @discardableResult
+    private func appendToggle(
+        into menu: NSMenu,
+        at cursor: Int,
+        width: CGFloat,
+        icon: String,
+        label: String,
+        isOn: Bool,
+        onToggle: @escaping () -> Void) -> Int
+    {
+        let hosted = ClickableMenuItemHostView(
+            rootView: AnyView(QuickSettingsRow(icon: icon, label: label, isOn: isOn, width: width)),
+            width: width)
+        hosted.showsHighlight = false
+        self.quickSettingsHostedViews.append(hosted)
+        hosted.onClick = { [weak self] in
+            onToggle()
+            self?.refreshQuickSettingsVisuals()
+        }
+        let item = NSMenuItem()
+        item.tag = self.quickSettingsTag
+        item.isEnabled = true
+        item.view = hosted
+        menu.insertItem(item, at: cursor)
+        return cursor + 1
+    }
+
+    /// Updates existing hosted views in place so SwiftUI can diff and animate
+    /// the CapsuleToggle transitions smoothly.
+    private func refreshQuickSettingsVisuals() {
+        let w = self.currentWidth
+        let state = AppStateStore.shared
+        let configs: [(String, String, Bool)] = [
+            ("waveform.path.ecg", "Send Heartbeats", state.heartbeatsEnabled),
+            ("globe", "Browser Control", self.quickSettingsBrowserControlEnabled),
+            ("camera", "Allow Camera", UserDefaults.standard.bool(forKey: cameraEnabledKey)),
+            ("rectangle.and.pencil.and.ellipsis", "Allow Canvas", state.canvasEnabled),
+            ("mic.fill", "Voice Wake", self.voiceWakePendingIsOn ?? state.swabbleEnabled),
+        ]
+        for (index, (icon, label, isOn)) in configs.enumerated() {
+            guard index < self.quickSettingsHostedViews.count else { break }
+            self.quickSettingsHostedViews[index].update(
+                rootView: AnyView(QuickSettingsRow(icon: icon, label: label, isOn: isOn, width: w)),
+                width: w)
+        }
+        if let execHosted = self.execApprovalsHostedView {
+            execHosted.update(
+                rootView: AnyView(MenuSubMenuRow(
+                    icon: "terminal",
+                    label: "Exec Approvals",
+                    currentValue: state.execApprovalMode.title,
+                    width: w)),
+                width: w)
+        }
+    }
+
+    private func buildExecApprovalsSubmenu(state: AppState, width: CGFloat) -> NSMenu {
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        for mode in ExecApprovalQuickMode.allCases {
+            let isSelected = state.execApprovalMode == mode
+            let hosted = HighlightedMenuItemHostView(
+                rootView: AnyView(MenuPickerRow(label: mode.title, isSelected: isSelected, width: width)),
+                width: width)
+            let item = NSMenuItem()
+            item.target = self
+            item.action = #selector(self.selectExecApprovalMode(_:))
+            item.representedObject = mode.rawValue
+            item.view = hosted
+            submenu.addItem(item)
+        }
+        return submenu
+    }
+
+    @objc
+    private func selectExecApprovalMode(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = ExecApprovalQuickMode(rawValue: rawValue) else { return }
+        let state = AppStateStore.shared
+        state.execApprovalMode = mode
+        self.refreshQuickSettingsVisuals()
+    }
+
+    /// Injects the "Actions" section label just before the "Open Dashboard" button.
+    private func injectActionsLabel(into menu: NSMenu) {
+        for item in menu.items where item.tag == self.actionsTag {
+            menu.removeItem(item)
+        }
+        guard let dashIdx = menu.items.firstIndex(where: { $0.title == "Open Dashboard" }) else { return }
+        let width = self.initialWidth(for: menu)
+        let label = NSMenuItem()
+        label.tag = self.actionsTag
+        label.isEnabled = false
+        label.view = self.makeHostedView(
+            rootView: AnyView(MenuSectionLabelView(title: "Actions", width: width)),
+            width: width,
+            highlighted: false)
+        menu.insertItem(label, at: dashIdx)
+    }
+
+    /// Injects the "App" section label just before the "Settings…" button.
+    private func injectAppLabel(into menu: NSMenu) {
+        for item in menu.items where item.tag == self.appLabelTag {
+            menu.removeItem(item)
+        }
+        guard let settingsIdx = menu.items.firstIndex(where: { $0.title == "Settings…" }) else { return }
+        let width = self.initialWidth(for: menu)
+        let label = NSMenuItem()
+        label.tag = self.appLabelTag
+        label.isEnabled = false
+        label.view = self.makeHostedView(
+            rootView: AnyView(MenuSectionLabelView(title: "App", width: width)),
+            width: width,
+            highlighted: false)
+        menu.insertItem(label, at: settingsIdx)
+    }
+
+    /// Wraps native SwiftUI menu items in the Actions and App sections with custom host views
+    /// so they receive the same grey-hover treatment as all other custom rows.
+    /// Items with a submenu get `HighlightedMenuItemHostView`; plain buttons get
+    /// `ClickableMenuItemHostView` (grey hover + click re-fires via NSApp.sendAction).
+    /// Already-wrapped items (tag == nativeItemsTag) are updated in place.
+    private func injectNativeItemViews(into menu: NSMenu) {
+        guard let actionsStart = menu.items.firstIndex(where: { $0.tag == self.actionsTag }) else { return }
+        let width = self.initialWidth(for: menu)
+        let items = menu.items
+        for i in (actionsStart + 1)..<items.count {
+            let item = items[i]
+            guard !item.isSeparatorItem else { continue }
+            let isAlreadyWrapped = item.tag == self.nativeItemsTag
+            let isNative = item.tag == 0 && item.view == nil
+            guard isAlreadyWrapped || isNative else { continue }
+            guard let image = item.image else { continue }
+            let title = item.title
+            guard !title.isEmpty else { continue }
+
+            let hasSubmenu = item.submenu != nil
+            let rowView = AnyView(MenuNativeItemRow(
+                image: image,
+                label: title,
+                hasSubmenu: hasSubmenu,
+                width: width))
+
+            if isAlreadyWrapped {
+                if let hosted = item.view as? HighlightedMenuItemHostView {
+                    hosted.update(rootView: rowView, width: width)
+                }
+            } else if hasSubmenu {
+                item.view = HighlightedMenuItemHostView(rootView: rowView, width: width)
+                item.tag = self.nativeItemsTag
+            } else {
+                let hosted = ClickableMenuItemHostView(rootView: rowView, width: width)
+                let target = item.target
+                let action = item.action
+                if let action {
+                    hosted.onClick = { [weak item] in
+                        guard let item else { return }
+                        NSApp.sendAction(action, to: target, from: item)
+                    }
+                }
+                item.view = hosted
+                item.tag = self.nativeItemsTag
+            }
+        }
+    }
+
+    private func refreshQuickSettingsBrowserControl() async {
+        let root = await ConfigStore.load()
+        let browser = root["browser"] as? [String: Any]
+        self.quickSettingsBrowserControlEnabled = browser?["enabled"] as? Bool ?? true
+    }
+
+    private func makeGatewayItem(entry: NodeInfo, width: CGFloat) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.tag = self.nodesTag
+        item.target = self
+        item.action = #selector(self.copyNodeSummary(_:))
+        item.representedObject = NodeMenuEntryFormatter.summaryText(entry)
+        item.view = HighlightedMenuItemHostView(
+            rootView: AnyView(GatewayMenuRowView(entry: entry, width: width)),
+            width: width)
+        item.submenu = self.buildNodeSubmenu(entry: entry, width: width)
+        return item
+    }
+
+    private func buildDevicesSubmenu(entries: [NodeInfo], width: CGFloat) -> NSMenu {
+        let submenu = NSMenu()
+
         if case .connecting = ControlChannel.shared.state {
-            menu.insertItem(
-                self.makeMessageItem(text: "Connecting…", symbolName: "circle.dashed", width: width),
-                at: cursor)
-            cursor += 1
-            return
+            let msg = self.makeMessageItem(text: "Connecting…", symbolName: "circle.dashed", width: width)
+            msg.tag = 0
+            submenu.addItem(msg)
+            return submenu
         }
 
-        guard self.isControlChannelConnected else { return }
+        guard self.isControlChannelConnected else {
+            let msg = self.makeMessageItem(text: "Gateway not connected", symbolName: "bolt.slash", width: width)
+            msg.tag = 0
+            submenu.addItem(msg)
+            return submenu
+        }
 
         if let error = self.nodesStore.lastError?.nonEmpty {
-            menu.insertItem(
-                self.makeMessageItem(
-                    text: "Error: \(error)",
-                    symbolName: "exclamationmark.triangle",
-                    width: width),
-                at: cursor)
-            cursor += 1
+            let msg = self.makeMessageItem(
+                text: "Error: \(error)",
+                symbolName: "exclamationmark.triangle",
+                width: width)
+            msg.tag = 0
+            submenu.addItem(msg)
         } else if let status = self.nodesStore.statusMessage?.nonEmpty {
-            menu.insertItem(
-                self.makeMessageItem(text: status, symbolName: "info.circle", width: width),
-                at: cursor)
-            cursor += 1
+            let msg = self.makeMessageItem(text: status, symbolName: "info.circle", width: width)
+            msg.tag = 0
+            submenu.addItem(msg)
         }
 
         if entries.isEmpty {
-            let title = self.nodesStore.isLoading ? "Loading devices..." : "No devices yet"
-            menu.insertItem(
-                self.makeMessageItem(text: title, symbolName: "circle.dashed", width: width),
-                at: cursor)
-            cursor += 1
+            let title = self.nodesStore.isLoading ? "Loading devices…" : "No devices yet"
+            let msg = self.makeMessageItem(text: title, symbolName: "circle.dashed", width: width)
+            msg.tag = 0
+            submenu.addItem(msg)
         } else {
-            for entry in entries.prefix(8) {
+            for entry in entries {
                 let item = self.makeNodeItem(entry: entry, width: width)
-                menu.insertItem(item, at: cursor)
-                cursor += 1
-            }
-
-            if entries.count > 8 {
-                let moreItem = NSMenuItem()
-                moreItem.tag = self.nodesTag
-                moreItem.title = "More Devices..."
-                moreItem.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-                let overflow = Array(entries.dropFirst(8))
-                moreItem.submenu = self.buildNodesOverflowMenu(entries: overflow, width: width)
-                menu.insertItem(moreItem, at: cursor)
-                cursor += 1
+                item.tag = 0
+                submenu.addItem(item)
             }
         }
 
-        _ = cursor
+        return submenu
     }
 
     private func insertUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
@@ -354,13 +777,6 @@ extension MenuSessionsInjector {
 
         var cursor = cursor
 
-        if cursor > 0, !menu.items[cursor - 1].isSeparatorItem {
-            let separator = NSMenuItem.separator()
-            separator.tag = self.tag
-            menu.insertItem(separator, at: cursor)
-            cursor += 1
-        }
-
         let headerItem = NSMenuItem()
         headerItem.tag = self.tag
         headerItem.isEnabled = false
@@ -368,7 +784,7 @@ extension MenuSessionsInjector {
             rootView: AnyView(MenuUsageHeaderView(
                 count: rows.count)),
             width: width,
-            highlighted: false)
+            highlighted: true)
         menu.insertItem(headerItem, at: cursor)
         cursor += 1
 
@@ -391,7 +807,7 @@ extension MenuSessionsInjector {
             menu.insertItem(item, at: cursor)
             cursor += 1
 
-            return cursor
+            return self.insertUsageCostRowIfAvailable(into: menu, at: cursor)
         }
 
         for row in rows {
@@ -406,25 +822,25 @@ extension MenuSessionsInjector {
             cursor += 1
         }
 
-        return cursor
+        return self.insertUsageCostRowIfAvailable(into: menu, at: cursor)
     }
 
-    private func insertCostUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
+    private func insertUsageCostRowIfAvailable(into menu: NSMenu, at cursor: Int) -> Int {
         guard self.isControlChannelConnected else { return cursor }
-        guard let submenu = self.buildCostUsageSubmenu(width: width) else { return cursor }
+        guard let submenu = self.buildCostUsageSubmenu(width: self.submenuWidth()) else { return cursor }
         var cursor = cursor
 
-        if cursor > 0, !menu.items[cursor - 1].isSeparatorItem {
-            let separator = NSMenuItem.separator()
-            separator.tag = self.tag
-            menu.insertItem(separator, at: cursor)
-            cursor += 1
-        }
-
-        let item = NSMenuItem(title: "Usage cost (30 days)", action: nil, keyEquivalent: "")
+        let width = self.currentWidth
+        let view = AnyView(MenuSubMenuRow(
+            icon: "chart.bar.xaxis",
+            label: "Usage cost (30 days)",
+            currentValue: "",
+            width: width))
+        let hosted = HighlightedMenuItemHostView(rootView: view, width: width)
+        let item = NSMenuItem()
         item.tag = self.tag
         item.isEnabled = true
-        item.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
+        item.view = hosted
         item.submenu = submenu
         menu.insertItem(item, at: cursor)
         cursor += 1
@@ -493,18 +909,16 @@ extension MenuSessionsInjector {
         guard !summary.daily.isEmpty else { return nil }
 
         let menu = NSMenu()
-        menu.delegate = self
 
         let chartView = CostUsageHistoryMenuView(summary: summary, width: width)
         let hosting = NSHostingView(rootView: AnyView(chartView))
-        let controller = NSHostingController(rootView: AnyView(chartView))
-        let size = controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
-        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
+        hosting.frame.size.width = max(1, width)
+        let size = hosting.fittingSize
+        hosting.frame = NSRect(origin: .zero, size: NSSize(width: max(1, width), height: size.height))
 
         let chartItem = NSMenuItem()
         chartItem.view = hosting
         chartItem.isEnabled = false
-        chartItem.representedObject = "costUsageChart"
         menu.addItem(chartItem)
 
         return menu
@@ -1098,43 +1512,56 @@ extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
-        // Insert right before the separator above "Send Heartbeats".
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
+        // Insert right after the Status section (nodesTag items).
+        if let last = menu.items.lastIndex(where: { $0.tag == self.nodesTag }) {
+            return last + 1
         }
-
+        // Fallback: after active header section.
+        if let last = menu.items.lastIndex(where: { $0.tag == self.activeHeaderTag }) {
+            return last + 1
+        }
         if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
             return sepIdx
         }
-
         if menu.items.count >= 1 { return 1 }
         return menu.items.count
     }
 
-    private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
+    /// Insertion point for the Status section: right after the active header items.
+    private func statusInsertIndex(in menu: NSMenu) -> Int {
+        if let last = menu.items.lastIndex(where: { $0.tag == self.activeHeaderTag }) {
+            return last + 1
         }
+        return 2
+    }
 
-        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
-            return sepIdx
+    /// Insertion point for Quick Settings: right after the last Activity/sessions item.
+    private func findQuickSettingsInsertIndex(in menu: NSMenu) -> Int? {
+        if let last = menu.items.lastIndex(where: { $0.tag == self.tag }) {
+            return last + 1
         }
+        // Fallback: after the Status section.
+        if let last = menu.items.lastIndex(where: { $0.tag == self.nodesTag }) {
+            return last + 1
+        }
+        return nil
+    }
 
-        if menu.items.count >= 1 { return 1 }
-        return menu.items.count
+    private var currentWidth: CGFloat {
+        if let w = self.menuOpenWidth { return max(self.fallbackWidth, w) }
+        return max(self.fallbackWidth, self.lastKnownMenuWidth ?? 0)
     }
 
     private func initialWidth(for menu: NSMenu) -> CGFloat {
+        // Prefer the width captured at menu open; update it if the live window
+        // is wider (items may have been injected since open).
+        let live = self.currentMenuWidth(for: menu)
         if let openWidth = self.menuOpenWidth {
-            return max(300, openWidth)
+            let best = max(openWidth, live)
+            self.menuOpenWidth = best
+            return max(self.fallbackWidth, best)
         }
-        return self.currentMenuWidth(for: menu)
+        return max(self.fallbackWidth, live)
     }
 
     private func submenuWidth() -> CGFloat {

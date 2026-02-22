@@ -126,8 +126,6 @@ struct SessionMenuPreviewView: View {
     let items: [SessionPreviewItem]
     let status: LoadStatus
 
-    @Environment(\.menuItemHighlighted) private var isHighlighted
-
     enum LoadStatus: Equatable {
         case loading
         case ready
@@ -135,26 +133,12 @@ struct SessionMenuPreviewView: View {
         case error(String)
     }
 
-    private var primaryColor: Color {
-        if self.isHighlighted {
-            return Color(nsColor: .selectedMenuItemTextColor)
-        }
-        return Color(nsColor: .labelColor)
-    }
-
-    private var secondaryColor: Color {
-        if self.isHighlighted {
-            return Color(nsColor: .selectedMenuItemTextColor).opacity(0.85)
-        }
-        return Color(nsColor: .secondaryLabelColor)
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(self.title)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(self.secondaryColor)
+                    .foregroundStyle(Color.secondary)
                 Spacer(minLength: 8)
             }
 
@@ -177,7 +161,8 @@ struct SessionMenuPreviewView: View {
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
         .padding(.leading, 16)
         .padding(.trailing, 11)
         .frame(width: max(1, self.width), alignment: .leading)
@@ -192,7 +177,7 @@ struct SessionMenuPreviewView: View {
 
             Text(item.text)
                 .font(.caption)
-                .foregroundStyle(self.primaryColor)
+                .foregroundStyle(Color.primary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(self.maxLines)
                 .truncationMode(.tail)
@@ -201,7 +186,6 @@ struct SessionMenuPreviewView: View {
     }
 
     private func roleColor(_ role: PreviewRole) -> Color {
-        if self.isHighlighted { return Color(nsColor: .selectedMenuItemTextColor).opacity(0.9) }
         switch role {
         case .user: return .accentColor
         case .assistant: return .secondary
@@ -214,7 +198,7 @@ struct SessionMenuPreviewView: View {
     private func placeholder(_ text: String) -> some View {
         Text(text)
             .font(.caption)
-            .foregroundStyle(self.primaryColor)
+            .foregroundStyle(Color.primary)
     }
 }
 

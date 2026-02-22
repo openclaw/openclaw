@@ -5,24 +5,26 @@ import Observation
 import SwiftUI
 
 /// Menu contents for the OpenClaw menu bar extra.
+///
+/// The active header (OpenClaw toggle), Status section (Gateway + Connected Devices),
+/// Activity section (sessions + usage), and Quick Settings toggle rows are all injected
+/// by MenuSessionsInjector as custom NSMenuItem.view items so they render as real switches
+/// and align consistently with each other.
+///
+/// This view supplies the remaining SwiftUI-rendered items:
+///   • Exec Approvals picker (multi-value, not a simple toggle)
+///   • Voice Wake toggle + optional mic picker
+///   • Action buttons (Dashboard, Chat, Canvas, Talk)
+///   • Footer (Settings, About, Quit)
 struct MenuContent: View {
     @Bindable var state: AppState
     let updater: UpdaterProviding?
     @Bindable private var updateStatus: UpdateStatus
-    private let gatewayManager = GatewayProcessManager.shared
-    private let healthStore = HealthStore.shared
-    private let heartbeatStore = HeartbeatStore.shared
-    private let controlChannel = ControlChannel.shared
-    private let activityStore = WorkActivityStore.shared
-    @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
-    @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
-    @State private var browserControlEnabled = true
-    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
     @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
 
@@ -32,79 +34,19 @@ struct MenuContent: View {
         self._updateStatus = Bindable(wrappedValue: updater?.updateStatus ?? UpdateStatus.disabled)
     }
 
-    private var execApprovalModeBinding: Binding<ExecApprovalQuickMode> {
-        Binding(
-            get: { self.state.execApprovalMode },
-            set: { self.state.execApprovalMode = $0 })
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle(isOn: self.activeBinding) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(self.connectionLabel)
-                    self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
-                    if self.pairingPrompter.pendingCount > 0 {
-                        let repairCount = self.pairingPrompter.pendingRepairCount
-                        let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
-                        self.statusLine(
-                            label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))\(repairSuffix)",
-                            color: .orange)
-                    }
-                    if self.devicePairingPrompter.pendingCount > 0 {
-                        let repairCount = self.devicePairingPrompter.pendingRepairCount
-                        let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
-                        self.statusLine(
-                            label: "Device pairing pending (\(self.devicePairingPrompter.pendingCount))\(repairSuffix)",
-                            color: .orange)
-                    }
-                }
-            }
-            .disabled(self.state.connectionMode == .unconfigured)
-
-            Divider()
-            Toggle(isOn: self.heartbeatsBinding) {
-                HStack(spacing: 8) {
-                    Label("Send Heartbeats", systemImage: "waveform.path.ecg")
-                    Spacer(minLength: 0)
-                    self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
-                }
-            }
-            Toggle(
-                isOn: Binding(
-                    get: { self.browserControlEnabled },
-                    set: { enabled in
-                        self.browserControlEnabled = enabled
-                        Task { await self.saveBrowserControlEnabled(enabled) }
-                    })) {
-                Label("Browser Control", systemImage: "globe")
-            }
-            Toggle(isOn: self.$cameraEnabled) {
-                Label("Allow Camera", systemImage: "camera")
-            }
-            Picker(selection: self.execApprovalModeBinding) {
-                ForEach(ExecApprovalQuickMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            } label: {
-                Label("Exec Approvals", systemImage: "terminal")
-            }
-            Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
-                Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
-            }
-            .onChange(of: self.state.canvasEnabled) { _, enabled in
-                if !enabled {
-                    CanvasManager.shared.hideAll()
-                }
-            }
-            Toggle(isOn: self.voiceWakeBinding) {
-                Label("Voice Wake", systemImage: "mic.fill")
-            }
-            .disabled(!voiceWakeSupported)
-            .opacity(voiceWakeSupported ? 1 : 0.5)
+            // ── Mic Picker ────────────────────────────────────────────────────
+            // Voice Wake toggle is injected as a custom NSMenuItem.view row by
+            // MenuSessionsInjector; the mic picker sub-item lives here in SwiftUI
+            // so it stays adjacent to the Voice Wake row.
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
+
+            // ── Actions ───────────────────────────────────────────────────────
+            // "Actions" section label is injected by MenuSessionsInjector before
+            // "Open Dashboard". The Divider below separates Quick Settings from Actions.
             Divider()
             Button {
                 Task { @MainActor in
@@ -128,7 +70,6 @@ struct MenuContent: View {
                             CanvasManager.shared.hideAll()
                         } else {
                             let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                            // Don't force a navigation on re-open: preserve the current web view state.
                             _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
                         }
                     }
@@ -144,16 +85,28 @@ struct MenuContent: View {
                 Label(self.state.talkEnabled ? "Stop Talk Mode" : "Talk Mode", systemImage: "waveform.circle.fill")
             }
             .disabled(!voiceWakeSupported)
-            .opacity(voiceWakeSupported ? 1 : 0.5)
+
+            // ── Footer ────────────────────────────────────────────────────────
             Divider()
-            Button("Settings…") { self.open(tab: .general) }
-                .keyboardShortcut(",", modifiers: [.command])
+            Button {
+                self.open(tab: .general)
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
+            }
             self.debugMenu
-            Button("About OpenClaw") { self.open(tab: .about) }
+            Button {
+                self.open(tab: .about)
+            } label: {
+                Label("About OpenClaw", systemImage: "info.circle")
+            }
             if let updater, updater.isAvailable, self.updateStatus.isUpdateReady {
                 Button("Update ready, restart now?") { updater.checkForUpdates(nil) }
             }
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Label("Quit", systemImage: "power")
+            }
         }
         .task(id: self.state.swabbleEnabled) {
             if self.state.swabbleEnabled {
@@ -165,9 +118,6 @@ struct MenuContent: View {
         }
         .onChange(of: self.state.voicePushToTalkEnabled) { _, enabled in
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && enabled)
-        }
-        .task(id: self.state.connectionMode) {
-            await self.loadBrowserControlEnabled()
         }
         .onAppear {
             self.startMicObserver()
@@ -182,50 +132,12 @@ struct MenuContent: View {
         }
     }
 
-    private var connectionLabel: String {
-        switch self.state.connectionMode {
-        case .unconfigured:
-            "OpenClaw Not Configured"
-        case .remote:
-            "Remote OpenClaw Active"
-        case .local:
-            "OpenClaw Active"
-        }
-    }
-
-    private func loadBrowserControlEnabled() async {
-        let root = await ConfigStore.load()
-        let browser = root["browser"] as? [String: Any]
-        let enabled = browser?["enabled"] as? Bool ?? true
-        await MainActor.run { self.browserControlEnabled = enabled }
-    }
-
-    private func saveBrowserControlEnabled(_ enabled: Bool) async {
-        let (success, _) = await MenuContent.buildAndSaveBrowserEnabled(enabled)
-
-        if !success {
-            await self.loadBrowserControlEnabled()
-        }
-    }
-
-    @MainActor
-    private static func buildAndSaveBrowserEnabled(_ enabled: Bool) async -> (Bool, ()) {
-        var root = await ConfigStore.load()
-        var browser = root["browser"] as? [String: Any] ?? [:]
-        browser["enabled"] = enabled
-        root["browser"] = browser
-        do {
-            try await ConfigStore.save(root)
-            return (true, ())
-        } catch {
-            return (false, ())
-        }
-    }
+    // MARK: - Debug menu
 
     @ViewBuilder
     private var debugMenu: some View {
         if self.state.debugPaneEnabled {
-            Menu("Debug") {
+            Menu {
                 Button {
                     DebugActions.openConfigFolder()
                 } label: {
@@ -320,9 +232,13 @@ struct MenuContent: View {
                 } label: {
                     Label("Restart App", systemImage: "arrow.triangle.2.circlepath")
                 }
+            } label: {
+                Label("Debug", systemImage: "wrench.and.screwdriver")
             }
         }
     }
+
+    // MARK: - Navigation helpers
 
     private func open(tab: SettingsTab) {
         SettingsTabRouter.request(tab)
@@ -347,90 +263,7 @@ struct MenuContent: View {
         }
     }
 
-    private var healthStatus: (label: String, color: Color) {
-        if let activity = self.activityStore.current {
-            let color: Color = activity.role == .main ? .accentColor : .gray
-            let roleLabel = activity.role == .main ? "Main" : "Other"
-            let text = "\(roleLabel) · \(activity.label)"
-            return (text, color)
-        }
-
-        let health = self.healthStore.state
-        let isRefreshing = self.healthStore.isRefreshing
-        let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
-
-        if isRefreshing {
-            return ("Health check running…", health.tint)
-        }
-
-        switch health {
-        case .ok:
-            let ageText = lastAge.map { " · checked \($0)" } ?? ""
-            return ("Health ok\(ageText)", .green)
-        case .linkingNeeded:
-            return ("Health: login required", .red)
-        case let .degraded(reason):
-            let detail = HealthStore.shared.degradedSummary ?? reason
-            let ageText = lastAge.map { " · checked \($0)" } ?? ""
-            return ("\(detail)\(ageText)", .orange)
-        case .unknown:
-            return ("Health pending", .secondary)
-        }
-    }
-
-    private var heartbeatStatus: (label: String, color: Color) {
-        if case .degraded = self.controlChannel.state {
-            return ("Control channel disconnected", .red)
-        } else if let evt = self.heartbeatStore.lastEvent {
-            let ageText = age(from: Date(timeIntervalSince1970: evt.ts / 1000))
-            switch evt.status {
-            case "sent":
-                return ("Last heartbeat sent · \(ageText)", .blue)
-            case "ok-empty", "ok-token":
-                return ("Heartbeat ok · \(ageText)", .green)
-            case "skipped":
-                return ("Heartbeat skipped · \(ageText)", .secondary)
-            case "failed":
-                return ("Heartbeat failed · \(ageText)", .red)
-            default:
-                return ("Heartbeat · \(ageText)", .secondary)
-            }
-        } else {
-            return ("No heartbeat yet", .secondary)
-        }
-    }
-
-    private func statusLine(label: String, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-        }
-        .padding(.top, 2)
-    }
-
-    private var activeBinding: Binding<Bool> {
-        Binding(get: { !self.state.isPaused }, set: { self.state.isPaused = !$0 })
-    }
-
-    private var heartbeatsBinding: Binding<Bool> {
-        Binding(get: { self.state.heartbeatsEnabled }, set: { self.state.heartbeatsEnabled = $0 })
-    }
-
-    private var voiceWakeBinding: Binding<Bool> {
-        Binding(
-            get: { self.state.swabbleEnabled },
-            set: { newValue in
-                Task { await self.state.setVoiceWakeEnabled(newValue) }
-            })
-    }
+    // MARK: - Voice Wake helpers
 
     private var showVoiceWakeMicPicker: Bool {
         voiceWakeSupported && self.state.swabbleEnabled
@@ -511,20 +344,7 @@ struct MenuContent: View {
         return "System default"
     }
 
-    @MainActor
-    private func presentDebugResult(_ result: Result<String, DebugActionError>, title: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        switch result {
-        case let .success(message):
-            alert.informativeText = message
-            alert.alertStyle = .informational
-        case let .failure(error):
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-        }
-        alert.runModal()
-    }
+    // MARK: - Mic loading
 
     @MainActor
     private func loadMicrophones(force: Bool = false) async {
@@ -586,11 +406,26 @@ struct MenuContent: View {
         }
     }
 
+    // MARK: - Debug helpers
+
+    @MainActor
+    private func presentDebugResult(_ result: Result<String, DebugActionError>, title: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        switch result {
+        case let .success(message):
+            alert.informativeText = message
+            alert.alertStyle = .informational
+        case let .failure(error):
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+        }
+        alert.runModal()
+    }
+
     private struct AudioInputDevice: Identifiable, Equatable {
         let uid: String
         let name: String
-        var id: String {
-            self.uid
-        }
+        var id: String { self.uid }
     }
 }

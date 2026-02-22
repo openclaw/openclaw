@@ -196,56 +196,148 @@ struct NodeMenuEntryFormatter {
     }
 }
 
-struct NodeMenuRowView: View {
+// MARK: - Gateway compact row (single line, status dot)
+
+/// Compact single-line gateway row: green/orange status dot, "Gateway", detail, platform >.
+struct GatewayMenuRowView: View {
     let entry: NodeInfo
     let width: CGFloat
-    @Environment(\.menuItemHighlighted) private var isHighlighted
 
-    private var primaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
-    }
-
-    private var secondaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
+    private var statusColor: Color {
+        self.entry.isConnected ? .green : .orange
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
+            // Status dot icon — green when connected, orange when disconnected
+            Circle()
+                .fill(self.statusColor)
+                .frame(width: 8, height: 8)
+                .frame(width: 16, height: 16, alignment: .center)
+
+            Text("Gateway")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+
+            if let detail = self.gatewayDetail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 4)
+
+            HStack(alignment: .center, spacing: 4) {
+                if let platform = NodeMenuEntryFormatter.headlineRight(self.entry) {
+                    Text(platform)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.leading, 12)
+        .padding(.trailing, 12)
+        .frame(width: max(1, self.width), alignment: .leading)
+    }
+
+    /// Compact detail: "127.0.0.1:18789"
+    private var gatewayDetail: String? {
+        self.entry.remoteIp?.nonEmpty
+    }
+}
+
+// MARK: - Connected Devices row (custom hosted, matches alignment)
+
+/// Custom-drawn "Connected Devices — N" row that aligns with the gateway row.
+struct ConnectedDevicesMenuRowView: View {
+    let count: Int
+    let isConnecting: Bool
+    let isConnected: Bool
+    let width: CGFloat
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "network")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 16, height: 16, alignment: .center)
+
+            Text(self.title)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+        }
+        .padding(.vertical, 5)
+        .padding(.leading, 12)
+        .padding(.trailing, 12)
+        .frame(width: max(1, self.width), alignment: .leading)
+    }
+
+    private var title: String {
+        if self.isConnecting { return "Connected Devices — …" }
+        if !self.isConnected { return "Connected Devices" }
+        return "Connected Devices — \(self.count)"
+    }
+}
+
+// MARK: - Node row (devices inside submenu)
+
+struct NodeMenuRowView: View {
+    let entry: NodeInfo
+    let width: CGFloat
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
             self.leadingIcon
-                .frame(width: 22, height: 22, alignment: .center)
+                .frame(width: 16, height: 16, alignment: .center)
+                .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(NodeMenuEntryFormatter.primaryName(self.entry))
-                        .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
-                        .foregroundStyle(self.primaryColor)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .layoutPriority(1)
 
                     Spacer(minLength: 8)
 
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         if let right = NodeMenuEntryFormatter.headlineRight(self.entry) {
                             Text(right)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(self.secondaryColor)
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(Color.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .layoutPriority(2)
                         }
 
                         Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(self.secondaryColor)
-                            .padding(.leading, 2)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
                     }
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(NodeMenuEntryFormatter.detailLeft(self.entry))
-                        .font(.caption)
-                        .foregroundStyle(self.secondaryColor)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
 
@@ -253,8 +345,8 @@ struct NodeMenuRowView: View {
 
                     if let version = NodeMenuEntryFormatter.detailRightVersion(self.entry) {
                         Text(version)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(self.secondaryColor)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(Color.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -263,8 +355,8 @@ struct NodeMenuRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 8)
-        .padding(.leading, 18)
+        .padding(.vertical, 6)
+        .padding(.leading, 12)
         .padding(.trailing, 12)
         .frame(width: max(1, self.width), alignment: .leading)
     }
@@ -273,11 +365,12 @@ struct NodeMenuRowView: View {
     private var leadingIcon: some View {
         if NodeMenuEntryFormatter.isAndroid(self.entry) {
             AndroidMark()
-                .foregroundStyle(self.secondaryColor)
+                .foregroundStyle(Color.secondary)
         } else {
             Image(systemName: NodeMenuEntryFormatter.leadingSymbol(self.entry))
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(self.secondaryColor)
+                .font(.system(size: 13, weight: .regular))
+                .imageScale(.medium)
+                .foregroundStyle(Color.secondary)
         }
     }
 }
@@ -303,25 +396,16 @@ struct NodeMenuMultilineView: View {
     let label: String
     let value: String
     let width: CGFloat
-    @Environment(\.menuItemHighlighted) private var isHighlighted
-
-    private var primaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
-    }
-
-    private var secondaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(self.label):")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(self.secondaryColor)
+                .foregroundStyle(Color.secondary)
 
             Text(self.value)
                 .font(.caption)
-                .foregroundStyle(self.primaryColor)
+                .foregroundStyle(Color.primary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
