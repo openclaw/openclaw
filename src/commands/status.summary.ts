@@ -132,7 +132,7 @@ export async function getStatusSummary(
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
-          entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
+          lookupContextTokens(model) ?? entry?.contextTokens ?? configContextTokens ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
