@@ -187,12 +187,17 @@ export function createEventHandlers(context: EventHandlerContext) {
           : "";
 
       const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      // Never suppress messages that have an error - always show the error to the user
+      const hasError = stopReason === "error";
+      // If finalText is "(no output)" but we have an error, try to extract the error message directly
+      const displayText =
+        finalText === "(no output)" && hasError ? extractTextFromMessage(evt.message) : finalText;
       const suppressEmptyExternalPlaceholder =
-        finalText === "(no output)" && !isLocalRunId?.(evt.runId);
+        displayText === "(no output)" && !isLocalRunId?.(evt.runId) && !hasError;
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
-        chatLog.finalizeAssistant(finalText, evt.runId);
+        chatLog.finalizeAssistant(displayText, evt.runId);
       }
       noteFinalizedRun(evt.runId);
       clearActiveRunIfMatch(evt.runId);
