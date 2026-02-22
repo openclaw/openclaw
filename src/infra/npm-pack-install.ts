@@ -21,6 +21,58 @@ export type NpmSpecArchiveInstallFlowResult<TResult extends { ok: boolean }> =
       integrityDrift?: NpmIntegrityDrift;
     };
 
+export async function installFromNpmSpecArchiveWithInstaller<
+  TResult extends { ok: boolean },
+  TArchiveInstallParams extends { archivePath: string },
+>(params: {
+  tempDirPrefix: string;
+  spec: string;
+  timeoutMs: number;
+  expectedIntegrity?: string;
+  onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+  warn?: (message: string) => void;
+  installFromArchive: (params: TArchiveInstallParams) => Promise<TResult>;
+  archiveInstallParams: Omit<TArchiveInstallParams, "archivePath">;
+}): Promise<NpmSpecArchiveInstallFlowResult<TResult>> {
+  return await installFromNpmSpecArchive({
+    tempDirPrefix: params.tempDirPrefix,
+    spec: params.spec,
+    timeoutMs: params.timeoutMs,
+    expectedIntegrity: params.expectedIntegrity,
+    onIntegrityDrift: params.onIntegrityDrift,
+    warn: params.warn,
+    installFromArchive: async ({ archivePath }) =>
+      await params.installFromArchive({
+        archivePath,
+        ...params.archiveInstallParams,
+      } as TArchiveInstallParams),
+  });
+}
+
+export type NpmSpecArchiveFinalInstallResult<TResult extends { ok: boolean }> =
+  | { ok: false; error: string }
+  | Exclude<TResult, { ok: true }>
+  | (Extract<TResult, { ok: true }> & {
+      npmResolution: NpmSpecResolution;
+      integrityDrift?: NpmIntegrityDrift;
+    });
+
+export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
+  flowResult: NpmSpecArchiveInstallFlowResult<TResult>,
+): NpmSpecArchiveFinalInstallResult<TResult> {
+  if (!flowResult.ok) {
+    return flowResult;
+  }
+  if (!flowResult.installResult.ok) {
+    return flowResult.installResult;
+  }
+  return {
+    ...flowResult.installResult,
+    npmResolution: flowResult.npmResolution,
+    integrityDrift: flowResult.integrityDrift,
+  };
+}
+
 export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {
   tempDirPrefix: string;
   spec: string;
