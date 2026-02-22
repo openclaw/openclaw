@@ -54,6 +54,7 @@ const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
 const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
+const GEMINI_CLI_OAUTH_PLACEHOLDER = "gemini-cli-oauth";
 // Pricing per 1M tokens (USD) — https://platform.minimaxi.com/document/Price
 const MINIMAX_API_COST = {
   input: 0.3,
@@ -617,6 +618,33 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
+const GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const GEMINI_CLI_FREE_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+function buildGeminiCli31Model(): ProviderModelConfig {
+  return {
+    id: "gemini-3.1-pro-preview",
+    name: "Gemini 3.1 Pro",
+    api: "google-gemini-cli",
+    provider: "google-gemini-cli",
+    baseUrl: GEMINI_CLI_BASE_URL,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: GEMINI_CLI_FREE_COST,
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  };
+}
+
+export function buildGeminiCliExtraModelsProvider(): ProviderConfig {
+  return {
+    baseUrl: GEMINI_CLI_BASE_URL,
+    api: "google-gemini-cli",
+    auth: "oauth",
+    models: [buildGeminiCli31Model()],
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -915,6 +943,17 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  // Inject extra models for google-gemini-cli when OAuth profiles exist.
+  // The built-in pi-ai catalog doesn't include gemini-3.1-pro-preview for this provider,
+  // so we inject it via models.json custom providers.
+  const geminiCliOauthProfiles = listProfilesForProvider(authStore, "google-gemini-cli");
+  if (geminiCliOauthProfiles.length > 0) {
+    providers["google-gemini-cli"] = {
+      ...buildGeminiCliExtraModelsProvider(),
+      apiKey: GEMINI_CLI_OAUTH_PLACEHOLDER,
+    };
   }
 
   return providers;
