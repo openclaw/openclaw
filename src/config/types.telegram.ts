@@ -88,6 +88,8 @@ export type TelegramAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max concurrent agent runs per conversation lane (overrides global default). */
+  maxConcurrentPerConversation?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
   /** Per-DM config overrides keyed by user ID. */
@@ -179,6 +181,8 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Max concurrent agent runs in this group's conversation lane. */
+  maxConcurrentPerConversation?: number;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */

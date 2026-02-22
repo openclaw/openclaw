@@ -63,6 +63,13 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
   return true;
 }
 
+/** Evict idle conversation lanes to bound memory growth. */
+function evictIdleLane(lane: string, state: LaneState) {
+  if (lane.startsWith("conv:") && state.queue.length === 0 && state.activeTaskIds.size === 0) {
+    lanes.delete(lane);
+  }
+}
+
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
@@ -93,6 +100,7 @@ function drainLane(lane: string) {
             diag.debug(
               `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
             );
+            evictIdleLane(lane, state);
             pump();
           }
           entry.resolve(result);
@@ -105,6 +113,7 @@ function drainLane(lane: string) {
             );
           }
           if (completedCurrentGeneration) {
+            evictIdleLane(lane, state);
             pump();
           }
           entry.reject(err);
@@ -119,8 +128,12 @@ function drainLane(lane: string) {
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = lane.trim() || CommandLane.Main;
+  const resolved = Math.max(1, Math.floor(maxConcurrent));
   const state = getLaneState(cleaned);
-  state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+  if (state.maxConcurrent === resolved) {
+    return;
+  }
+  state.maxConcurrent = resolved;
   drainLane(cleaned);
 }
 

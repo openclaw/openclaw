@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveAgentMaxConcurrentPerConversation } from "../../config/agent-limits.js";
+import { resolveMaxConcurrentPerConversation } from "../../config/agent-limits.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
@@ -198,7 +198,15 @@ export async function runEmbeddedPiAgent(
     peerId: params.messageTo,
   });
   if (convLane) {
-    setCommandLaneConcurrency(convLane, resolveAgentMaxConcurrentPerConversation(params.config));
+    setCommandLaneConcurrency(
+      convLane,
+      resolveMaxConcurrentPerConversation({
+        cfg: params.config,
+        channel: params.messageChannel,
+        groupSpace: params.groupSpace,
+        peerId: params.messageTo,
+      }),
+    );
   }
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));

@@ -10,7 +10,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveAgentMaxConcurrentPerConversation } from "../../config/agent-limits.js";
+import { resolveMaxConcurrentPerConversation } from "../../config/agent-limits.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
@@ -770,7 +770,15 @@ export async function compactEmbeddedPiSession(
     peerId: convParts.peerId,
   });
   if (convLane) {
-    setCommandLaneConcurrency(convLane, resolveAgentMaxConcurrentPerConversation(params.config));
+    setCommandLaneConcurrency(
+      convLane,
+      resolveMaxConcurrentPerConversation({
+        cfg: params.config,
+        channel: params.messageChannel ?? convParts.channel,
+        groupSpace: params.groupSpace,
+        peerId: convParts.peerId,
+      }),
+    );
   }
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
