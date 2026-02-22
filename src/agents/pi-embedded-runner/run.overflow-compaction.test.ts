@@ -83,8 +83,6 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      // Keep one extra mocked response so legacy reset behavior does not crash the test.
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
 
     mockedCompactDirect
@@ -119,7 +117,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   });
 
   it("returns retry_limit when repeated retries never converge", async () => {
-    mockedRunEmbeddedAttempt.mockReset();
+    mockedRunEmbeddedAttempt.mockClear();
     mockedCompactDirect.mockClear();
     mockedPickFallbackThinkingLevel.mockClear();
     mockedRunEmbeddedAttempt.mockResolvedValue(
