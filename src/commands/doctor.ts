@@ -316,5 +316,12 @@ export async function doctorCommand(
     }
   }
 
+  if (finalSnapshot.valid && finalSnapshot.config?.telemetry?.enabled !== false) {
+    note(
+      `Telemetry: Anonymous skill usage is sent to ClawHub. To opt out: ${formatCliCommand("openclaw config set telemetry.enabled false")} or run ${formatCliCommand("openclaw configure --section telemetry")}.`,
+      "Privacy",
+    );
+  }
+
   outro("Doctor complete.");
 }

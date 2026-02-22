@@ -64,6 +64,15 @@ export type OpenClawConfig = {
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
   };
+  /** Anonymous skill/tool usage telemetry for ClawHub (success rate, platform). Opt-out via telemetry.enabled: false. */
+  telemetry?: {
+    /** Master switch for telemetry (default: true). Set to false to disable all telemetry. */
+    enabled?: boolean;
+    /** Skill execution telemetry (default: follows telemetry.enabled). */
+    skills?: { enabled?: boolean };
+    /** ClawHub endpoint overrides. */
+    clawhub?: { endpoint?: string };
+  };
   browser?: BrowserConfig;
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */

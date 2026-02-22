@@ -207,6 +207,31 @@ async function promptWebToolsConfig(
   };
 }
 
+async function promptTelemetryConfig(
+  nextConfig: OpenClawConfig,
+  runtime: RuntimeEnv,
+  prompter: ReturnType<typeof createClackPrompter>,
+): Promise<OpenClawConfig> {
+  note(
+    "Anonymous skill/tool usage (success rate, platform) can be sent to ClawHub to improve skills. No user data or prompt content is included.",
+    "Telemetry",
+  );
+  const enabled = guardCancel(
+    await confirm({
+      message: "Send anonymous skill usage to ClawHub?",
+      initialValue: nextConfig.telemetry?.enabled !== false,
+    }),
+    runtime,
+  );
+  return {
+    ...nextConfig,
+    telemetry: {
+      ...nextConfig.telemetry,
+      enabled,
+    },
+  };
+}
+
 export async function runConfigureWizard(
   opts: ConfigureWizardParams,
   runtime: RuntimeEnv = defaultRuntime,
@@ -407,6 +432,10 @@ export async function runConfigureWizard(
         nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
       }
 
+      if (selected.includes("telemetry")) {
+        nextConfig = await promptTelemetryConfig(nextConfig, runtime, prompter);
+      }
+
       await persistConfig();
 
       if (selected.includes("daemon")) {
@@ -463,6 +492,11 @@ export async function runConfigureWizard(
         if (choice === "skills") {
           const wsDir = resolveUserPath(workspaceDir);
           nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+          await persistConfig();
+        }
+
+        if (choice === "telemetry") {
+          nextConfig = await promptTelemetryConfig(nextConfig, runtime, prompter);
           await persistConfig();
         }
 

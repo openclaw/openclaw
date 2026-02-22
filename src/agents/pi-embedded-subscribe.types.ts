@@ -31,6 +31,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Optional map of tool name -> skill id/version for skill telemetry (when tool is skill-backed). */
+  skillToolToMeta?: Map<string, { skill_id: string; version: string }>;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

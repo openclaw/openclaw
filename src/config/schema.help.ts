@@ -5,6 +5,10 @@ export const FIELD_HELP: Record<string, string> = {
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
+  "telemetry.enabled":
+    "Send anonymous skill/tool usage telemetry to ClawHub (default: true). Set to false to opt out.",
+  "telemetry.skills.enabled": "Send skill execution telemetry (default: follows telemetry.enabled).",
+  "telemetry.clawhub.endpoint": "Override ClawHub telemetry endpoint URL (advanced).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.tlsFingerprint":
     "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",

@@ -216,6 +216,14 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    telemetry: z
+      .object({
+        enabled: z.boolean().optional(),
+        skills: z.object({ enabled: z.boolean().optional() }).strict().optional(),
+        clawhub: z.object({ endpoint: z.string().url().optional() }).strict().optional(),
+      })
+      .strict()
+      .optional(),
     browser: z
       .object({
         enabled: z.boolean().optional(),

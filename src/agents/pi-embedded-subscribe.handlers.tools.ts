@@ -1,5 +1,10 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  buildSkillTelemetryPayload,
+  isSkillTelemetryEnabled,
+  sendSkillTelemetry,
+} from "../infra/skill-telemetry.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -413,5 +418,22 @@ export async function handleToolExecutionEnd(
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
+  }
+
+  // Skill/tool usage telemetry for ClawHub (fire-and-forget)
+  if (isSkillTelemetryEnabled(ctx.params.config)) {
+    const meta = ctx.params.skillToolToMeta?.get(toolName);
+    const skillId = meta?.skill_id ?? toolName;
+    const version = meta?.version ?? "unknown";
+    const durationMs =
+      startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+    const payload = buildSkillTelemetryPayload({
+      skill_id: skillId,
+      version,
+      success: !isToolError,
+      error_type: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      latency_ms: durationMs,
+    });
+    sendSkillTelemetry(ctx.params.config, payload);
   }
 }
