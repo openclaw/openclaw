@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import * as tar from "tar";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempWorkspace, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
@@ -53,25 +51,11 @@ const STRIP_COMPONENTS_ZIP_BUFFER_PROMISE = createZipBuffer([
 const ZIP_SLIP_BUFFER_PROMISE = createZipBuffer([
   { name: "../outside-write/pwned.txt", contents: "pwnd" },
 ]);
-
-async function createTarGzTraversalBuffer(): Promise<Buffer> {
-  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-tar-slip-"));
-  const insideDir = path.join(fixtureRoot, "inside");
-  const outsideWriteDir = path.join(fixtureRoot, "outside-write");
-  const outsideWritePath = path.join(outsideWriteDir, "pwned.txt");
-  const archivePath = path.join(fixtureRoot, "evil.tgz");
-  try {
-    await fs.mkdir(insideDir, { recursive: true });
-    await fs.mkdir(outsideWriteDir, { recursive: true });
-    await fs.writeFile(outsideWritePath, "pwnd", "utf-8");
-    await tar.c({ cwd: insideDir, file: archivePath, gzip: true }, ["../outside-write/pwned.txt"]);
-    return await fs.readFile(archivePath);
-  } finally {
-    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-const TAR_GZ_TRAVERSAL_BUFFER_PROMISE = createTarGzTraversalBuffer();
+const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
+  // Prebuilt archive containing ../outside-write/pwned.txt.
+  "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==",
+  "base64",
+);
 
 function mockArchiveResponse(buffer: Uint8Array): void {
   fetchWithSsrFGuardMock.mockResolvedValue({
@@ -207,8 +191,7 @@ describe("installSkill download extraction safety", () => {
       const targetDir = path.join(stateDir, "tools", "tar-slip", "target");
       const outsideWritePath = path.join(workspaceDir, "outside-write", "pwned.txt");
       const url = "https://example.invalid/evil";
-      const buffer = await TAR_GZ_TRAVERSAL_BUFFER_PROMISE;
-      mockArchiveResponse(new Uint8Array(buffer));
+      mockArchiveResponse(new Uint8Array(TAR_GZ_TRAVERSAL_BUFFER));
 
       await writeDownloadSkill({
         workspaceDir,
