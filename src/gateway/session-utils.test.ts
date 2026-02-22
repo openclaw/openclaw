@@ -8,6 +8,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  listAgentsForGateway,
   listSessionsFromStore,
   parseGroupKey,
   pruneLegacyStoreKeys,
@@ -15,6 +16,19 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
+  try {
+    fs.symlinkSync(targetPath, linkPath);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+      return false;
+    }
+    throw error;
+  }
+}
 
 describe("gateway session utils", () => {
   test("capArrayByJsonBytes trims from the front", () => {
@@ -216,6 +230,52 @@ describe("gateway session utils", () => {
       candidates: ["agent:ops:work", "agent:ops:main"],
     });
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+  });
+
+  test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-outside-"));
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    const outsideFile = path.join(root, "outside.txt");
+    fs.writeFileSync(outsideFile, "top-secret", "utf8");
+    const linkPath = path.join(workspace, "avatar-link.png");
+    if (!createSymlinkOrSkip(outsideFile, linkPath)) {
+      return;
+    }
+
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]?.identity?.avatarUrl).toBeUndefined();
+  });
+
+  test("listAgentsForGateway allows avatar symlinks that stay inside workspace", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-inside-"));
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(path.join(workspace, "avatars"), { recursive: true });
+    const targetPath = path.join(workspace, "avatars", "actual.png");
+    fs.writeFileSync(targetPath, "avatar", "utf8");
+    const linkPath = path.join(workspace, "avatar-link.png");
+    if (!createSymlinkOrSkip(targetPath, linkPath)) {
+      return;
+    }
+
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]?.identity?.avatarUrl).toBe(
+      `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+    );
   });
 });
 
