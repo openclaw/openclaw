@@ -63,6 +63,8 @@ export type AgentConfig = {
     prune?: SandboxPruneSettings;
   };
   tools?: AgentToolsConfig;
+  /** Per-agent stream params (e.g., cacheRetention, temperature). Overrides global model defaults. */
+  params?: Record<string, unknown>;
 };
 
 export type AgentsConfig = {
