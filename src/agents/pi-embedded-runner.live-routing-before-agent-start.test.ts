@@ -44,8 +44,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (prevOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
-  else process.env.OPENAI_API_KEY = prevOpenAiKey;
+  if (prevOpenAiKey === undefined) { delete process.env.OPENAI_API_KEY; }
+  else { process.env.OPENAI_API_KEY = prevOpenAiKey; }
 });
 
 describe("before_agent_start run-scoped model/provider override", () => {
