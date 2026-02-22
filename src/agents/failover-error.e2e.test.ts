@@ -16,6 +16,21 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
   });
 
+  it("HTTP 400 with insufficient_quota message is billing, not format (issue #23440)", () => {
+    // Anthropic returns HTTP 400 for quota errors — must not be masked as "format"
+    expect(
+      resolveFailoverReasonFromError({ status: 400, message: "insufficient_quota" }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Your account has insufficient quota to complete this request.",
+      }),
+    ).toBe("billing");
+    // Plain HTTP 400 with no billing/rate-limit message still resolves to "format"
+    expect(resolveFailoverReasonFromError({ status: 400, message: "bad request" })).toBe("format");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({

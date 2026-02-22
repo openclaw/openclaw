@@ -150,6 +150,48 @@ export async function saveConfig(state: ConfigState) {
   }
 }
 
+/**
+ * Save only the agents section via config.patch to preserve other agents
+ * that may have been added/modified externally since the last load.
+ *
+ * Uses mergeObjectArraysById to merge agents by their id field, preventing
+ * silent data loss when editing agents through the dashboard.
+ */
+export async function patchAgentsConfig(state: ConfigState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.configSaving = true;
+  state.lastError = null;
+  try {
+    const baseHash = state.configSnapshot?.hash;
+    if (!baseHash) {
+      state.lastError = "Config hash missing; reload and retry.";
+      return;
+    }
+
+    // Extract only the agents section from the form
+    const schema = asJsonSchema(state.configSchema);
+    const form = state.configForm ?? {};
+    const coerced = schema ? (coerceFormValues(form, schema) as Record<string, unknown>) : form;
+
+    // Create a patch containing only the agents section
+    const patch: Record<string, unknown> = {};
+    if (coerced.agents) {
+      patch.agents = coerced.agents;
+    }
+
+    const raw = serializeConfigForm(patch);
+    await state.client.request("config.patch", { raw, baseHash });
+    state.configFormDirty = false;
+    await loadConfig(state);
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.configSaving = false;
+  }
+}
+
 export async function applyConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;

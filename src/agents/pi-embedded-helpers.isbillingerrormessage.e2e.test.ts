@@ -50,6 +50,17 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches Anthropic insufficient_quota errors (issue #23440)", () => {
+    const samples = [
+      "insufficient_quota",
+      "Your account has insufficient_quota to complete this request.",
+      "insufficient quota",
+      "Your account has insufficient quota.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
   it("does not false-positive on issue IDs or text containing 402", () => {
     const falsePositives = [
       "Fixed issue CHE-402 in the latest release",
