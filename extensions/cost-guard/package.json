@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/cost-guard",
+  "version": "0.1.0",
+  "description": "Budget enforcement and cost alerts for OpenClaw API usage",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
