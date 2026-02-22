@@ -427,13 +427,48 @@ export function buildInlineKeyboard(
   return { inline_keyboard: rows };
 }
 
+/**
+ * Per-chat send serializer. Ensures concurrent sends to the same Telegram chat
+ * are delivered in the order they were initiated. Without this, fire-and-forget
+ * block reply deliveries can race with direct message tool sends, causing
+ * messages to arrive out of order on the client.
+ */
+const chatSendChains = new Map<string, Promise<unknown>>();
+
+function serializeChatSend<T>(chatId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = chatSendChains.get(chatId) ?? Promise.resolve();
+  const result = prev.then(fn, fn);
+  // Update chain, swallow errors to prevent chain poisoning.
+  const chain = result.then(
+    () => {},
+    () => {},
+  );
+  chatSendChains.set(chatId, chain);
+  // Clean up completed chains to prevent memory leak.
+  void chain.then(() => {
+    if (chatSendChains.get(chatId) === chain) {
+      chatSendChains.delete(chatId);
+    }
+  });
+  return result;
+}
+
 export async function sendMessageTelegram(
   to: string,
   text: string,
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
+  const serializationKey = `${opts.accountId ?? "default"}:${normalizeChatId(target.chatId)}`;
+  return serializeChatSend(serializationKey, () => sendMessageTelegramImpl(target, text, opts));
+}
+
+async function sendMessageTelegramImpl(
+  target: ReturnType<typeof parseTelegramTarget>,
+  text: string,
+  opts: TelegramSendOpts = {},
+): Promise<TelegramSendResult> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
   const chatId = normalizeChatId(target.chatId);
   const mediaUrl = opts.mediaUrl?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
@@ -456,7 +491,7 @@ export async function sendMessageTelegram(
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
     chatId,
-    input: to,
+    input: String(target.chatId),
   });
 
   const textMode = opts.textMode ?? "markdown";
