@@ -371,6 +371,24 @@ export async function detectBinary(name: string): Promise<boolean> {
   }
 }
 
+export async function detectDockerSandboxAvailability(): Promise<boolean> {
+  if (process.env.VITEST === "true" && process.env.OPENCLAW_TEST_ONBOARD_DOCKER !== "1") {
+    return false;
+  }
+  if (!(await detectBinary("docker"))) {
+    return false;
+  }
+  try {
+    const result = await runCommandWithTimeout(
+      ["docker", "version", "--format", "{{.Server.Version}}"],
+      { timeoutMs: 3_000 },
+    );
+    return result.code === 0 && result.stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function shouldSkipBrowserOpenInTests(): boolean {
   if (process.env.VITEST) {
     return true;
