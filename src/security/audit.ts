@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
@@ -39,6 +40,7 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
 
@@ -117,30 +119,6 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
-}
-
-function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
-  const enabledFlags: string[] = [];
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
-  }
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
-  }
-  if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
-    enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
-  }
-  if (Array.isArray(cfg.hooks?.mappings)) {
-    for (const [index, mapping] of cfg.hooks.mappings.entries()) {
-      if (mapping?.allowUnsafeExternalContent === true) {
-        enabledFlags.push(`hooks.mappings[${index}].allowUnsafeExternalContent=true`);
-      }
-    }
-  }
-  if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
-    enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
-  }
-  return enabledFlags;
 }
 
 async function collectFilesystemFindings(params: {
@@ -293,6 +271,8 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
+  const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
   // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
   // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
@@ -354,6 +334,39 @@ function collectGatewayConfigFindings(
         "gateway.bind is loopback but no gateway auth secret is configured. " +
         "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
       remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
+    });
+  }
+
+  if (allowRealIpFallback) {
+    const hasNonLoopbackTrustedProxy = trustedProxies.some(
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
+    );
+    const exposed =
+      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+    findings.push({
+      checkId: "gateway.real_ip_fallback_enabled",
+      severity: exposed ? "critical" : "warn",
+      title: "X-Real-IP fallback is enabled",
+      detail:
+        "gateway.allowRealIpFallback=true trusts X-Real-IP when trusted proxies omit X-Forwarded-For. " +
+        "Misconfigured proxies that forward client-supplied X-Real-IP can spoof source IP and local-client checks.",
+      remediation:
+        "Keep gateway.allowRealIpFallback=false (default). Only enable this when your trusted proxy " +
+        "always overwrites X-Real-IP and cannot provide X-Forwarded-For.",
+    });
+  }
+
+  if (mdnsMode === "full") {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "discovery.mdns_full_mode",
+      severity: exposed ? "critical" : "warn",
+      title: "mDNS full mode can leak host metadata",
+      detail:
+        'discovery.mdns.mode="full" publishes cliPath/sshPort in local-network TXT records. ' +
+        "This can reveal usernames, filesystem layout, and management ports.",
+      remediation:
+        'Prefer discovery.mdns.mode="minimal" (recommended) or "off", especially when gateway.bind is not loopback.',
     });
   }
 
@@ -492,6 +505,35 @@ function collectGatewayConfigFindings(
   }
 
   return findings;
+}
+
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
+  const candidate = entry.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (!candidate.includes("/")) {
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
+  }
+
+  const [rawIp, rawPrefix] = candidate.split("/", 2);
+  if (!rawIp || !rawPrefix) {
+    return false;
+  }
+  const ipVersion = isIP(rawIp.trim());
+  const prefix = Number.parseInt(rawPrefix.trim(), 10);
+  if (!Number.isInteger(prefix)) {
+    return false;
+  }
+  if (ipVersion === 4) {
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
+  }
+  if (ipVersion === 6) {
+    return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
+  }
+  return false;
 }
 
 function collectBrowserControlFindings(

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
+import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
@@ -71,7 +72,8 @@ function resolveConsoleSettings(): ConsoleSettings {
       }
     }
   }
-  const level = normalizeConsoleLevel(cfg?.consoleLevel);
+  const envLevel = resolveEnvLogLevelOverride();
+  const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
 }

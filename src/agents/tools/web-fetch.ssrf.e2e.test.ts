@@ -74,7 +74,7 @@ describe("web_fetch SSRF protection", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
-    lookupMock.mockReset();
+    lookupMock.mockClear();
     vi.restoreAllMocks();
   });
 

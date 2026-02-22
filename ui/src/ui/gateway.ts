@@ -61,6 +61,13 @@ export type GatewayBrowserClientOptions = {
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+const DEFAULT_OPERATOR_CONNECT_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.pairing",
+];
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
@@ -129,6 +136,11 @@ export class GatewayBrowserClient {
     if (this.connectSent) {
       return;
     }
+    const nonce = this.connectNonce?.trim() ?? "";
+    if (!nonce) {
+      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge missing nonce");
+      return;
+    }
     this.connectSent = true;
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
@@ -140,7 +152,7 @@ export class GatewayBrowserClient {
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
 
-    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+    const scopes = DEFAULT_OPERATOR_CONNECT_SCOPES;
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
@@ -169,13 +181,12 @@ export class GatewayBrowserClient {
           publicKey: string;
           signature: string;
           signedAt: number;
-          nonce: string | undefined;
+          nonce: string;
         }
       | undefined;
 
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
-      const nonce = this.connectNonce ?? undefined;
       const payload = buildDeviceAuthPayload({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -249,10 +260,12 @@ export class GatewayBrowserClient {
       if (evt.event === "connect.challenge") {
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
-        if (nonce) {
-          this.connectNonce = nonce;
-          void this.sendConnect();
+        if (!nonce || nonce.trim().length === 0) {
+          this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge missing nonce");
+          return;
         }
+        this.connectNonce = nonce.trim();
+        void this.sendConnect();
         return;
       }
       const seq = typeof evt.seq === "number" ? evt.seq : null;
@@ -306,7 +319,10 @@ export class GatewayBrowserClient {
       window.clearTimeout(this.connectTimer);
     }
     this.connectTimer = window.setTimeout(() => {
-      void this.sendConnect();
-    }, 750);
+      if (this.connectSent || this.ws?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge timeout");
+    }, 2_000);
   }
 }

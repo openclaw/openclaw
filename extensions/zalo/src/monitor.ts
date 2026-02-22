@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
 import {
+  createDedupeCache,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
   registerWebhookTarget,
@@ -92,7 +93,10 @@ type WebhookTarget = {
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimits = new Map<string, WebhookRateLimitState>();
-const recentWebhookEvents = new Map<string, number>();
+const recentWebhookEvents = createDedupeCache({
+  ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
+  maxSize: 5000,
+});
 const webhookStatusCounters = new Map<string, number>();
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
@@ -141,22 +145,7 @@ function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
     return false;
   }
   const key = `${update.event_name}:${messageId}`;
-  const seenAt = recentWebhookEvents.get(key);
-  recentWebhookEvents.set(key, nowMs);
-
-  if (seenAt && nowMs - seenAt < ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
-    return true;
-  }
-
-  if (recentWebhookEvents.size > 5000) {
-    for (const [eventKey, timestamp] of recentWebhookEvents) {
-      if (nowMs - timestamp >= ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
-        recentWebhookEvents.delete(eventKey);
-      }
-    }
-  }
-
-  return false;
+  return recentWebhookEvents.check(key, nowMs);
 }
 
 function recordWebhookStatus(

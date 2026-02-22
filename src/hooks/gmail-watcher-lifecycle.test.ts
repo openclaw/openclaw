@@ -18,7 +18,7 @@ describe("startGmailWatcherWithLogs", () => {
   };
 
   beforeEach(() => {
-    startGmailWatcherMock.mockReset();
+    startGmailWatcherMock.mockClear();
     log.info.mockClear();
     log.warn.mockClear();
     log.error.mockClear();

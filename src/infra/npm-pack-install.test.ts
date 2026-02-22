@@ -67,7 +67,7 @@ describe("installFromNpmSpecArchive", () => {
   };
 
   beforeEach(() => {
-    vi.mocked(packNpmSpecToArchive).mockReset();
+    vi.mocked(packNpmSpecToArchive).mockClear();
     vi.mocked(withTempDir).mockClear();
   });
 

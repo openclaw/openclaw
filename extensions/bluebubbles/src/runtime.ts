@@ -6,9 +6,27 @@ export function setBlueBubblesRuntime(next: PluginRuntime): void {
   runtime = next;
 }
 
+export function clearBlueBubblesRuntime(): void {
+  runtime = null;
+}
+
+export function tryGetBlueBubblesRuntime(): PluginRuntime | null {
+  return runtime;
+}
+
 export function getBlueBubblesRuntime(): PluginRuntime {
   if (!runtime) {
     throw new Error("BlueBubbles runtime not initialized");
   }
   return runtime;
+}
+
+export function warnBlueBubbles(message: string): void {
+  const formatted = `[bluebubbles] ${message}`;
+  const log = runtime?.log;
+  if (typeof log === "function") {
+    log(formatted);
+    return;
+  }
+  console.warn(formatted);
 }

@@ -39,7 +39,7 @@ import type {
   BlueBubblesRuntimeEnv,
   WebhookTarget,
 } from "./monitor-shared.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
@@ -420,7 +420,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const privateApiEnabled = getCachedBlueBubblesPrivateApiStatus(account.accountId) !== false;
+  const privateApiEnabled = isBlueBubblesPrivateApiEnabled(account.accountId);
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;

@@ -150,15 +150,16 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
   });
 
-  it("uses trusted absolute SHELL path when executable", () => {
+  it("uses trusted absolute SHELL path when executable on posix-style paths", () => {
     const accessSyncSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
     try {
       const trustedShell = "/usr/bin/zsh-trusted";
       const { res, exec } = runShellEnvFallbackForShell(trustedShell);
+      const expectedShell = process.platform === "win32" ? "/bin/sh" : trustedShell;
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+      expect(exec).toHaveBeenCalledWith(expectedShell, ["-l", "-c", "env -0"], expect.any(Object));
     } finally {
       accessSyncSpy.mockRestore();
     }
