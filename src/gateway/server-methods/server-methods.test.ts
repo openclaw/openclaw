@@ -254,6 +254,7 @@ describe("exec approval handlers", () => {
 
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
+    hasExecApprovalClients?: () => boolean;
   }): ExecApprovalRequestArgs["context"] {
     return context as unknown as ExecApprovalRequestArgs["context"];
   }
@@ -277,7 +278,10 @@ describe("exec approval handlers", () => {
     return params.handlers["exec.approval.request"]({
       params: requestParams,
       respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
-      context: toExecApprovalRequestContext(params.context),
+      context: toExecApprovalRequestContext({
+        hasExecApprovalClients: () => true,
+        ...params.context,
+      }),
       client: null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
@@ -309,6 +313,7 @@ describe("exec approval handlers", () => {
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
       },
+      hasExecApprovalClients: () => true,
     };
     return { handlers, broadcasts, respond, context };
   }
@@ -462,6 +467,46 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("expires immediately when no approver clients and no forwarding targets", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new ExecApprovalManager();
+      const forwarder = {
+        handleRequested: vi.fn(async () => false),
+        handleResolved: vi.fn(async () => {}),
+        stop: vi.fn(),
+      };
+      const handlers = createExecApprovalHandlers(manager, { forwarder });
+      const respond = vi.fn();
+      const context = {
+        broadcast: (_event: string, _payload: unknown) => {},
+        hasExecApprovalClients: () => false,
+      };
+      const expireSpy = vi.spyOn(manager, "expire");
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: { timeoutMs: 60_000 },
+      });
+      for (let idx = 0; idx < 20; idx += 1) {
+        await Promise.resolve();
+      }
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).toHaveBeenCalledTimes(1);
+      await vi.runOnlyPendingTimersAsync();
+      await requestPromise;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ decision: null }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
