@@ -1,7 +1,15 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
+
+// Provide require() globally for CJS dependencies of jiti-loaded plugins (#12854).
+// jiti evaluates extensions in an ESM context where require is unavailable, causing
+// CJS packages that internally call require() to fail at runtime.
+if (typeof globalThis.require !== "function") {
+  globalThis.require = createRequire(import.meta.url);
+}
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -422,6 +430,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
 
+  const savedRequire = globalThis.require;
+
   for (const candidate of discovery.candidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
@@ -503,6 +513,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
       continue;
     }
+
+    // Anchor require() resolution to the plugin's directory so its CJS
+    // dependencies resolve packages from the plugin's own node_modules.
+    globalThis.require = createRequire(candidate.source);
 
     let mod: OpenClawPluginModule | null = null;
     try {
@@ -649,6 +663,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     }
   }
+
+  // Restore the pre-existing require (or the module-level fallback) so runtime
+  // code that relied on the original require semantics is not broken.
+  globalThis.require = savedRequire;
 
   if (typeof memorySlot === "string" && !memorySlotMatched) {
     registry.diagnostics.push({
