@@ -80,6 +80,10 @@ export type RunEmbeddedPiAgentParams = {
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
+  /** Timeout (ms) for the first token/response from the model. If no streaming data arrives
+   *  within this window after prompt dispatch, the attempt is aborted early so fallback models
+   *  can be tried without waiting for the full `timeoutMs`. 0 disables. Default: 30 000. */
+  firstTokenTimeoutMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
