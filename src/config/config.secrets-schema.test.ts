@@ -56,4 +56,54 @@ describe("config secret refs schema", () => {
       ).toBe(true);
     }
   });
+
+  it("rejects env refs that are not env var names", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", id: "/providers/openai/apiKey" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.path.includes("models.providers.openai.apiKey") &&
+            issue.message.includes("Env secret reference id"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects file refs that are not absolute JSON pointers", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "file", id: "providers/openai/apiKey" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.path.includes("models.providers.openai.apiKey") &&
+            issue.message.includes("absolute JSON pointer"),
+        ),
+      ).toBe(true);
+    }
+  });
 });

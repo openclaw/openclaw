@@ -3,19 +3,47 @@ import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const SECRET_REF_ID_PATTERN = /^[A-Za-z0-9_./:=-](?:[A-Za-z0-9_./:=~-]{0,127})$/;
+const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
+const FILE_SECRET_REF_SEGMENT_PATTERN = /^(?:[^~]|~0|~1)*$/;
 
-export const SecretRefSchema = z
+function isValidFileSecretRefId(value: string): boolean {
+  if (!value.startsWith("/")) {
+    return false;
+  }
+  return value
+    .slice(1)
+    .split("/")
+    .every((segment) => FILE_SECRET_REF_SEGMENT_PATTERN.test(segment));
+}
+
+const EnvSecretRefSchema = z
   .object({
-    source: z.enum(["env", "file"]),
+    source: z.literal("env"),
     id: z
       .string()
       .regex(
-        SECRET_REF_ID_PATTERN,
-        "Secret reference id must match /^[A-Za-z0-9_./:=-](?:[A-Za-z0-9_./:=~-]{0,127})$/",
+        ENV_SECRET_REF_ID_PATTERN,
+        'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
       ),
   })
   .strict();
+
+const FileSecretRefSchema = z
+  .object({
+    source: z.literal("file"),
+    id: z
+      .string()
+      .refine(
+        isValidFileSecretRefId,
+        'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey").',
+      ),
+  })
+  .strict();
+
+export const SecretRefSchema = z.discriminatedUnion("source", [
+  EnvSecretRefSchema,
+  FileSecretRefSchema,
+]);
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
