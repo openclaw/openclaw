@@ -27,6 +27,14 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import {
+  AVATAR_MAX_BYTES,
+  isAvatarDataUrl,
+  isAvatarHttpUrl,
+  isPathWithinRoot,
+  isWorkspaceRelativeAvatarPath,
+  resolveAvatarMime,
+} from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
 import type {
@@ -58,43 +66,6 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
-
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
-const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
-
-const AVATAR_MIME_BY_EXT: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".bmp": "image/bmp",
-  ".tif": "image/tiff",
-  ".tiff": "image/tiff",
-};
-
-function resolveAvatarMime(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  return AVATAR_MIME_BY_EXT[ext] ?? "application/octet-stream";
-}
-
-function isWorkspaceRelativePath(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.startsWith("~")) {
-    return false;
-  }
-  if (AVATAR_SCHEME_RE.test(value) && !WINDOWS_ABS_RE.test(value)) {
-    return false;
-  }
-  return true;
-}
-
 function resolveIdentityAvatarUrl(
   cfg: OpenClawConfig,
   agentId: string,
@@ -107,17 +78,16 @@ function resolveIdentityAvatarUrl(
   if (!trimmed) {
     return undefined;
   }
-  if (AVATAR_DATA_RE.test(trimmed) || AVATAR_HTTP_RE.test(trimmed)) {
+  if (isAvatarDataUrl(trimmed) || isAvatarHttpUrl(trimmed)) {
     return trimmed;
   }
-  if (!isWorkspaceRelativePath(trimmed)) {
+  if (!isWorkspaceRelativeAvatarPath(trimmed)) {
     return undefined;
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, trimmed);
-  const relative = path.relative(workspaceRoot, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathWithinRoot(workspaceRoot, resolved)) {
     return undefined;
   }
   try {
