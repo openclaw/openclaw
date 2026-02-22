@@ -949,8 +949,8 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          // Rotate on timeout to try another account/model path in this turn,
+          // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
@@ -973,9 +973,7 @@ export async function runEmbeddedPiAgent(
                 });
               }
               if (timedOut && !isProbeSession) {
-                log.warn(
-                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
-                );
+                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }
               if (cloudCodeAssistFormatError) {
                 log.warn(
