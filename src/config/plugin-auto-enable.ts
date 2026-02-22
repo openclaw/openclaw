@@ -319,7 +319,7 @@ function resolveConfiguredPlugins(
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (configuredChannels && typeof configuredChannels === "object") {
     for (const key of Object.keys(configuredChannels)) {
-      if (key === "defaults") {
+      if (key === "defaults" || key === "modelByChannel") {
         continue;
       }
       channelIds.add(key);
