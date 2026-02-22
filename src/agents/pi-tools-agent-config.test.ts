@@ -690,4 +690,44 @@ describe("Agent-specific tool filtering", () => {
       }),
     ).rejects.toThrow("exec host=sandbox is configured");
   });
+
+  it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          host: "sandbox",
+          security: "full",
+          ask: "off",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                host: "gateway",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      agentId: "main",
+      sessionKey: "run-opaque-123",
+      workspaceDir: "/tmp/test-main-opaque-session",
+      agentDir: "/tmp/agent-main-opaque-session",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+    const result = await execTool!.execute("call-main-opaque-session", {
+      command: "echo done",
+      yieldMs: 1000,
+    });
+    const details = result?.details as { status?: string } | undefined;
+    expect(details?.status).toBe("completed");
+  });
 });
