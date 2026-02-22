@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const DYNAMIC_TMPDIR_JOIN_RE = /path\.join\(os\.tmpdir\(\),\s*`[^`]*\$\{[^`]*`/;
 const RUNTIME_ROOTS = ["src", "extensions"];
 const SKIP_PATTERNS = [
   /\.test\.tsx?$/,
@@ -16,6 +15,21 @@ const SKIP_PATTERNS = [
 
 function shouldSkip(relativePath: string): boolean {
   return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
+
+function hasDynamicTmpdirTemplateJoin(source: string): boolean {
+  const needle = "path.join(os.tmpdir(),";
+  let cursor = source.indexOf(needle);
+  while (cursor !== -1) {
+    const window = source.slice(cursor, Math.min(source.length, cursor + 240));
+    const closeIdx = window.indexOf(")");
+    const expr = closeIdx === -1 ? window : window.slice(0, closeIdx + 1);
+    if (expr.includes("`") && expr.includes("${")) {
+      return true;
+    }
+    cursor = source.indexOf(needle, cursor + needle.length);
+  }
+  return false;
 }
 
 async function listTsFiles(dir: string): Promise<string[]> {
@@ -60,7 +74,7 @@ describe("temp path guard", () => {
           continue;
         }
         const source = await fs.readFile(file, "utf-8");
-        if (DYNAMIC_TMPDIR_JOIN_RE.test(source)) {
+        if (hasDynamicTmpdirTemplateJoin(source)) {
           offenders.push(relativePath);
         }
       }
