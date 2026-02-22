@@ -18,7 +18,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 beforeEach(() => {
-  callGatewayMock.mockReset();
+  callGatewayMock.mockClear();
   setRegistry(emptyRegistry);
 });
 
