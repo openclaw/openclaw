@@ -188,6 +188,13 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
+  /** Model failover and auth profile retry behavior. */
+  modelFailover?: {
+    /** Number of retries on the same auth profile before rotating (timeout only). Default: 1. */
+    retrySameProfileOnTimeout?: number;
+    /** Backoff delays in ms for each retry attempt. Default: [300, 1200]. */
+    retryBackoffMs?: number[];
+  };
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
