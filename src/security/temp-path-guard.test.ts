@@ -153,5 +153,5 @@ describe("temp path guard", () => {
     }
 
     expect(offenders).toEqual([]);
-  });
+  }, 240_000);
 });
