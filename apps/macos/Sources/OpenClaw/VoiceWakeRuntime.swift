@@ -160,6 +160,16 @@ actor VoiceWakeRuntime {
             self.recognitionRequest?.taskHint = .dictation
             guard let request = self.recognitionRequest else { return }
 
+            guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+                throw NSError(
+                    domain: "VoiceWakeRuntime",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "No usable default audio input available",
+                        "inputSummary": AudioInputDeviceObserver.inputAvailabilitySummary(),
+                    ])
+            }
+
             // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
             if self.audioEngine == nil {
                 self.audioEngine = AVAudioEngine()
