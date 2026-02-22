@@ -205,7 +205,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // If all media sends fail, fall back to normal text delivery.
         if (mediaList.length > 0) {
           // Close streaming card before sending media to ensure proper message ordering.
-          if (streaming?.isActive()) {
+          // Also await any pending stream startup to prevent a late card after media.
+          if (streaming?.isActive() || streamingStartPromise) {
             streamText = text;
             await closeStreaming();
           }
@@ -233,9 +234,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // Fallback: send text normally if all media failed
             await sendTextPayload(text, info);
           } else if (mediaDelivered && text.trim()) {
-            // Send text as a note-style caption replying to the media message
-            try {
-              await sendCaptionCardFeishu({
+            // Send text as a note-style caption replying to the media message.
+            // In raw mode, send plain text instead of an interactive card.
+            if (renderMode === "raw") {
+              await sendMessageFeishu({
                 cfg,
                 to: chatId,
                 text: text.trim(),
@@ -243,11 +245,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 mentions: mentionTargets,
                 accountId,
               });
-            } catch (err) {
-              params.runtime.error?.(
-                `feishu[${account.accountId}] sendCaptionCard failed, falling back to text: ${String(err)}`,
-              );
-              await sendTextPayload(text, info);
+            } else {
+              try {
+                await sendCaptionCardFeishu({
+                  cfg,
+                  to: chatId,
+                  text: text.trim(),
+                  replyToMessageId: lastMediaMessageId,
+                  mentions: mentionTargets,
+                  accountId,
+                });
+              } catch (err) {
+                params.runtime.error?.(
+                  `feishu[${account.accountId}] sendCaptionCard failed, falling back to text: ${String(err)}`,
+                );
+                await sendTextPayload(text, info);
+              }
             }
           }
           return;
