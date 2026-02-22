@@ -241,6 +241,22 @@ export async function launchOpenClawChrome(
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const needsBootstrap = !exists(localStatePath) || !exists(preferencesPath);
 
+  // Remove stale Chrome Singleton files that block launch when the container
+  // hostname changes across restarts.  Chrome encodes the hostname in
+  // SingletonLock and refuses to start (exit code 21) if it sees a lock from a
+  // different host.  In Docker environments the hostname changes on every
+  // container restart while the user-data volume persists, so these locks are
+  // always stale after a restart.  Must run before any spawn (including the
+  // bootstrap spawn below).
+  for (const singletonFile of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const filePath = path.join(userDataDir, singletonFile);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // File may not exist, which is fine.
+    }
+  }
+
   // If the profile doesn't exist yet, bootstrap it once so Chrome creates defaults.
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
