@@ -68,7 +68,8 @@ async function runAgentTurn(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       deliver: false,
-      channel: "internal",
+      // channel omitted; gateway will infer/default
+
       lane: "pipeline",
       timeout: 0,
       idempotencyKey,
