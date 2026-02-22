@@ -25,7 +25,11 @@ import type {
 } from "./types.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
-import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
+import type {
+  ResolvedMemoryBackendConfig,
+  ResolvedQmdConfig,
+  ResolvedQmdMcporterConfig,
+} from "./backend-config.js";
 import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
 
 const log = createSubsystemLogger("memory");
@@ -425,9 +429,37 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     const qmdSearchCommand = this.qmd.searchMode;
+    const mcporterEnabled = this.qmd.mcporter.enabled;
     let parsed: QmdQueryResult[];
     try {
-      if (collectionNames.length > 1) {
+      if (mcporterEnabled) {
+        const tool: "search" | "vector_search" | "deep_search" =
+          qmdSearchCommand === "search"
+            ? "search"
+            : qmdSearchCommand === "vsearch"
+              ? "vector_search"
+              : "deep_search";
+        const minScore = opts?.minScore ?? 0;
+        if (collectionNames.length > 1) {
+          parsed = await this.runMcporterAcrossCollections({
+            tool,
+            query: trimmed,
+            limit,
+            minScore,
+            collectionNames,
+          });
+        } else {
+          parsed = await this.runQmdSearchViaMcporter({
+            mcporter: this.qmd.mcporter,
+            tool,
+            query: trimmed,
+            limit,
+            minScore,
+            collection: collectionNames[0],
+            timeoutMs: this.qmd.limits.timeoutMs,
+          });
+        }
+      } else if (collectionNames.length > 1) {
         parsed = await this.runQueryAcrossCollections(
           trimmed,
           limit,
@@ -443,7 +475,11 @@ export class QmdMemoryManager implements MemorySearchManager {
         parsed = parseQmdQueryJson(result.stdout, result.stderr);
       }
     } catch (err) {
-      if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
+      if (
+        !mcporterEnabled &&
+        qmdSearchCommand !== "query" &&
+        this.isUnsupportedQmdOptionError(err)
+      ) {
         log.warn(
           `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
         );
@@ -463,7 +499,8 @@ export class QmdMemoryManager implements MemorySearchManager {
           throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
         }
       } else {
-        log.warn(`qmd ${qmdSearchCommand} failed: ${String(err)}`);
+        const label = mcporterEnabled ? "mcporter/qmd" : `qmd ${qmdSearchCommand}`;
+        log.warn(`${label} failed: ${String(err)}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
     }
@@ -857,6 +894,169 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       });
     });
+  }
+
+  private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
+    if (!mcporter.enabled) {
+      return;
+    }
+    if (!mcporter.startDaemon) {
+      type McporterWarnGlobal = typeof globalThis & {
+        __openclawMcporterColdStartWarned?: boolean;
+      };
+      const g: McporterWarnGlobal = globalThis;
+      if (!g.__openclawMcporterColdStartWarned) {
+        g.__openclawMcporterColdStartWarned = true;
+        log.warn(
+          "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
+        );
+      }
+      return;
+    }
+    type McporterGlobal = typeof globalThis & {
+      __openclawMcporterDaemonStart?: Promise<void>;
+    };
+    const g: McporterGlobal = globalThis;
+    if (!g.__openclawMcporterDaemonStart) {
+      g.__openclawMcporterDaemonStart = (async () => {
+        try {
+          await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
+        } catch (err) {
+          log.warn(`mcporter daemon start failed: ${String(err)}`);
+          // Allow future searches to retry daemon start on transient failures.
+          delete g.__openclawMcporterDaemonStart;
+        }
+      })();
+    }
+    await g.__openclawMcporterDaemonStart;
+  }
+
+  private async runMcporter(
+    args: string[],
+    opts?: { timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string }> {
+    return await new Promise((resolve, reject) => {
+      const child = spawn("mcporter", args, {
+        // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
+        env: this.env,
+        cwd: this.workspaceDir,
+      });
+      let stdout = "";
+      let stderr = "";
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
+      const timer = opts?.timeoutMs
+        ? setTimeout(() => {
+            child.kill("SIGKILL");
+            reject(new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
+          }, opts.timeoutMs)
+        : null;
+      child.stdout.on("data", (data) => {
+        const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
+        stdout = next.text;
+        stdoutTruncated = stdoutTruncated || next.truncated;
+      });
+      child.stderr.on("data", (data) => {
+        const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
+        stderr = next.text;
+        stderrTruncated = stderrTruncated || next.truncated;
+      });
+      child.on("error", (err) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        reject(err);
+      });
+      child.on("close", (code) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (stdoutTruncated || stderrTruncated) {
+          reject(
+            new Error(
+              `mcporter ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
+            ),
+          );
+          return;
+        }
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(
+            new Error(`mcporter ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`),
+          );
+        }
+      });
+    });
+  }
+
+  private async runQmdSearchViaMcporter(params: {
+    mcporter: ResolvedQmdMcporterConfig;
+    tool: "search" | "vector_search" | "deep_search";
+    query: string;
+    limit: number;
+    minScore: number;
+    collection?: string;
+    timeoutMs: number;
+  }): Promise<QmdQueryResult[]> {
+    await this.ensureMcporterDaemonStarted(params.mcporter);
+
+    const selector = `${params.mcporter.serverName}.${params.tool}`;
+    const callArgs: Record<string, unknown> = {
+      query: params.query,
+      limit: params.limit,
+      minScore: params.minScore,
+    };
+    if (params.collection) {
+      callArgs.collection = params.collection;
+    }
+
+    const result = await this.runMcporter(
+      [
+        "call",
+        selector,
+        "--args",
+        JSON.stringify(callArgs),
+        "--output",
+        "json",
+        "--timeout",
+        String(Math.max(0, params.timeoutMs)),
+      ],
+      { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
+    );
+
+    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    const isRecord = (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+
+    const structured =
+      isRecord(parsedUnknown) && isRecord(parsedUnknown.structuredContent)
+        ? parsedUnknown.structuredContent
+        : parsedUnknown;
+
+    const results: unknown[] =
+      isRecord(structured) && Array.isArray(structured.results)
+        ? (structured.results as unknown[])
+        : Array.isArray(structured)
+          ? structured
+          : [];
+
+    const out: QmdQueryResult[] = [];
+    for (const item of results) {
+      if (!isRecord(item)) {
+        continue;
+      }
+      const docidRaw = item.docid;
+      const docid = typeof docidRaw === "string" ? docidRaw.replace(/^#/, "").trim() : "";
+      if (!docid) {
+        continue;
+      }
+      const scoreRaw = item.score;
+      const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
+      const snippet = typeof item.snippet === "string" ? item.snippet : "";
+      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
+    }
+    return out;
   }
 
   private async readPartialText(
@@ -1401,6 +1601,39 @@ export class QmdMemoryManager implements MemorySearchManager {
             : Number.NEGATIVE_INFINITY;
         if (!prev || nextScore > prevScore) {
           bestByDocId.set(normalizedDocId, withCollection);
+        }
+      }
+    }
+    return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
+  private async runMcporterAcrossCollections(params: {
+    tool: "search" | "vector_search" | "deep_search";
+    query: string;
+    limit: number;
+    minScore: number;
+    collectionNames: string[];
+  }): Promise<QmdQueryResult[]> {
+    const bestByDocId = new Map<string, QmdQueryResult>();
+    for (const collectionName of params.collectionNames) {
+      const parsed = await this.runQmdSearchViaMcporter({
+        mcporter: this.qmd.mcporter,
+        tool: params.tool,
+        query: params.query,
+        limit: params.limit,
+        minScore: params.minScore,
+        collection: collectionName,
+        timeoutMs: this.qmd.limits.timeoutMs,
+      });
+      for (const entry of parsed) {
+        if (typeof entry.docid !== "string" || !entry.docid.trim()) {
+          continue;
+        }
+        const prev = bestByDocId.get(entry.docid);
+        const prevScore = typeof prev?.score === "number" ? prev.score : Number.NEGATIVE_INFINITY;
+        const nextScore = typeof entry.score === "number" ? entry.score : Number.NEGATIVE_INFINITY;
+        if (!prev || nextScore > prevScore) {
+          bestByDocId.set(entry.docid, entry);
         }
       }
     }
