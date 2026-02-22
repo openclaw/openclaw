@@ -581,7 +581,18 @@ export async function approveChannelPairingCode(params: {
       const { requests: pruned, removed } = await readPrunedPairingRequests(filePath);
       const normalizedAccountId = normalizePairingAccountId(params.accountId);
       const idx = pruned.findIndex((r) => {
-        if (String(r.code ?? "").toUpperCase() !== code) {
+        const stored = String(r.code ?? "").toUpperCase();
+        // Use timing-safe comparison to prevent side-channel leakage of pairing codes.
+        // Pad both buffers to the same length so we never short-circuit on length
+        // mismatch — a length-dependent early return leaks timing information.
+        const storedBuf = Buffer.from(stored, "utf8");
+        const codeBuf = Buffer.from(code, "utf8");
+        const maxLen = Math.max(storedBuf.length, codeBuf.length);
+        const a = Buffer.alloc(maxLen);
+        const b = Buffer.alloc(maxLen);
+        storedBuf.copy(a);
+        codeBuf.copy(b);
+        if (!crypto.timingSafeEqual(a, b)) {
           return false;
         }
         return requestMatchesAccountId(r, normalizedAccountId);
