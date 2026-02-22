@@ -23,18 +23,18 @@ Terminal Manager uses a dedicated tmux socket (`$TMPDIR/openclaw-term.sock`) to 
 
 ## Commands
 
-| Command                             | Description                                         |
-| ----------------------------------- | --------------------------------------------------- |
-| `/term help`                        | Show command reference                              |
-| `/term`                             | List all active sessions with windows and status    |
-| `/term <session>`                   | Show last 50 lines of output from a session         |
-| `/term <session> screenshot`        | Render session output as a macOS-style terminal PNG |
-| `/term <session> send <cmd>`        | Send a command to a running session                 |
-| `/term <session> kill`              | Kill a specific session                             |
-| `/term <session> rename <newname>`  | Rename a session                                    |
-| `/term <session> window <n>`        | Show output of window n                             |
-| `/term new <name> [cmd]`            | Create a new session, optionally run a command      |
-| `/term clear`                       | Kill all managed sessions                           |
+| Command                            | Description                                         |
+| ---------------------------------- | --------------------------------------------------- |
+| `/term help`                       | Show command reference                              |
+| `/term`                            | List all active sessions with windows and status    |
+| `/term <session>`                  | Show last 50 lines of output from a session         |
+| `/term <session> screenshot`       | Render session output as a macOS-style terminal PNG |
+| `/term <session> send <cmd>`       | Send a command to a running session                 |
+| `/term <session> kill`             | Kill a specific session                             |
+| `/term <session> rename <newname>` | Rename a session                                    |
+| `/term <session> window <n>`       | Show output of window n                             |
+| `/term new <name> [cmd]`           | Create a new session, optionally run a command      |
+| `/term clear`                      | Kill all managed sessions                           |
 
 ## Usage Examples
 
