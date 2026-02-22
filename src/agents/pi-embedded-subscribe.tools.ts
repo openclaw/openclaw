@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { MEDIA_TOKEN_RE } from "../media/parse.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
@@ -216,23 +216,11 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
       continue;
     }
     if (entry.type === "text" && typeof entry.text === "string") {
-      // Only parse lines that start with MEDIA: (after trimming) to avoid
-      // false-matching placeholders like <media:audio> or mid-line mentions.
-      // Mirrors the line-start guard in splitMediaFromOutput (media/parse.ts).
-      for (const line of entry.text.split("\n")) {
-        if (!line.trimStart().startsWith("MEDIA:")) {
-          continue;
-        }
-        MEDIA_TOKEN_RE.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = MEDIA_TOKEN_RE.exec(line)) !== null) {
-          const p = match[1]
-            ?.replace(/^[`"'[{(]+/, "")
-            .replace(/[`"'\]})\\,]+$/, "")
-            .trim();
-          if (p && p.length <= 4096) {
-            paths.push(p);
-          }
+      const parsed = splitMediaFromOutput(entry.text);
+      for (const mediaUrl of parsed.mediaUrls ?? []) {
+        const candidate = mediaUrl.trim();
+        if (candidate.length > 0 && candidate.length <= 4096) {
+          paths.push(candidate);
         }
       }
     }
