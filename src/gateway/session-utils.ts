@@ -21,6 +21,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -75,10 +76,6 @@ function tryResolveExistingPath(value: string): string | null {
   }
 }
 
-function areSameFileIdentity(preOpen: fs.Stats, opened: fs.Stats): boolean {
-  return preOpen.dev === opened.dev && preOpen.ino === opened.ino;
-}
-
 function resolveIdentityAvatarUrl(
   cfg: OpenClawConfig,
   agentId: string,
@@ -103,37 +100,28 @@ function resolveIdentityAvatarUrl(
   if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
     return undefined;
   }
-  let fd: number | null = null;
   try {
     const resolvedReal = fs.realpathSync(resolvedCandidate);
     if (!isPathWithinRoot(workspaceRoot, resolvedReal)) {
       return undefined;
     }
-    const preOpenStat = fs.lstatSync(resolvedReal);
-    if (!preOpenStat.isFile() || preOpenStat.size > AVATAR_MAX_BYTES) {
+    const opened = openVerifiedFileSync({
+      filePath: resolvedReal,
+      resolvedPath: resolvedReal,
+      maxBytes: AVATAR_MAX_BYTES,
+    });
+    if (!opened.ok) {
       return undefined;
     }
-    const openFlags =
-      fs.constants.O_RDONLY |
-      (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
-    fd = fs.openSync(resolvedReal, openFlags);
-    const openedStat = fs.fstatSync(fd);
-    if (
-      !openedStat.isFile() ||
-      openedStat.size > AVATAR_MAX_BYTES ||
-      !areSameFileIdentity(preOpenStat, openedStat)
-    ) {
-      return undefined;
+    try {
+      const buffer = fs.readFileSync(opened.fd);
+      const mime = resolveAvatarMime(resolvedCandidate);
+      return `data:${mime};base64,${buffer.toString("base64")}`;
+    } finally {
+      fs.closeSync(opened.fd);
     }
-    const buffer = fs.readFileSync(fd);
-    const mime = resolveAvatarMime(resolvedCandidate);
-    return `data:${mime};base64,${buffer.toString("base64")}`;
   } catch {
     return undefined;
-  } finally {
-    if (fd !== null) {
-      fs.closeSync(fd);
-    }
   }
 }
 
