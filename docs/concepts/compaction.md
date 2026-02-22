@@ -21,7 +21,29 @@ Compaction **persists** in the session’s JSONL history.
 
 ## Configuration
 
-Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+Use `agents.defaults.compaction` in your config to tune compaction:
+
+```yaml
+agents:
+  defaults:
+    compaction:
+      mode: safeguard          # "default" or "safeguard"
+      reserveTokensFloor: 8000 # min tokens reserved for reply
+      maxHistoryShare: 0.7     # max share of context for history
+      memoryFlush:
+        enabled: true          # flush memories before compacting
+        softThresholdTokens: 50000
+```
+
+Related settings:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `agents.defaults.contextTokens` | *(from model)* | Cap the context window (useful for small models) |
+| `agents.defaults.bootstrapMaxChars` | `20000` | Max chars per workspace file injected into system prompt |
+| `agents.defaults.bootstrapTotalMaxChars` | `150000` | Total char budget for all injected workspace files |
+
+> **Note:** There is no `autoCompact` config key. Auto-compaction is always enabled and triggers automatically when the context window is tight. Use `agents.defaults.compaction` to tune its behavior.
 
 ## Auto-compaction (default on)
 
@@ -53,6 +75,20 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 - **Session pruning**: trims old **tool results** only, **in-memory**, per request.
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
+
+## Troubleshooting context overflow
+
+If you see "Context overflow: prompt too large for the model" even on fresh sessions:
+
+1. **Check your workspace files.** Large `AGENTS.md`, `SOUL.md`, `USER.md`, etc. are injected into every prompt. Use `/context` to see sizes. Lower `agents.defaults.bootstrapMaxChars` to reduce per-file injection.
+
+2. **Check the model's context window.** Use `/status` to see your model. Some models have small windows (8k–32k). The error message includes the resolved context window and its source.
+
+3. **Simplify workspace files.** Remove files you don't need, or reduce their size. The system prompt + workspace files + tools can consume significant tokens before any conversation starts.
+
+4. **Cap the context window.** Set `agents.defaults.contextTokens` to match your model if auto-detection is wrong.
+
+5. **Switch models.** Models with larger context windows (100k+) are less likely to overflow.
 
 ## Tips
 
