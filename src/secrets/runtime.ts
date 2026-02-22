@@ -25,6 +25,7 @@ export type SecretResolverWarning = {
 };
 
 export type PreparedSecretsRuntimeSnapshot = {
+  sourceConfig: OpenClawConfig;
   config: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
@@ -62,6 +63,7 @@ let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
+    sourceConfig: structuredClone(snapshot.sourceConfig),
     config: structuredClone(snapshot.config),
     authStores: snapshot.authStores.map((entry) => ({
       agentDir: entry.agentDir,
@@ -290,6 +292,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   }
 
   return {
+    sourceConfig: structuredClone(params.config),
     config: resolvedConfig,
     authStores,
     warnings,
