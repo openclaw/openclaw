@@ -6,6 +6,7 @@ import {
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
+  resolveBrowserExecutable,
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
@@ -318,6 +319,21 @@ function createProfileContext(
             ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
+      }
+      // Before attempting local Chrome launch, check if a browser executable exists.
+      // If not and there's a different remote default profile, suggest using it instead
+      // of failing with "No supported browser found".
+      if (!resolveBrowserExecutable(current.resolved)) {
+        const defaultProfileName = current.resolved.defaultProfile;
+        if (defaultProfileName && defaultProfileName !== profile.name) {
+          const defaultResolved = resolveProfile(current.resolved, defaultProfileName);
+          if (defaultResolved && !defaultResolved.cdpIsLoopback) {
+            throw new Error(
+              `Profile "${profile.name}" requires a local browser but none is installed. ` +
+                `Use the default profile "${defaultProfileName}" instead (remote CDP at ${defaultResolved.cdpUrl}).`,
+            );
+          }
+        }
       }
       const launched = await launchOpenClawChrome(current.resolved, profile);
       attachRunning(launched);
