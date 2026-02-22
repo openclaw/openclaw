@@ -772,9 +772,12 @@ export function renderChat(props: ChatProps) {
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
-    props.onDraftChange(target.value);
     updateSlashMenu(target.value, requestUpdate);
     inputHistory.reset();
+    // onDraftChange must be last: requestUpdate() inside updateSlashMenu
+    // uses the stale render-time props.draft, overwriting chatMessage.
+    // Calling onDraftChange last ensures the correct DOM value wins.
+    props.onDraftChange(target.value);
   };
 
   return html`
@@ -963,22 +966,6 @@ export function renderChat(props: ChatProps) {
             <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
               ${icons.download}
             </button>
-            ${
-              props.messages.length > 0
-                ? html`
-                  <span class="agent-chat__input-divider"></span>
-                  <button class="btn-ghost" @click=${() => props.onSend()} title="Compact" ?disabled=${!props.connected || props.sending}>
-                    ${icons.refresh}
-                  </button>
-                  <button class="btn-ghost" @click=${props.onNewSession} title="New chat" ?disabled=${!props.connected || props.sending}>
-                    ${icons.plus}
-                  </button>
-                  <button class="btn-ghost btn-ghost--danger" @click=${props.onClearHistory} title="Clear history" ?disabled=${!props.connected || props.sending}>
-                    ${icons.trash}
-                  </button>
-                `
-                : nothing
-            }
 
             ${
               canAbort && isBusy
