@@ -110,8 +110,22 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Stored on globalThis so that all bundler-split chunks share a single Map.
+ * Without this, code-splitting can duplicate this module across chunks, giving
+ * registerInternalHook (hook loader) and triggerInternalHook (message
+ * dispatcher) separate Maps — silently preventing registered hooks from
+ * firing.
+ *
+ * Refs: #22790, #7067, #8807
+ */
+export const GLOBAL_KEY = "__openclaw_internal_hooks__";
+const globalRecord = globalThis as Record<string, unknown>;
+const handlers: Map<string, InternalHookHandler[]> =
+  (globalRecord[GLOBAL_KEY] as Map<string, InternalHookHandler[]>) ??
+  (globalRecord[GLOBAL_KEY] = new Map<string, InternalHookHandler[]>());
 const log = createSubsystemLogger("internal-hooks");
 
 /**
