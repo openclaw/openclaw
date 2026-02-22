@@ -11,8 +11,8 @@ const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 250)"';
 const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 60;
 const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 320;
 const POLL_INTERVAL_MS = 15;
-const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 900;
-const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.12;
+const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 800;
+const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.1;
 const TEST_EXEC_DEFAULTS = {
   security: "full" as const,
   ask: "off" as const,

@@ -44,7 +44,7 @@ async function waitForSessionCompletion(params: {
       },
       {
         timeout: process.platform === "win32" ? 4000 : 2000,
-        interval: 50,
+        interval: 30,
       },
     )
     .toBe(true);
