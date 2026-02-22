@@ -679,7 +679,19 @@ export const registerTelegramHandlers = ({
         logger.warn({ chatId, error: errMsg }, oversizeLogMessage);
         return;
       }
-      throw mediaErr;
+      // For other media fetch errors (network failures, Telegram API errors, etc.),
+      // notify the user instead of silently dropping the message. Previously the
+      // error was only logged server-side with no user-visible response. (#4662)
+      logger.warn({ chatId, error: errMsg }, "media fetch failed");
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+            reply_to_message_id: msg.message_id,
+          }),
+      }).catch(() => {});
+      return;
     }
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
