@@ -130,6 +130,9 @@ describe("GatewayClient security checks", () => {
         message: expect.stringContaining("SECURITY ERROR"),
       }),
     );
+    const error = onConnectError.mock.calls[0]?.[0] as Error;
+    expect(error.message).toContain("openclaw doctor --fix");
+    expect(error.message).toContain("Tailscale Serve/Funnel");
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
@@ -149,6 +152,8 @@ describe("GatewayClient security checks", () => {
         message: expect.stringContaining("SECURITY ERROR"),
       }),
     );
+    const error = onConnectError.mock.calls[0]?.[0] as Error;
+    expect(error.message).toContain("openclaw doctor --fix");
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
