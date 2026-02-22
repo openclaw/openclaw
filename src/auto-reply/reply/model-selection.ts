@@ -386,7 +386,15 @@ export async function createModelSelectionState(params: {
     if (overrideModel) {
       const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
       const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+      // Allow overrides for providers explicitly configured in openclaw.json even
+      // if they don't appear in the pi-sdk model catalog (e.g. openrouter, groq).
+      const configuredProviderKeys = Object.keys(cfg.models?.providers ?? {}).map(
+        normalizeProviderId,
+      );
+      const isConfiguredProvider = configuredProviderKeys.includes(
+        normalizeProviderId(normalizedOverride.provider),
+      );
+      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key) && !isConfiguredProvider) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -422,7 +430,17 @@ export async function createModelSelectionState(params: {
       storedOverride.model,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    const configuredProviderKeysForOverride = Object.keys(cfg.models?.providers ?? {}).map(
+      normalizeProviderId,
+    );
+    const isConfiguredProviderForOverride = configuredProviderKeysForOverride.includes(
+      normalizeProviderId(normalizedStoredOverride.provider),
+    );
+    if (
+      allowedModelKeys.size === 0 ||
+      allowedModelKeys.has(key) ||
+      isConfiguredProviderForOverride
+    ) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
     }

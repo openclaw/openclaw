@@ -514,6 +514,22 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
 
+    const cfg2 = loadConfig();
+    const outputDir = resolveSubagentOutputDir(cfg2);
+    const OUTPUT_THRESHOLD = 3_000;
+    const savedFilePath =
+      findings.length > OUTPUT_THRESHOLD
+        ? saveOutputToTempFile({
+            findings,
+            label: params.label ?? params.task?.slice(0, 40) ?? "agent",
+            runId: params.childRunId ?? "unknown",
+            outputDir,
+          })
+        : undefined;
+    const findingsForContext = savedFilePath
+      ? `${findings.slice(0, 1_500)}\n…\n\n_Full output saved: \`${savedFilePath.includes("/.openclaw/workspace/") ? savedFilePath.replace(/.*\.openclaw\/workspace\//, "") : savedFilePath}\`_`
+      : findings;
+
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
       const {
