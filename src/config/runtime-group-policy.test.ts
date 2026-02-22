@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resetMissingProviderGroupPolicyFallbackWarningsForTesting,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-group-policy.js";
+
+beforeEach(() => {
+  resetMissingProviderGroupPolicyFallbackWarningsForTesting();
+});
 
 describe("resolveRuntimeGroupPolicy", () => {
   it.each([
@@ -58,6 +65,15 @@ describe("resolveAllowlistProviderRuntimeGroupPolicy", () => {
   });
 });
 
+describe("resolveDefaultGroupPolicy", () => {
+  it("returns channels.defaults.groupPolicy when present", () => {
+    const resolved = resolveDefaultGroupPolicy({
+      channels: { defaults: { groupPolicy: "disabled" } },
+    });
+    expect(resolved).toBe("disabled");
+  });
+});
+
 describe("warnMissingProviderGroupPolicyFallbackOnce", () => {
   it("logs only once per provider/account key", () => {
     const lines: string[] = [];
@@ -65,14 +81,14 @@ describe("warnMissingProviderGroupPolicyFallbackOnce", () => {
       providerMissingFallbackApplied: true,
       providerKey: "runtime-policy-test",
       accountId: "account-a",
-      blockedLabel: "room messages",
+      blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
       log: (message) => lines.push(message),
     });
     const second = warnMissingProviderGroupPolicyFallbackOnce({
       providerMissingFallbackApplied: true,
       providerKey: "runtime-policy-test",
       accountId: "account-a",
-      blockedLabel: "room messages",
+      blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
       log: (message) => lines.push(message),
     });
 

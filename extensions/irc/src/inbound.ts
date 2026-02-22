@@ -1,8 +1,10 @@
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
   createReplyPrefixOptions,
   logInboundDrop,
   resolveControlCommandGate,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
   type OpenClawConfig,
   type RuntimeEnv,
@@ -86,7 +88,7 @@ export async function handleIrcInbound(params: {
     : message.senderNick;
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
   const { groupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: config.channels?.irc !== undefined,
@@ -97,7 +99,7 @@ export async function handleIrcInbound(params: {
     providerMissingFallbackApplied,
     providerKey: "irc",
     accountId: account.accountId,
-    blockedLabel: "channel messages",
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.channel,
     log: (message) => runtime.log?.(message),
   });
 

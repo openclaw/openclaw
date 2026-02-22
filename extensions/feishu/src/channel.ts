@@ -5,6 +5,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk";
 import {
   resolveFeishuAccount,
@@ -225,7 +226,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     collectWarnings: ({ cfg, accountId }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
       const feishuCfg = account.config;
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
         providerConfigPresent: cfg.channels?.feishu !== undefined,
         groupPolicy: feishuCfg?.groupPolicy,

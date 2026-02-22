@@ -7,6 +7,7 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
@@ -229,7 +230,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
         providerConfigPresent: cfg.channels?.mattermost !== undefined,
         groupPolicy: account.config.groupPolicy,
