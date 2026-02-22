@@ -121,11 +121,30 @@ export async function detectZaiEndpoint(params: {
     }
   }
 
-  // Fallback: Coding Plan endpoint (GLM-5 not available there).
+  // Try GLM-5 on Coding Plan endpoints too. Some accounts can access GLM-5 there.
   const coding: Array<{ endpoint: ZaiEndpointId; baseUrl: string }> = [
     { endpoint: "coding-global", baseUrl: ZAI_CODING_GLOBAL_BASE_URL },
     { endpoint: "coding-cn", baseUrl: ZAI_CODING_CN_BASE_URL },
   ];
+  for (const candidate of coding) {
+    const result = await probeZaiChatCompletions({
+      baseUrl: candidate.baseUrl,
+      apiKey: params.apiKey,
+      modelId: "glm-5",
+      timeoutMs,
+      fetchFn: params.fetchFn,
+    });
+    if (result.ok) {
+      return {
+        endpoint: candidate.endpoint,
+        baseUrl: candidate.baseUrl,
+        modelId: "glm-5",
+        note: `Verified GLM-5 on ${candidate.endpoint} endpoint.`,
+      };
+    }
+  }
+
+  // Fallback: Coding Plan endpoint with GLM-4.7 when GLM-5 is unavailable.
   for (const candidate of coding) {
     const result = await probeZaiChatCompletions({
       baseUrl: candidate.baseUrl,
@@ -139,7 +158,7 @@ export async function detectZaiEndpoint(params: {
         endpoint: candidate.endpoint,
         baseUrl: candidate.baseUrl,
         modelId: "glm-4.7",
-        note: "Coding Plan endpoint detected; GLM-5 is not available there. Defaulting to GLM-4.7.",
+        note: "Coding Plan endpoint detected; GLM-5 probe failed there. Defaulting to GLM-4.7.",
       };
     }
   }

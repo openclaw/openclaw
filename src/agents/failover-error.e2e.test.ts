@@ -33,7 +33,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop_reason: abort" })).toBe(
+      "timeout",
+    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: 'stop_reason = "abort"' })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "finish_reason=abort" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
   });
 

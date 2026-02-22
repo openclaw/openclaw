@@ -11,8 +11,14 @@ import {
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
 
 async function withAuthProfileStore(
-  fn: (ctx: { agentDir: string; store: AuthProfileStore }) => Promise<void>,
+  opts: {
+    provider?: string;
+    profileId?: string;
+  },
+  fn: (ctx: { agentDir: string; store: AuthProfileStore; profileId: string }) => Promise<void>,
 ): Promise<void> {
+  const provider = opts.provider ?? "anthropic";
+  const profileId = opts.profileId ?? `${provider}:default`;
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   try {
     const authPath = path.join(agentDir, "auth-profiles.json");
@@ -21,9 +27,9 @@ async function withAuthProfileStore(
       JSON.stringify({
         version: 1,
         profiles: {
-          "anthropic:default": {
+          [profileId]: {
             type: "api_key",
-            provider: "anthropic",
+            provider,
             key: "sk-default",
           },
         },
@@ -31,7 +37,7 @@ async function withAuthProfileStore(
     );
 
     const store = ensureAuthProfileStore(agentDir);
-    await fn({ agentDir, store });
+    await fn({ agentDir, store, profileId });
   } finally {
     fs.rmSync(agentDir, { recursive: true, force: true });
   }
@@ -44,27 +50,27 @@ function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number
 
 describe("markAuthProfileFailure", () => {
   it("disables billing failures for ~5 hours by default", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
+    await withAuthProfileStore({}, async ({ agentDir, store, profileId }) => {
       const startedAt = Date.now();
       await markAuthProfileFailure({
         store,
-        profileId: "anthropic:default",
+        profileId,
         reason: "billing",
         agentDir,
       });
 
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+      const disabledUntil = store.usageStats?.[profileId]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
       expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
     });
   });
   it("honors per-provider billing backoff overrides", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
+    await withAuthProfileStore({}, async ({ agentDir, store, profileId }) => {
       const startedAt = Date.now();
       await markAuthProfileFailure({
         store,
-        profileId: "anthropic:default",
+        profileId,
         reason: "billing",
         agentDir,
         cfg: {
@@ -77,12 +83,53 @@ describe("markAuthProfileFailure", () => {
         } as never,
       });
 
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+      const disabledUntil = store.usageStats?.[profileId]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
       expectCooldownInRange(remainingMs, 0.8 * 60 * 60 * 1000, 1.2 * 60 * 60 * 1000);
     });
   });
+
+  it("uses faster cooldowns for z.ai rate limit failures", async () => {
+    await withAuthProfileStore(
+      { provider: "z-ai", profileId: "zai:default" },
+      async ({ agentDir, store, profileId }) => {
+        const startedAt = Date.now();
+        await markAuthProfileFailure({
+          store,
+          profileId,
+          reason: "rate_limit",
+          agentDir,
+        });
+
+        const cooldownUntil = store.usageStats?.[profileId]?.cooldownUntil;
+        expect(typeof cooldownUntil).toBe("number");
+        const remainingMs = (cooldownUntil as number) - startedAt;
+        expectCooldownInRange(remainingMs, 15_000, 30_000);
+      },
+    );
+  });
+
+  it("keeps default cooldowns for z.ai non-rate failures", async () => {
+    await withAuthProfileStore(
+      { provider: "z.ai", profileId: "zai:default" },
+      async ({ agentDir, store, profileId }) => {
+        const startedAt = Date.now();
+        await markAuthProfileFailure({
+          store,
+          profileId,
+          reason: "auth",
+          agentDir,
+        });
+
+        const cooldownUntil = store.usageStats?.[profileId]?.cooldownUntil;
+        expect(typeof cooldownUntil).toBe("number");
+        const remainingMs = (cooldownUntil as number) - startedAt;
+        expectCooldownInRange(remainingMs, 50_000, 75_000);
+      },
+    );
+  });
+
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {

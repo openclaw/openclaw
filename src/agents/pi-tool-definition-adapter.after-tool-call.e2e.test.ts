@@ -140,6 +140,52 @@ describe("pi tool definition adapter after_tool_call", () => {
     );
   });
 
+  it("uses adjusted params for after_tool_call payload on adapter error", async () => {
+    enableAfterToolCallHook();
+    hookMocks.runBeforeToolCallHook.mockResolvedValue({
+      blocked: false,
+      params: { cmd: "ls", mode: "safe" },
+    });
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "throws",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+    const result = await execute(
+      "call-err-adjusted",
+      { cmd: "ls" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      tool: "exec",
+      error: "boom",
+    });
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { cmd: "ls", mode: "safe" },
+        error: "boom",
+      },
+      { toolName: "exec" },
+    );
+  });
+
   it("does not break execution when after_tool_call hook throws", async () => {
     enableAfterToolCallHook();
     hookMocks.runner.runAfterToolCall.mockRejectedValue(new Error("hook failed"));

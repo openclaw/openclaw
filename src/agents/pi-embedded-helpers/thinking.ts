@@ -1,5 +1,33 @@
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 
+function normalizeProviderId(provider?: string | null): string {
+  if (!provider) {
+    return "";
+  }
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "z-ai" || normalized === "z.ai") {
+    return "zai";
+  }
+  return normalized;
+}
+
+/**
+ * Normalize model thinking levels for providers with binary switches.
+ *
+ * Z.AI accepts on/off-style thinking controls. Mapping all non-off values to
+ * `low` keeps behavior deterministic and avoids one failed call before fallback.
+ */
+export function normalizeThinkLevelForProvider(params: {
+  provider?: string | null;
+  thinkLevel: ThinkLevel;
+}): ThinkLevel {
+  const provider = normalizeProviderId(params.provider);
+  if (provider === "zai" && params.thinkLevel !== "off") {
+    return "low";
+  }
+  return params.thinkLevel;
+}
+
 function extractSupportedValues(raw: string): string[] {
   const match =
     raw.match(/supported values are:\s*([^\n.]+)/i) ?? raw.match(/supported values:\s*([^\n.]+)/i);

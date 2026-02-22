@@ -13,7 +13,7 @@ import type {
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 
-function createTestContext(): {
+function createTestContext(params?: { runId?: string }): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
@@ -22,7 +22,7 @@ function createTestContext(): {
   const warn = vi.fn();
   const ctx: ToolHandlerContext = {
     params: {
-      runId: "run-test",
+      runId: params?.runId ?? "run-test",
       onBlockReplyFlush,
       onAgentEvent: undefined,
       onToolResult: undefined,
@@ -141,6 +141,55 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it("isolates tool start metadata by runId when toolCallIds overlap", async () => {
+    const { ctx: runA } = createTestContext({ runId: "run-a" });
+    const { ctx: runB } = createTestContext({ runId: "run-b" });
+
+    await handleToolExecutionStart(
+      runA as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-shared",
+        args: { action: "add", job: { name: "reminder-a" } },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      runB as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-shared",
+        args: { action: "list" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      runA as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-shared",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      runB as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-shared",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+
+    expect(runA.state.successfulCronAdds).toBe(1);
+    expect(runB.state.successfulCronAdds).toBe(0);
   });
 });
 
@@ -299,5 +348,46 @@ describe("messaging tool media URL tracking", () => {
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
+  });
+
+  it("deduplicates committed media URLs from args and result payload", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m4",
+      args: {
+        action: "send",
+        to: "channel:123",
+        media: "file:///img-a.jpg",
+        mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-m4",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              mediaUrls: ["file:///img-b.jpg", "file:///img-c.jpg"],
+            }),
+          },
+        ],
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
+      "file:///img-a.jpg",
+      "file:///img-b.jpg",
+      "file:///img-c.jpg",
+    ]);
   });
 });

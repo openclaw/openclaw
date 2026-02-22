@@ -182,6 +182,26 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   );
 }
 
+function calculateZaiRateLimitCooldownMs(errorCount: number): number {
+  const normalized = Math.max(1, errorCount);
+  const exponent = Math.min(normalized - 1, 4);
+  const raw = 20_000 * 3 ** exponent; // 20s, 60s, 3m, 9m, 27m
+  return Math.min(30 * 60 * 1000, raw);
+}
+
+function calculateAuthProfileCooldownForFailure(params: {
+  providerId: string;
+  errorCount: number;
+  reason: AuthProfileFailureReason;
+}): number {
+  const providerId = normalizeProviderId(params.providerId);
+  const isRateLike = params.reason === "rate_limit" || params.reason === "timeout";
+  if (providerId === "zai" && isRateLike) {
+    return calculateZaiRateLimitCooldownMs(params.errorCount);
+  }
+  return calculateAuthProfileCooldownMs(params.errorCount);
+}
+
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
@@ -259,6 +279,7 @@ export function resolveProfileUnusableUntilForDisplay(
 function computeNextProfileUsageStats(params: {
   existing: ProfileUsageStats;
   now: number;
+  providerId: string;
   reason: AuthProfileFailureReason;
   cfgResolved: ResolvedAuthCooldownConfig;
 }): ProfileUsageStats {
@@ -290,7 +311,11 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const backoffMs = calculateAuthProfileCooldownForFailure({
+      providerId: params.providerId,
+      errorCount: nextErrorCount,
+      reason: params.reason,
+    });
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
 
@@ -329,6 +354,7 @@ export async function markAuthProfileFailure(params: {
       freshStore.usageStats[profileId] = computeNextProfileUsageStats({
         existing,
         now,
+        providerId: providerKey,
         reason,
         cfgResolved,
       });
@@ -355,6 +381,7 @@ export async function markAuthProfileFailure(params: {
   store.usageStats[profileId] = computeNextProfileUsageStats({
     existing,
     now,
+    providerId: providerKey,
     reason,
     cfgResolved,
   });
