@@ -116,9 +116,9 @@ beforeEach(() => {
   state.entries.clear();
   state.counter = 0;
   copyToClipboard.mockReset();
-  runtime.log.mockReset();
-  runtime.error.mockReset();
-  runtime.exit.mockReset();
+  runtime.log.mockClear();
+  runtime.error.mockClear();
+  runtime.exit.mockClear();
 });
 
 function writeManifest(dir: string) {
