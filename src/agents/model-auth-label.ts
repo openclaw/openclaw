@@ -19,6 +19,20 @@ function formatApiKeySnippet(apiKey: string): string {
   return `${head}…${tail}`;
 }
 
+function formatCredentialSnippet(params: {
+  value: string | undefined;
+  ref: { source: string; id: string } | undefined;
+}): string {
+  const value = typeof params.value === "string" ? params.value.trim() : "";
+  if (value) {
+    return formatApiKeySnippet(value);
+  }
+  if (params.ref) {
+    return `ref(${params.ref.source}:${params.ref.id})`;
+  }
+  return "unknown";
+}
+
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
@@ -57,9 +71,13 @@ export function resolveModelAuthLabel(params: {
       return `oauth${label ? ` (${label})` : ""}`;
     }
     if (profile.type === "token") {
-      return `token ${formatApiKeySnippet(profile.token)}${label ? ` (${label})` : ""}`;
+      return `token ${formatCredentialSnippet({ value: profile.token, ref: profile.tokenRef })}${
+        label ? ` (${label})` : ""
+      }`;
     }
-    return `api-key ${formatApiKeySnippet(profile.key ?? "")}${label ? ` (${label})` : ""}`;
+    return `api-key ${formatCredentialSnippet({ value: profile.key, ref: profile.keyRef })}${
+      label ? ` (${label})` : ""
+    }`;
   }
 
   const envKey = resolveEnvApiKey(providerKey);
