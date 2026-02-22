@@ -58,6 +58,13 @@ const processSchema = Type.Object({
   ),
   hex: Type.Optional(Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" })),
   literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
+  delayMs: Type.Optional(
+    Type.Number({
+      description:
+        "Delay in milliseconds between each key when sending multiple keys (for TUI compatibility)",
+      minimum: 0,
+    }),
+  ),
   text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
   bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
   eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
@@ -170,6 +177,7 @@ export function createProcessTool(
         keys?: string[];
         hex?: string[];
         literal?: string;
+        delayMs?: number;
         text?: string;
         bracketed?: boolean;
         eof?: boolean;
@@ -477,6 +485,79 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
+
+          // When delayMs is provided and we have multiple keys, send them individually with delays
+          // This prevents race conditions in TUI apps that need time to process each key
+          if (
+            typeof params.delayMs === "number" &&
+            params.delayMs > 0 &&
+            params.keys &&
+            params.keys.length > 0
+          ) {
+            const allWarnings: string[] = [];
+            let totalBytes = 0;
+
+            // Send hex prefix once at the beginning (if provided)
+            if (params.hex && params.hex.length > 0) {
+              const { data: hexData, warnings: hexWarnings } = encodeKeySequence({
+                hex: params.hex,
+              });
+              if (hexData) {
+                await writeToStdin(resolved.stdin, hexData);
+                totalBytes += hexData.length;
+              }
+              allWarnings.push(...hexWarnings);
+            }
+
+            // Send each key sequentially with delays
+            for (let i = 0; i < params.keys.length; i++) {
+              const { data, warnings } = encodeKeySequence({
+                keys: [params.keys[i]],
+              });
+
+              if (data) {
+                await writeToStdin(resolved.stdin, data);
+                totalBytes += data.length;
+              }
+
+              allWarnings.push(...warnings);
+
+              // Add delay between keys (but not after the last one)
+              if (i < params.keys.length - 1) {
+                await new Promise<void>((resolve) => setTimeout(resolve, params.delayMs));
+              }
+            }
+
+            // Send literal suffix once at the end (if provided)
+            if (params.literal) {
+              const { data: literalData, warnings: literalWarnings } = encodeKeySequence({
+                literal: params.literal,
+              });
+              if (literalData) {
+                await writeToStdin(resolved.stdin, literalData);
+                totalBytes += literalData.length;
+              }
+              allWarnings.push(...literalWarnings);
+            }
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Sent ${totalBytes} bytes (${params.keys.length} keys with ${params.delayMs}ms delay) to session ${params.sessionId}.` +
+                    (allWarnings.length ? `\nWarnings:\n- ${allWarnings.join("\n- ")}` : ""),
+                },
+              ],
+              details: {
+                status: "running",
+                sessionId: params.sessionId,
+                name: deriveSessionName(resolved.session.command),
+              },
+            };
+          }
+
+          // Default behavior: send all keys at once (backward compatibility)
           const { data, warnings } = encodeKeySequence({
             keys: params.keys,
             hex: params.hex,
