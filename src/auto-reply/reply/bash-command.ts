@@ -346,7 +346,7 @@ export async function handleBashChatCommand(params: {
       elevated: {
         enabled: params.elevated.enabled,
         allowed: params.elevated.allowed,
-        defaultLevel: "on",
+        defaultLevel: "off",
       },
     });
     const result = await execTool.execute("chat-bash", {

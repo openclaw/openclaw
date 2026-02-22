@@ -104,7 +104,7 @@ describe("directive behavior", () => {
       expect(call?.bashElevated).toEqual({
         enabled: true,
         allowed: true,
-        defaultLevel: "on",
+        defaultLevel: "off",
       });
     });
   });
