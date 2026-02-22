@@ -24,6 +24,19 @@ export type FindExtraGatewayServicesOptions = {
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
 
+const GATEWAY_COMMAND_PATTERNS = [
+  /\bopenclaw\b.*\bgateway\b/i,
+  /\bopenclaw-gateway\b/i,
+  /\bclawdbot\b.*\bgateway\b/i,
+  /\bmoltbot\b.*\bgateway\b/i,
+];
+
+function isGatewayCommand(content: string): boolean {
+  const execMatch = content.match(/ExecStart\s*=\s*(.+?)(?:\n|$)/i);
+  const command = execMatch?.[1] ?? content;
+  return GATEWAY_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
+}
+
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string[] {
@@ -195,6 +208,9 @@ async function scanLaunchdDir(params: {
     if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
       continue;
     }
+    if (!isGatewayCommand(contents)) {
+      continue;
+    }
     results.push({
       platform: "darwin",
       label,
@@ -233,6 +249,9 @@ async function scanSystemdDir(params: {
       continue;
     }
     if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+      continue;
+    }
+    if (!isGatewayCommand(contents)) {
       continue;
     }
     results.push({
