@@ -370,6 +370,7 @@ export async function runExecProcess(opts: {
             workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
             env: opts.env,
             tty: opts.usePty,
+            user: opts.sandbox.user,
           }),
         ],
         env: process.env,

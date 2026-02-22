@@ -12,6 +12,7 @@ export type BashSandboxConfig = {
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
+  user?: string;
 };
 
 export function buildSandboxEnv(params: {
@@ -52,8 +53,12 @@ export function buildDockerExecArgs(params: {
   workdir?: string;
   env: Record<string, string>;
   tty: boolean;
+  user?: string;
 }) {
   const args = ["exec", "-i"];
+  if (params.user) {
+    args.push("-u", params.user);
+  }
   if (params.tty) {
     args.push("-t");
   }

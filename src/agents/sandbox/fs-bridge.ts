@@ -192,15 +192,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     script: string,
     options: RunCommandOptions = {},
   ): Promise<ExecDockerRawResult> {
-    const dockerArgs = [
-      "exec",
-      "-i",
-      this.sandbox.containerName,
-      "sh",
-      "-c",
-      script,
-      "moltbot-sandbox-fs",
-    ];
+    const dockerArgs = ["exec", "-i"];
+    if (this.sandbox.docker.user) {
+      dockerArgs.push("-u", this.sandbox.docker.user);
+    }
+    dockerArgs.push(this.sandbox.containerName, "sh", "-c", script, "moltbot-sandbox-fs");
     if (options.args?.length) {
       dockerArgs.push(...options.args);
     }
