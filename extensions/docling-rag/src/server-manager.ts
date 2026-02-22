@@ -37,13 +37,17 @@ export class DoclingServerManager {
   private child: ChildProcess | null = null;
   private started = false;
   private readonly url: string;
+  private readonly host: string;
   private readonly port: number;
 
   constructor(url?: string) {
     this.url = url ?? DEFAULT_DOCLING_SERVE_URL;
     try {
-      this.port = new URL(this.url).port ? Number.parseInt(new URL(this.url).port, 10) : 5001;
+      const parsed = new URL(this.url);
+      this.host = parsed.hostname || "127.0.0.1";
+      this.port = parsed.port ? Number.parseInt(parsed.port, 10) : 5001;
     } catch {
+      this.host = "127.0.0.1";
       this.port = 5001;
     }
   }
@@ -90,7 +94,7 @@ export class DoclingServerManager {
     try {
       this.child = spawn(
         "docling-serve",
-        ["run", "--port", String(this.port), "--host", "127.0.0.1"],
+        ["run", "--port", String(this.port), "--host", this.host],
         {
           stdio: ["ignore", "pipe", "pipe"],
           detached: false,

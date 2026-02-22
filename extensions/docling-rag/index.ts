@@ -277,11 +277,12 @@ const plugin = {
     // =====================================================================
 
     if (cfg.autoManage !== false) {
+      // Service exists primarily for clean shutdown. Start is a no-op because
+      // docling-serve is lazy-started on first document ingestion via ensureDocling().
+      // This avoids consuming ~500MB RAM when the user never uses RAG.
       api.registerService({
         id: "docling-serve",
-        async start() {
-          // Lazy start — don't start until first document is ingested
-        },
+        async start() {},
         async stop() {
           await serverManager.stop();
         },

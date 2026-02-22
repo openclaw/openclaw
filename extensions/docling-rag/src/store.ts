@@ -41,7 +41,10 @@ export class DocumentStore {
           this.documents.set(doc.id, doc);
         }
       }
-    } catch {
+    } catch (err: unknown) {
+      console.warn(
+        `[docling-rag] Failed to load ${this.docsPath}: ${err instanceof Error ? err.message : String(err)}. Starting with empty document store.`,
+      );
       this.documents = new Map();
     }
 
@@ -52,8 +55,10 @@ export class DocumentStore {
           const data = JSON.parse(fs.readFileSync(chunkFile, "utf-8")) as DocumentChunk[];
           this.chunks.set(docId, data);
         }
-      } catch {
-        // Skip corrupted chunk files
+      } catch (err: unknown) {
+        console.warn(
+          `[docling-rag] Failed to load chunks for ${docId}: ${err instanceof Error ? err.message : String(err)}. Skipping.`,
+        );
       }
     }
   }
