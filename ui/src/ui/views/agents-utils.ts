@@ -189,6 +189,14 @@ export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
 }
 
+export function agentAvatarHue(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  return ((hash % 360) + 360) % 360;
+}
+
 export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
     return "-";
@@ -379,7 +387,10 @@ export function buildModelOptions(
       <option value="" disabled>No configured models</option>
     `;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map(
+    (option) =>
+      html`<option value=${option.value} ?selected=${current === option.value}>${option.label}</option>`,
+  );
 }
 
 type CompiledPattern =

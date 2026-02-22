@@ -48,7 +48,7 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
 
 describe("runCliAgent with process supervisor", () => {
   beforeEach(() => {
-    supervisorSpawnMock.mockReset();
+    supervisorSpawnMock.mockClear();
   });
 
   it("runs CLI through supervisor and returns payload", async () => {

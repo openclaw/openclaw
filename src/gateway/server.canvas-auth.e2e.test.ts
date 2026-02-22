@@ -9,6 +9,9 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
+const WS_REJECT_TIMEOUT_MS = 2_000;
+const WS_CONNECT_TIMEOUT_MS = 2_000;
+
 async function listen(
   server: ReturnType<typeof createGatewayHttpServer>,
   host = "127.0.0.1",
@@ -38,7 +41,7 @@ async function expectWsRejected(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
-    const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
+    const timer = setTimeout(() => reject(new Error("timeout")), WS_REJECT_TIMEOUT_MS);
     ws.once("open", () => {
       clearTimeout(timer);
       ws.terminate();
@@ -53,6 +56,23 @@ async function expectWsRejected(
       clearTimeout(timer);
       resolve();
     });
+  });
+}
+
+async function expectWsConnected(url: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(url);
+    const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      ws.terminate();
+      resolve();
+    });
+    ws.once("unexpected-response", (_req, res) => {
+      clearTimeout(timer);
+      reject(new Error(`unexpected response ${res.statusCode}`));
+    });
+    ws.once("error", reject);
   });
 }
 
@@ -240,20 +260,7 @@ describe("gateway canvas host auth", () => {
             );
             expect(scopedA2ui.status).toBe(200);
 
-            await new Promise<void>((resolve, reject) => {
-              const ws = new WebSocket(`ws://${host}:${listener.port}${activeWsPath}`);
-              const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
-              ws.once("open", () => {
-                clearTimeout(timer);
-                ws.terminate();
-                resolve();
-              });
-              ws.once("unexpected-response", (_req, res) => {
-                clearTimeout(timer);
-                reject(new Error(`unexpected response ${res.statusCode}`));
-              });
-              ws.once("error", reject);
-            });
+            await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
 
             clients.delete(activeNodeClient);
 
@@ -358,20 +365,7 @@ describe("gateway canvas host auth", () => {
               const scopedCanvas = await fetch(`http://[::1]:${listener.port}${canvasPath}`);
               expect(scopedCanvas.status).toBe(200);
 
-              await new Promise<void>((resolve, reject) => {
-                const ws = new WebSocket(`ws://[::1]:${listener.port}${wsPath}`);
-                const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
-                ws.once("open", () => {
-                  clearTimeout(timer);
-                  ws.terminate();
-                  resolve();
-                });
-                ws.once("unexpected-response", (_req, res) => {
-                  clearTimeout(timer);
-                  reject(new Error(`unexpected response ${res.statusCode}`));
-                });
-                ws.once("error", reject);
-              });
+              await expectWsConnected(`ws://[::1]:${listener.port}${wsPath}`);
             },
           });
         } catch (err) {

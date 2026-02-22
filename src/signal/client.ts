@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolveFetch } from "../infra/fetch.js";
+import { generateSecureUuid } from "../infra/secure-random.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 export type SignalRpcOptions = {
@@ -480,7 +480,8 @@ async function signalRpcRequestJsonRpc<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
-  const id = randomUUID();
+  const baseUrl = normalizeBaseUrl(opts.baseUrl);
+  const id = generateSecureUuid();
   const body = JSON.stringify({
     jsonrpc: "2.0",
     method,
@@ -488,7 +489,7 @@ async function signalRpcRequestJsonRpc<T = unknown>(
     id,
   });
   const res = await fetchWithTimeout(
-    `${opts.baseUrl}/api/v1/rpc`,
+    `${baseUrl}/api/v1/rpc`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

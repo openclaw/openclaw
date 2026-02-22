@@ -15,8 +15,8 @@ import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
 describe("models/shared", () => {
   beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockReset();
-    mocks.writeConfigFile.mockReset();
+    mocks.readConfigFileSnapshot.mockClear();
+    mocks.writeConfigFile.mockClear();
   });
 
   it("returns config when snapshot is valid", async () => {

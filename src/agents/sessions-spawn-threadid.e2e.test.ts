@@ -32,7 +32,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
   beforeEach(() => {
     const callGatewayMock = getCallGatewayMock();
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",

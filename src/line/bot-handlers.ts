@@ -8,6 +8,11 @@ import type {
   PostbackEvent,
 } from "@line/bot-sdk";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -109,11 +114,13 @@ async function shouldProcessLineEvent(
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
 
   const storeAllowFrom = await readChannelAllowFromStore("line").catch(() => []);
   const effectiveDmAllow = normalizeAllowFromWithStore({
     allowFrom: account.config.allowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
   const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
   const groupAllowOverride = groupConfig?.allowFrom;
@@ -128,10 +135,21 @@ async function shouldProcessLineEvent(
   const effectiveGroupAllow = normalizeAllowFromWithStore({
     allowFrom: groupAllowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.line !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "line",
+    accountId: account.accountId,
+    log: (message) => logVerbose(message),
+  });
 
   if (isGroup) {
     if (groupConfig?.enabled === false) {

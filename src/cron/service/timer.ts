@@ -34,10 +34,18 @@ const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
+    delivered?: boolean;
     startedAt: number;
     endedAt: number;
   };
 
+function resolveRunConcurrency(state: CronServiceState): number {
+  const raw = state.deps.cronConfig?.maxConcurrentRuns;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(raw));
+}
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
@@ -66,6 +74,7 @@ function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    delivered?: boolean;
     startedAt: number;
     endedAt: number;
   },
@@ -75,6 +84,7 @@ function applyJobResult(
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
+  job.state.lastDelivered = result.delivered;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -236,9 +246,11 @@ export async function onTimer(state: CronServiceState) {
       }));
     });
 
-    const results: TimedCronRunOutcome[] = [];
-
-    for (const { id, job } of dueJobs) {
+    const runDueJob = async (params: {
+      id: string;
+      job: CronJob;
+    }): Promise<TimedCronRunOutcome> => {
+      const { id, job } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
@@ -255,18 +267,20 @@ export async function onTimer(state: CronServiceState) {
           : DEFAULT_JOB_TIMEOUT_MS;
 
       try {
+        const runAbortController =
+          typeof jobTimeoutMs === "number" ? new AbortController() : undefined;
         const result =
           typeof jobTimeoutMs === "number"
             ? await (async () => {
                 let timeoutId: NodeJS.Timeout | undefined;
                 try {
                   return await Promise.race([
-                    executeJobCore(state, job),
+                    executeJobCore(state, job, runAbortController?.signal),
                     new Promise<never>((_, reject) => {
-                      timeoutId = setTimeout(
-                        () => reject(new Error("cron: job execution timed out")),
-                        jobTimeoutMs,
-                      );
+                      timeoutId = setTimeout(() => {
+                        runAbortController?.abort(new Error("cron: job execution timed out"));
+                        reject(new Error("cron: job execution timed out"));
+                      }, jobTimeoutMs);
                     }),
                   ]);
                 } finally {
@@ -276,27 +290,49 @@ export async function onTimer(state: CronServiceState) {
                 }
               })()
             : await executeJobCore(state, job);
-        results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() });
+        return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         state.deps.log.warn(
           { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
           `cron: job failed: ${String(err)}`,
         );
-        results.push({
+        return {
           jobId: id,
           status: "error",
           error: String(err),
           startedAt,
           endedAt: state.deps.nowMs(),
-        });
+        };
       }
-    }
+    };
 
-    if (results.length > 0) {
+    const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
+    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
+    let cursor = 0;
+    const workers = Array.from({ length: concurrency }, async () => {
+      for (;;) {
+        const index = cursor++;
+        if (index >= dueJobs.length) {
+          return;
+        }
+        const due = dueJobs[index];
+        if (!due) {
+          return;
+        }
+        results[index] = await runDueJob(due);
+      }
+    });
+    await Promise.all(workers);
+
+    const completedResults: TimedCronRunOutcome[] = results.filter(
+      (entry): entry is TimedCronRunOutcome => entry !== undefined,
+    );
+
+    if (completedResults.length > 0) {
       await locked(state, async () => {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
-        for (const result of results) {
+        for (const result of completedResults) {
           const job = state.store?.jobs.find((j) => j.id === result.jobId);
           if (!job) {
             continue;
@@ -305,6 +341,7 @@ export async function onTimer(state: CronServiceState) {
           const shouldDelete = applyJobResult(state, job, {
             status: result.status,
             error: result.error,
+            delivered: result.delivered,
             startedAt: result.startedAt,
             endedAt: result.endedAt,
           });
@@ -423,22 +460,97 @@ export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string> },
 ) {
-  if (!state.store) {
-    return;
-  }
-  const now = state.deps.nowMs();
-  const skipJobIds = opts?.skipJobIds;
-  const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
-
-  if (missed.length > 0) {
+  const startupCandidates = await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    if (!state.store) {
+      return [] as Array<{ jobId: string; job: CronJob }>;
+    }
+    const now = state.deps.nowMs();
+    const skipJobIds = opts?.skipJobIds;
+    const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
+    if (missed.length === 0) {
+      return [] as Array<{ jobId: string; job: CronJob }>;
+    }
     state.deps.log.info(
       { count: missed.length, jobIds: missed.map((j) => j.id) },
       "cron: running missed jobs after restart",
     );
     for (const job of missed) {
-      await executeJob(state, job, now, { forced: false });
+      job.state.runningAtMs = now;
+      job.state.lastError = undefined;
+    }
+    await persist(state);
+    return missed.map((job) => ({ jobId: job.id, job }));
+  });
+
+  if (startupCandidates.length === 0) {
+    return;
+  }
+
+  const outcomes: Array<TimedCronRunOutcome> = [];
+  for (const candidate of startupCandidates) {
+    const startedAt = state.deps.nowMs();
+    emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
+    try {
+      const result = await executeJobCore(state, candidate.job);
+      outcomes.push({
+        jobId: candidate.jobId,
+        status: result.status,
+        error: result.error,
+        summary: result.summary,
+        delivered: result.delivered,
+        sessionId: result.sessionId,
+        sessionKey: result.sessionKey,
+        model: result.model,
+        provider: result.provider,
+        usage: result.usage,
+        startedAt,
+        endedAt: state.deps.nowMs(),
+      });
+    } catch (err) {
+      outcomes.push({
+        jobId: candidate.jobId,
+        status: "error",
+        error: String(err),
+        startedAt,
+        endedAt: state.deps.nowMs(),
+      });
     }
   }
+
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    if (!state.store) {
+      return;
+    }
+
+    for (const result of outcomes) {
+      const job = state.store.jobs.find((entry) => entry.id === result.jobId);
+      if (!job) {
+        continue;
+      }
+      const shouldDelete = applyJobResult(state, job, {
+        status: result.status,
+        error: result.error,
+        delivered: result.delivered,
+        startedAt: result.startedAt,
+        endedAt: result.endedAt,
+      });
+
+      emitJobFinished(state, job, result, result.startedAt);
+
+      if (shouldDelete) {
+        state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+        emit(state, { jobId: job.id, action: "removed" });
+      }
+    }
+
+    // Preserve any new past-due nextRunAtMs values that became due while
+    // startup catch-up was running. They should execute on a future tick
+    // instead of being silently advanced.
+    recomputeNextRunsForMaintenance(state);
+    await persist(state);
+  });
 }
 
 export async function runDueJobs(state: CronServiceState) {
@@ -455,7 +567,8 @@ export async function runDueJobs(state: CronServiceState) {
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
-): Promise<CronRunOutcome & CronRunTelemetry> {
+  abortSignal?: AbortSignal,
+): Promise<CronRunOutcome & CronRunTelemetry & { delivered?: boolean }> {
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
@@ -524,10 +637,14 @@ async function executeJobCore(
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
   }
+  if (abortSignal?.aborted) {
+    return { status: "error", error: "cron: job execution aborted" };
+  }
 
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message: job.payload.message,
+    abortSignal,
   });
 
   // Post a short summary back to the main session — but only when the
@@ -560,6 +677,7 @@ async function executeJobCore(
     status: res.status,
     error: res.error,
     summary: res.summary,
+    delivered: res.delivered,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -588,6 +706,7 @@ export async function executeJob(
 
   let coreResult: {
     status: CronRunStatus;
+    delivered?: boolean;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -600,6 +719,7 @@ export async function executeJob(
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
     error: coreResult.error,
+    delivered: coreResult.delivered,
     startedAt,
     endedAt,
   });
@@ -617,6 +737,7 @@ function emitJobFinished(
   job: CronJob,
   result: {
     status: CronRunStatus;
+    delivered?: boolean;
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
@@ -627,6 +748,7 @@ function emitJobFinished(
     status: result.status,
     error: result.error,
     summary: result.summary,
+    delivered: result.delivered,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
     runAtMs,

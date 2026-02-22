@@ -21,6 +21,7 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
+import { isFileMissingError } from "./fs-utils.js";
 import {
   buildFileEntry,
   ensureDir,
@@ -522,7 +523,15 @@ export abstract class MemoryManagerSyncOps {
     if (end <= start) {
       return 0;
     }
-    const handle = await fs.open(absPath, "r");
+    let handle;
+    try {
+      handle = await fs.open(absPath, "r");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return 0;
+      }
+      throw err;
+    }
     try {
       let offset = start;
       let count = 0;
@@ -625,9 +634,9 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
-    const fileEntries = await Promise.all(
-      files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
-    );
+    const fileEntries = (
+      await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
+    ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,

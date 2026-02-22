@@ -1,5 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigEnvVars } from "../config/env-vars.js";
+import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -67,7 +67,7 @@ export async function buildGatewayInstallPlan(params: {
   // Merge config env vars into the service environment (vars + inline env keys).
   // Config env vars are added first so service-specific vars take precedence.
   const environment: Record<string, string | undefined> = {
-    ...collectConfigEnvVars(params.config),
+    ...collectConfigServiceEnvVars(params.config),
   };
   Object.assign(environment, serviceEnvironment);
 
