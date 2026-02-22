@@ -21,7 +21,7 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     try {
       net.setDefaultAutoSelectFamily(decision.value);
       const label = decision.source ? ` (${decision.source})` : "";
-      log.info(`telegram: autoSelectFamily=${decision.value}${label}`);
+      log.debug(`telegram: autoSelectFamily=${decision.value}${label}`);
     } catch {
       // ignore if unsupported by the runtime
     }
