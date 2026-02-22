@@ -61,8 +61,6 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     callId: string;
     acceptedAt: number;
   }) {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     setAllowAgents(params.allowAgents);
     const getChildSessionKey = mockAcceptedSpawn(params.acceptedAt);
 
@@ -77,12 +75,11 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
 
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
   });
 
   it("sessions_spawn only allows same-agent by default", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
@@ -99,8 +96,6 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("sessions_spawn forbids cross-agent spawning when not allowed", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
