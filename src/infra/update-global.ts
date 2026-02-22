@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathExists } from "../utils.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -12,15 +13,7 @@ export type CommandRunner = (
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 
 async function tryRealpath(targetPath: string): Promise<string> {
   try {
@@ -141,7 +134,7 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec];
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {

@@ -4,7 +4,6 @@ import {
   defaultValue,
   hintForPath,
   humanize,
-  isSensitivePath,
   pathKey,
   schemaType,
   type JsonSchema,
@@ -26,6 +25,44 @@ function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+function renderJsonFallback(params: {
+  label: string;
+  help: string | undefined;
+  value: unknown;
+  path: Array<string | number>;
+  disabled: boolean;
+  showLabel: boolean;
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+}): TemplateResult {
+  const { label, help, value, path, disabled, showLabel, onPatch } = params;
+  const display = jsonValue(value);
+  return html`
+    <div class="cfg-field">
+      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      <textarea
+        class="cfg-textarea"
+        rows=${Math.min(Math.max((display.match(/\n/g)?.length ?? 0) + 1, 2), 10)}
+        placeholder="JSON value"
+        .value=${display}
+        ?disabled=${disabled}
+        @change=${(e: Event) => {
+          const raw = (e.target as HTMLTextAreaElement).value.trim();
+          if (!raw) {
+            onPatch(path, undefined);
+            return;
+          }
+          try {
+            onPatch(path, JSON.parse(raw));
+          } catch {
+            // leave as-is if invalid JSON
+          }
+        }}
+      ></textarea>
+    </div>
+  `;
 }
 
 // SVG Icons as template literals
@@ -114,10 +151,7 @@ export function renderNode(params: {
   const key = pathKey(path);
 
   if (unsupported.has(key)) {
-    return html`<div class="cfg-field cfg-field--error">
-      <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
-    </div>`;
+    return renderJsonFallback({ label, help, value, path, disabled, onPatch, showLabel });
   }
 
   // Handle anyOf/oneOf unions
@@ -283,13 +317,8 @@ export function renderNode(params: {
     return renderTextInput({ ...params, inputType: "text" });
   }
 
-  // Fallback
-  return html`
-    <div class="cfg-field cfg-field--error">
-      <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
-    </div>
-  `;
+  // Fallback — render a JSON textarea for types the form renderer doesn't know about
+  return renderJsonFallback({ label, help, value, path, disabled, onPatch, showLabel });
 }
 
 function renderTextInput(params: {
@@ -307,7 +336,8 @@ function renderTextInput(params: {
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
-  const isSensitive = hint?.sensitive ?? isSensitivePath(path);
+  const isSensitive =
+    (hint?.sensitive ?? false) && !/^\$\{[^}]*\}$/.test(String(value ?? "").trim());
   const placeholder =
     hint?.placeholder ??
     // oxlint-disable typescript/no-base-to-string
@@ -500,35 +530,39 @@ function renderObject(params: {
   const additional = schema.additionalProperties;
   const allowExtra = Boolean(additional) && typeof additional === "object";
 
+  const fields = html`
+    ${sorted.map(([propKey, node]) =>
+      renderNode({
+        schema: node,
+        value: obj[propKey],
+        path: [...path, propKey],
+        hints,
+        unsupported,
+        disabled,
+        onPatch,
+      }),
+    )}
+    ${
+      allowExtra
+        ? renderMapField({
+            schema: additional,
+            value: obj,
+            path,
+            hints,
+            unsupported,
+            disabled,
+            reservedKeys: reserved,
+            onPatch,
+          })
+        : nothing
+    }
+  `;
+
   // For top-level, don't wrap in collapsible
   if (path.length === 1) {
     return html`
       <div class="cfg-fields">
-        ${sorted.map(([propKey, node]) =>
-          renderNode({
-            schema: node,
-            value: obj[propKey],
-            path: [...path, propKey],
-            hints,
-            unsupported,
-            disabled,
-            onPatch,
-          }),
-        )}
-        ${
-          allowExtra
-            ? renderMapField({
-                schema: additional,
-                value: obj,
-                path,
-                hints,
-                unsupported,
-                disabled,
-                reservedKeys: reserved,
-                onPatch,
-              })
-            : nothing
-        }
+        ${fields}
       </div>
     `;
   }
@@ -542,31 +576,7 @@ function renderObject(params: {
       </summary>
       ${help ? html`<div class="cfg-object__help">${help}</div>` : nothing}
       <div class="cfg-object__content">
-        ${sorted.map(([propKey, node]) =>
-          renderNode({
-            schema: node,
-            value: obj[propKey],
-            path: [...path, propKey],
-            hints,
-            unsupported,
-            disabled,
-            onPatch,
-          }),
-        )}
-        ${
-          allowExtra
-            ? renderMapField({
-                schema: additional,
-                value: obj,
-                path,
-                hints,
-                unsupported,
-                disabled,
-                reservedKeys: reserved,
-                onPatch,
-              })
-            : nothing
-        }
+        ${fields}
       </div>
     </details>
   `;

@@ -1,6 +1,7 @@
 const KEY = "openclaw.control.settings.v1";
 
-import type { ThemeMode } from "./theme.ts";
+import { isSupportedLocale } from "../i18n/index.ts";
+import { VALID_THEMES, type ThemeMode } from "./theme.ts";
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -13,6 +14,7 @@ export type UiSettings = {
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  locale?: string;
 };
 
 export function loadSettings(): UiSettings {
@@ -26,7 +28,7 @@ export function loadSettings(): UiSettings {
     token: "",
     sessionKey: "main",
     lastActiveSessionKey: "main",
-    theme: "system",
+    theme: "dark",
     chatFocusMode: false,
     chatShowThinking: true,
     splitRatio: 0.6,
@@ -55,10 +57,9 @@ export function loadSettings(): UiSettings {
           ? parsed.lastActiveSessionKey.trim()
           : (typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()) ||
             defaults.lastActiveSessionKey,
-      theme:
-        parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
-          ? parsed.theme
-          : defaults.theme,
+      theme: VALID_THEMES.has(parsed.theme as ThemeMode)
+        ? (parsed.theme as ThemeMode)
+        : defaults.theme,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
@@ -77,6 +78,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
   } catch {
     return defaults;

@@ -105,7 +105,7 @@ Want “groups can only see folder X” instead of “no host access”? Keep `w
         docker: {
           binds: [
             // hostPath:containerPath:mode
-            "~/FriendsShared:/data:ro",
+            "/home/user/FriendsShared:/data:ro",
           ],
         },
       },
@@ -138,7 +138,7 @@ Control how group/room messages are handled per channel:
     },
     telegram: {
       groupPolicy: "disabled",
-      groupAllowFrom: ["123456789", "@username"],
+      groupAllowFrom: ["123456789"], // numeric Telegram user id (wizard can resolve @username)
     },
     signal: {
       groupPolicy: "disabled",
@@ -190,6 +190,7 @@ Notes:
 - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`).
 - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
 - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
+- Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy falls back to a fail-closed mode (typically `allowlist`) instead of inheriting `channels.defaults.groupPolicy`.
 
 Quick mental model (evaluation order for group messages):
 

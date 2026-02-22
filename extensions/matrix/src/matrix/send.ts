@@ -45,6 +45,7 @@ export async function sendMessageMatrix(
   const { client, stopOnDone } = await resolveMatrixClient({
     client: opts.client,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
   try {
     const roomId = await resolveMatrixRoomId(client, to);
@@ -78,7 +79,7 @@ export async function sendMessageMatrix(
 
     let lastMessageId = "";
     if (opts.mediaUrl) {
-      const maxBytes = resolveMediaMaxBytes();
+      const maxBytes = resolveMediaMaxBytes(opts.accountId);
       const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes);
       const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
         contentType: media.contentType,
@@ -166,6 +167,7 @@ export async function sendPollMatrix(
   const { client, stopOnDone } = await resolveMatrixClient({
     client: opts.client,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
 
   try {

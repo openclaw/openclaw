@@ -1,10 +1,13 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { detectMime } from "../../media/mime.js";
+import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown>;
+export type AnyAgentTool = AgentTool<any, unknown> & {
+  ownerOnly?: boolean;
+};
 
 export type StringParamOptions = {
   required?: boolean;
@@ -17,6 +20,26 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
+
+export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
+
+export class ToolInputError extends Error {
+  readonly status: number = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
+export class ToolAuthorizationError extends ToolInputError {
+  override readonly status = 403;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolAuthorizationError";
+  }
+}
 
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
@@ -49,14 +72,14 @@ export function readStringParam(
   const raw = params[key];
   if (typeof raw !== "string") {
     if (required) {
-      throw new Error(`${label} required`);
+      throw new ToolInputError(`${label} required`);
     }
     return undefined;
   }
   const value = trim ? raw.trim() : raw;
   if (!value && !allowEmpty) {
     if (required) {
-      throw new Error(`${label} required`);
+      throw new ToolInputError(`${label} required`);
     }
     return undefined;
   }
@@ -80,7 +103,7 @@ export function readStringOrNumberParam(
     }
   }
   if (required) {
-    throw new Error(`${label} required`);
+    throw new ToolInputError(`${label} required`);
   }
   return undefined;
 }
@@ -106,7 +129,7 @@ export function readNumberParam(
   }
   if (value === undefined) {
     if (required) {
-      throw new Error(`${label} required`);
+      throw new ToolInputError(`${label} required`);
     }
     return undefined;
   }
@@ -137,7 +160,7 @@ export function readStringArrayParam(
       .filter(Boolean);
     if (values.length === 0) {
       if (required) {
-        throw new Error(`${label} required`);
+        throw new ToolInputError(`${label} required`);
       }
       return undefined;
     }
@@ -147,14 +170,14 @@ export function readStringArrayParam(
     const value = raw.trim();
     if (!value) {
       if (required) {
-        throw new Error(`${label} required`);
+        throw new ToolInputError(`${label} required`);
       }
       return undefined;
     }
     return [value];
   }
   if (required) {
-    throw new Error(`${label} required`);
+    throw new ToolInputError(`${label} required`);
   }
   return undefined;
 }
@@ -181,7 +204,7 @@ export function readReactionParams(
     allowEmpty: true,
   });
   if (remove && !emoji) {
-    throw new Error(options.removeErrorMessage);
+    throw new ToolInputError(options.removeErrorMessage);
   }
   return { emoji, remove, isEmpty: !emoji };
 }
@@ -198,6 +221,21 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   };
 }
 
+export function wrapOwnerOnlyToolExecution(
+  tool: AnyAgentTool,
+  senderIsOwner: boolean,
+): AnyAgentTool {
+  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error(OWNER_ONLY_TOOL_ERROR);
+    },
+  };
+}
+
 export async function imageResult(params: {
   label: string;
   path: string;
@@ -205,6 +243,7 @@ export async function imageResult(params: {
   mimeType: string;
   extraText?: string;
   details?: Record<string, unknown>;
+  imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = [
     {
@@ -221,7 +260,7 @@ export async function imageResult(params: {
     content,
     details: { path: params.path, ...params.details },
   };
-  return await sanitizeToolResultImages(result, params.label);
+  return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 
 export async function imageResultFromFile(params: {
@@ -229,6 +268,7 @@ export async function imageResultFromFile(params: {
   path: string;
   extraText?: string;
   details?: Record<string, unknown>;
+  imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const buf = await fs.readFile(params.path);
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
@@ -239,5 +279,44 @@ export async function imageResultFromFile(params: {
     mimeType,
     extraText: params.extraText,
     details: params.details,
+    imageSanitization: params.imageSanitization,
   });
+}
+
+export type AvailableTag = {
+  id?: string;
+  name: string;
+  moderated?: boolean;
+  emoji_id?: string | null;
+  emoji_name?: string | null;
+};
+
+/**
+ * Validate and parse an `availableTags` parameter from untrusted input.
+ * Returns `undefined` when the value is missing or not an array.
+ * Entries that lack a string `name` are silently dropped.
+ */
+export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const result = raw
+    .filter(
+      (t): t is Record<string, unknown> =>
+        typeof t === "object" && t !== null && typeof t.name === "string",
+    )
+    .map((t) => ({
+      ...(t.id !== undefined && typeof t.id === "string" ? { id: t.id } : {}),
+      name: t.name as string,
+      ...(typeof t.moderated === "boolean" ? { moderated: t.moderated } : {}),
+      ...(t.emoji_id === null || typeof t.emoji_id === "string" ? { emoji_id: t.emoji_id } : {}),
+      ...(t.emoji_name === null || typeof t.emoji_name === "string"
+        ? { emoji_name: t.emoji_name }
+        : {}),
+    }));
+  // Return undefined instead of empty array to avoid accidentally clearing all tags
+  return result.length ? result : undefined;
 }

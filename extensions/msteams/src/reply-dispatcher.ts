@@ -9,8 +9,6 @@ import {
 } from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -21,7 +19,9 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
+import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
@@ -49,7 +49,7 @@ export function createMSTeamsReplyDispatcher(params: {
     start: sendTypingIndicator,
     onStartError: (err) => {
       logTypingFailure({
-        log: (message) => params.log.debug(message),
+        log: (message) => params.log.debug?.(message),
         channel: "msteams",
         action: "start",
         error: err,
@@ -94,7 +94,7 @@ export function createMSTeamsReplyDispatcher(params: {
           // Enable default retry/backoff for throttling/transient failures.
           retry: {},
           onRetry: (event) => {
-            params.log.debug("retrying send", {
+            params.log.debug?.("retrying send", {
               replyStyle: params.replyStyle,
               ...event,
             });

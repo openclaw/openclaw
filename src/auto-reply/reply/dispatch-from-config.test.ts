@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async () => ({ ok: true, messageId: "mock" })),
-  tryFastAbortFromMessage: vi.fn(async () => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
   })),
@@ -22,6 +25,10 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn(() => false),
     runMessageReceived: vi.fn(async () => {}),
   },
+}));
+const internalHookMocks = vi.hoisted(() => ({
+  createInternalHookEvent: vi.fn(),
+  triggerInternalHook: vi.fn(async () => {}),
 }));
 
 vi.mock("./route-reply.js", () => ({
@@ -53,9 +60,17 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
 }));
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
+
+const noAbortResult = { handled: false, aborted: false } as const;
+const emptyConfig = {} as OpenClawConfig;
+type DispatchReplyArgs = Parameters<typeof dispatchReplyFromConfig>[0];
 
 function createDispatcher(): ReplyDispatcher {
   return {
@@ -64,26 +79,48 @@ function createDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    markComplete: vi.fn(),
   };
+}
+
+function setNoAbort() {
+  mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
+}
+
+function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | undefined {
+  return (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+    | ReplyPayload
+    | undefined;
+}
+
+async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
+  await dispatchReplyFromConfig({
+    ...params,
+    dispatcher: createDispatcher(),
+  });
+  await dispatchReplyFromConfig({
+    ...params,
+    dispatcher: createDispatcher(),
+  });
 }
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     resetInboundDedupe();
-    diagnosticMocks.logMessageQueued.mockReset();
-    diagnosticMocks.logMessageProcessed.mockReset();
-    diagnosticMocks.logSessionStateChange.mockReset();
-    hookMocks.runner.hasHooks.mockReset();
+    diagnosticMocks.logMessageQueued.mockClear();
+    diagnosticMocks.logMessageProcessed.mockClear();
+    diagnosticMocks.logSessionStateChange.mockClear();
+    hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runMessageReceived.mockReset();
+    hookMocks.runner.runMessageReceived.mockClear();
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
+    internalHookMocks.triggerInternalHook.mockClear();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
+    setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = {} as OpenClawConfig;
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -94,8 +131,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -104,12 +141,9 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("routes when OriginatingChannel differs from Provider", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
+    setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = {} as OpenClawConfig;
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -121,8 +155,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -137,13 +171,46 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("provides onToolResult in DM sessions", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
+  it("routes media-only tool results when summaries are suppressed", async () => {
+    setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = {} as OpenClawConfig;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      ChatType: "group",
+      AccountId: "acc-1",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolResult).toBeDefined();
+      await opts?.onToolResult?.({
+        text: "NO_REPLY",
+        mediaUrls: ["https://example.com/tts-routed.opus"],
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    const routed = mocks.routeReply.mock.calls[0]?.[0] as { payload?: ReplyPayload } | undefined;
+    expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
+    expect(routed?.payload?.text).toBeUndefined();
+  });
+
+  it("provides onToolResult in DM sessions", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -152,8 +219,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       expect(typeof opts?.onToolResult).toBe("function");
@@ -164,12 +231,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not provide onToolResult in group sessions", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
-    const cfg = {} as OpenClawConfig;
+  it("suppresses group tool summaries but still forwards tool media", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -178,23 +242,30 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeUndefined();
+      expect(opts?.onToolResult).toBeDefined();
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      await opts?.onToolResult?.({
+        text: "NO_REPLY",
+        mediaUrls: ["https://example.com/tts-group.opus"],
+      });
       return { text: "hi" } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    const sent = firstToolResultPayload(dispatcher);
+    expect(sent?.mediaUrls).toEqual(["https://example.com/tts-group.opus"]);
+    expect(sent?.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
   it("sends tool results via dispatcher in DM sessions", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
-    const cfg = {} as OpenClawConfig;
+    setNoAbort();
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -203,8 +274,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       // Simulate tool result emission
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
@@ -218,12 +289,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not provide onToolResult for native slash commands", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
-    const cfg = {} as OpenClawConfig;
+  it("suppresses native tool summaries but still forwards tool media", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -233,14 +301,23 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeUndefined();
+      expect(opts?.onToolResult).toBeDefined();
+      await opts?.onToolResult?.({ text: "🔧 tools/sessions_send" });
+      await opts?.onToolResult?.({
+        mediaUrl: "https://example.com/tts-native.opus",
+      });
       return { text: "hi" } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    const sent = firstToolResultPayload(dispatcher);
+    expect(sent?.mediaUrl).toBe("https://example.com/tts-native.opus");
+    expect(sent?.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -249,7 +326,7 @@ describe("dispatchReplyFromConfig", () => {
       handled: true,
       aborted: true,
     });
-    const cfg = {} as OpenClawConfig;
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -271,7 +348,7 @@ describe("dispatchReplyFromConfig", () => {
       aborted: true,
       stoppedSubagents: 2,
     });
-    const cfg = {} as OpenClawConfig;
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -291,11 +368,8 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("deduplicates inbound messages by MessageSid and origin", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
-    const cfg = {} as OpenClawConfig;
+    setNoAbort();
+    const cfg = emptyConfig;
     const ctx = buildTestCtx({
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
@@ -304,16 +378,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({
+    await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 
@@ -321,12 +388,9 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("emits message_received hook with originating channel metadata", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
+    setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(true);
-    const cfg = {} as OpenClawConfig;
+    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -371,11 +435,55 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("emits diagnostics when enabled", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
+  it("emits internal message:received hook when a session key is available", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+      MessageSid: "msg-42",
     });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:main:main",
+      expect.objectContaining({
+        from: ctx.From,
+        content: "/help",
+        channelId: "telegram",
+        messageId: "msg-42",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips internal message:received hook when session key is unavailable", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandBody: "/help",
+    });
+    (ctx as MsgContext).SessionKey = undefined;
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("emits diagnostics when enabled", async () => {
+    setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -405,10 +513,7 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
+    setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
       Provider: "whatsapp",
@@ -418,16 +523,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({
+    await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 

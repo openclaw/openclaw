@@ -1,3 +1,4 @@
+import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
@@ -52,9 +53,7 @@ export type FeishuSendResult = {
   chatId: string;
 };
 
-export type FeishuProbeResult = {
-  ok: boolean;
-  error?: string;
+export type FeishuProbeResult = BaseProbeResult<string> & {
   appId?: string;
   botName?: string;
   botOpenId?: string;
@@ -72,4 +71,11 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+};
+
+export type DynamicAgentCreationConfig = {
+  enabled?: boolean;
+  workspaceTemplate?: string;
+  agentDirTemplate?: string;
+  maxAgents?: number;
 };

@@ -6,14 +6,21 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
 import {
+  applyQueueRuntimeSettings,
   applyQueueDropPolicy,
   buildCollectPrompt,
-  buildQueueSummaryPrompt,
+  clearQueueSummaryState,
+  drainCollectItemIfNeeded,
+  drainNextQueueItem,
   hasCrossChannelItems,
+  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
 
 export type AnnounceQueueItem = {
+  // Stable announce identity shared by direct + queued delivery paths.
+  // Optional for backward compatibility with previously queued items.
+  announceId?: string;
   prompt: string;
   summaryLine?: string;
   enqueuedAt: number;
@@ -44,6 +51,18 @@ type AnnounceQueueState = {
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
+export function resetAnnounceQueuesForTests() {
+  // Test isolation: other suites may leave a draining queue behind in the worker.
+  // Clearing the map alone isn't enough because drain loops capture `queue` by reference.
+  for (const queue of ANNOUNCE_QUEUES.values()) {
+    queue.items.length = 0;
+    queue.summaryLines.length = 0;
+    queue.droppedCount = 0;
+    queue.lastEnqueuedAt = 0;
+  }
+  ANNOUNCE_QUEUES.clear();
+}
+
 function getAnnounceQueue(
   key: string,
   settings: AnnounceQueueSettings,
@@ -51,16 +70,10 @@ function getAnnounceQueue(
 ) {
   const existing = ANNOUNCE_QUEUES.get(key);
   if (existing) {
-    existing.mode = settings.mode;
-    existing.debounceMs =
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : existing.debounceMs;
-    existing.cap =
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : existing.cap;
-    existing.dropPolicy = settings.dropPolicy ?? existing.dropPolicy;
+    applyQueueRuntimeSettings({
+      target: existing,
+      settings,
+    });
     existing.send = send;
     return existing;
   }
@@ -76,6 +89,10 @@ function getAnnounceQueue(
     summaryLines: [],
     send,
   };
+  applyQueueRuntimeSettings({
+    target: created,
+    settings,
+  });
   ANNOUNCE_QUEUES.set(key, created);
   return created;
 }
@@ -92,14 +109,6 @@ function scheduleAnnounceDrain(key: string) {
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
-          if (forceIndividualCollect) {
-            const next = queue.items.shift();
-            if (!next) {
-              break;
-            }
-            await queue.send(next);
-            continue;
-          }
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
             if (!item.origin) {
               return {};
@@ -109,17 +118,23 @@ function scheduleAnnounceDrain(key: string) {
             }
             return { key: item.originKey };
           });
-          if (isCrossChannel) {
-            forceIndividualCollect = true;
-            const next = queue.items.shift();
-            if (!next) {
-              break;
-            }
-            await queue.send(next);
+          const collectDrainResult = await drainCollectItemIfNeeded({
+            forceIndividualCollect,
+            isCrossChannel,
+            setForceIndividualCollect: (next) => {
+              forceIndividualCollect = next;
+            },
+            items: queue.items,
+            run: async (item) => await queue.send(item),
+          });
+          if (collectDrainResult === "empty") {
+            break;
+          }
+          if (collectDrainResult === "drained") {
             continue;
           }
-          const items = queue.items.splice(0, queue.items.length);
-          const summary = buildQueueSummaryPrompt({ state: queue, noun: "announce" });
+          const items = queue.items.slice();
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
           const prompt = buildCollectPrompt({
             title: "[Queued announce messages while agent was busy]",
             items,
@@ -131,26 +146,34 @@ function scheduleAnnounceDrain(key: string) {
             break;
           }
           await queue.send({ ...last, prompt });
+          queue.items.splice(0, items.length);
+          if (summary) {
+            clearQueueSummaryState(queue);
+          }
           continue;
         }
 
-        const summaryPrompt = buildQueueSummaryPrompt({ state: queue, noun: "announce" });
+        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
-          const next = queue.items.shift();
-          if (!next) {
+          if (
+            !(await drainNextQueueItem(
+              queue.items,
+              async (item) => await queue.send({ ...item, prompt: summaryPrompt }),
+            ))
+          ) {
             break;
           }
-          await queue.send({ ...next, prompt: summaryPrompt });
+          clearQueueSummaryState(queue);
           continue;
         }
 
-        const next = queue.items.shift();
-        if (!next) {
+        if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
           break;
         }
-        await queue.send(next);
       }
     } catch (err) {
+      // Keep items in queue and retry after debounce; avoid hot-loop retries.
+      queue.lastEnqueuedAt = Date.now();
       defaultRuntime.error?.(`announce queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;

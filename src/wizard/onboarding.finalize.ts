@@ -1,14 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
-import { resolveCliName } from "../cli/cli-name.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { installCompletion } from "../cli/completion-cli.js";
 import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
@@ -17,10 +10,6 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
-import {
-  checkShellCompletionStatus,
-  ensureCompletionCacheExists,
-} from "../commands/doctor-completion.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
@@ -31,12 +20,18 @@ import {
   waitForGatewayReachable,
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
+import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
+import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
+import type { WizardPrompter } from "./prompts.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -334,7 +329,7 @@ export async function finalizeOnboardingWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-onboarding tui");
+      restoreTerminalState("pre-onboarding tui", { resumeStdinIfPaused: true });
       await runTui({
         url: links.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -397,50 +392,7 @@ export async function finalizeOnboardingWizard(
     "Security",
   );
 
-  // Shell completion setup
-  const cliName = resolveCliName();
-  const completionStatus = await checkShellCompletionStatus(cliName);
-
-  if (completionStatus.usesSlowPattern) {
-    // Case 1: Profile uses slow dynamic pattern - silently upgrade to cached version
-    const cacheGenerated = await ensureCompletionCacheExists(cliName);
-    if (cacheGenerated) {
-      await installCompletion(completionStatus.shell, true, cliName);
-    }
-  } else if (completionStatus.profileInstalled && !completionStatus.cacheExists) {
-    // Case 2: Profile has completion but no cache - auto-fix silently
-    await ensureCompletionCacheExists(cliName);
-  } else if (!completionStatus.profileInstalled) {
-    // Case 3: No completion at all - prompt to install
-    const installShellCompletion = await prompter.confirm({
-      message: `Enable ${completionStatus.shell} shell completion for ${cliName}?`,
-      initialValue: true,
-    });
-    if (installShellCompletion) {
-      // Generate cache first (required for fast shell startup)
-      const cacheGenerated = await ensureCompletionCacheExists(cliName);
-      if (cacheGenerated) {
-        // Install to shell profile
-        await installCompletion(completionStatus.shell, true, cliName);
-        const profileHint =
-          completionStatus.shell === "zsh"
-            ? "~/.zshrc"
-            : completionStatus.shell === "bash"
-              ? "~/.bashrc"
-              : "~/.config/fish/config.fish";
-        await prompter.note(
-          `Shell completion installed. Restart your shell or run: source ${profileHint}`,
-          "Shell completion",
-        );
-      } else {
-        await prompter.note(
-          `Failed to generate completion cache. Run \`${cliName} completion --install\` later.`,
-          "Shell completion",
-        );
-      }
-    }
-  }
-  // Case 4: Both profile and cache exist (using cached version) - all good, nothing to do
+  await setupOnboardingShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
     !opts.skipUi &&

@@ -1,5 +1,3 @@
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
@@ -7,7 +5,9 @@ import {
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
+import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
 

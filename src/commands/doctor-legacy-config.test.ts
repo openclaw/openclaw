@@ -1,114 +1,34 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 
-describe("normalizeLegacyConfigValues", () => {
-  let previousOauthDir: string | undefined;
-  let tempOauthDir: string | undefined;
-
-  const writeCreds = (dir: string) => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "creds.json"), JSON.stringify({ me: {} }));
-  };
-
-  beforeEach(() => {
-    previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
-    tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
-    process.env.OPENCLAW_OAUTH_DIR = tempOauthDir;
-  });
-
-  afterEach(() => {
-    if (previousOauthDir === undefined) {
-      delete process.env.OPENCLAW_OAUTH_DIR;
-    } else {
-      process.env.OPENCLAW_OAUTH_DIR = previousOauthDir;
-    }
-    if (tempOauthDir) {
-      fs.rmSync(tempOauthDir, { recursive: true, force: true });
-      tempOauthDir = undefined;
-    }
-  });
-
-  it("does not add whatsapp config when missing and no auth exists", () => {
+describe("normalizeLegacyConfigValues preview streaming aliases", () => {
+  it("normalizes telegram boolean streaming aliases to enum", () => {
     const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀" },
+      channels: {
+        telegram: {
+          streaming: false,
+        },
+      },
     });
 
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.config.channels?.telegram?.streaming).toBe("off");
+    expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual(["Normalized channels.telegram.streaming boolean → enum (off)."]);
   });
 
-  it("copies legacy ack reaction when whatsapp config exists", () => {
+  it("normalizes discord boolean streaming aliases to enum", () => {
     const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-      channels: { whatsapp: {} },
+      channels: {
+        discord: {
+          streaming: true,
+        },
+      },
     });
 
-    expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-      emoji: "👀",
-      direct: false,
-      group: "mentions",
-    });
+    expect(res.config.channels?.discord?.streaming).toBe("partial");
+    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
     expect(res.changes).toEqual([
-      "Copied messages.ackReaction → channels.whatsapp.ackReaction (scope: group-mentions).",
+      "Normalized channels.discord.streaming boolean → enum (partial).",
     ]);
-  });
-
-  it("does not add whatsapp config when only auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-    });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
-  });
-
-  it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
-    const credsPath = path.join(tempOauthDir ?? "", "creds.json");
-    fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-    });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
-  });
-
-  it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-    });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
-  });
-
-  it("copies legacy ack reaction when authDir override exists", () => {
-    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-auth-"));
-    try {
-      writeCreds(customDir);
-
-      const res = normalizeLegacyConfigValues({
-        messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-        channels: { whatsapp: { accounts: { work: { authDir: customDir } } } },
-      });
-
-      expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-        emoji: "👀",
-        direct: false,
-        group: "mentions",
-      });
-    } finally {
-      fs.rmSync(customDir, { recursive: true, force: true });
-    }
   });
 });

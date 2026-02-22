@@ -1,5 +1,143 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
+
+const REPLACEMENT_CHAR_RE = /\uFFFD/g;
+const MAX_TOKEN_CHARS = 32;
+const LONG_TOKEN_RE = /\S{33,}/g;
+const LONG_TOKEN_TEST_RE = /\S{33,}/;
+const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
+const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
+const RTL_ISOLATE_START = "\u2067";
+const RTL_ISOLATE_END = "\u2069";
+
+function hasControlChars(text: string): boolean {
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    const isC1Control = code >= 0x7f && code <= 0x9f;
+    if (isAsciiControl || isC1Control) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stripControlChars(text: string): string {
+  if (!hasControlChars(text)) {
+    return text;
+  }
+  let sanitized = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    const isC1Control = code >= 0x7f && code <= 0x9f;
+    if (!isAsciiControl && !isC1Control) {
+      sanitized += char;
+    }
+  }
+  return sanitized;
+}
+
+function chunkToken(token: string, maxChars: number): string[] {
+  if (token.length <= maxChars) {
+    return [token];
+  }
+  const chunks: string[] = [];
+  for (let i = 0; i < token.length; i += maxChars) {
+    chunks.push(token.slice(i, i + maxChars));
+  }
+  return chunks;
+}
+
+function isCopySensitiveToken(token: string): boolean {
+  if (URL_PREFIX_RE.test(token)) {
+    return true;
+  }
+  if (
+    token.startsWith("/") ||
+    token.startsWith("~/") ||
+    token.startsWith("./") ||
+    token.startsWith("../")
+  ) {
+    return true;
+  }
+  if (WINDOWS_DRIVE_RE.test(token) || token.startsWith("\\\\")) {
+    return true;
+  }
+  if (token.includes("/") || token.includes("\\")) {
+    return true;
+  }
+  return token.includes("_") && FILE_LIKE_RE.test(token);
+}
+
+function normalizeLongTokenForDisplay(token: string): string {
+  // Preserve copy-sensitive tokens exactly (paths/urls/file-like names).
+  if (isCopySensitiveToken(token)) {
+    return token;
+  }
+  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+}
+
+function redactBinaryLikeLine(line: string): string {
+  const replacementCount = (line.match(REPLACEMENT_CHAR_RE) || []).length;
+  if (
+    replacementCount >= BINARY_LINE_REPLACEMENT_THRESHOLD &&
+    replacementCount * 2 >= line.length
+  ) {
+    return "[binary data omitted]";
+  }
+  return line;
+}
+
+function isolateRtlLine(line: string): string {
+  if (!RTL_SCRIPT_RE.test(line) || BIDI_CONTROL_RE.test(line)) {
+    return line;
+  }
+  return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
+}
+
+function applyRtlIsolation(text: string): string {
+  if (!RTL_SCRIPT_RE.test(text)) {
+    return text;
+  }
+  return text
+    .split("\n")
+    .map((line) => isolateRtlLine(line))
+    .join("\n");
+}
+
+export function sanitizeRenderableText(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  const hasAnsi = text.includes("\u001b");
+  const hasReplacementChars = text.includes("\uFFFD");
+  const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
+  const hasControls = hasControlChars(text);
+  if (!hasAnsi && !hasReplacementChars && !hasLongTokens && !hasControls) {
+    return applyRtlIsolation(text);
+  }
+
+  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
+  const withoutControlChars = hasControls ? stripControlChars(withoutAnsi) : withoutAnsi;
+  const redacted = hasReplacementChars
+    ? withoutControlChars
+        .split("\n")
+        .map((line) => redactBinaryLikeLine(line))
+        .join("\n")
+    : withoutControlChars;
+  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
+    ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
+    : redacted;
+  return applyRtlIsolation(tokenSafe);
+}
 
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
@@ -59,7 +197,7 @@ export function extractThinkingFromMessage(message: unknown): string {
     }
     const rec = block as Record<string, unknown>;
     if (rec.type === "thinking" && typeof rec.thinking === "string") {
-      parts.push(rec.thinking);
+      parts.push(sanitizeRenderableText(rec.thinking));
     }
   }
   return parts.join("\n").trim();
@@ -77,7 +215,7 @@ export function extractContentFromMessage(message: unknown): string {
   const content = record.content;
 
   if (typeof content === "string") {
-    return content.trim();
+    return sanitizeRenderableText(content).trim();
   }
 
   // Check for error BEFORE returning empty for non-array content
@@ -97,7 +235,7 @@ export function extractContentFromMessage(message: unknown): string {
     }
     const rec = block as Record<string, unknown>;
     if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(rec.text);
+      parts.push(sanitizeRenderableText(rec.text));
     }
   }
 
@@ -115,7 +253,7 @@ export function extractContentFromMessage(message: unknown): string {
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
   if (typeof content === "string") {
-    return content.trim();
+    return sanitizeRenderableText(content).trim();
   }
   if (!Array.isArray(content)) {
     return "";
@@ -130,14 +268,14 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     }
     const record = block as Record<string, unknown>;
     if (record.type === "text" && typeof record.text === "string") {
-      textParts.push(record.text);
+      textParts.push(sanitizeRenderableText(record.text));
     }
     if (
       opts?.includeThinking &&
       record.type === "thinking" &&
       typeof record.thinking === "string"
     ) {
-      thinkingParts.push(record.thinking);
+      thinkingParts.push(sanitizeRenderableText(record.thinking));
     }
   }
 
@@ -158,6 +296,9 @@ export function extractTextFromMessage(
   const record = message as Record<string, unknown>;
   const text = extractTextBlocks(record.content, opts);
   if (text) {
+    if (record.role === "user") {
+      return stripLeadingInboundMetadata(text);
+    }
     return text;
   }
 

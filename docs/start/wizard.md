@@ -50,6 +50,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
     - Workspace default (or existing workspace)
     - Gateway port **18789**
     - Gateway auth **Token** (auto‑generated, even on loopback)
+    - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram + WhatsApp DMs default to **allowlist** (you'll be prompted for your phone number)
   </Tab>
@@ -62,7 +63,8 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 
 **Local mode (default)** walks you through these steps:
 
-1. **Model/Auth** — Anthropic API key (recommended), OAuth, OpenAI, or other providers. Pick a default model.
+1. **Model/Auth** — Anthropic API key (recommended), OpenAI, or Custom Provider
+   (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
 2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
 4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, or iMessage.
@@ -104,5 +106,6 @@ RPC API, and a full list of config fields the wizard writes, see the
 ## Related docs
 
 - CLI command reference: [`openclaw onboard`](/cli/onboard)
+- Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Agent first-run ritual: [Agent Bootstrapping](/start/bootstrapping)

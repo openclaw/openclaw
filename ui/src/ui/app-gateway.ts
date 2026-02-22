@@ -1,11 +1,9 @@
-import type { EventLogEntry } from "./app-events.ts";
-import type { OpenClawApp } from "./app.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
-import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
-import type { Tab } from "./navigation.ts";
-import type { UiSettings } from "./storage.ts";
-import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
+import {
+  GATEWAY_EVENT_UPDATE_AVAILABLE,
+  type GatewayUpdateAvailableEventPayload,
+} from "../../../src/gateway/events.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
   loadCron,
@@ -13,20 +11,33 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import type { OpenClawApp } from "./app.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
 import { loadDevices } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
+import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type {
+  AgentsListResult,
+  PresenceEntry,
+  HealthSummary,
+  StatusSummary,
+  UpdateAvailable,
+} from "./types.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -45,7 +56,10 @@ type GatewayHost = {
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
-  debugHealth: HealthSnapshot | null;
+  healthLoading: boolean;
+  healthResult: HealthSummary | null;
+  healthError: string | null;
+  debugHealth: HealthSummary | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
@@ -54,6 +68,7 @@ type GatewayHost = {
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  updateAvailable: UpdateAvailable | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -122,14 +137,17 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalQueue = [];
   host.execApprovalError = null;
 
-  host.client?.stop();
-  host.client = new GatewayBrowserClient({
+  const previousClient = host.client;
+  const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
     mode: "webchat",
     onHello: (hello) => {
+      if (host.client !== client) {
+        return;
+      }
       host.connected = true;
       host.lastError = null;
       host.hello = hello;
@@ -142,23 +160,42 @@ export function connectGateway(host: GatewayHost) {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
+      void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason }) => {
+      if (host.client !== client) {
+        return;
+      }
       host.connected = false;
+      // Code 1008 = Policy Violation (auth failure) — show the gateway's reason directly
+      if (code === 1008) {
+        host.lastError = reason || "Authentication failed. Check your gateway token.";
+        return;
+      }
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       if (code !== 1012) {
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
       }
     },
-    onEvent: (evt) => handleGatewayEvent(host, evt),
+    onEvent: (evt) => {
+      if (host.client !== client) {
+        return;
+      }
+      handleGatewayEvent(host, evt);
+    },
     onGap: ({ expected, received }) => {
+      if (host.client !== client) {
+        return;
+      }
       host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
     },
   });
-  host.client.start();
+  host.client = client;
+  previousClient?.stop();
+  client.start();
 }
 
 export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
@@ -174,7 +211,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,
   ].slice(0, 250);
-  if (host.tab === "debug") {
+  if (host.tab === "debug" || host.tab === "overview") {
     host.eventLog = host.eventLogBuffer;
   }
 
@@ -253,6 +290,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
     }
+    return;
+  }
+
+  if (evt.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
+    const payload = evt.payload as GatewayUpdateAvailableEventPayload | undefined;
+    host.updateAvailable = payload?.updateAvailable ?? null;
   }
 }
 
@@ -260,8 +303,9 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   const snapshot = hello.snapshot as
     | {
         presence?: PresenceEntry[];
-        health?: HealthSnapshot;
+        health?: HealthSummary;
         sessionDefaults?: SessionDefaultsSnapshot;
+        updateAvailable?: UpdateAvailable;
       }
     | undefined;
   if (snapshot?.presence && Array.isArray(snapshot.presence)) {
@@ -269,8 +313,10 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   }
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
+    host.healthResult = snapshot.health;
   }
   if (snapshot?.sessionDefaults) {
     applySessionDefaults(host, snapshot.sessionDefaults);
   }
+  host.updateAvailable = snapshot?.updateAvailable ?? null;
 }

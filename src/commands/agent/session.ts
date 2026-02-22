@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -75,6 +76,31 @@ export function resolveSessionKeyForRequest(opts: {
     );
     if (foundKey) {
       sessionKey = foundKey;
+    }
+  }
+
+  // When sessionId was provided but not found in the primary store, search all agent stores.
+  // Sessions created under a specific agent live in that agent's store file; the primary
+  // store (derived from the default agent) won't contain them.
+  // Also covers the case where --to derived a sessionKey that doesn't match the requested sessionId.
+  if (
+    opts.sessionId &&
+    !explicitSessionKey &&
+    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
+  ) {
+    const allAgentIds = listAgentIds(opts.cfg);
+    for (const agentId of allAgentIds) {
+      if (agentId === storeAgentId) {
+        continue;
+      }
+      const altStorePath = resolveStorePath(sessionCfg?.store, { agentId });
+      const altStore = loadSessionStore(altStorePath);
+      const foundKey = Object.keys(altStore).find(
+        (key) => altStore[key]?.sessionId === opts.sessionId,
+      );
+      if (foundKey) {
+        return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
+      }
     }
   }
 

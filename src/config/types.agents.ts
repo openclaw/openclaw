@@ -72,11 +72,14 @@ export type AgentsConfig = {
 
 export type AgentBinding = {
   agentId: string;
+  comment?: string;
   match: {
     channel: string;
     accountId?: string;
     peer?: { kind: ChatType; id: string };
     guildId?: string;
     teamId?: string;
+    /** Discord role IDs used for role-based routing. */
+    roles?: string[];
   };
 };

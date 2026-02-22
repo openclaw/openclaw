@@ -31,9 +31,13 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected.
+
 3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
+Looking for third-party listings? See [Community plugins](/plugins/community).
 
 ## Available plugins (official)
 
@@ -112,6 +116,15 @@ Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
 or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
 but can be disabled the same way.
 
+Hardening notes:
+
+- If `plugins.allow` is empty and non-bundled plugins are discoverable, OpenClaw logs a startup warning with plugin ids and sources.
+- Candidate paths are safety-checked before discovery admission. OpenClaw blocks candidates when:
+  - extension entry resolves outside plugin root (including symlink/path traversal escapes),
+  - plugin root/source path is world-writable,
+  - path ownership is suspicious for non-bundled plugins (POSIX owner is neither current uid nor root).
+- Loaded non-bundled plugins without install/load-path provenance emit a warning so you can pin trust (`plugins.allow`) or install tracking (`plugins.installs`).
+
 Each plugin must include a `openclaw.plugin.json` file in its root. If a path
 points at a file, the plugin root is the file's directory and must contain the
 manifest.
@@ -137,6 +150,14 @@ becomes `name/<fileBase>`.
 
 If your plugin imports npm deps, install them in that directory so
 `node_modules` is available (`npm install` / `pnpm install`).
+
+Security guardrail: every `openclaw.extensions` entry must stay inside the plugin
+directory after symlink resolution. Entries that escape the package directory are
+rejected.
+
+Security note: `openclaw plugins install` installs plugin dependencies with
+`npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
+trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 
 ### Channel catalog metadata
 
@@ -287,6 +308,7 @@ openclaw plugins install ./plugin.tgz           # install from a local tarball
 openclaw plugins install ./plugin.zip           # install from a local zip
 openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
 openclaw plugins install @openclaw/voice-call # install from npm
+openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
 openclaw plugins update <id>
 openclaw plugins update --all
 openclaw plugins enable <id>
@@ -295,6 +317,7 @@ openclaw plugins doctor
 ```
 
 `plugins update` only works for npm installs tracked under `plugins.installs`.
+If stored integrity metadata changes between updates, OpenClaw warns and asks for confirmation (use global `--yes` to bypass prompts).
 
 Plugins may also register their own top‑level commands (example: `openclaw voicecall`).
 
@@ -307,22 +330,29 @@ Plugins export either:
 
 ## Plugin hooks
 
-Plugins can ship hooks and register them at runtime. This lets a plugin bundle
-event-driven automation without a separate hook pack install.
+Plugins can register hooks at runtime. This lets a plugin bundle event-driven
+automation without a separate hook pack install.
 
 ### Example
 
-```
-import { registerPluginHooksFromDir } from "openclaw/plugin-sdk";
-
+```ts
 export default function register(api) {
-  registerPluginHooksFromDir(api, "./hooks");
+  api.registerHook(
+    "command:new",
+    async () => {
+      // Hook logic here.
+    },
+    {
+      name: "my-plugin.command-new",
+      description: "Runs when /new is invoked",
+    },
+  );
 }
 ```
 
 Notes:
 
-- Hook directories follow the normal hook structure (`HOOK.md` + `handler.ts`).
+- Register hooks explicitly via `api.registerHook(...)`.
 - Hook eligibility rules still apply (OS/bins/env/config requirements).
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
@@ -424,7 +454,7 @@ Notes:
 
 ### Write a new messaging channel (step‑by‑step)
 
-Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
+Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.
 Model provider docs live under `/providers/*`.
 
 1. Pick an id + config shape

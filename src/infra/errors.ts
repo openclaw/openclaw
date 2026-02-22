@@ -1,3 +1,5 @@
+import { redactSensitiveText } from "../logging/redact.js";
+
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -12,21 +14,37 @@ export function extractErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Type guard for NodeJS.ErrnoException (any error with a `code` property).
+ */
+export function isErrno(err: unknown): err is NodeJS.ErrnoException {
+  return Boolean(err && typeof err === "object" && "code" in err);
+}
+
+/**
+ * Check if an error has a specific errno code.
+ */
+export function hasErrnoCode(err: unknown, code: string): boolean {
+  return isErrno(err) && err.code === code;
+}
+
 export function formatErrorMessage(err: unknown): string {
+  let formatted: string;
   if (err instanceof Error) {
-    return err.message || err.name || "Error";
+    formatted = err.message || err.name || "Error";
+  } else if (typeof err === "string") {
+    formatted = err;
+  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+    formatted = String(err);
+  } else {
+    try {
+      formatted = JSON.stringify(err);
+    } catch {
+      formatted = Object.prototype.toString.call(err);
+    }
   }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    return String(err);
-  }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return Object.prototype.toString.call(err);
-  }
+  // Security: best-effort token redaction before returning/logging.
+  return redactSensitiveText(formatted);
 }
 
 export function formatUncaughtError(err: unknown): string {
@@ -34,7 +52,8 @@ export function formatUncaughtError(err: unknown): string {
     return formatErrorMessage(err);
   }
   if (err instanceof Error) {
-    return err.stack ?? err.message ?? err.name;
+    const stack = err.stack ?? err.message ?? err.name;
+    return redactSensitiveText(stack);
   }
   return formatErrorMessage(err);
 }

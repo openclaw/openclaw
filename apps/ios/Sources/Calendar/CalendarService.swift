@@ -6,7 +6,7 @@ final class CalendarService: CalendarServicing {
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
+        let authorized = EventKitAuthorization.allowsRead(status: status)
         guard authorized else {
             throw NSError(domain: "Calendar", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
@@ -39,7 +39,7 @@ final class CalendarService: CalendarServicing {
     func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = await Self.ensureWriteAuthorization(store: store, status: status)
+        let authorized = EventKitAuthorization.allowsWrite(status: status)
         guard authorized else {
             throw NSError(domain: "Calendar", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
@@ -93,38 +93,6 @@ final class CalendarService: CalendarServicing {
             calendarTitle: event.calendar.title)
 
         return OpenClawCalendarAddPayload(event: payload)
-    }
-
-    private static func ensureAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized:
-            return true
-        case .notDetermined:
-            // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-            return false
-        case .restricted, .denied:
-            return false
-        case .fullAccess:
-            return true
-        case .writeOnly:
-            return false
-        @unknown default:
-            return false
-        }
-    }
-
-    private static func ensureWriteAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized, .fullAccess, .writeOnly:
-            return true
-        case .notDetermined:
-            // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-            return false
-        case .restricted, .denied:
-            return false
-        @unknown default:
-            return false
-        }
     }
 
     private static func resolveCalendar(

@@ -29,6 +29,16 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "maxProperties",
 ]);
 
+const SCHEMA_META_KEYS = ["description", "title", "default"] as const;
+
+function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknown>): void {
+  for (const key of SCHEMA_META_KEYS) {
+    if (key in from && from[key] !== undefined) {
+      to[key] = from[key];
+    }
+  }
+}
+
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
@@ -164,6 +174,39 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   return defs.get(name);
 }
 
+function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }): {
+  variants: unknown[];
+  simplified?: unknown;
+} {
+  const { obj, variants } = params;
+
+  const { variants: nonNullVariants, stripped } = stripNullVariants(variants);
+
+  const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
+  if (flattened) {
+    const result: Record<string, unknown> = {
+      type: flattened.type,
+      enum: flattened.enum,
+    };
+    copySchemaMeta(obj, result);
+    return { variants: nonNullVariants, simplified: result };
+  }
+
+  if (stripped && nonNullVariants.length === 1) {
+    const lone = nonNullVariants[0];
+    if (lone && typeof lone === "object" && !Array.isArray(lone)) {
+      const result: Record<string, unknown> = {
+        ...(lone as Record<string, unknown>),
+      };
+      copySchemaMeta(obj, result);
+      return { variants: nonNullVariants, simplified: result };
+    }
+    return { variants: nonNullVariants, simplified: lone };
+  }
+
+  return { variants: stripped ? nonNullVariants : variants };
+}
+
 function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -198,20 +241,12 @@ function cleanSchemaForGeminiWithDefs(
       const result: Record<string, unknown> = {
         ...(cleaned as Record<string, unknown>),
       };
-      for (const key of ["description", "title", "default"]) {
-        if (key in obj && obj[key] !== undefined) {
-          result[key] = obj[key];
-        }
-      }
+      copySchemaMeta(obj, result);
       return result;
     }
 
     const result: Record<string, unknown> = {};
-    for (const key of ["description", "title", "default"]) {
-      if (key in obj && obj[key] !== undefined) {
-        result[key] = obj[key];
-      }
-    }
+    copySchemaMeta(obj, result);
     return result;
   }
 
@@ -229,74 +264,18 @@ function cleanSchemaForGeminiWithDefs(
     : undefined;
 
   if (hasAnyOf) {
-    const { variants: nonNullVariants, stripped } = stripNullVariants(cleanedAnyOf ?? []);
-    if (stripped) {
-      cleanedAnyOf = nonNullVariants;
-    }
-
-    const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
-    if (flattened) {
-      const result: Record<string, unknown> = {
-        type: flattened.type,
-        enum: flattened.enum,
-      };
-      for (const key of ["description", "title", "default"]) {
-        if (key in obj && obj[key] !== undefined) {
-          result[key] = obj[key];
-        }
-      }
-      return result;
-    }
-    if (stripped && nonNullVariants.length === 1) {
-      const lone = nonNullVariants[0];
-      if (lone && typeof lone === "object" && !Array.isArray(lone)) {
-        const result: Record<string, unknown> = {
-          ...(lone as Record<string, unknown>),
-        };
-        for (const key of ["description", "title", "default"]) {
-          if (key in obj && obj[key] !== undefined) {
-            result[key] = obj[key];
-          }
-        }
-        return result;
-      }
-      return lone;
+    const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
+    cleanedAnyOf = simplified.variants;
+    if ("simplified" in simplified) {
+      return simplified.simplified;
     }
   }
 
   if (hasOneOf) {
-    const { variants: nonNullVariants, stripped } = stripNullVariants(cleanedOneOf ?? []);
-    if (stripped) {
-      cleanedOneOf = nonNullVariants;
-    }
-
-    const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
-    if (flattened) {
-      const result: Record<string, unknown> = {
-        type: flattened.type,
-        enum: flattened.enum,
-      };
-      for (const key of ["description", "title", "default"]) {
-        if (key in obj && obj[key] !== undefined) {
-          result[key] = obj[key];
-        }
-      }
-      return result;
-    }
-    if (stripped && nonNullVariants.length === 1) {
-      const lone = nonNullVariants[0];
-      if (lone && typeof lone === "object" && !Array.isArray(lone)) {
-        const result: Record<string, unknown> = {
-          ...(lone as Record<string, unknown>),
-        };
-        for (const key of ["description", "title", "default"]) {
-          if (key in obj && obj[key] !== undefined) {
-            result[key] = obj[key];
-          }
-        }
-        return result;
-      }
-      return lone;
+    const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
+    cleanedOneOf = simplified.variants;
+    if ("simplified" in simplified) {
+      return simplified.simplified;
     }
   }
 
@@ -360,7 +339,61 @@ function cleanSchemaForGeminiWithDefs(
     }
   }
 
+  // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after
+  // simplifyUnionVariants runs above. Flatten remaining unions as a fallback:
+  // pick the common type or use the first variant's type so the tool
+  // declaration is accepted by Google's validation layer.
+  if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
+    const flattened = flattenUnionFallback(cleaned, cleaned.anyOf);
+    if (flattened) {
+      return flattened;
+    }
+  }
+  if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
+    const flattened = flattenUnionFallback(cleaned, cleaned.oneOf);
+    if (flattened) {
+      return flattened;
+    }
+  }
+
   return cleaned;
+}
+
+/**
+ * Last-resort flattening for anyOf/oneOf arrays that could not be simplified
+ * by `simplifyUnionVariants`. Picks a representative type so the schema is
+ * accepted by Google's restricted JSON Schema validation.
+ */
+function flattenUnionFallback(
+  obj: Record<string, unknown>,
+  variants: unknown[],
+): Record<string, unknown> | undefined {
+  const objects = variants.filter(
+    (v): v is Record<string, unknown> => !!v && typeof v === "object",
+  );
+  if (objects.length === 0) {
+    return undefined;
+  }
+  const types = new Set(objects.map((v) => v.type).filter(Boolean));
+  if (objects.length === 1) {
+    const merged: Record<string, unknown> = { ...objects[0] };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  if (types.size === 1) {
+    const merged: Record<string, unknown> = { type: Array.from(types)[0] };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  const first = objects[0];
+  if (first?.type) {
+    const merged: Record<string, unknown> = { type: first.type };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  const merged: Record<string, unknown> = {};
+  copySchemaMeta(obj, merged);
+  return merged;
 }
 
 export function cleanSchemaForGemini(schema: unknown): unknown {

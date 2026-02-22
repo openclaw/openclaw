@@ -1,5 +1,5 @@
-import type { FeishuProbeResult } from "./types.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
+import type { FeishuProbeResult } from "./types.js";
 
 export async function probeFeishu(creds?: FeishuClientCredentials): Promise<FeishuProbeResult> {
   if (!creds?.appId || !creds?.appSecret) {
