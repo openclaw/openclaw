@@ -62,7 +62,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
-    mockLoadConfig.mockReset();
+    mockLoadConfig.mockClear();
   });
 
   afterEach(() => {

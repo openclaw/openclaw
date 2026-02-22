@@ -163,7 +163,7 @@ async function focusCodexAcpInThread(fake = createFakeThreadBindingManager()) {
 describe("/focus, /unfocus, /agents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    hoisted.callGatewayMock.mockReset();
+    hoisted.callGatewayMock.mockClear();
     hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
     hoisted.resolveThreadBindingThreadNameMock.mockClear().mockReturnValue("🤖 codex");
   });

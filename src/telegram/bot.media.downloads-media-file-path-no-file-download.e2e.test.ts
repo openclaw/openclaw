@@ -326,9 +326,12 @@ describe("telegram stickers", () => {
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
 
   beforeEach(() => {
-    cacheStickerSpy.mockReset();
-    getCachedStickerSpy.mockReset();
-    describeStickerImageSpy.mockReset();
+    cacheStickerSpy.mockClear();
+    getCachedStickerSpy.mockClear();
+    describeStickerImageSpy.mockClear();
+    // Re-seed defaults so per-test overrides do not leak when using mockClear.
+    getCachedStickerSpy.mockReturnValue(undefined);
+    describeStickerImageSpy.mockReturnValue(undefined);
   });
 
   it(

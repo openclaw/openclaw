@@ -153,7 +153,9 @@ export function createTelegramDraftStream(params: {
     },
     isValidMessageId: (value): value is number =>
       typeof value === "number" && Number.isFinite(value),
-    deleteMessage: (messageId) => params.api.deleteMessage(chatId, messageId),
+    deleteMessage: async (messageId) => {
+      await params.api.deleteMessage(chatId, messageId);
+    },
     onDeleteSuccess: (messageId) => {
       params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
     },

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  readConnectChallengeNonce,
+  rpcReq,
+} from "./test-helpers.js";
 import { withServer } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-async function createFreshOperatorDevice(scopes: string[]) {
+async function createFreshOperatorDevice(scopes: string[], nonce: string) {
   const { randomUUID } = await import("node:crypto");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -24,6 +29,7 @@ async function createFreshOperatorDevice(scopes: string[]) {
     scopes,
     signedAtMs,
     token: "secret",
+    nonce,
   });
 
   return {
@@ -31,6 +37,7 @@ async function createFreshOperatorDevice(scopes: string[]) {
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     signature: signDevicePayload(identity.privateKeyPem, payload),
     signedAt: signedAtMs,
+    nonce,
   };
 }
 
@@ -51,10 +58,12 @@ describe("gateway talk.config", () => {
     });
 
     await withServer(async (ws) => {
+      const nonce = await readConnectChallengeNonce(ws);
+      expect(nonce).toBeTruthy();
       await connectOk(ws, {
         token: "secret",
         scopes: ["operator.read"],
-        device: await createFreshOperatorDevice(["operator.read"]),
+        device: await createFreshOperatorDevice(["operator.read"], String(nonce)),
       });
       const res = await rpcReq<{ config?: { talk?: { apiKey?: string; voiceId?: string } } }>(
         ws,
@@ -76,10 +85,12 @@ describe("gateway talk.config", () => {
     });
 
     await withServer(async (ws) => {
+      const nonce = await readConnectChallengeNonce(ws);
+      expect(nonce).toBeTruthy();
       await connectOk(ws, {
         token: "secret",
         scopes: ["operator.read"],
-        device: await createFreshOperatorDevice(["operator.read"]),
+        device: await createFreshOperatorDevice(["operator.read"], String(nonce)),
       });
       const res = await rpcReq(ws, "talk.config", { includeSecrets: true });
       expect(res.ok).toBe(false);
@@ -96,14 +107,15 @@ describe("gateway talk.config", () => {
     });
 
     await withServer(async (ws) => {
+      const nonce = await readConnectChallengeNonce(ws);
+      expect(nonce).toBeTruthy();
       await connectOk(ws, {
         token: "secret",
         scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
-        device: await createFreshOperatorDevice([
-          "operator.read",
-          "operator.write",
-          "operator.talk.secrets",
-        ]),
+        device: await createFreshOperatorDevice(
+          ["operator.read", "operator.write", "operator.talk.secrets"],
+          String(nonce),
+        ),
       });
       const res = await rpcReq<{ config?: { talk?: { apiKey?: string } } }>(ws, "talk.config", {
         includeSecrets: true,

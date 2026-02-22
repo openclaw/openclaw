@@ -84,7 +84,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
     const callGatewayMock = getCallGatewayMock();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",

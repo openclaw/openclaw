@@ -242,6 +242,37 @@ type GatewayTestMessage = {
   [key: string]: unknown;
 };
 
+const CONNECT_CHALLENGE_NONCE_KEY = "__openclawTestConnectChallengeNonce";
+const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
+type TrackedWs = WebSocket & Record<string, unknown>;
+
+export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
+  const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
+  return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+}
+
+export function trackConnectChallengeNonce(ws: WebSocket): void {
+  const trackedWs = ws as TrackedWs;
+  if (trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] === true) {
+    return;
+  }
+  trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] = true;
+  ws.on("message", (data) => {
+    try {
+      const obj = JSON.parse(rawDataToString(data)) as GatewayTestMessage;
+      if (obj.type !== "event" || obj.event !== "connect.challenge") {
+        return;
+      }
+      const nonce = (obj.payload as { nonce?: unknown } | undefined)?.nonce;
+      if (typeof nonce === "string" && nonce.trim().length > 0) {
+        trackedWs[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      }
+    } catch {
+      // ignore parse errors in nonce tracker
+    }
+  });
+}
+
 export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   ws: WebSocket,
   filter: (obj: T) => boolean,
@@ -345,6 +376,7 @@ export async function startServerWithClient(
     `ws://127.0.0.1:${port}`,
     wsHeaders ? { headers: wsHeaders } : undefined,
   );
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
     const cleanup = () => {
@@ -380,6 +412,32 @@ type ConnectResponse = {
   error?: { message?: string };
 };
 
+export async function readConnectChallengeNonce(
+  ws: WebSocket,
+  timeoutMs = 2_000,
+): Promise<string | undefined> {
+  const cached = getTrackedConnectChallengeNonce(ws);
+  if (cached) {
+    return cached;
+  }
+  trackConnectChallengeNonce(ws);
+  try {
+    const evt = await onceMessage<{
+      type?: string;
+      event?: string;
+      payload?: Record<string, unknown> | null;
+    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
+    if (typeof nonce === "string" && nonce.trim().length > 0) {
+      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      return nonce.trim();
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function connectReq(
   ws: WebSocket,
   opts?: {
@@ -410,6 +468,7 @@ export async function connectReq(
       signedAt: number;
       nonce?: string;
     } | null;
+    skipConnectChallengeNonce?: boolean;
   },
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
@@ -440,12 +499,20 @@ export async function connectReq(
     : role === "operator"
       ? ["operator.admin"]
       : [];
+  if (opts?.skipConnectChallengeNonce && opts?.device === undefined) {
+    throw new Error("skipConnectChallengeNonce requires an explicit device override");
+  }
+  const connectChallengeNonce =
+    opts?.device !== undefined ? undefined : await readConnectChallengeNonce(ws);
   const device = (() => {
     if (opts?.device === null) {
       return undefined;
     }
     if (opts?.device) {
       return opts.device;
+    }
+    if (!connectChallengeNonce) {
+      throw new Error("missing connect.challenge nonce");
     }
     const identity = loadOrCreateDeviceIdentity();
     const signedAtMs = Date.now();
@@ -457,13 +524,14 @@ export async function connectReq(
       scopes: requestedScopes,
       signedAtMs,
       token: token ?? null,
+      nonce: connectChallengeNonce,
     });
     return {
       id: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       signature: signDevicePayload(identity.privateKeyPem, payload),
       signedAt: signedAtMs,
-      nonce: opts?.device?.nonce,
+      nonce: connectChallengeNonce,
     };
   })();
   ws.send(

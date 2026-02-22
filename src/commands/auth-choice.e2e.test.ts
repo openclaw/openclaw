@@ -101,8 +101,8 @@ describe("applyAuthChoice", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    resolvePluginProviders.mockReset();
-    loginOpenAICodexOAuth.mockReset();
+    resolvePluginProviders.mockClear();
+    loginOpenAICodexOAuth.mockClear();
     loginOpenAICodexOAuth.mockResolvedValue(null);
     await lifecycle.cleanup();
   });

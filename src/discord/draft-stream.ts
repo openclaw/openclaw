@@ -114,7 +114,9 @@ export function createDiscordDraftStream(params: {
       streamMessageId = undefined;
     },
     isValidMessageId: (value): value is string => typeof value === "string",
-    deleteMessage: (messageId) => rest.delete(Routes.channelMessage(channelId, messageId)),
+    deleteMessage: async (messageId) => {
+      await rest.delete(Routes.channelMessage(channelId, messageId));
+    },
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });
