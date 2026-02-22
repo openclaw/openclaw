@@ -5,6 +5,7 @@ import type {
   GatewayTrustedProxyConfig,
 } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { verifyPassword } from "../security/password-hash.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -451,7 +452,8 @@ export async function authorizeGatewayConnect(
       limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "password_missing" };
     }
-    if (!safeEqualSecret(password, auth.password)) {
+    const verification = await verifyPassword(password, auth.password);
+    if (!verification.ok) {
       limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "password_mismatch" };
     }

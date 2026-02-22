@@ -16,6 +16,11 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import {
+  detectPrototypePollution,
+  freezeSafeGlobals,
+  snapshotPrototypes,
+} from "./globals-freeze.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
@@ -417,6 +422,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
 
+  // Freeze safe globals (JSON, Math, Reflect) and take a prototype snapshot
+  // to detect pollution after plugin loading.
+  freezeSafeGlobals();
+  const prototypeSnapshot = snapshotPrototypes();
+
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
@@ -654,6 +664,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registry.diagnostics.push({
       level: "warn",
       message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
+    });
+  }
+
+  // Check for prototype pollution after all plugins have been registered.
+  const pollutionViolations = detectPrototypePollution(prototypeSnapshot);
+  for (const violation of pollutionViolations) {
+    logger.error(`[plugins] SECURITY: ${violation}`);
+    registry.diagnostics.push({
+      level: "error",
+      message: `SECURITY: ${violation}`,
     });
   }
 

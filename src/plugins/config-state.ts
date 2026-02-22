@@ -175,6 +175,10 @@ export function resolveEnableState(
   if (config.allow.length > 0 && !config.allow.includes(id)) {
     return { enabled: false, reason: "not in allowlist" };
   }
+  // For non-bundled plugins, being in the allowlist is sufficient to enable.
+  if (origin !== "bundled" && config.allow.length > 0 && config.allow.includes(id)) {
+    return { enabled: true };
+  }
   if (config.slots.memory === id) {
     return { enabled: true };
   }
@@ -191,7 +195,7 @@ export function resolveEnableState(
   if (origin === "bundled") {
     return { enabled: false, reason: "bundled (disabled by default)" };
   }
-  return { enabled: true };
+  return { enabled: false, reason: "not explicitly allowed" };
 }
 
 export function resolveMemorySlotDecision(params: {
