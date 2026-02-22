@@ -1041,5 +1041,67 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     });
   }
 
+  const contexts: Array<{
+    label: string;
+    agentId?: string;
+    tools?: AgentToolsConfig;
+  }> = [{ label: "agents.defaults" }];
+  for (const agent of cfg.agents?.list ?? []) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    contexts.push({
+      label: `agents.list.${agent.id}`,
+      agentId: agent.id,
+      tools: agent.tools,
+    });
+  }
+
+  const riskyContexts: string[] = [];
+  let hasRuntimeRisk = false;
+  for (const context of contexts) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
+    const policies = resolveToolPolicies({
+      cfg,
+      agentTools: context.tools,
+      sandboxMode,
+      agentId: context.agentId ?? null,
+    });
+    const runtimeTools = ["exec", "process"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
+    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
+    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
+    if (!runtimeUnguarded && !fsUnguarded) {
+      continue;
+    }
+    if (runtimeUnguarded) {
+      hasRuntimeRisk = true;
+    }
+    riskyContexts.push(
+      `${context.label} (sandbox=${sandboxMode}; runtime=[${runtimeTools.join(", ") || "off"}]; fs=[${fsTools.join(", ") || "off"}]; fs.workspaceOnly=${
+        fsWorkspaceOnly === true ? "true" : "false"
+      })`,
+    );
+  }
+
+  if (riskyContexts.length > 0) {
+    findings.push({
+      checkId: "security.exposure.open_groups_with_runtime_or_fs",
+      severity: hasRuntimeRisk ? "critical" : "warn",
+      title: "Open groupPolicy with runtime/filesystem tools exposed",
+      detail:
+        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+        `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
+        "Prompt injection in open groups can trigger command/file actions in these contexts.",
+      remediation:
+        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+    });
+  }
+
   return findings;
 }
