@@ -4,6 +4,8 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -105,6 +107,38 @@ export async function resolveGatewayRuntimeConfig(params: {
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
+  const gatewayToolsAllow = new Set(
+    (params.cfg.gateway?.tools?.allow ?? [])
+      .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+      .filter(Boolean),
+  );
+  const dangerousHttpToolsReenabled = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
+    gatewayToolsAllow.has(name),
+  );
+  const allowDangerousToolsBreakGlass = isTruthyEnvValue(
+    process.env.OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS,
+  );
+  const isExposedBind = !isLoopbackHost(bindHost);
+
+  if (dangerousHttpToolsReenabled.length > 0) {
+    if (isExposedBind && !allowDangerousToolsBreakGlass) {
+      throw new Error(
+        "refusing to start gateway with dangerous HTTP /tools/invoke tool re-enables " +
+          `(${dangerousHttpToolsReenabled.join(", ")}). ` +
+          "Unset gateway.tools.allow entries or set OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS=1 for short-lived break-glass use.",
+      );
+    }
+
+    const scope = isExposedBind ? "exposed bind" : "loopback-only bind";
+    const breakGlassNote = allowDangerousToolsBreakGlass
+      ? "break-glass override enabled"
+      : "no break-glass override set";
+    console.warn(
+      `[gateway] WARNING: dangerous HTTP /tools/invoke tool re-enables active (${dangerousHttpToolsReenabled.join(
+        ", ",
+      )}) on ${scope}; ${breakGlassNote}.`,
+    );
+  }
 
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {

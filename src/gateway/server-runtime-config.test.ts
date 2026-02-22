@@ -14,6 +14,87 @@ const TOKEN_AUTH = {
 };
 
 describe("resolveGatewayRuntimeConfig", () => {
+  describe("gateway HTTP dangerous tool guard", () => {
+    it("rejects dangerous HTTP tool re-enables on non-loopback bind without explicit break-glass env", async () => {
+      const cfg = {
+        gateway: {
+          bind: "lan" as const,
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+          tools: {
+            allow: ["sessions_spawn"],
+          },
+        },
+      };
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        }),
+      ).rejects.toThrow(
+        "refusing to start gateway with dangerous HTTP /tools/invoke tool re-enables",
+      );
+    });
+
+    it("allows dangerous HTTP tool re-enables on loopback without break-glass env", async () => {
+      const cfg = {
+        gateway: {
+          auth: {
+            mode: "token" as const,
+            token: "test-token-123",
+          },
+          tools: {
+            allow: ["sessions_send"],
+          },
+        },
+      };
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg,
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("token");
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("allows dangerous HTTP tool re-enables on non-loopback bind with explicit break-glass env", async () => {
+      const previous = process.env.OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS;
+      process.env.OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS = "1";
+      try {
+        const cfg = {
+          gateway: {
+            bind: "lan" as const,
+            auth: {
+              mode: "token" as const,
+              token: "test-token-123",
+            },
+            tools: {
+              allow: ["sessions_send"],
+            },
+          },
+        };
+
+        const result = await resolveGatewayRuntimeConfig({
+          cfg,
+          port: 18789,
+        });
+
+        expect(result.authMode).toBe("token");
+        expect(result.bindHost).toBe("0.0.0.0");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS;
+        } else {
+          process.env.OPENCLAW_UNSAFE_ALLOW_GATEWAY_HTTP_DANGEROUS_TOOLS = previous;
+        }
+      }
+    });
+  });
+
   describe("trusted-proxy auth mode", () => {
     // This test validates BOTH validation layers:
     // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
