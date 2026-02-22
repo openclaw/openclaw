@@ -301,6 +301,28 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
   });
 
+  test("preserves openrouter provider when model contains vendor prefix", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/minimax/minimax-m2.5" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-or",
+      updatedAt: Date.now(),
+      modelProvider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+    });
+
+    expect(resolved).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+    });
+  });
+
   test("falls back to override when runtime model is not recorded yet", () => {
     const cfg = {
       agents: {
