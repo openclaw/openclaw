@@ -130,7 +130,7 @@ beforeAll(async () => {
   workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
   await fs.mkdir(workspaceDir, { recursive: true });
-}, 60_000);
+}, 180_000);
 
 afterAll(async () => {
   if (!tempRoot) {

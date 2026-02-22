@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasSubagentEndedHook: true,
@@ -79,6 +80,7 @@ function mockAgentStartFailure() {
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
+    resetSubagentRegistryForTests();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
@@ -101,6 +103,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       }
       return {};
     });
+  });
+
+  afterEach(() => {
+    resetSubagentRegistryForTests();
   });
 
   it("runs subagent_spawning and emits subagent_spawned with requester metadata", async () => {
