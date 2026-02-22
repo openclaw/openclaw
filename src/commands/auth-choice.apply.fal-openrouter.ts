@@ -61,7 +61,7 @@ export async function applyAuthChoiceFalOpenRouter(
   if (!hasCredential) {
     await params.prompter.note(
       [
-        "fal OpenRouter gives you access to 300+ LLMs via a single FAL_API_KEY.",
+        "fal OpenRouter gives you access to LLMs via a single FAL_API_KEY.",
         "Get your API key at: https://fal.ai/dashboard/keys",
       ].join("\n"),
       "fal OpenRouter",
