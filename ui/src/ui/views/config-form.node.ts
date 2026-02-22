@@ -27,6 +27,44 @@ function jsonValue(value: unknown): string {
   }
 }
 
+function renderJsonFallback(params: {
+  label: string;
+  help: string | undefined;
+  value: unknown;
+  path: Array<string | number>;
+  disabled: boolean;
+  showLabel: boolean;
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+}): TemplateResult {
+  const { label, help, value, path, disabled, showLabel, onPatch } = params;
+  const display = jsonValue(value);
+  return html`
+    <div class="cfg-field">
+      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      <textarea
+        class="cfg-textarea"
+        rows=${Math.min(Math.max((display.match(/\n/g)?.length ?? 0) + 1, 2), 10)}
+        placeholder="JSON value"
+        .value=${display}
+        ?disabled=${disabled}
+        @change=${(e: Event) => {
+          const raw = (e.target as HTMLTextAreaElement).value.trim();
+          if (!raw) {
+            onPatch(path, undefined);
+            return;
+          }
+          try {
+            onPatch(path, JSON.parse(raw));
+          } catch {
+            // leave as-is if invalid JSON
+          }
+        }}
+      ></textarea>
+    </div>
+  `;
+}
+
 // SVG Icons as template literals
 const icons = {
   chevronDown: html`
@@ -113,10 +151,7 @@ export function renderNode(params: {
   const key = pathKey(path);
 
   if (unsupported.has(key)) {
-    return html`<div class="cfg-field cfg-field--error">
-      <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
-    </div>`;
+    return renderJsonFallback({ label, help, value, path, disabled, onPatch, showLabel });
   }
 
   // Handle anyOf/oneOf unions
@@ -282,13 +317,8 @@ export function renderNode(params: {
     return renderTextInput({ ...params, inputType: "text" });
   }
 
-  // Fallback
-  return html`
-    <div class="cfg-field cfg-field--error">
-      <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
-    </div>
-  `;
+  // Fallback — render a JSON textarea for types the form renderer doesn't know about
+  return renderJsonFallback({ label, help, value, path, disabled, onPatch, showLabel });
 }
 
 function renderTextInput(params: {

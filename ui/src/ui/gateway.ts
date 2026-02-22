@@ -155,7 +155,6 @@ export class GatewayBrowserClient {
     const scopes = DEFAULT_OPERATOR_CONNECT_SCOPES;
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
-    let canFallbackToShared = false;
     let authToken = this.opts.token;
 
     if (isSecureContext) {
@@ -165,7 +164,6 @@ export class GatewayBrowserClient {
         role,
       })?.token;
       authToken = storedToken ?? this.opts.token;
-      canFallbackToShared = Boolean(storedToken && this.opts.token);
     }
     const auth =
       authToken || this.opts.password
@@ -239,7 +237,11 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch(() => {
-        if (canFallbackToShared && deviceIdentity) {
+        // Clear stale device token on any connect failure so the next attempt
+        // falls back to the shared gateway token (if present) or retries without
+        // a cached device token. Without this, a rotated/revoked device token
+        // causes an infinite mismatch loop when no shared token is configured.
+        if (deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
