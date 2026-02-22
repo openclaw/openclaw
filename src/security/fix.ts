@@ -440,6 +440,25 @@ export async function fixSecurityFootguns(opts?: {
   actions.push(await applyPerms({ path: stateDir, mode: 0o700, require: "dir" }));
   actions.push(await applyPerms({ path: configPath, mode: 0o600, require: "file" }));
 
+  // Tighten permissions on sensitive subdirectories and files (#18866)
+  const cronDir = path.join(stateDir, "cron");
+  actions.push(await applyPerms({ path: cronDir, mode: 0o700, require: "dir" }));
+  actions.push(
+    await applyPerms({ path: path.join(cronDir, "jobs.json"), mode: 0o600, require: "file" }),
+  );
+  actions.push(
+    await applyPerms({ path: path.join(cronDir, "jobs.json.bak"), mode: 0o600, require: "file" }),
+  );
+  actions.push(
+    await applyPerms({ path: path.join(stateDir, "browser"), mode: 0o700, require: "dir" }),
+  );
+  actions.push(
+    await applyPerms({ path: path.join(stateDir, "settings"), mode: 0o700, require: "dir" }),
+  );
+  actions.push(
+    await applyPerms({ path: path.join(stateDir, "logs"), mode: 0o700, require: "dir" }),
+  );
+
   if (snap.exists) {
     const includePaths = await collectIncludePathsRecursive({
       configPath: snap.path,
