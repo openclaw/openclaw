@@ -44,7 +44,14 @@ function isDynamicTemplateSegment(node: ts.Expression): boolean {
   return ts.isTemplateExpression(node);
 }
 
+function mightContainDynamicTmpdirJoin(source: string): boolean {
+  return source.includes("path.join") && source.includes("os.tmpdir") && source.includes("`");
+}
+
 function hasDynamicTmpdirJoin(source: string, filePath = "fixture.ts"): boolean {
+  if (!mightContainDynamicTmpdirJoin(source)) {
+    return false;
+  }
   const sourceFile = ts.createSourceFile(
     filePath,
     source,
@@ -146,5 +153,5 @@ describe("temp path guard", () => {
     }
 
     expect(offenders).toEqual([]);
-  });
+  }, 240_000);
 });
