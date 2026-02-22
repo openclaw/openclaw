@@ -57,7 +57,10 @@ export function resolveMemoryFlushPromptForRun(params: {
 
 export type MemoryFlushSettings = {
   enabled: boolean;
+  /** Absolute soft threshold tokens (fallback if softThresholdPercent not set). */
   softThresholdTokens: number;
+  /** Optional percentage of context window for soft threshold (e.g., 2 = 2%). Overrides softThresholdTokens if set. */
+  softThresholdPercent?: number;
   prompt: string;
   systemPrompt: string;
   reserveTokensFloor: number;
@@ -79,6 +82,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   }
   const softThresholdTokens =
     normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+  const softThresholdPercent = defaults?.softThresholdPercent;
   const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
   const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
   const reserveTokensFloor =
@@ -88,6 +92,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   return {
     enabled,
     softThresholdTokens,
+    softThresholdPercent,
     prompt: ensureNoReplyHint(prompt),
     systemPrompt: ensureNoReplyHint(systemPrompt),
     reserveTokensFloor,
@@ -118,6 +123,7 @@ export function shouldRunMemoryFlush(params: {
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
+  softThresholdPercent?: number;
 }): boolean {
   const totalTokens = resolveFreshSessionTotalTokens(params.entry);
   if (!totalTokens || totalTokens <= 0) {
@@ -125,7 +131,14 @@ export function shouldRunMemoryFlush(params: {
   }
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
+  // If softThresholdPercent is set, calculate threshold as percentage of context window
+  // Otherwise, use the absolute softThresholdTokens value
+  let softThreshold: number;
+  if (typeof params.softThresholdPercent === "number" && params.softThresholdPercent > 0) {
+    softThreshold = Math.floor(contextWindow * (params.softThresholdPercent / 100));
+  } else {
+    softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
+  }
   const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
   if (threshold <= 0) {
     return false;
