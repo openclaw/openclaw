@@ -23,6 +23,7 @@ const {
   updateLastRouteMock,
   upsertPairingRequestMock,
   waitForTransportReadyMock,
+  spawnSignalDaemonMock,
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
@@ -176,7 +177,7 @@ describe("monitorSignalProvider tool results", () => {
         logIntervalMs: 10_000,
         pollIntervalMs: 150,
         runtime,
-        abortSignal: abortController.signal,
+        abortSignal: expect.any(AbortSignal),
       }),
     );
   });
@@ -210,6 +211,76 @@ describe("monitorSignalProvider tool results", () => {
     });
 
     expectWaitForTransportReadyTimeout(120_000);
+  });
+
+  it("fails fast when auto-started signal daemon exits during startup", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    spawnSignalDaemonMock.mockReturnValueOnce({
+      stop: vi.fn(),
+      exited: Promise.resolve({ code: 1, signal: null }),
+      isExited: () => true,
+    });
+    waitForTransportReadyMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal | null }) => {
+        await new Promise<void>((_resolve, reject) => {
+          if (params.abortSignal?.aborted) {
+            reject(params.abortSignal.reason);
+            return;
+          }
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => reject(params.abortSignal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+      },
+    );
+
+    await expect(
+      runMonitorWithMocks({
+        autoStart: true,
+        baseUrl: SIGNAL_BASE_URL,
+        runtime,
+      }),
+    ).rejects.toThrow(/signal daemon exited/i);
+  });
+
+  it("treats daemon exit after user abort as clean shutdown", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = new AbortController();
+    let exited = false;
+    let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
+    const exitedPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        resolveExit = resolve;
+      },
+    );
+    const stop = vi.fn(() => {
+      if (exited) {
+        return;
+      }
+      exited = true;
+      resolveExit({ code: null, signal: "SIGTERM" });
+    });
+    spawnSignalDaemonMock.mockReturnValueOnce({
+      stop,
+      exited: exitedPromise,
+      isExited: () => exited,
+    });
+    streamMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("stop"));
+    });
+
+    await expect(
+      runMonitorWithMocks({
+        autoStart: true,
+        baseUrl: SIGNAL_BASE_URL,
+        runtime,
+        abortSignal: abortController.signal,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("skips tool summaries with responsePrefix", async () => {
