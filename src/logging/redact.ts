@@ -66,7 +66,7 @@ function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
 
-function parsePattern(raw: string): RegExp | null {
+export function parsePattern(raw: string): RegExp | null {
   if (!raw.trim()) {
     return null;
   }
