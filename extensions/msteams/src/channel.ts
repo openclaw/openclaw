@@ -6,6 +6,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
+  resolveRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk";
 import { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
 import { msteamsOnboardingAdapter } from "./onboarding.js";
@@ -128,7 +129,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   security: {
     collectWarnings: ({ cfg }) => {
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = cfg.channels?.msteams?.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const { groupPolicy } = resolveRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.msteams !== undefined,
+        groupPolicy: cfg.channels?.msteams?.groupPolicy,
+        defaultGroupPolicy,
+        configuredFallbackPolicy: "allowlist",
+        missingProviderFallbackPolicy: "allowlist",
+      });
       if (groupPolicy !== "open") {
         return [];
       }

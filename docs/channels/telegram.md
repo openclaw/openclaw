@@ -148,6 +148,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries must be numeric Telegram user IDs.
+    Runtime note: if `channels.telegram` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group policy evaluation (even if `channels.defaults.groupPolicy` is set).
 
     Example: allow any member in one specific group:
 

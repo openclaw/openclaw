@@ -39,6 +39,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import { resolveRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -1329,8 +1330,15 @@ async function dispatchDiscordCommandInteraction(params: {
     const channelAllowlistConfigured =
       Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
     const channelAllowed = channelConfig?.allowed !== false;
+    const { groupPolicy } = resolveRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.discord !== undefined,
+      groupPolicy: discordConfig?.groupPolicy,
+      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+      configuredFallbackPolicy: "open",
+      missingProviderFallbackPolicy: "allowlist",
+    });
     const allowByPolicy = isDiscordGroupAllowedByPolicy({
-      groupPolicy: discordConfig?.groupPolicy ?? "open",
+      groupPolicy,
       guildAllowlisted: Boolean(guildInfo),
       channelAllowlistConfigured,
       channelAllowed,

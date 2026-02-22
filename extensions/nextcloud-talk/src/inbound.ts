@@ -2,6 +2,7 @@ import {
   createReplyPrefixOptions,
   logInboundDrop,
   resolveControlCommandGate,
+  resolveRuntimeGroupPolicy,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
@@ -20,6 +21,7 @@ import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
+const warnedMissingProviderGroupPolicy = new Set<string>();
 
 async function deliverNextcloudTalkReply(params: {
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
@@ -84,12 +86,26 @@ export async function handleNextcloudTalkInbound(params: {
   statusSink?.({ lastInboundAt: message.timestamp });
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = (config.channels as Record<string, unknown> | undefined)?.defaults as
-    | { groupPolicy?: string }
-    | undefined;
-  const groupPolicy = (account.config.groupPolicy ??
-    defaultGroupPolicy?.groupPolicy ??
-    "allowlist") as GroupPolicy;
+  const defaultGroupPolicy = (
+    (config.channels as Record<string, unknown> | undefined)?.defaults as
+      | { groupPolicy?: string }
+      | undefined
+  )?.groupPolicy as GroupPolicy | undefined;
+  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+    providerConfigPresent:
+      ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
+        undefined) !== undefined,
+    groupPolicy: account.config.groupPolicy as GroupPolicy | undefined,
+    defaultGroupPolicy,
+    configuredFallbackPolicy: "allowlist",
+    missingProviderFallbackPolicy: "allowlist",
+  });
+  if (providerMissingFallbackApplied && !warnedMissingProviderGroupPolicy.has(account.accountId)) {
+    warnedMissingProviderGroupPolicy.add(account.accountId);
+    runtime.log?.(
+      'nextcloud-talk: channels.nextcloud-talk is missing; defaulting groupPolicy to "allowlist" (room messages blocked until explicitly configured).',
+    );
+  }
 
   const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);

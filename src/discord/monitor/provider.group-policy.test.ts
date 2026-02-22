@@ -26,4 +26,13 @@ describe("resolveDiscordRuntimeGroupPolicy", () => {
     expect(resolved.groupPolicy).toBe("disabled");
     expect(resolved.providerMissingFallbackApplied).toBe(false);
   });
+
+  it("ignores explicit global defaults when provider config is missing", () => {
+    const resolved = __testing.resolveDiscordRuntimeGroupPolicy({
+      providerConfigPresent: false,
+      defaultGroupPolicy: "open",
+    });
+    expect(resolved.groupPolicy).toBe("allowlist");
+    expect(resolved.providerMissingFallbackApplied).toBe(true);
+  });
 });
