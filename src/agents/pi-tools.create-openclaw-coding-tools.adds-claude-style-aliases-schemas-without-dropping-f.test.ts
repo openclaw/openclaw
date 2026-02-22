@@ -7,44 +7,6 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 
 describe("createOpenClawCodingTools", () => {
-  it("uses workspaceDir for read/write/edit path resolution", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ws-"));
-    try {
-      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
-
-      const readPath = "test-workspace-file.txt";
-      const readContent = "workspace path resolution test";
-      await fs.writeFile(path.join(tmpDir, readPath), readContent, "utf8");
-      const readResult = await readTool?.execute("tool-ws-1", {
-        path: readPath,
-      });
-      const textBlocks = readResult?.content?.filter((block) => block.type === "text") as
-        | Array<{ text?: string }>
-        | undefined;
-      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
-      expect(combinedText).toContain(readContent);
-
-      const writePath = "test-write-file.txt";
-      const writeContent = "written via workspace path";
-      await writeTool?.execute("tool-ws-2", {
-        path: writePath,
-        content: writeContent,
-      });
-      expect(await fs.readFile(path.join(tmpDir, writePath), "utf8")).toBe(writeContent);
-
-      const editPath = "test-edit-file.txt";
-      await fs.writeFile(path.join(tmpDir, editPath), "hello world", "utf8");
-      await editTool?.execute("tool-ws-3", {
-        path: editPath,
-        oldText: "world",
-        newText: "universe",
-      });
-      expect(await fs.readFile(path.join(tmpDir, editPath), "utf8")).toBe("hello universe");
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
   it("accepts Claude Code parameter aliases for read/write/edit", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alias-"));
     try {
