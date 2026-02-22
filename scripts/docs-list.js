@@ -20,6 +20,8 @@ if (!statSync(DOCS_DIR).isDirectory()) {
   process.exit(1);
 }
 
+const includeTranslations = process.argv.includes("--include-translations");
+const localeDirPattern = /^[a-z]{2}-[A-Z]{2}$/;
 const EXCLUDED_DIRS = new Set(["archive", "research"]);
 
 /**
@@ -47,11 +49,28 @@ function compactStrings(values) {
 }
 
 /**
+ * @param {string} entryName
+ * @param {string} currentDir
+ * @param {string} rootDir
+ * @param {boolean} includeTranslations
+ * @returns {boolean}
+ */
+function shouldSkipDir(entryName, currentDir, rootDir, includeTranslations) {
+  if (EXCLUDED_DIRS.has(entryName)) {
+    return true;
+  }
+  if (!includeTranslations && currentDir === rootDir && localeDirPattern.test(entryName)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * @param {string} dir
- * @param {string} base
+ * @param {{ baseDir: string; rootDir: string; includeTranslations: boolean }} params
  * @returns {string[]}
  */
-function walkMarkdownFiles(dir, base = dir) {
+function walkMarkdownFiles(dir, params) {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
@@ -60,12 +79,12 @@ function walkMarkdownFiles(dir, base = dir) {
     }
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.has(entry.name)) {
+      if (shouldSkipDir(entry.name, dir, params.rootDir, params.includeTranslations)) {
         continue;
       }
-      files.push(...walkMarkdownFiles(fullPath, base));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(relative(base, fullPath));
+      files.push(...walkMarkdownFiles(fullPath, params));
+    } else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".mdx"))) {
+      files.push(relative(params.baseDir, fullPath));
     }
   }
   return files.toSorted((a, b) => a.localeCompare(b));
@@ -152,7 +171,11 @@ function extractMetadata(fullPath) {
 
 console.log("Listing all markdown files in docs folder:");
 
-const markdownFiles = walkMarkdownFiles(DOCS_DIR);
+const markdownFiles = walkMarkdownFiles(DOCS_DIR, {
+  baseDir: DOCS_DIR,
+  rootDir: DOCS_DIR,
+  includeTranslations,
+});
 
 for (const relativePath of markdownFiles) {
   const fullPath = join(DOCS_DIR, relativePath);
