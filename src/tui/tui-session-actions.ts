@@ -38,6 +38,14 @@ type SessionInfoEntry = SessionInfo & {
   providerOverride?: string;
 };
 
+function normalizeModelField(value?: string | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 export function createSessionActions(context: SessionActionContext) {
   const {
     client,
@@ -114,21 +122,38 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const resolveModelSelection = (entry?: SessionInfoEntry) => {
-    if (entry?.modelProvider || entry?.model) {
+  const resolveModelSelection = (
+    entry: SessionInfoEntry | undefined,
+    defaults: SessionInfoDefaults | undefined,
+    opts?: { keepCurrentWhenEntryMissing?: boolean },
+  ) => {
+    const defaultModel = normalizeModelField(defaults?.model);
+    const defaultProvider = normalizeModelField(defaults?.modelProvider);
+    const runtimeModel = normalizeModelField(entry?.model);
+    const runtimeProvider = normalizeModelField(entry?.modelProvider);
+    if (!entry && opts?.keepCurrentWhenEntryMissing) {
       return {
-        modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
-        model: entry.model ?? state.sessionInfo.model,
+        modelProvider: state.sessionInfo.modelProvider,
+        model: state.sessionInfo.model,
       };
     }
-    const overrideModel = entry?.modelOverride?.trim();
+    if (entry?.modelProvider || entry?.model) {
+      return {
+        modelProvider: runtimeProvider ?? defaultProvider ?? state.sessionInfo.modelProvider,
+        model: runtimeModel ?? defaultModel ?? state.sessionInfo.model,
+      };
+    }
+    const overrideModel = normalizeModelField(entry?.modelOverride);
     if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
+      const overrideProvider =
+        normalizeModelField(entry?.providerOverride) ??
+        defaultProvider ??
+        state.sessionInfo.modelProvider;
       return { modelProvider: overrideProvider, model: overrideModel };
     }
     return {
-      modelProvider: state.sessionInfo.modelProvider,
-      model: state.sessionInfo.model,
+      modelProvider: defaultProvider ?? state.sessionInfo.modelProvider,
+      model: defaultModel ?? state.sessionInfo.model,
     };
   };
 
@@ -136,6 +161,7 @@ export function createSessionActions(context: SessionActionContext) {
     entry?: SessionInfoEntry | null;
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
+    keepCurrentModelWhenEntryMissing?: boolean;
   }) => {
     const entry = params.entry ?? undefined;
     const defaults = params.defaults ?? lastSessionDefaults ?? undefined;
@@ -199,7 +225,9 @@ export function createSessionActions(context: SessionActionContext) {
       next.updatedAt = entry.updatedAt;
     }
 
-    const selection = resolveModelSelection(entry);
+    const selection = resolveModelSelection(entry, defaults, {
+      keepCurrentWhenEntryMissing: Boolean(params.keepCurrentModelWhenEntryMissing),
+    });
     if (selection.modelProvider !== undefined) {
       next.modelProvider = selection.modelProvider;
     }
@@ -246,6 +274,8 @@ export function createSessionActions(context: SessionActionContext) {
       applySessionInfo({
         entry,
         defaults: result.defaults,
+        keepCurrentModelWhenEntryMissing:
+          !entry && (state.currentSessionKey === "global" || state.currentSessionKey === "unknown"),
       });
     } catch (err) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);

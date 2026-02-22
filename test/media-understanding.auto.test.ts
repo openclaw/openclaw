@@ -13,9 +13,18 @@ const makeTempDir = async (prefix: string) => {
   return await fs.mkdtemp(path.join(baseDir, prefix));
 };
 
-const writeExecutable = async (dir: string, name: string, content: string) => {
+const writeExecutable = async (
+  dir: string,
+  name: string,
+  scripts: { posix: string; win32: string },
+) => {
+  if (process.platform === "win32") {
+    const filePath = path.join(dir, `${name}.cmd`);
+    await fs.writeFile(filePath, scripts.win32);
+    return filePath;
+  }
   const filePath = path.join(dir, name);
-  await fs.writeFile(filePath, content, { mode: 0o755 });
+  await fs.writeFile(filePath, scripts.posix, { mode: 0o755 });
   return filePath;
 };
 
@@ -83,13 +92,12 @@ describe("media understanding auto-detect (e2e)", () => {
       await fs.writeFile(path.join(modelDir, "decoder.onnx"), "a");
       await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
 
-      await writeExecutable(
-        binDir,
-        "sherpa-onnx-offline",
-        `#!/usr/bin/env bash\necho "{\\"text\\":\\"sherpa ok\\"}"\n`,
-      );
+      await writeExecutable(binDir, "sherpa-onnx-offline", {
+        posix: `#!/usr/bin/env bash\necho "{\\"text\\":\\"sherpa ok\\"}"\n`,
+        win32: '@echo off\r\necho {"text":"sherpa ok"}\r\n',
+      });
 
-      process.env.PATH = `${binDir}:/usr/bin:/bin`;
+      process.env.PATH = [binDir, "/usr/bin", "/bin"].join(path.delimiter);
       process.env.SHERPA_ONNX_MODEL_DIR = modelDir;
 
       const filePath = await createTrackedTempMedia(tempPaths, ".wav");
@@ -115,10 +123,9 @@ describe("media understanding auto-detect (e2e)", () => {
       const modelPath = path.join(modelDir, "tiny.bin");
       await fs.writeFile(modelPath, "model");
 
-      await writeExecutable(
-        binDir,
-        "whisper-cli",
-        "#!/usr/bin/env bash\n" +
+      await writeExecutable(binDir, "whisper-cli", {
+        posix:
+          "#!/usr/bin/env bash\n" +
           'out=""\n' +
           'prev=""\n' +
           'for arg in "$@"; do\n' +
@@ -126,9 +133,27 @@ describe("media understanding auto-detect (e2e)", () => {
           '  prev="$arg"\n' +
           "done\n" +
           'if [ -n "$out" ]; then echo \'whisper cpp ok\' > "${out}.txt"; fi\n',
-      );
+        win32:
+          "@echo off\r\n" +
+          "setlocal EnableDelayedExpansion\r\n" +
+          'set "out="\r\n' +
+          'set "prev="\r\n' +
+          ":parse\r\n" +
+          'if "%~1"=="" goto done\r\n' +
+          'if "!prev!"=="-of" (\r\n' +
+          '  set "out=%~1"\r\n' +
+          "  goto done\r\n" +
+          ")\r\n" +
+          'set "prev=%~1"\r\n' +
+          "shift\r\n" +
+          "goto parse\r\n" +
+          ":done\r\n" +
+          'if not "%out%"=="" (\r\n' +
+          '  > "%out%.txt" echo whisper cpp ok\r\n' +
+          ")\r\n",
+      });
 
-      process.env.PATH = `${binDir}:/usr/bin:/bin`;
+      process.env.PATH = [binDir, "/usr/bin", "/bin"].join(path.delimiter);
       process.env.WHISPER_CPP_MODEL = modelPath;
 
       const filePath = await createTrackedTempMedia(tempPaths, ".wav");
@@ -150,13 +175,12 @@ describe("media understanding auto-detect (e2e)", () => {
     await withEnvSnapshot(async () => {
       const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-gemini-");
 
-      await writeExecutable(
-        binDir,
-        "gemini",
-        `#!/usr/bin/env bash\necho '{"response":"gemini ok"}'\n`,
-      );
+      await writeExecutable(binDir, "gemini", {
+        posix: `#!/usr/bin/env bash\necho '{"response":"gemini ok"}'\n`,
+        win32: '@echo off\r\necho {"response":"gemini ok"}\r\n',
+      });
 
-      process.env.PATH = `${binDir}:/usr/bin:/bin`;
+      process.env.PATH = [binDir, "/usr/bin", "/bin"].join(path.delimiter);
 
       const filePath = await createTrackedTempMedia(tempPaths, ".png");
 
