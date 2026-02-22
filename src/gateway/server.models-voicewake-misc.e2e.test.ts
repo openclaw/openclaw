@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import { clearConfigCache } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -249,6 +250,99 @@ describe("gateway server models + voicewake", () => {
     ]);
 
     expect(piSdkMock.discoverCalls).toBe(1);
+  });
+
+  test("models.list filters to allowlisted configured models by default", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    }
+    let previousConfig: string | undefined;
+    try {
+      previousConfig = await fs.readFile(configPath, "utf-8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw err;
+      }
+    }
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-test-z" },
+                models: {
+                  "openai/gpt-test-z": {},
+                  "anthropic/claude-test-a": {},
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      clearConfigCache();
+
+      piSdkMock.enabled = true;
+      piSdkMock.models = [
+        { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+        {
+          id: "gpt-test-a",
+          name: "A-Model",
+          provider: "openai",
+          contextWindow: 8000,
+        },
+        {
+          id: "claude-test-b",
+          name: "B-Model",
+          provider: "anthropic",
+          contextWindow: 1000,
+        },
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+      ];
+
+      const res = await rpcReq<{
+        models: Array<{
+          id: string;
+          name: string;
+          provider: string;
+          contextWindow?: number;
+        }>;
+      }>(ws, "models.list");
+
+      expect(res.ok).toBe(true);
+      expect(res.payload?.models).toEqual([
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+        {
+          id: "gpt-test-z",
+          name: "gpt-test-z",
+          provider: "openai",
+        },
+      ]);
+    } finally {
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      clearConfigCache();
+    }
   });
 
   test("models.list rejects unknown params", async () => {
