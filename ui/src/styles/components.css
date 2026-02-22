@@ -2840,16 +2840,16 @@
 }
 
 .ov-log-tail-content {
-  margin-top: 12px;
-  max-height: 250px;
+  margin-top: 10px;
+  max-height: 220px;
   overflow: auto;
   font-family: var(--mono);
   font-size: 11px;
-  line-height: 1.6;
+  line-height: 1.5;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   background: var(--bg-inset, var(--bg));
-  padding: 12px;
+  padding: 10px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
 }
