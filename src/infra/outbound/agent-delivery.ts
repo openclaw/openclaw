@@ -78,8 +78,11 @@ export function resolveAgentDeliveryPlan(params: {
       ? "implicit"
       : undefined;
 
+  // Preserve accountId from session even for internal channels (e.g., agent-to-agent).
+  // This ensures tools like `message` have the correct agentAccountId context.
   const resolvedAccountId =
     normalizeAccountId(params.accountId) ??
+    baseDelivery.lastAccountId ??
     (deliveryTargetMode === "implicit" ? baseDelivery.accountId : undefined);
 
   let resolvedTo = explicitTo;
