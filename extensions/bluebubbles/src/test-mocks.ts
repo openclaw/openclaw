@@ -19,4 +19,5 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
+  isBlueBubblesPrivateApiStatusEnabled: vi.fn((status: boolean | null) => status === true),
 }));
