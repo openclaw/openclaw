@@ -62,7 +62,7 @@ Outbound sends were mirrored into the _current_ agent session (tool session key)
 
 ## Tests Added/Updated
 
-- `src/infra/outbound/outbound-session.test.ts`
+- `src/infra/outbound/outbound.test.ts`
   - Slack thread session key.
   - Telegram topic session key.
   - dmScope identityLinks with Discord.
@@ -84,6 +84,6 @@ Outbound sends were mirrored into the _current_ agent session (tool session key)
 - `src/agents/tools/message-tool.ts`
 - `src/gateway/server-methods/send.ts`
 - Tests in:
-  - `src/infra/outbound/outbound-session.test.ts`
+  - `src/infra/outbound/outbound.test.ts`
   - `src/agents/tools/message-tool.test.ts`
   - `src/gateway/server-methods/send.test.ts`
