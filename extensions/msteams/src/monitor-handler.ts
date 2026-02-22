@@ -94,8 +94,8 @@ async function handleFileConsentInvoke(
           uniqueId: consentResponse.uploadInfo.uniqueId,
         });
       } catch (err) {
-        log.debug?.("file upload failed", { uploadId, error: String(err) });
-        await context.sendActivity(`File upload failed: ${String(err)}`);
+        log.error("file upload failed", { uploadId, error: String(err) });
+        await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
       }
