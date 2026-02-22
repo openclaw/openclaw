@@ -1,6 +1,6 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
@@ -325,23 +325,27 @@ function validateAction(action: HookAction): HookMappingResult {
 }
 
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
-  const cached = transformCache.get(transform.modulePath);
+  const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
+  const cached = transformCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const url = pathToFileURL(transform.modulePath).href;
-  const mod = (await import(url)) as Record<string, unknown>;
+  const mod = await importFileModule({ modulePath: transform.modulePath });
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(transform.modulePath, fn);
+  transformCache.set(cacheKey, fn);
   return fn;
 }
 
 function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
-  const candidate = exportName ? mod[exportName] : (mod.default ?? mod.transform);
-  if (typeof candidate !== "function") {
+  const candidate = resolveFunctionModuleExport<HookTransformFn>({
+    mod,
+    exportName,
+    fallbackExportNames: ["default", "transform"],
+  });
+  if (!candidate) {
     throw new Error("hook transform module must export a function");
   }
-  return candidate as HookTransformFn;
+  return candidate;
 }
 
 function resolvePath(baseDir: string, target: string): string {
@@ -437,6 +441,11 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
+// Block traversal into prototype-chain properties on attacker-controlled
+// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
+// for config path traversal.
+const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -463,6 +472,9 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       }
       current = current[part] as unknown;
       continue;
+    }
+    if (BLOCKED_PATH_KEYS.has(part)) {
+      return undefined;
     }
     if (typeof current !== "object") {
       return undefined;

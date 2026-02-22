@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempWorkspace } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -40,8 +40,8 @@ metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-
 
 describe("installSkill code safety scanning", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockReset();
-    scanDirectoryWithSummaryMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
+    scanDirectoryWithSummaryMock.mockClear();
     runCommandWithTimeoutMock.mockResolvedValue({
       code: 0,
       stdout: "ok",
@@ -52,8 +52,7 @@ describe("installSkill code safety scanning", () => {
   });
 
   it("adds detailed warnings for critical findings and continues install", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-    try {
+    await withTempWorkspace(async ({ workspaceDir }) => {
       const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
       scanDirectoryWithSummaryMock.mockResolvedValue({
         scannedFiles: 1,
@@ -83,14 +82,11 @@ describe("installSkill code safety scanning", () => {
         true,
       );
       expect(result.warnings?.some((warning) => warning.includes("runner.js:1"))).toBe(true);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    });
   });
 
   it("warns and continues when skill scan fails", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-    try {
+    await withTempWorkspace(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");
       scanDirectoryWithSummaryMock.mockRejectedValue(new Error("scanner exploded"));
 
@@ -107,8 +103,6 @@ describe("installSkill code safety scanning", () => {
       expect(result.warnings?.some((warning) => warning.includes("Installation continues"))).toBe(
         true,
       );
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    });
   });
 });

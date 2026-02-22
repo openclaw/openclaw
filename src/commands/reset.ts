@@ -1,9 +1,10 @@
-import { cancel, confirm, isCancel, select } from "@clack/prompts";
+import { cancel, confirm, isCancel } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import { selectStyled } from "../terminal/prompt-select-styled.js";
+import { stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import { listAgentSessionDirs, removePath } from "./cleanup-utils.js";
 
@@ -15,15 +16,6 @@ export type ResetOptions = {
   nonInteractive?: boolean;
   dryRun?: boolean;
 };
-
-const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
-  select({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
 
 async function stopGatewayIfRunning(runtime: RuntimeEnv) {
   if (isNixMode) {

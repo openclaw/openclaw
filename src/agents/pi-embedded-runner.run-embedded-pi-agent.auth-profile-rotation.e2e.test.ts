@@ -196,6 +196,24 @@ function mockSingleSuccessfulAttempt() {
   );
 }
 
+function mockSingleErrorAttempt(params: {
+  errorMessage: string;
+  provider?: string;
+  model?: string;
+}) {
+  runEmbeddedAttemptMock.mockResolvedValueOnce(
+    makeAttempt({
+      assistantTexts: [],
+      lastAssistant: buildAssistant({
+        stopReason: "error",
+        errorMessage: params.errorMessage,
+        ...(params.provider ? { provider: params.provider } : {}),
+        ...(params.model ? { model: params.model } : {}),
+      }),
+    }),
+  );
+}
+
 async function withTimedAgentWorkspace<T>(
   run: (ctx: { agentDir: string; workspaceDir: string; now: number }) => Promise<T>,
 ) {
@@ -347,15 +365,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     try {
       await writeAuthStore(agentDir);
 
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: [],
-          lastAssistant: buildAssistant({
-            stopReason: "error",
-            errorMessage: "rate limit",
-          }),
-        }),
-      );
+      mockSingleErrorAttempt({ errorMessage: "rate limit" });
 
       await runEmbeddedPiAgent({
         sessionId: "session:test",
@@ -513,6 +523,53 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       } else {
         process.env.OPENAI_API_KEY = previousOpenAiKey;
       }
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the active erroring model in billing failover errors", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+      mockSingleErrorAttempt({
+        errorMessage: "insufficient credits",
+        provider: "openai",
+        model: "mock-rotated",
+      });
+
+      let thrown: unknown;
+      try {
+        await runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:test:billing-failover-active-model",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig({ fallbacks: ["openai/mock-2"] }),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "user",
+          timeoutMs: 5_000,
+          runId: "run:billing-failover-active-model",
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toMatchObject({
+        name: "FailoverError",
+        reason: "billing",
+        provider: "openai",
+        model: "mock-rotated",
+      });
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain("openai (mock-rotated) returned a billing error");
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

@@ -1,45 +1,21 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
+import {
+  createStubSessionHarness,
+  createTextEndBlockReplyHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   it("does not emit duplicate block replies when text_end repeats", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    const subscription = subscribeEmbeddedPiSession({
-      session,
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello block",
-      },
-    });
-
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-      },
-    });
-
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "Hello block" });
+    emitAssistantTextEnd({ emit });
+    emitAssistantTextEnd({ emit });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);

@@ -2,17 +2,13 @@ import type { Server } from "node:http";
 import express from "express";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { resolveBrowserConfig } from "./config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
-import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
-import {
-  type BrowserServerState,
-  createBrowserRouteContext,
-  listKnownProfileNames,
-} from "./server-context.js";
+import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
@@ -74,17 +70,10 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     profiles: new Map(),
   };
 
-  // If any profile uses the Chrome extension relay, start the local relay server eagerly
-  // so the extension can connect before the first browser action.
-  for (const name of Object.keys(resolved.profiles)) {
-    const profile = resolveProfile(resolved, name);
-    if (!profile || profile.driver !== "extension") {
-      continue;
-    }
-    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
-      logServer.warn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
-    });
-  }
+  await ensureExtensionRelayForProfiles({
+    resolved,
+    onWarn: (message) => logServer.warn(message),
+  });
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
@@ -97,25 +86,10 @@ export async function stopBrowserControlServer(): Promise<void> {
     return;
   }
 
-  const ctx = createBrowserRouteContext({
+  await stopKnownBrowserProfiles({
     getState: () => state,
-    refreshConfigFromDisk: true,
+    onWarn: (message) => logServer.warn(message),
   });
-
-  try {
-    const current = state;
-    if (current) {
-      for (const name of listKnownProfileNames(current)) {
-        try {
-          await ctx.forProfile(name).stopRunningBrowser();
-        } catch {
-          // ignore
-        }
-      }
-    }
-  } catch (err) {
-    logServer.warn(`openclaw browser stop failed: ${String(err)}`);
-  }
 
   if (current.server) {
     await new Promise<void>((resolve) => {

@@ -263,6 +263,28 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "session",
+      nativeName: "session",
+      description: "Manage session-level settings (for example /session ttl).",
+      textAlias: "/session",
+      category: "session",
+      args: [
+        {
+          name: "action",
+          description: "ttl",
+          type: "string",
+          choices: ["ttl"],
+        },
+        {
+          name: "value",
+          description: "Duration (24h, 90m) or off",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
       description: "List, kill, log, spawn, or steer subagent runs for this session.",
@@ -288,6 +310,35 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
       argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "focus",
+      nativeName: "focus",
+      description: "Bind this Discord thread (or a new one) to a session target.",
+      textAlias: "/focus",
+      category: "management",
+      args: [
+        {
+          name: "target",
+          description: "Subagent label/index or session key/id/label",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "unfocus",
+      nativeName: "unfocus",
+      description: "Remove the current Discord thread binding.",
+      textAlias: "/unfocus",
+      category: "management",
+    }),
+    defineChatCommand({
+      key: "agents",
+      nativeName: "agents",
+      description: "List thread-bound agents for this session.",
+      textAlias: "/agents",
+      category: "management",
     }),
     defineChatCommand({
       key: "kill",

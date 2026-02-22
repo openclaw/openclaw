@@ -2,8 +2,30 @@ import type { OpenClawConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "./registry.js";
+import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+
+function createPluginLogger(): PluginLogger {
+  return {
+    info: (msg) => log.info(msg),
+    warn: (msg) => log.warn(msg),
+    error: (msg) => log.error(msg),
+    debug: (msg) => log.debug(msg),
+  };
+}
+
+function createServiceContext(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+}): OpenClawPluginServiceContext {
+  return {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    stateDir: STATE_DIR,
+    logger: createPluginLogger(),
+  };
+}
 
 export type PluginServicesHandle = {
   stop: () => Promise<void>;
@@ -18,37 +40,18 @@ export async function startPluginServices(params: {
     id: string;
     stop?: () => void | Promise<void>;
   }> = [];
+  const serviceContext = createServiceContext({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
 
   for (const entry of params.registry.services) {
     const service = entry.service;
     try {
-      await service.start({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        stateDir: STATE_DIR,
-        logger: {
-          info: (msg) => log.info(msg),
-          warn: (msg) => log.warn(msg),
-          error: (msg) => log.error(msg),
-          debug: (msg) => log.debug(msg),
-        },
-      });
+      await service.start(serviceContext);
       running.push({
         id: service.id,
-        stop: service.stop
-          ? () =>
-              service.stop?.({
-                config: params.config,
-                workspaceDir: params.workspaceDir,
-                stateDir: STATE_DIR,
-                logger: {
-                  info: (msg) => log.info(msg),
-                  warn: (msg) => log.warn(msg),
-                  error: (msg) => log.error(msg),
-                  debug: (msg) => log.debug(msg),
-                },
-              })
-          : undefined,
+        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
       });
     } catch (err) {
       log.error(`plugin service failed (${service.id}): ${String(err)}`);

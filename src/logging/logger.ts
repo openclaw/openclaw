@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -7,6 +6,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 
 export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
@@ -16,7 +16,7 @@ const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
-const requireConfig = createRequire(import.meta.url);
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
@@ -55,10 +55,12 @@ function resolveSettings(): ResolvedSettings {
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
     try {
-      const loaded = requireConfig("../config/config.js") as {
-        loadConfig?: () => OpenClawConfig;
-      };
-      cfg = loaded.loadConfig?.().logging;
+      const loaded = requireConfig?.("../config/config.js") as
+        | {
+            loadConfig?: () => OpenClawConfig;
+          }
+        | undefined;
+      cfg = loaded?.loadConfig?.().logging;
     } catch {
       cfg = undefined;
     }

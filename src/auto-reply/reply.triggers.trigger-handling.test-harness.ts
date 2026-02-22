@@ -147,6 +147,13 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
   return storePath;
 }
 
+export async function readSessionStore(cfg: {
+  session?: { store?: string };
+}): Promise<Record<string, { elevatedLevel?: string }>> {
+  const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
+  return JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
+}
+
 export function makeWhatsAppElevatedCfg(
   home: string,
   opts?: { elevatedEnabled?: boolean; requireMentionInGroups?: boolean },
@@ -196,8 +203,7 @@ export async function runDirectElevatedToggleAndLoadStore(params: {
   if (!storePath) {
     throw new Error("session.store is required in test config");
   }
-  const storeRaw = await fs.readFile(storePath, "utf-8");
-  const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
+  const store = await readSessionStore(params.cfg);
   return { text, store };
 }
 
@@ -229,6 +235,7 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
   const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
+  expect(prompt).toContain("Execute your Session Startup sequence now");
 }
 
 export function installTriggerHandlingE2eTestHooks() {

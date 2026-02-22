@@ -128,11 +128,8 @@ describe("normalizeGatewayTokenInput", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
   });
 
-  it('rejects the literal string "undefined"', () => {
+  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
     expect(normalizeGatewayTokenInput("undefined")).toBe("");
-  });
-
-  it('rejects the literal string "null"', () => {
     expect(normalizeGatewayTokenInput("null")).toBe("");
   });
 });

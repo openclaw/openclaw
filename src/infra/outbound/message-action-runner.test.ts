@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
@@ -78,16 +78,40 @@ const runDrySend = (params: {
     action: "send",
   });
 
-describe("runMessageAction context isolation", () => {
-  beforeEach(async () => {
-    const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
-    const { setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js");
-    const { setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js");
-    const { setWhatsAppRuntime } = await import("../../../extensions/whatsapp/src/runtime.js");
-    const runtime = createPluginRuntime();
-    setSlackRuntime(runtime);
+function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
+  return {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => account,
+    isConfigured: () => true,
+  };
+}
+
+let createPluginRuntime: typeof import("../../plugins/runtime/index.js").createPluginRuntime;
+let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").setSlackRuntime;
+let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.js").setTelegramRuntime;
+let setWhatsAppRuntime: typeof import("../../../extensions/whatsapp/src/runtime.js").setWhatsAppRuntime;
+
+function installChannelRuntimes(params?: { includeTelegram?: boolean; includeWhatsApp?: boolean }) {
+  const runtime = createPluginRuntime();
+  setSlackRuntime(runtime);
+  if (params?.includeTelegram !== false) {
     setTelegramRuntime(runtime);
+  }
+  if (params?.includeWhatsApp !== false) {
     setWhatsAppRuntime(runtime);
+  }
+}
+
+describe("runMessageAction context isolation", () => {
+  beforeAll(async () => {
+    ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
+    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
+    ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
+    ({ setWhatsAppRuntime } = await import("../../../extensions/whatsapp/src/runtime.js"));
+  });
+
+  beforeEach(() => {
+    installChannelRuntimes();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -214,59 +238,59 @@ describe("runMessageAction context isolation", () => {
     expect(result.kind).toBe("action");
   });
 
-  it("allows WhatsApp send when target matches current chat", async () => {
+  it.each([
+    {
+      name: "whatsapp",
+      channel: "whatsapp",
+      target: "123@g.us",
+      currentChannelId: "123@g.us",
+    },
+    {
+      name: "imessage",
+      channel: "imessage",
+      target: "imessage:+15551234567",
+      currentChannelId: "imessage:+15551234567",
+    },
+  ] as const)("allows $name send when target matches current context", async (testCase) => {
     const result = await runDrySend({
       cfg: whatsappConfig,
       actionParams: {
-        channel: "whatsapp",
-        target: "123@g.us",
+        channel: testCase.channel,
+        target: testCase.target,
         message: "hi",
       },
-      toolContext: { currentChannelId: "123@g.us" },
+      toolContext: { currentChannelId: testCase.currentChannelId },
     });
 
     expect(result.kind).toBe("send");
   });
 
-  it("blocks WhatsApp send when target differs from current chat", async () => {
+  it.each([
+    {
+      name: "whatsapp",
+      channel: "whatsapp",
+      target: "456@g.us",
+      currentChannelId: "123@g.us",
+      currentChannelProvider: "whatsapp",
+    },
+    {
+      name: "imessage",
+      channel: "imessage",
+      target: "imessage:+15551230000",
+      currentChannelId: "imessage:+15551234567",
+      currentChannelProvider: "imessage",
+    },
+  ] as const)("blocks $name send when target differs from current context", async (testCase) => {
     const result = await runDrySend({
       cfg: whatsappConfig,
       actionParams: {
-        channel: "whatsapp",
-        target: "456@g.us",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "123@g.us", currentChannelProvider: "whatsapp" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("allows iMessage send when target matches current handle", async () => {
-    const result = await runDrySend({
-      cfg: whatsappConfig,
-      actionParams: {
-        channel: "imessage",
-        target: "imessage:+15551234567",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "imessage:+15551234567" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("blocks iMessage send when target differs from current handle", async () => {
-    const result = await runDrySend({
-      cfg: whatsappConfig,
-      actionParams: {
-        channel: "imessage",
-        target: "imessage:+15551230000",
+        channel: testCase.channel,
+        target: testCase.target,
         message: "hi",
       },
       toolContext: {
-        currentChannelId: "imessage:+15551234567",
-        currentChannelProvider: "imessage",
+        currentChannelId: testCase.currentChannelId,
+        currentChannelProvider: testCase.currentChannelProvider,
       },
     });
 
@@ -337,39 +361,38 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
-  it("aborts send when abortSignal is already aborted", async () => {
+  it.each([
+    {
+      name: "send",
+      run: (abortSignal: AbortSignal) =>
+        runDrySend({
+          cfg: slackConfig,
+          actionParams: {
+            channel: "slack",
+            target: "#C12345678",
+            message: "hi",
+          },
+          abortSignal,
+        }),
+    },
+    {
+      name: "broadcast",
+      run: (abortSignal: AbortSignal) =>
+        runDryAction({
+          cfg: slackConfig,
+          action: "broadcast",
+          actionParams: {
+            targets: ["channel:C12345678"],
+            channel: "slack",
+            message: "hi",
+          },
+          abortSignal,
+        }),
+    },
+  ])("aborts $name when abortSignal is already aborted", async ({ run }) => {
     const controller = new AbortController();
     controller.abort();
-
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-          message: "hi",
-        },
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-  });
-
-  it("aborts broadcast when abortSignal is already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(
-      runDryAction({
-        cfg: slackConfig,
-        action: "broadcast",
-        actionParams: {
-          targets: ["channel:C12345678"],
-          channel: "slack",
-          message: "hi",
-        },
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(run(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 
@@ -490,11 +513,8 @@ describe("runMessageAction sendAttachment hydration", () => {
 });
 
 describe("runMessageAction sandboxed media validation", () => {
-  beforeEach(async () => {
-    const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
-    const { setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js");
-    const runtime = createPluginRuntime();
-    setSlackRuntime(runtime);
+  beforeEach(() => {
+    installChannelRuntimes({ includeTelegram: false, includeWhatsApp: false });
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -510,38 +530,38 @@ describe("runMessageAction sandboxed media validation", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  it("rejects media outside the sandbox root", async () => {
-    await withSandbox(async (sandboxDir) => {
-      await expect(
-        runDrySend({
-          cfg: slackConfig,
-          actionParams: {
-            channel: "slack",
-            target: "#C12345678",
-            media: "/etc/passwd",
-            message: "",
-          },
-          sandboxRoot: sandboxDir,
-        }),
-      ).rejects.toThrow(/sandbox/i);
-    });
-  });
+  it.each(["/etc/passwd", "file:///etc/passwd"])(
+    "rejects out-of-sandbox media reference: %s",
+    async (media) => {
+      await withSandbox(async (sandboxDir) => {
+        await expect(
+          runDrySend({
+            cfg: slackConfig,
+            actionParams: {
+              channel: "slack",
+              target: "#C12345678",
+              media,
+              message: "",
+            },
+            sandboxRoot: sandboxDir,
+          }),
+        ).rejects.toThrow(/sandbox/i);
+      });
+    },
+  );
 
-  it("rejects file:// media outside the sandbox root", async () => {
-    await withSandbox(async (sandboxDir) => {
-      await expect(
-        runDrySend({
-          cfg: slackConfig,
-          actionParams: {
-            channel: "slack",
-            target: "#C12345678",
-            media: "file:///etc/passwd",
-            message: "",
-          },
-          sandboxRoot: sandboxDir,
-        }),
-      ).rejects.toThrow(/sandbox/i);
-    });
+  it("rejects data URLs in media params", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "data:image/png;base64,abcd",
+          message: "",
+        },
+      }),
+    ).rejects.toThrow(/data:/i);
   });
 
   it("rewrites sandbox-relative media paths", async () => {
@@ -585,18 +605,31 @@ describe("runMessageAction sandboxed media validation", () => {
     });
   });
 
-  it("rejects data URLs in media params", async () => {
-    await expect(
-      runDrySend({
+  it("allows media paths under os.tmpdir()", async () => {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      const tmpFile = path.join(os.tmpdir(), "test-media-image.png");
+      const result = await runMessageAction({
         cfg: slackConfig,
-        actionParams: {
+        action: "send",
+        params: {
           channel: "slack",
           target: "#C12345678",
-          media: "data:image/png;base64,abcd",
+          media: tmpFile,
           message: "",
         },
-      }),
-    ).rejects.toThrow(/data:/i);
+        sandboxRoot: sandboxDir,
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(tmpFile);
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -680,11 +713,7 @@ describe("runMessageAction card-only send behavior", () => {
       blurb: "Card-only send test plugin.",
     },
     capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({ enabled: true }),
-      isConfigured: () => true,
-    },
+    config: createAlwaysConfiguredPluginConfig(),
     actions: {
       listActions: () => ["send"],
       supportsAction: ({ action }) => action === "send",
@@ -764,11 +793,7 @@ describe("runMessageAction components parsing", () => {
       blurb: "Discord components send test plugin.",
     },
     capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      isConfigured: () => true,
-    },
+    config: createAlwaysConfiguredPluginConfig({}),
     actions: {
       listActions: () => ["send"],
       supportsAction: ({ action }) => action === "send",

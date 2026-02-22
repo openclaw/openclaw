@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
 
+let doctorCommand: typeof import("./doctor.js").doctorCommand;
+
 describe("doctor command", () => {
+  beforeAll(async () => {
+    ({ doctorCommand } = await import("./doctor.js"));
+  });
+
   it("warns when per-agent sandbox docker/browser/prune overrides are ignored under shared scope", async () => {
     mockDoctorConfigSnapshot({
       config: {
@@ -34,7 +40,6 @@ describe("doctor command", () => {
 
     note.mockClear();
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
     expect(
@@ -74,7 +79,6 @@ describe("doctor command", () => {
       return realExists(value as never);
     });
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
     expect(note.mock.calls.some(([_, title]) => title === "Extra workspace")).toBe(false);

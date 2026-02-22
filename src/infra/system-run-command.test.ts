@@ -2,10 +2,21 @@ import { describe, expect, test } from "vitest";
 import {
   extractShellCommandFromArgv,
   formatExecCommand,
+  resolveSystemRunCommand,
   validateSystemRunCommandConsistency,
 } from "./system-run-command.js";
 
 describe("system run command helpers", () => {
+  function expectRawCommandMismatch(params: { argv: string[]; rawCommand: string }) {
+    const res = validateSystemRunCommandConsistency(params);
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.message).toContain("rawCommand does not match command");
+    expect(res.details?.code).toBe("RAW_COMMAND_MISMATCH");
+  }
+
   test("formatExecCommand quotes args with spaces", () => {
     expect(formatExecCommand(["echo", "hi there"])).toBe('echo "hi there"');
   });
@@ -16,6 +27,12 @@ describe("system run command helpers", () => {
 
   test("extractShellCommandFromArgv extracts cmd.exe /c command", () => {
     expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo hi"])).toBe("echo hi");
+  });
+
+  test("extractShellCommandFromArgv includes trailing cmd.exe args after /c", () => {
+    expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"])).toBe(
+      "echo SAFE&&whoami",
+    );
   });
 
   test("validateSystemRunCommandConsistency accepts rawCommand matching direct argv", () => {
@@ -32,16 +49,10 @@ describe("system run command helpers", () => {
   });
 
   test("validateSystemRunCommandConsistency rejects mismatched rawCommand vs direct argv", () => {
-    const res = validateSystemRunCommandConsistency({
+    expectRawCommandMismatch({
       argv: ["uname", "-a"],
       rawCommand: "echo hi",
     });
-    expect(res.ok).toBe(false);
-    if (res.ok) {
-      throw new Error("unreachable");
-    }
-    expect(res.message).toContain("rawCommand does not match command");
-    expect(res.details?.code).toBe("RAW_COMMAND_MISMATCH");
   });
 
   test("validateSystemRunCommandConsistency accepts rawCommand matching sh wrapper argv", () => {
@@ -50,5 +61,43 @@ describe("system run command helpers", () => {
       rawCommand: "echo hi",
     });
     expect(res.ok).toBe(true);
+  });
+
+  test("validateSystemRunCommandConsistency rejects cmd.exe /c trailing-arg smuggling", () => {
+    expectRawCommandMismatch({
+      argv: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
+      rawCommand: "echo",
+    });
+  });
+
+  test("validateSystemRunCommandConsistency rejects mismatched rawCommand vs sh wrapper argv", () => {
+    expectRawCommandMismatch({
+      argv: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: "echo bye",
+    });
+  });
+
+  test("resolveSystemRunCommand requires command when rawCommand is present", () => {
+    const res = resolveSystemRunCommand({ rawCommand: "echo hi" });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.message).toContain("rawCommand requires params.command");
+    expect(res.details?.code).toBe("MISSING_COMMAND");
+  });
+
+  test("resolveSystemRunCommand returns normalized argv and cmdText", () => {
+    const res = resolveSystemRunCommand({
+      command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
+      rawCommand: "echo SAFE&&whoami",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"]);
+    expect(res.shellCommand).toBe("echo SAFE&&whoami");
+    expect(res.cmdText).toBe("echo SAFE&&whoami");
   });
 });

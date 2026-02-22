@@ -11,27 +11,66 @@ const noopLogger = {
   error: vi.fn(),
 };
 
+type IsolatedRunResult = {
+  status: "ok" | "error" | "skipped";
+  summary?: string;
+  error?: string;
+};
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function makeStorePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
       // On macOS, teardown can race with trailing async fs writes and leave
-      // transient ENOTEMPTY errors. Retry briefly for stability.
-      for (let i = 0; i < 10; i += 1) {
-        try {
-          await fs.rm(dir, { recursive: true, force: true });
-          return;
-        } catch (err) {
-          const code = (err as NodeJS.ErrnoException).code;
-          if (code !== "ENOTEMPTY") {
-            throw err;
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise<void>((resolve) => setTimeout(resolve, 10));
-        }
+      // transient ENOTEMPTY/EBUSY errors; let fs.rm handle retries natively.
+      try {
+        await fs.rm(dir, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 10,
+        });
+      } catch {
+        await fs.rm(dir, { recursive: true, force: true });
       }
-      await fs.rm(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+function createDeferredIsolatedRun() {
+  let resolveRun: ((value: IsolatedRunResult) => void) | undefined;
+  let resolveRunStarted: (() => void) | undefined;
+  const runStarted = new Promise<void>((resolve) => {
+    resolveRunStarted = resolve;
+  });
+  const runIsolatedAgentJob = vi.fn(async () => {
+    resolveRunStarted?.();
+    return await new Promise<IsolatedRunResult>((resolve) => {
+      resolveRun = resolve;
+    });
+  });
+  return {
+    runIsolatedAgentJob,
+    runStarted,
+    completeRun: (result: IsolatedRunResult) => {
+      resolveRun?.(result);
     },
   };
 }
@@ -48,25 +87,7 @@ describe("CronService read ops while job is running", () => {
       resolveFinished = resolve;
     });
 
-    let resolveRun:
-      | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
-      | undefined;
-
-    let resolveRunStarted: (() => void) | undefined;
-    const runStarted = new Promise<void>((resolve) => {
-      resolveRunStarted = resolve;
-    });
-
-    const runIsolatedAgentJob = vi.fn(async () => {
-      resolveRunStarted?.();
-      return await new Promise<{
-        status: "ok" | "error" | "skipped";
-        summary?: string;
-        error?: string;
-      }>((resolve) => {
-        resolveRun = resolve;
-      });
-    });
+    const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
       storePath: store.storePath,
@@ -74,7 +95,7 @@ describe("CronService read ops while job is running", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       onEvent: (evt) => {
         if (evt.action === "finished" && evt.status === "ok") {
           resolveFinished?.();
@@ -103,8 +124,8 @@ describe("CronService read ops while job is running", () => {
       vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
       await vi.runOnlyPendingTimersAsync();
 
-      await runStarted;
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      await isolatedRun.runStarted;
+      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf("object");
       await expect(cron.status()).resolves.toBeTypeOf("object");
@@ -112,7 +133,7 @@ describe("CronService read ops while job is running", () => {
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
 
-      resolveRun?.({ status: "ok", summary: "done" });
+      isolatedRun.completeRun({ status: "ok", summary: "done" });
 
       // Wait until the scheduler writes the result back to the store.
       await finished;
@@ -136,6 +157,72 @@ describe("CronService read ops while job is running", () => {
       cron.stop();
       vi.clearAllTimers();
       vi.useRealTimers();
+      await store.cleanup();
+    }
+  });
+
+  it("keeps list and status responsive during startup catch-up runs", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: "startup-catchup",
+            name: "startup catch-up",
+            enabled: true,
+            createdAtMs: nowMs - 86_400_000,
+            updatedAtMs: nowMs - 86_400_000,
+            schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "agentTurn", message: "startup replay" },
+            delivery: { mode: "none" },
+            state: { nextRunAtMs: nowMs - 60_000 },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const isolatedRun = createDeferredIsolatedRun();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+    });
+
+    try {
+      const startPromise = cron.start();
+      await isolatedRun.runStarted;
+      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+
+      await expect(
+        withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
+      ).resolves.toBeTypeOf("object");
+      await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storePath: store.storePath }),
+      );
+
+      isolatedRun.completeRun({ status: "ok", summary: "done" });
+      await startPromise;
+
+      const jobs = await cron.list({ includeDisabled: true });
+      expect(jobs[0]?.state.lastStatus).toBe("ok");
+      expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+    } finally {
+      cron.stop();
       await store.cleanup();
     }
   });

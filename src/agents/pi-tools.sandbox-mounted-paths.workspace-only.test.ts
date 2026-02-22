@@ -7,16 +7,17 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { SandboxFsBridge, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
+import {
+  expectReadWriteEditTools,
+  expectReadWriteTools,
+  getTextContent,
+} from "./test-helpers/pi-tools-fs-helpers.js";
+import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
-
-function getTextContent(result?: { content?: Array<{ type: string; text?: string }> }) {
-  const textBlock = result?.content?.find((block) => block.type === "text");
-  return textBlock?.text ?? "";
-}
 
 function createUnsafeMountedBridge(params: {
   root: string;
@@ -63,29 +64,13 @@ function createSandbox(params: {
   agentRoot: string;
   fsBridge: SandboxFsBridge;
 }): SandboxContext {
-  return {
-    enabled: true,
-    sessionKey: "sandbox:test",
+  return createPiToolsSandboxContext({
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
     workspaceAccess: "rw",
-    containerName: "openclaw-sbx-test",
-    containerWorkdir: "/workspace",
     fsBridge: params.fsBridge,
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: [],
-      network: "none",
-      user: "1000:1000",
-      capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
-    },
     tools: { allow: [], deny: [] },
-    browserAllowHostControl: false,
-  };
+  });
 }
 
 async function withUnsafeMountedSandboxHarness(
@@ -111,10 +96,7 @@ describe("tools.fs.workspaceOnly", () => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
 
       const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot });
-      const readTool = tools.find((tool) => tool.name === "read");
-      const writeTool = tools.find((tool) => tool.name === "write");
-      expect(readTool).toBeDefined();
-      expect(writeTool).toBeDefined();
+      const { readTool, writeTool } = expectReadWriteTools(tools);
 
       const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
       expect(getTextContent(readResult)).toContain("shh");
@@ -130,12 +112,7 @@ describe("tools.fs.workspaceOnly", () => {
 
       const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as OpenClawConfig;
       const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
-      const readTool = tools.find((tool) => tool.name === "read");
-      const writeTool = tools.find((tool) => tool.name === "write");
-      const editTool = tools.find((tool) => tool.name === "edit");
-      expect(readTool).toBeDefined();
-      expect(writeTool).toBeDefined();
-      expect(editTool).toBeDefined();
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
 
       await expect(readTool?.execute("t1", { path: "/agent/secret.txt" })).rejects.toThrow(
         /Path escapes sandbox root/i,

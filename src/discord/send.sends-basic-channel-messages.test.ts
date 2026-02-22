@@ -22,6 +22,32 @@ vi.mock("../web/media.js", async () => {
 });
 
 describe("sendMessageDiscord", () => {
+  function expectReplyReference(
+    body: { message_reference?: unknown } | undefined,
+    messageId: string,
+  ) {
+    expect(body?.message_reference).toEqual({
+      message_id: messageId,
+      fail_if_not_exists: false,
+    });
+  }
+
+  async function sendChunkedReplyAndCollectBodies(params: { text: string; mediaUrl?: string }) {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendMessageDiscord("channel:789", params.text, {
+      rest,
+      token: "t",
+      replyTo: "orig-123",
+      ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    });
+    expect(postMock).toHaveBeenCalledTimes(2);
+    return {
+      firstBody: postMock.mock.calls[0]?.[1]?.body as { message_reference?: unknown } | undefined,
+      secondBody: postMock.mock.calls[1]?.[1]?.body as { message_reference?: unknown } | undefined,
+    };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -257,46 +283,20 @@ describe("sendMessageDiscord", () => {
   });
 
   it("preserves reply reference across all text chunks", async () => {
-    const { rest, postMock } = makeDiscordRest();
-    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
-    await sendMessageDiscord("channel:789", "a".repeat(2001), {
-      rest,
-      token: "t",
-      replyTo: "orig-123",
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2001),
     });
-    expect(postMock).toHaveBeenCalledTimes(2);
-    const firstBody = postMock.mock.calls[0]?.[1]?.body;
-    const secondBody = postMock.mock.calls[1]?.[1]?.body;
-    expect(firstBody?.message_reference).toEqual({
-      message_id: "orig-123",
-      fail_if_not_exists: false,
-    });
-    expect(secondBody?.message_reference).toEqual({
-      message_id: "orig-123",
-      fail_if_not_exists: false,
-    });
+    expectReplyReference(firstBody, "orig-123");
+    expectReplyReference(secondBody, "orig-123");
   });
 
   it("preserves reply reference for follow-up text chunks after media caption split", async () => {
-    const { rest, postMock } = makeDiscordRest();
-    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
-    await sendMessageDiscord("channel:789", "a".repeat(2500), {
-      rest,
-      token: "t",
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2500),
       mediaUrl: "file:///tmp/photo.jpg",
-      replyTo: "orig-123",
     });
-    expect(postMock).toHaveBeenCalledTimes(2);
-    const firstBody = postMock.mock.calls[0]?.[1]?.body;
-    const secondBody = postMock.mock.calls[1]?.[1]?.body;
-    expect(firstBody?.message_reference).toEqual({
-      message_id: "orig-123",
-      fail_if_not_exists: false,
-    });
-    expect(secondBody?.message_reference).toEqual({
-      message_id: "orig-123",
-      fail_if_not_exists: false,
-    });
+    expectReplyReference(firstBody, "orig-123");
+    expectReplyReference(secondBody, "orig-123");
   });
 });
 

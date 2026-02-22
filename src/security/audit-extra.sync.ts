@@ -16,7 +16,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
+import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
+  resolveNodeCommandAllowlist,
+} from "../gateway/node-command-policy.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -441,7 +444,7 @@ export function collectHooksHardeningFindings(
   if (token && gatewayToken && token === gatewayToken) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
-      severity: "warn",
+      severity: "critical",
       title: "Hooks token reuses the Gateway token",
       detail:
         "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
@@ -530,6 +533,40 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
     detail:
       `${enabledEndpoints.join(", ")} accept x-openclaw-session-key for per-request session routing. ` +
       "Treat API credential holders as trusted principals.",
+  });
+
+  return findings;
+}
+
+export function collectGatewayHttpNoAuthFindings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  if (auth.mode !== "none") {
+    return findings;
+  }
+
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const enabledEndpoints = [
+    "/tools/invoke",
+    chatCompletionsEnabled ? "/v1/chat/completions" : null,
+    responsesEnabled ? "/v1/responses" : null,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  const remoteExposure = isGatewayRemotelyExposed(cfg);
+  findings.push({
+    checkId: "gateway.http.no_auth",
+    severity: remoteExposure ? "critical" : "warn",
+    title: "Gateway HTTP APIs are reachable without auth",
+    detail:
+      `gateway.auth.mode="none" leaves ${enabledEndpoints.join(", ")} callable without a shared secret. ` +
+      "Treat this as trusted-local only and avoid exposing the gateway beyond loopback.",
+    remediation:
+      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints.",
   });
 
   return findings;
@@ -680,6 +717,45 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
   }
 
+  const browserExposurePaths: string[] = [];
+  const defaultBrowser = resolveSandboxConfigForAgent(cfg).browser;
+  if (
+    defaultBrowser.enabled &&
+    defaultBrowser.network.trim().toLowerCase() === "bridge" &&
+    !defaultBrowser.cdpSourceRange?.trim()
+  ) {
+    browserExposurePaths.push("agents.defaults.sandbox.browser");
+  }
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const browser = resolveSandboxConfigForAgent(cfg, entry.id).browser;
+    if (!browser.enabled) {
+      continue;
+    }
+    if (browser.network.trim().toLowerCase() !== "bridge") {
+      continue;
+    }
+    if (browser.cdpSourceRange?.trim()) {
+      continue;
+    }
+    browserExposurePaths.push(`agents.list.${entry.id}.sandbox.browser`);
+  }
+  if (browserExposurePaths.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_cdp_bridge_unrestricted",
+      severity: "warn",
+      title: "Sandbox browser CDP may be reachable by peer containers",
+      detail:
+        "These sandbox browser configs use Docker bridge networking with no CDP source restriction:\n" +
+        browserExposurePaths.map((entry) => `- ${entry}`).join("\n"),
+      remediation:
+        "Set sandbox.browser.network to a dedicated bridge network (recommended default: openclaw-sandbox-browser), " +
+        "or set sandbox.browser.cdpSourceRange (for example 172.21.0.1/32) to restrict container-edge CDP ingress.",
+    });
+  }
+
   return findings;
 }
 
@@ -727,6 +803,43 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
       "If you need broader restrictions, remove risky commands from allowCommands/default workflows.",
+  });
+
+  return findings;
+}
+
+export function collectNodeDangerousAllowCommandFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const allowRaw = cfg.gateway?.nodes?.allowCommands;
+  if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
+    return findings;
+  }
+
+  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
+  if (allow.size === 0) {
+    return findings;
+  }
+
+  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+  const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
+    (cmd) => allow.has(cmd) && !deny.has(cmd),
+  );
+  if (dangerousAllowed.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "gateway.nodes.allow_commands_dangerous",
+    severity: isGatewayRemotelyExposed(cfg) ? "critical" : "warn",
+    title: "Dangerous node commands explicitly enabled",
+    detail:
+      `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
+      "These commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
+    remediation:
+      "Remove these entries from gateway.nodes.allowCommands (recommended). " +
+      "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
   });
 
   return findings;
@@ -965,6 +1078,68 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
         "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
       remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+    });
+  }
+
+  const contexts: Array<{
+    label: string;
+    agentId?: string;
+    tools?: AgentToolsConfig;
+  }> = [{ label: "agents.defaults" }];
+  for (const agent of cfg.agents?.list ?? []) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    contexts.push({
+      label: `agents.list.${agent.id}`,
+      agentId: agent.id,
+      tools: agent.tools,
+    });
+  }
+
+  const riskyContexts: string[] = [];
+  let hasRuntimeRisk = false;
+  for (const context of contexts) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
+    const policies = resolveToolPolicies({
+      cfg,
+      agentTools: context.tools,
+      sandboxMode,
+      agentId: context.agentId ?? null,
+    });
+    const runtimeTools = ["exec", "process"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
+    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
+    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
+    if (!runtimeUnguarded && !fsUnguarded) {
+      continue;
+    }
+    if (runtimeUnguarded) {
+      hasRuntimeRisk = true;
+    }
+    riskyContexts.push(
+      `${context.label} (sandbox=${sandboxMode}; runtime=[${runtimeTools.join(", ") || "off"}]; fs=[${fsTools.join(", ") || "off"}]; fs.workspaceOnly=${
+        fsWorkspaceOnly === true ? "true" : "false"
+      })`,
+    );
+  }
+
+  if (riskyContexts.length > 0) {
+    findings.push({
+      checkId: "security.exposure.open_groups_with_runtime_or_fs",
+      severity: hasRuntimeRisk ? "critical" : "warn",
+      title: "Open groupPolicy with runtime/filesystem tools exposed",
+      detail:
+        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+        `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
+        "Prompt injection in open groups can trigger command/file actions in these contexts.",
+      remediation:
+        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
     });
   }
 

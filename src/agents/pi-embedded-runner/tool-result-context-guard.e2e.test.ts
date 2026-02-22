@@ -72,25 +72,30 @@ function makeGuardableAgent(
   return { transformContext };
 }
 
+function makeTwoToolResultOverflowContext(): AgentMessage[] {
+  return [
+    makeUser("u".repeat(2_000)),
+    makeToolResult("call_old", "x".repeat(1_000)),
+    makeToolResult("call_new", "y".repeat(1_000)),
+  ];
+}
+
+async function applyGuardToContext(
+  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  contextForNextCall: AgentMessage[],
+) {
+  installToolResultContextGuard({
+    agent,
+    contextWindowTokens: 1_000,
+  });
+  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+}
+
 describe("installToolResultContextGuard", () => {
   it("compacts oldest-first when total context overflows, even if each result fits individually", async () => {
     const agent = makeGuardableAgent();
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
-    const contextForNextCall = [
-      makeUser("u".repeat(2_000)),
-      makeToolResult("call_old", "x".repeat(1_000)),
-      makeToolResult("call_new", "y".repeat(1_000)),
-    ];
-
-    const transformed = await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    );
+    const contextForNextCall = makeTwoToolResultOverflowContext();
+    const transformed = await applyGuardToContext(agent, contextForNextCall);
 
     expect(transformed).toBe(contextForNextCall);
     const oldResultText = getToolResultText(contextForNextCall[1]);
@@ -200,22 +205,8 @@ describe("installToolResultContextGuard", () => {
           }) as unknown as AgentMessage,
       );
     });
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
-    const contextForNextCall = [
-      makeUser("u".repeat(2_000)),
-      makeToolResult("call_old", "x".repeat(1_000)),
-      makeToolResult("call_new", "y".repeat(1_000)),
-    ];
-
-    const transformed = await agent.transformContext?.(
-      contextForNextCall,
-      new AbortController().signal,
-    );
+    const contextForNextCall = makeTwoToolResultOverflowContext();
+    const transformed = await applyGuardToContext(agent, contextForNextCall);
 
     expect(transformed).not.toBe(contextForNextCall);
     const transformedMessages = transformed as AgentMessage[];

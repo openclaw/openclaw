@@ -1,16 +1,4 @@
-import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./types.js";
-
-export function parsePairingList(value: unknown): PairingList {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
-  const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
-  return { pending, paired };
-}
-
-export function parseNodeList(value: unknown): NodeListNode[] {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
-}
+export { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 
 export function formatPermissions(raw: unknown) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {

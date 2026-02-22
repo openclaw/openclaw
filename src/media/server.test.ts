@@ -35,6 +35,16 @@ describe("media server", () => {
   let server: Awaited<ReturnType<typeof startMediaServer>>;
   let port = 0;
 
+  function mediaUrl(id: string) {
+    return `http://127.0.0.1:${port}/media/${id}`;
+  }
+
+  async function writeMediaFile(id: string, contents: string) {
+    const filePath = path.join(MEDIA_DIR, id);
+    await fs.writeFile(filePath, contents);
+    return filePath;
+  }
+
   beforeAll(async () => {
     MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
     server = await startMediaServer(0, 1_000);
@@ -48,55 +58,72 @@ describe("media server", () => {
   });
 
   it("serves media and cleans up after send", async () => {
-    const file = path.join(MEDIA_DIR, "file1");
-    await fs.writeFile(file, "hello");
-    const res = await fetch(`http://127.0.0.1:${port}/media/file1`);
+    const file = await writeMediaFile("file1", "hello");
+    const res = await fetch(mediaUrl("file1"));
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("hello");
     await waitForFileRemoval(file);
   });
 
   it("expires old media", async () => {
-    const file = path.join(MEDIA_DIR, "old");
-    await fs.writeFile(file, "stale");
+    const file = await writeMediaFile("old", "stale");
     const past = Date.now() - 10_000;
     await fs.utimes(file, past / 1000, past / 1000);
-    const res = await fetch(`http://127.0.0.1:${port}/media/old`);
+    const res = await fetch(mediaUrl("old"));
     expect(res.status).toBe(410);
     await expect(fs.stat(file)).rejects.toThrow();
   });
 
-  it("blocks path traversal attempts", async () => {
-    // URL-encoded "../" to bypass client-side path normalization
-    const res = await fetch(`http://127.0.0.1:${port}/media/%2e%2e%2fpackage.json`);
-    expect(res.status).toBe(400);
-    expect(await res.text()).toBe("invalid path");
-  });
-
-  it("blocks symlink escaping outside media dir", async () => {
-    const target = path.join(process.cwd(), "package.json"); // outside MEDIA_DIR
-    const link = path.join(MEDIA_DIR, "link-out");
-    await fs.symlink(target, link);
-
-    const res = await fetch(`http://127.0.0.1:${port}/media/link-out`);
-    expect(res.status).toBe(400);
-    expect(await res.text()).toBe("invalid path");
-  });
-
-  it("rejects invalid media ids", async () => {
-    const file = path.join(MEDIA_DIR, "file2");
-    await fs.writeFile(file, "hello");
-    const res = await fetch(`http://127.0.0.1:${port}/media/invalid%20id`);
+  it.each([
+    {
+      testName: "blocks path traversal attempts",
+      mediaPath: "%2e%2e%2fpackage.json",
+    },
+    {
+      testName: "rejects invalid media ids",
+      mediaPath: "invalid%20id",
+      setup: async () => {
+        await writeMediaFile("file2", "hello");
+      },
+    },
+    {
+      testName: "blocks symlink escaping outside media dir",
+      mediaPath: "link-out",
+      setup: async () => {
+        const target = path.join(process.cwd(), "package.json"); // outside MEDIA_DIR
+        const link = path.join(MEDIA_DIR, "link-out");
+        await fs.symlink(target, link);
+      },
+    },
+  ] as const)("$testName", async (testCase) => {
+    await testCase.setup?.();
+    const res = await fetch(mediaUrl(testCase.mediaPath));
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
   });
 
   it("rejects oversized media files", async () => {
-    const file = path.join(MEDIA_DIR, "big");
-    await fs.writeFile(file, "");
+    const file = await writeMediaFile("big", "");
     await fs.truncate(file, MEDIA_MAX_BYTES + 1);
-    const res = await fetch(`http://127.0.0.1:${port}/media/big`);
+    const res = await fetch(mediaUrl("big"));
     expect(res.status).toBe(413);
     expect(await res.text()).toBe("too large");
+  });
+
+  it("returns not found for missing media IDs", async () => {
+    const res = await fetch(mediaUrl("missing-file"));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("not found");
+  });
+
+  it("returns 404 when route param is missing (dot path)", async () => {
+    const res = await fetch(mediaUrl("."));
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects overlong media id", async () => {
+    const res = await fetch(mediaUrl(`${"a".repeat(201)}.txt`));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
   });
 });

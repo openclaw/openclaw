@@ -59,6 +59,25 @@ function createMockContext(overrides?: {
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
+async function emitPngMediaToolResult(
+  ctx: EmbeddedPiSubscribeContext,
+  opts?: { isError?: boolean },
+) {
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "browser",
+    toolCallId: "tc-1",
+    isError: opts?.isError ?? false,
+    result: {
+      content: [
+        { type: "text", text: "MEDIA:/tmp/screenshot.png" },
+        { type: "image", data: "base64", mimeType: "image/png" },
+      ],
+      details: { path: "/tmp/screenshot.png" },
+    },
+  });
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -77,22 +96,46 @@ describe("handleToolExecutionEnd media emission", () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
 
+    await emitPngMediaToolResult(ctx);
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/screenshot.png"],
+    });
+  });
+
+  it("does NOT emit local media for untrusted tools", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
-      toolName: "browser",
+      toolName: "plugin_tool",
       toolCallId: "tc-1",
       isError: false,
       result: {
-        content: [
-          { type: "text", text: "MEDIA:/tmp/screenshot.png" },
-          { type: "image", data: "base64", mimeType: "image/png" },
-        ],
-        details: { path: "/tmp/screenshot.png" },
+        content: [{ type: "text", text: "MEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("emits remote media for untrusted tools", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "plugin_tool",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:https://example.com/file.png" }],
       },
     });
 
     expect(onToolResult).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/screenshot.png"],
+      mediaUrls: ["https://example.com/file.png"],
     });
   });
 
@@ -100,19 +143,7 @@ describe("handleToolExecutionEnd media emission", () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "browser",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [
-          { type: "text", text: "MEDIA:/tmp/screenshot.png" },
-          { type: "image", data: "base64", mimeType: "image/png" },
-        ],
-        details: { path: "/tmp/screenshot.png" },
-      },
-    });
+    await emitPngMediaToolResult(ctx);
 
     // onToolResult should NOT be called by the new media path (emitToolOutput handles it).
     // It may be called by emitToolOutput, but the new block should not fire.
@@ -133,19 +164,7 @@ describe("handleToolExecutionEnd media emission", () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "browser",
-      toolCallId: "tc-1",
-      isError: true,
-      result: {
-        content: [
-          { type: "text", text: "MEDIA:/tmp/screenshot.png" },
-          { type: "image", data: "base64", mimeType: "image/png" },
-        ],
-        details: { path: "/tmp/screenshot.png" },
-      },
-    });
+    await emitPngMediaToolResult(ctx, { isError: true });
 
     expect(onToolResult).not.toHaveBeenCalled();
   });

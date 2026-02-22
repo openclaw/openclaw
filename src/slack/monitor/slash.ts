@@ -22,6 +22,7 @@ import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./ch
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import { normalizeSlackChannelType } from "./context.js";
+import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 
@@ -53,15 +54,6 @@ function truncatePlainText(value: string, max: number): string {
     return trimmed.slice(0, max);
   }
   return `${trimmed.slice(0, max - 1)}…`;
-}
-
-function escapeSlackMrkdwn(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/([*_`~])/g, "\\$1");
 }
 
 function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
@@ -358,7 +350,10 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
+      const storeAllowFrom =
+        ctx.dmPolicy === "allowlist"
+          ? []
+          : await readChannelAllowFromStore("slack").catch(() => []);
       const effectiveAllowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
       const effectiveAllowFromLower = normalizeAllowListLower(effectiveAllowFrom);
 
@@ -544,9 +539,14 @@ export async function registerSlackMonitorSlashCommands(params: {
           import("../../auto-reply/reply/inbound-context.js"),
           import("../../auto-reply/reply/provider-dispatcher.js"),
         ]);
-      const [{ resolveConversationLabel }, { createReplyPrefixOptions }] = await Promise.all([
+      const [
+        { resolveConversationLabel },
+        { createReplyPrefixOptions },
+        { recordSessionMetaFromInbound, resolveStorePath },
+      ] = await Promise.all([
         import("../../channels/conversation-label.js"),
         import("../../channels/reply-prefix.js"),
+        import("../../config/sessions.js"),
       ]);
 
       const route = resolveAgentRoute({
@@ -609,6 +609,19 @@ export async function registerSlackMonitorSlashCommands(params: {
         OriginatingChannel: "slack" as const,
         OriginatingTo: `user:${command.user_id}`,
       });
+
+      const storePath = resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
+      try {
+        await recordSessionMetaFromInbound({
+          storePath,
+          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+          ctx: ctxPayload,
+        });
+      } catch (err) {
+        runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`));
+      }
 
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
@@ -739,21 +752,19 @@ export async function registerSlackMonitorSlashCommands(params: {
   }
 
   const registerArgOptions = () => {
-    const optionsHandler = (
-      ctx.app as unknown as {
-        options?: (
-          actionId: string,
-          handler: (args: {
-            ack: (payload: { options: unknown[] }) => Promise<void>;
-            body: unknown;
-          }) => Promise<void>,
-        ) => void;
-      }
-    ).options;
-    if (typeof optionsHandler !== "function") {
+    const appWithOptions = ctx.app as unknown as {
+      options?: (
+        actionId: string,
+        handler: (args: {
+          ack: (payload: { options: unknown[] }) => Promise<void>;
+          body: unknown;
+        }) => Promise<void>,
+      ) => void;
+    };
+    if (typeof appWithOptions.options !== "function") {
       return;
     }
-    optionsHandler(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
+    appWithOptions.options(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
       const typedBody = body as {
         value?: string;
         user?: { id?: string };
