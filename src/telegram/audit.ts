@@ -71,6 +71,7 @@ export async function auditTelegramGroupMembership(params: {
   groupIds: string[];
   proxyUrl?: string;
   timeoutMs: number;
+  apiRoot?: string;
 }): Promise<TelegramGroupMembershipAudit> {
   const started = Date.now();
   const token = params.token?.trim() ?? "";
@@ -91,7 +92,7 @@ export async function auditTelegramGroupMembership(params: {
     ? (await import("./proxy.js")).makeProxyFetch(params.proxyUrl)
     : fetch;
   const { fetchWithTimeout } = await import("../utils/fetch-timeout.js");
-  const base = `${TELEGRAM_API_BASE}/bot${token}`;
+  const base = `${params.apiRoot || TELEGRAM_API_BASE}/bot${token}`;
   const groups: TelegramGroupMembershipAuditEntry[] = [];
 
   for (const chatId of params.groupIds) {

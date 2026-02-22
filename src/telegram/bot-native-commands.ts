@@ -106,6 +106,7 @@ export type RegisterTelegramHandlerParams = {
     },
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
+  apiRoot?: string;
 };
 
 type RegisterTelegramNativeCommandsParams = {

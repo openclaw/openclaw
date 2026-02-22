@@ -297,6 +297,9 @@ async function buildActivity(
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
 
+      console.log(
+        `[DEBUG] buildActivity conversationType=${conversationType} isPersonal=${isPersonal} isImage=${isImage} mediaKind=${media.kind} tokenProvider=${!!tokenProvider} sharePointSiteId=${sharePointSiteId}`,
+      );
       if (
         requiresFileConsent({
           conversationType,
@@ -348,6 +351,7 @@ async function buildActivity(
       }
 
       if (!isPersonal && media.kind !== "image" && tokenProvider) {
+        console.log(`[DEBUG] buildActivity calling uploadAndShareOneDrive`);
         // Fallback: no SharePoint site configured, try OneDrive upload
         const uploaded = await uploadAndShareOneDrive({
           buffer: media.buffer,

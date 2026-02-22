@@ -33,6 +33,7 @@ export type ResolvedTelegramAccount = {
   name?: string;
   token: string;
   tokenSource: "env" | "tokenFile" | "config" | "none";
+  apiRoot: string;
   config: TelegramAccountConfig;
 };
 
@@ -132,6 +133,7 @@ export function resolveTelegramAccount(params: {
       name: merged.name?.trim() || undefined,
       token: tokenResolution.token,
       tokenSource: tokenResolution.source,
+      apiRoot: merged.apiRoot?.trim() || "https://api.telegram.org",
       config: merged,
     } satisfies ResolvedTelegramAccount;
   };
