@@ -10,7 +10,7 @@ const SKIP_PATTERNS = [
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
   /[\\/](?:__tests__|tests)[\\/]/,
-  /[\\/]test-helpers(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
 ];
 
 function shouldSkip(relativePath: string): boolean {
@@ -40,6 +40,12 @@ async function listTsFiles(dir: string): Promise<string[]> {
 }
 
 describe("temp path guard", () => {
+  it("skips test helper filename variants", () => {
+    expect(shouldSkip("src/commands/test-helpers.ts")).toBe(true);
+    expect(shouldSkip("src/commands/sessions.test-helpers.ts")).toBe(true);
+    expect(shouldSkip("src\\commands\\sessions.test-helpers.ts")).toBe(true);
+  });
+
   it("blocks dynamic template path.join(os.tmpdir(), ...) in runtime source files", async () => {
     const repoRoot = process.cwd();
     const offenders: string[] = [];
