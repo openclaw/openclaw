@@ -8,11 +8,13 @@ export function installBrowserCommonMiddleware(app: Express) {
     const ctrl = new AbortController();
     const abort = () => ctrl.abort(new Error("request aborted"));
     req.once("aborted", abort);
-    res.once("close", () => {
-      if (!res.writableEnded) {
-        abort();
-      }
-    });
+    // REMOVED: res.close fires prematurely on Linux during long-running Playwright
+    // operations (click/type/fill), causing timeouts. Only rely on explicit aborts.
+    // res.once("close", () => {
+    //   if (!res.writableEnded) {
+    //     abort();
+    //   }
+    // });
     // Make the signal available to browser route handlers (best-effort).
     (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
     next();
