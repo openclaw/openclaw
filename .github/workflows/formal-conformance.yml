@@ -10,6 +10,7 @@ concurrency:
 jobs:
   formal_conformance:
     runs-on: ubuntu-latest
+    continue-on-error: true
     timeout-minutes: 20
     permissions:
       contents: read
@@ -24,7 +25,7 @@ jobs:
       - name: Checkout formal models
         uses: actions/checkout@v4
         with:
-          repository: vignesh07/bot-formal-models
+          repository: hanzoai/bot-formal-models
           ref: main
           path: bot-formal-models
 

@@ -1,6 +1,7 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { createDefaultDeps } from "../../cli/deps.js";
 import type { HealthSummary } from "../../commands/health.js";
+import type { GatewayIamConfig } from "../../config/config.js";
 import type { CronService } from "../../cron/service.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -11,12 +12,15 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { TenantContext } from "../tenant-context.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
+  /** Resolved tenant context (multi-tenant IAM mode). */
+  tenant?: TenantContext;
 };
 
 export type RespondFn = (
@@ -27,6 +31,8 @@ export type RespondFn = (
 ) => void;
 
 export type GatewayRequestContext = {
+  /** IAM config for billing enforcement (null/undefined when not in IAM mode). */
+  iamConfig?: GatewayIamConfig | null;
   deps: ReturnType<typeof createDefaultDeps>;
   cron: CronService;
   cronStorePath: string;

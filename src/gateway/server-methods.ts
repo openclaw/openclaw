@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
+import { checkBillingAllowance } from "./billing/billing-gate.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
@@ -51,6 +52,7 @@ const PAIRING_METHODS = new Set([
   "device.token.revoke",
   "node.rename",
 ]);
+const BILLABLE_METHODS = new Set(["agent", "agent.wait", "chat.send"]);
 const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
 const READ_METHODS = new Set([
   "health",
@@ -205,6 +207,19 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+
+  // Billing gate: block LLM-triggering methods when tenant has no credits
+  if (BILLABLE_METHODS.has(req.method) && context.iamConfig) {
+    const billing = await checkBillingAllowance({
+      iamConfig: context.iamConfig,
+      tenant: client?.tenant ?? null,
+    });
+    if (!billing.allowed) {
+      respond(false, undefined, errorShape(ErrorCodes.BILLING_ERROR, billing.reason));
+      return;
+    }
+  }
+
   const handler = opts.extraHandlers?.[req.method] ?? coreGatewayHandlers[req.method];
   if (!handler) {
     respond(

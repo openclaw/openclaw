@@ -550,6 +550,7 @@ export async function startGatewayServer(
     },
     broadcast,
     context: {
+      iamConfig: resolvedAuth.iam,
       deps,
       cron,
       cronStorePath,
