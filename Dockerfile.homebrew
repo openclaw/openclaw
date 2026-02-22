@@ -1,0 +1,86 @@
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git sudo \
+    build-essential procps file \
+    pkg-config locales \
+    libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+    libffi-dev liblzma-dev \
+    xz-utils unzip \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# Create non-root user with passwordless sudo (required for Homebrew installation and some formulas)
+# Using 'node' as username maintains consistency with node:22-bookworm base image
+ARG USER=node
+ARG UID=1000
+RUN useradd -m -u ${UID} -s /bin/bash ${USER} \
+ && echo "${USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USER} \
+ && chmod 0440 /etc/sudoers.d/${USER}
+
+USER ${USER}
+WORKDIR /home/${USER}
+
+# Install Homebrew (Linuxbrew)
+# Note: Installation script places brew in /home/linuxbrew/.linuxbrew
+# Pin to specific commit for supply-chain security (update periodically)
+ARG HOMEBREW_INSTALL_SHA=90fa3d5881cedc0d60c4a3cc5babdb867ef42e5a
+RUN curl -fsSL "https://raw.githubusercontent.com/Homebrew/install/${HOMEBREW_INSTALL_SHA}/install.sh" -o /tmp/brew-install.sh \
+ && echo "1c9db64f27d7487ecf74fe3543b96beb1f78039cc92745c3e825a9a7ccefec80  /tmp/brew-install.sh" | sha256sum -c - \
+ && /bin/bash /tmp/brew-install.sh \
+ && rm /tmp/brew-install.sh
+
+# Add brew to PATH for non-interactive shells
+ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH
+
+# (Optional) Disable brew analytics to reduce noise
+RUN brew analytics off
+
+# Install Node.js via brew, pin major version, and link
+RUN brew install node@24 \
+ && brew link --force --overwrite node@24 \
+ && brew cleanup -s \
+ && node -v && npm -v
+
+# Install corepack and enable pnpm
+RUN npm install -g corepack \
+ && corepack enable
+
+# Remove sudo privileges (no longer needed)
+USER root
+RUN rm -f /etc/sudoers.d/${USER}
+
+WORKDIR /app
+
+COPY --chown=${USER}:${USER} package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=${USER}:${USER} ui/package.json ./ui/package.json
+COPY --chown=${USER}:${USER} patches ./patches
+COPY --chown=${USER}:${USER} scripts ./scripts
+
+# Build stage runs as root; PATH must be set for pnpm availability
+ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH
+RUN pnpm install --frozen-lockfile  && pnpm store prune
+
+COPY --chown=${USER}:${USER} . .
+RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
+ENV OPENCLAW_PREFER_PNPM=1
+RUN pnpm ui:build
+
+ENV NODE_ENV=production
+
+# Security hardening: Run as non-root user
+USER ${USER}
+
+# Start gateway server with default config.
+# Binds to loopback (127.0.0.1) by default for security.
+#
+# For container platforms requiring external health checks:
+#   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
+#   2. Override CMD: ["node","dist/index.js","gateway","--allow-unconfigured","--bind","lan"]
+CMD ["node", "dist/index.js", "gateway", "--allow-unconfigured"]
