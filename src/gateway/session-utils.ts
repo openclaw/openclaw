@@ -668,15 +668,20 @@ export function resolveSessionModelRef(
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
-    const parsedRuntime = parseModelRef(
-      runtimeModel,
-      runtimeProvider || provider || DEFAULT_PROVIDER,
-    );
+    if (runtimeProvider) {
+      // Provider is explicitly recorded — use it directly. Re-parsing the
+      // model string through parseModelRef would incorrectly split OpenRouter
+      // vendor-prefixed model names (e.g. model="anthropic/claude-haiku-4.5"
+      // with provider="openrouter") into { provider: "anthropic" }, discarding
+      // the stored OpenRouter provider and causing direct API calls to a
+      // provider the user has no credentials for.
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    const parsedRuntime = parseModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
     if (parsedRuntime) {
       provider = parsedRuntime.provider;
       model = parsedRuntime.model;
     } else {
-      provider = runtimeProvider || provider;
       model = runtimeModel;
     }
     return { provider, model };
