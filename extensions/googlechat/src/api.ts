@@ -1,3 +1,4 @@
+import path from "node:path";
 import crypto from "node:crypto";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { getGoogleChatAccessToken } from "./auth.js";
@@ -166,11 +167,16 @@ export async function uploadGoogleChatAttachment(params: {
   buffer: Buffer;
   contentType?: string;
 }): Promise<{ attachmentUploadToken?: string }> {
-  const { account, space, filename, buffer, contentType } = params;
+  const { account, space, filename, buffer } = params;
   const boundary = `openclaw-${crypto.randomUUID()}`;
   const metadata = JSON.stringify({ filename });
+  const contentType =
+    params.contentType ??
+    lookupMimeFromExtension(filename) ??
+    "application/octet-stream";
+
   const header = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`;
-  const mediaHeader = `--${boundary}\r\nContent-Type: ${contentType ?? "application/octet-stream"}\r\n\r\n`;
+  const mediaHeader = `--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`;
   const footer = `\r\n--${boundary}--\r\n`;
   const body = Buffer.concat([
     Buffer.from(header, "utf8"),
@@ -278,5 +284,26 @@ export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promi
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+function lookupMimeFromExtension(filename: string): string | undefined {
+  const ext = path.extname(filename).toLowerCase();
+  switch (ext) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".mp4":
+      return "video/mp4";
+    case ".pdf":
+      return "application/pdf";
+    default:
+      return undefined;
   }
 }
