@@ -30,7 +30,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const firstPayload = onPartialReply.mock.calls[0][0];
     expect(firstPayload.text).toBe("Hi there");
 
-    onPartialReply.mockReset();
+    onPartialReply.mockClear();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "</final>Oops no start" });

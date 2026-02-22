@@ -77,7 +77,7 @@ describe("doctor state integrity oauth dir checks", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
     delete process.env.OPENCLAW_OAUTH_DIR;
     fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
-    vi.mocked(note).mockReset();
+    vi.mocked(note).mockClear();
   });
 
   afterEach(() => {
