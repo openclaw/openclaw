@@ -16,7 +16,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   resetTelegramFetchStateForTests();
-  setDefaultAutoSelectFamily.mockReset();
+  setDefaultAutoSelectFamily.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
