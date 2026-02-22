@@ -1,3 +1,4 @@
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -43,14 +44,25 @@ const PROVIDER_API_KEY_CONFIG: Record<string, Omit<ProviderApiKeyConfig, "fallba
   },
 };
 
+function normalizeApiKeyValue(value?: string | null): string | null {
+  const normalized = normalizeSecretInput(value);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "undefined" || normalized === "null") {
+    return null;
+  }
+  return normalized;
+}
+
 function parseKeyList(raw?: string | null): string[] {
   if (!raw) {
     return [];
   }
   return raw
     .split(KEY_SPLIT_RE)
-    .map((value) => value.trim())
-    .filter(Boolean);
+    .map((value) => normalizeApiKeyValue(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 function collectEnvPrefixedKeys(prefix: string): string[] {
@@ -59,11 +71,11 @@ function collectEnvPrefixedKeys(prefix: string): string[] {
     if (!name.startsWith(prefix)) {
       continue;
     }
-    const trimmed = value?.trim();
-    if (!trimmed) {
+    const normalized = normalizeApiKeyValue(value);
+    if (!normalized) {
       continue;
     }
-    keys.push(trimmed);
+    keys.push(normalized);
   }
   return keys;
 }
@@ -100,18 +112,22 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
 export function collectProviderApiKeys(provider: string): string[] {
   const config = resolveProviderApiKeyConfig(provider);
 
-  const forcedSingle = config.liveSingle ? process.env[config.liveSingle]?.trim() : undefined;
+  const forcedSingle = config.liveSingle
+    ? normalizeApiKeyValue(process.env[config.liveSingle])
+    : null;
   if (forcedSingle) {
     return [forcedSingle];
   }
 
   const fromList = parseKeyList(config.listVar ? process.env[config.listVar] : undefined);
-  const primary = config.primaryVar ? process.env[config.primaryVar]?.trim() : undefined;
+  const primary = config.primaryVar
+    ? normalizeApiKeyValue(process.env[config.primaryVar])
+    : null;
   const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar) : [];
 
   const fallback = config.fallbackVars
-    .map((envVar) => process.env[envVar]?.trim())
-    .filter(Boolean) as string[];
+    .map((envVar) => normalizeApiKeyValue(process.env[envVar]))
+    .filter((value): value is string => Boolean(value));
 
   const seen = new Set<string>();
 

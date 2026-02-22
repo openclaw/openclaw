@@ -23,6 +23,7 @@ import {
   shortenHomePath,
   sleep,
 } from "../utils.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
@@ -71,16 +72,16 @@ export function randomToken(): string {
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {
-  if (typeof value !== "string") {
+  const normalized = normalizeSecretInput(value);
+  if (!normalized) {
     return "";
   }
-  const trimmed = value.trim();
   // Reject the literal string "undefined" — a common bug when JS undefined
   // gets coerced to a string via template literals or String(undefined).
-  if (trimmed === "undefined" || trimmed === "null") {
+  if (normalized === "undefined" || normalized === "null") {
     return "";
   }
-  return trimmed;
+  return normalized;
 }
 
 export function validateGatewayPasswordInput(value: unknown): string | undefined {

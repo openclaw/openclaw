@@ -12,20 +12,14 @@ import {
   promptModelAllowlist,
 } from "./model-picker.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./onboard-helpers.js";
+import { normalizeGatewayTokenInput, randomToken } from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 
 /** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
 function sanitizeTokenValue(value: string | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
-    return undefined;
-  }
-  return trimmed;
+  const normalized = normalizeGatewayTokenInput(value);
+  return normalized ? normalized : undefined;
 }
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [

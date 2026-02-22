@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
+import { parseTimeoutMs } from "./parse-timeout.js";
 import { shouldSkipRespawnForArgv } from "./respawn-policy.js";
 import { waitForever } from "./wait.js";
 
@@ -104,5 +105,26 @@ describe("parseDurationMs", () => {
     for (const [name, input, expected] of cases) {
       expect(parseDurationMs(input), name).toBe(expected);
     }
+  });
+});
+
+describe("parseTimeoutMs", () => {
+  it("parses numeric timeouts", () => {
+    expect(parseTimeoutMs("15000")).toBe(15_000);
+  });
+
+  it("parses duration suffixes", () => {
+    const cases = [
+      ["1.5s", 1_500],
+      ["2m", 120_000],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(parseTimeoutMs(input)).toBe(expected);
+    }
+  });
+
+  it("returns undefined for empty or invalid values", () => {
+    expect(parseTimeoutMs(" ")).toBeUndefined();
+    expect(parseTimeoutMs("nope")).toBeUndefined();
   });
 });

@@ -124,6 +124,10 @@ describe("normalizeGatewayTokenInput", () => {
     expect(normalizeGatewayTokenInput("  token  ")).toBe("token");
   });
 
+  it("removes line breaks from tokens", () => {
+    expect(normalizeGatewayTokenInput("tok\nen\r\nvalue")).toBe("tokenvalue");
+  });
+
   it("returns empty string for non-string input", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
   });

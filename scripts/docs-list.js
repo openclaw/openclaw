@@ -20,7 +20,15 @@ if (!statSync(DOCS_DIR).isDirectory()) {
   process.exit(1);
 }
 
+const args = new Set(process.argv.slice(2));
+const includeTranslations = args.has("--include-translations");
+const showHelp = args.has("--help") || args.has("-h");
+const localeDirPattern = /^[a-z]{2}-[A-Z]{2}$/;
 const EXCLUDED_DIRS = new Set(["archive", "research"]);
+
+function printHelp() {
+  console.log(`Usage: pnpm docs:list [--include-translations]\n\nOptions:\n  --include-translations  Include docs/<locale>/ directories\n  -h, --help              Show this help message`);
+}
 
 /**
  * @param {unknown[]} values
@@ -47,11 +55,28 @@ function compactStrings(values) {
 }
 
 /**
+ * @param {string} entryName
+ * @param {string} currentDir
+ * @param {string} rootDir
+ * @param {boolean} includeTranslations
+ * @returns {boolean}
+ */
+function shouldSkipDir(entryName, currentDir, rootDir, includeTranslations) {
+  if (EXCLUDED_DIRS.has(entryName)) {
+    return true;
+  }
+  if (!includeTranslations && currentDir === rootDir && localeDirPattern.test(entryName)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * @param {string} dir
- * @param {string} base
+ * @param {{ baseDir: string; rootDir: string; includeTranslations: boolean }} params
  * @returns {string[]}
  */
-function walkMarkdownFiles(dir, base = dir) {
+function walkMarkdownFiles(dir, params) {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
@@ -60,12 +85,12 @@ function walkMarkdownFiles(dir, base = dir) {
     }
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.has(entry.name)) {
+      if (shouldSkipDir(entry.name, dir, params.rootDir, params.includeTranslations)) {
         continue;
       }
-      files.push(...walkMarkdownFiles(fullPath, base));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(relative(base, fullPath));
+      files.push(...walkMarkdownFiles(fullPath, params));
+    } else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".mdx"))) {
+      files.push(relative(params.baseDir, fullPath));
     }
   }
   return files.toSorted((a, b) => a.localeCompare(b));
@@ -150,9 +175,29 @@ function extractMetadata(fullPath) {
   return { summary: normalized, readWhen };
 }
 
-console.log("Listing all markdown files in docs folder:");
+if (showHelp) {
+  printHelp();
+  process.exit(0);
+}
 
-const markdownFiles = walkMarkdownFiles(DOCS_DIR);
+const localeDirs = readdirSync(DOCS_DIR, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && localeDirPattern.test(entry.name))
+  .map((entry) => entry.name)
+  .toSorted((a, b) => a.localeCompare(b));
+
+console.log("Listing all markdown files in docs folder:");
+if (!includeTranslations && localeDirs.length > 0) {
+  console.log(
+    `Note: skipping translation folders (${localeDirs.join(", ")}). ` +
+      "Use --include-translations to include them.",
+  );
+}
+
+const markdownFiles = walkMarkdownFiles(DOCS_DIR, {
+  baseDir: DOCS_DIR,
+  rootDir: DOCS_DIR,
+  includeTranslations,
+});
 
 for (const relativePath of markdownFiles) {
   const fullPath = join(DOCS_DIR, relativePath);
