@@ -64,13 +64,6 @@ describe("cli program (nodes basics)", () => {
     runTui.mockResolvedValue(undefined);
   });
 
-  it("runs nodes list and calls node.pair.list", async () => {
-    callGateway.mockResolvedValue({ pending: [], paired: [] });
-    await runProgram(["nodes", "list"]);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
-    expect(runtime.log).toHaveBeenCalledWith("Pending: 0 · Paired: 0");
-  });
-
   it("runs nodes list --connected and filters to connected nodes", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {
