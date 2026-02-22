@@ -150,6 +150,29 @@ function readLastAgentCommandCall():
     | undefined;
 }
 
+function mockSessionResetSuccess(params: {
+  reason: "new" | "reset";
+  key?: string;
+  sessionId?: string;
+}) {
+  const key = params.key ?? "agent:main:main";
+  const sessionId = params.sessionId ?? "reset-session-id";
+  mocks.sessionsResetHandler.mockImplementation(
+    async (opts: {
+      params: { key: string; reason: string };
+      respond: (ok: boolean, payload?: unknown) => void;
+    }) => {
+      expect(opts.params.key).toBe(key);
+      expect(opts.params.reason).toBe(params.reason);
+      opts.respond(true, {
+        ok: true,
+        key,
+        entry: { sessionId },
+      });
+    },
+  );
+}
+
 async function invokeAgent(
   params: AgentParams,
   options?: {
@@ -321,20 +344,7 @@ describe("gateway agent handler", () => {
   });
 
   it("handles bare /new by resetting the same session and sending reset greeting prompt", async () => {
-    mocks.sessionsResetHandler.mockImplementation(
-      async (opts: {
-        params: { key: string; reason: string };
-        respond: (ok: boolean, payload?: unknown) => void;
-      }) => {
-        expect(opts.params.key).toBe("agent:main:main");
-        expect(opts.params.reason).toBe("new");
-        opts.respond(true, {
-          ok: true,
-          key: "agent:main:main",
-          entry: { sessionId: "reset-session-id" },
-        });
-      },
-    );
+    mockSessionResetSuccess({ reason: "new" });
 
     primeMainAgentRun({ sessionId: "reset-session-id" });
 
@@ -366,20 +376,7 @@ describe("gateway agent handler", () => {
         },
       },
     };
-    mocks.sessionsResetHandler.mockImplementation(
-      async (opts: {
-        params: { key: string; reason: string };
-        respond: (ok: boolean, payload?: unknown) => void;
-      }) => {
-        expect(opts.params.key).toBe("agent:main:main");
-        expect(opts.params.reason).toBe("reset");
-        opts.respond(true, {
-          ok: true,
-          key: "agent:main:main",
-          entry: { sessionId: "reset-session-id" },
-        });
-      },
-    );
+    mockSessionResetSuccess({ reason: "reset" });
     mocks.sessionsResetHandler.mockClear();
     primeMainAgentRun({
       sessionId: "reset-session-id",

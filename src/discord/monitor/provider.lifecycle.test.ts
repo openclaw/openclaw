@@ -70,6 +70,20 @@ describe("runDiscordGatewayLifecycle", () => {
     };
   };
 
+  function expectLifecycleCleanup(params: {
+    start: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+    threadStop: ReturnType<typeof vi.fn>;
+    waitCalls: number;
+  }) {
+    expect(params.start).toHaveBeenCalledTimes(1);
+    expect(params.stop).toHaveBeenCalledTimes(1);
+    expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(params.waitCalls);
+    expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
+    expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
+    expect(params.threadStop).toHaveBeenCalledTimes(1);
+  }
+
   it("cleans up thread bindings when exec approvals startup fails", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop } = createLifecycleHarness({
@@ -80,12 +94,7 @@ describe("runDiscordGatewayLifecycle", () => {
 
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow("startup failed");
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(waitForDiscordGatewayStopMock).not.toHaveBeenCalled();
-    expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
-    expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
-    expect(threadStop).toHaveBeenCalledTimes(1);
+    expectLifecycleCleanup({ start, stop, threadStop, waitCalls: 0 });
   });
 
   it("cleans up when gateway wait fails after startup", async () => {
@@ -97,12 +106,7 @@ describe("runDiscordGatewayLifecycle", () => {
       "gateway wait failed",
     );
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(1);
-    expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
-    expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
-    expect(threadStop).toHaveBeenCalledTimes(1);
+    expectLifecycleCleanup({ start, stop, threadStop, waitCalls: 1 });
   });
 
   it("cleans up after successful gateway wait", async () => {
@@ -111,11 +115,6 @@ describe("runDiscordGatewayLifecycle", () => {
 
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(1);
-    expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
-    expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
-    expect(threadStop).toHaveBeenCalledTimes(1);
+    expectLifecycleCleanup({ start, stop, threadStop, waitCalls: 1 });
   });
 });

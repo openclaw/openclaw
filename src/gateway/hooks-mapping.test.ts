@@ -43,6 +43,40 @@ describe("hooks mapping", () => {
     });
   }
 
+  function expectAgentMessage(
+    result: Awaited<ReturnType<typeof applyHookMappings>> | undefined,
+    expectedMessage: string,
+  ) {
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.kind).toBe("agent");
+      expect(result.action.message).toBe(expectedMessage);
+    }
+  }
+
+  async function expectBlockedPrototypeTraversal(params: {
+    id: string;
+    messageTemplate: string;
+    payload: Record<string, unknown>;
+    expectedMessage: string;
+  }) {
+    const mappings = resolveHookMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: params.id,
+          messageTemplate: params.messageTemplate,
+        }),
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: params.payload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expectAgentMessage(result, params.expectedMessage);
+  }
+
   async function applyNullTransformFromTempConfig(params: {
     configDir: string;
     transformsDir?: string;
@@ -91,11 +125,7 @@ describe("hooks mapping", () => {
         }),
       ],
     });
-    expect(result?.ok).toBe(true);
-    if (result?.ok && result.action?.kind === "agent") {
-      expect(result.action.kind).toBe("agent");
-      expect(result.action.message).toBe("Subject: Hello");
-    }
+    expectAgentMessage(result, "Subject: Hello");
   });
 
   it("passes model override from mapping", async () => {
@@ -342,11 +372,7 @@ describe("hooks mapping", () => {
         }),
       ],
     });
-    expect(result?.ok).toBe(true);
-    if (result?.ok && result.action?.kind === "agent") {
-      expect(result.action.kind).toBe("agent");
-      expect(result.action.message).toBe("Override subject: Hello");
-    }
+    expectAgentMessage(result, "Override subject: Hello");
   });
 
   it("passes agentId from mapping", async () => {
@@ -461,75 +487,30 @@ describe("hooks mapping", () => {
 
   describe("prototype pollution protection", () => {
     it("blocks __proto__ traversal in webhook payload", async () => {
-      const mappings = resolveHookMappings({
-        mappings: [
-          createGmailAgentMapping({
-            id: "proto-test",
-            messageTemplate: "value: {{__proto__}}",
-          }),
-        ],
-      });
-      const result = await applyHookMappings(mappings, {
+      await expectBlockedPrototypeTraversal({
+        id: "proto-test",
+        messageTemplate: "value: {{__proto__}}",
         payload: { __proto__: { polluted: true } } as Record<string, unknown>,
-        headers: {},
-        url: baseUrl,
-        path: "gmail",
+        expectedMessage: "value: ",
       });
-      expect(result?.ok).toBe(true);
-      if (result?.ok) {
-        const action = result.action;
-        if (action?.kind === "agent") {
-          expect(action.message).toBe("value: ");
-        }
-      }
     });
 
     it("blocks constructor traversal in webhook payload", async () => {
-      const mappings = resolveHookMappings({
-        mappings: [
-          createGmailAgentMapping({
-            id: "constructor-test",
-            messageTemplate: "type: {{constructor.name}}",
-          }),
-        ],
-      });
-      const result = await applyHookMappings(mappings, {
+      await expectBlockedPrototypeTraversal({
+        id: "constructor-test",
+        messageTemplate: "type: {{constructor.name}}",
         payload: { constructor: { name: "INJECTED" } } as Record<string, unknown>,
-        headers: {},
-        url: baseUrl,
-        path: "gmail",
+        expectedMessage: "type: ",
       });
-      expect(result?.ok).toBe(true);
-      if (result?.ok) {
-        const action = result.action;
-        if (action?.kind === "agent") {
-          expect(action.message).toBe("type: ");
-        }
-      }
     });
 
     it("blocks prototype traversal in webhook payload", async () => {
-      const mappings = resolveHookMappings({
-        mappings: [
-          createGmailAgentMapping({
-            id: "prototype-test",
-            messageTemplate: "val: {{prototype}}",
-          }),
-        ],
-      });
-      const result = await applyHookMappings(mappings, {
+      await expectBlockedPrototypeTraversal({
+        id: "prototype-test",
+        messageTemplate: "val: {{prototype}}",
         payload: { prototype: "leaked" } as Record<string, unknown>,
-        headers: {},
-        url: baseUrl,
-        path: "gmail",
+        expectedMessage: "val: ",
       });
-      expect(result?.ok).toBe(true);
-      if (result?.ok) {
-        const action = result.action;
-        if (action?.kind === "agent") {
-          expect(action.message).toBe("val: ");
-        }
-      }
     });
   });
 });

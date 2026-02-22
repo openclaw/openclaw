@@ -10,17 +10,21 @@ const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn(async () => {}),
   removeReactionDiscord: vi.fn(async () => {}),
 }));
-const deliveryMocks = vi.hoisted(() => ({
-  editMessageDiscord: vi.fn(async () => ({})),
-  deliverDiscordReply: vi.fn(async () => {}),
-  createDiscordDraftStream: vi.fn(() => ({
+function createMockDraftStream() {
+  return {
     update: vi.fn<(text: string) => void>(() => {}),
     flush: vi.fn(async () => {}),
     messageId: vi.fn(() => "preview-1"),
     clear: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {}),
-  })),
+  };
+}
+
+const deliveryMocks = vi.hoisted(() => ({
+  editMessageDiscord: vi.fn(async () => ({})),
+  deliverDiscordReply: vi.fn(async () => {}),
+  createDiscordDraftStream: vi.fn(() => createMockDraftStream()),
 }));
 const editMessageDiscord = deliveryMocks.editMessageDiscord;
 const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
@@ -373,17 +377,6 @@ describe("processDiscordMessage draft streaming", () => {
     await processDiscordMessage(ctx as any);
   }
 
-  function createMockDraftStream() {
-    return {
-      update: vi.fn<(text: string) => void>(() => {}),
-      flush: vi.fn(async () => {}),
-      messageId: vi.fn(() => "preview-1"),
-      clear: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      forceNewMessage: vi.fn(() => {}),
-    };
-  }
-
   async function createBlockModeContext() {
     return await createBaseContext({
       cfg: {
@@ -424,17 +417,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("falls back to standard send when final needs multiple chunks", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 1 },
-    });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 1 });
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);

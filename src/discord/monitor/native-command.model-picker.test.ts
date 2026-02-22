@@ -12,27 +12,12 @@ import * as globalsModule from "../../globals.js";
 import * as timeoutModule from "../../utils/with-timeout.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
+import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
 } from "./native-command.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
-
-function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
-  const byProvider = new Map<string, Set<string>>();
-  for (const [provider, models] of Object.entries(entries)) {
-    byProvider.set(provider, new Set(models));
-  }
-  const providers = Object.keys(entries).toSorted();
-  return {
-    byProvider,
-    providers,
-    resolvedDefault: {
-      provider: providers[0] ?? "openai",
-      model: entries[providers[0] ?? "openai"]?.[0] ?? "gpt-4o",
-    },
-  };
-}
 
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
@@ -54,6 +39,10 @@ type MockInteraction = {
   acknowledge: ReturnType<typeof vi.fn>;
   client: object;
 };
+
+function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
+  return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
+}
 
 function createModelPickerContext(): ModelPickerContext {
   const cfg = {
@@ -152,6 +141,36 @@ function createModelsViewSubmitData(): PickerButtonData {
   };
 }
 
+async function runSubmitButton(params: {
+  context: ModelPickerContext;
+  data: PickerButtonData;
+  userId?: string;
+}) {
+  const button = createDiscordModelPickerFallbackButton(params.context);
+  const submitInteraction = createInteraction({ userId: params.userId ?? "owner" });
+  await button.run(submitInteraction as unknown as PickerButtonInteraction, params.data);
+  return submitInteraction;
+}
+
+function expectDispatchedModelSelection(params: {
+  dispatchSpy: { mock: { calls: Array<[unknown]> } };
+  model: string;
+  requireTargetSessionKey?: boolean;
+}) {
+  const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0] as {
+    ctx?: {
+      CommandBody?: string;
+      CommandArgs?: { values?: { model?: string } };
+      CommandTargetSessionKey?: string;
+    };
+  };
+  expect(dispatchCall.ctx?.CommandBody).toBe(`/model ${params.model}`);
+  expect(dispatchCall.ctx?.CommandArgs?.values?.model).toBe(params.model);
+  if (params.requireTargetSessionKey) {
+    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBeDefined();
+  }
+}
+
 function createBoundThreadBindingManager(params: {
   accountId: string;
   threadId: string;
@@ -244,25 +263,18 @@ describe("Discord model picker interactions", () => {
     expect(selectInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).not.toHaveBeenCalled();
 
-    const button = createDiscordModelPickerFallbackButton(context);
-    const submitInteraction = createInteraction({ userId: "owner" });
-    const submitData = createModelsViewSubmitData();
-
-    await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
+    const submitInteraction = await runSubmitButton({
+      context,
+      data: createModelsViewSubmitData(),
+    });
 
     expect(submitInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: {
-        CommandBody?: string;
-        CommandArgs?: { values?: { model?: string } };
-        CommandTargetSessionKey?: string;
-      };
-    };
-    expect(dispatchCall.ctx?.CommandBody).toBe("/model openai/gpt-4o");
-    expect(dispatchCall.ctx?.CommandArgs?.values?.model).toBe("openai/gpt-4o");
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBeDefined();
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+      requireTargetSessionKey: true,
+    });
   });
 
   it("shows timeout status and skips recents write when apply is still processing", async () => {
@@ -359,31 +371,22 @@ describe("Discord model picker interactions", () => {
       .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
       .mockResolvedValue({} as never);
 
-    const button = createDiscordModelPickerFallbackButton(context);
-    const submitInteraction = createInteraction({ userId: "owner" });
-    // rs=2 → first deduped recent (default is anthropic/claude-sonnet-4-5, so openai/gpt-4o remains)
-    const submitData: PickerButtonData = {
-      cmd: "model",
-      act: "submit",
-      view: "recents",
-      u: "owner",
-      pg: "1",
-      rs: "2",
-    };
-
-    await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
+    // rs=2 -> first deduped recent (default is anthropic/claude-sonnet-4-5, so openai/gpt-4o remains)
+    const submitInteraction = await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "submit",
+        view: "recents",
+        u: "owner",
+        pg: "1",
+        rs: "2",
+      },
+    });
 
     expect(submitInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: {
-        CommandBody?: string;
-        CommandArgs?: { values?: { model?: string } };
-      };
-    };
-    expect(dispatchCall.ctx?.CommandBody).toBe("/model openai/gpt-4o");
-    expect(dispatchCall.ctx?.CommandArgs?.values?.model).toBe("openai/gpt-4o");
+    expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o" });
   });
 
   it("verifies model state against the bound thread session", async () => {
