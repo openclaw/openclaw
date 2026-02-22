@@ -6,8 +6,11 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
 
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  const provider = model.provider ?? "";
+  const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+  const isMoonshot = provider === "moonshot" || baseUrl.includes("api.moonshot");
+
+  if (!(isZai || isMoonshot) || !isOpenAiCompletionsModel(model)) {
     return model;
   }
 
