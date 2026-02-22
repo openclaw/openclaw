@@ -1397,42 +1397,39 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("If they are unrelated, respond normally using only the result above.");
   });
 
-  it("defers announce while the finished run still has active descendants", async () => {
+  it("defers announce while finished runs still have active descendants", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
-      sessionKey === "agent:main:subagent:parent" ? 1 : 0,
-    );
+    const cases = [
+      {
+        childRunId: "run-parent",
+        expectsCompletionMessage: false,
+      },
+      {
+        childRunId: "run-parent-completion",
+        expectsCompletionMessage: true,
+      },
+    ] as const;
 
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:parent",
-      childRunId: "run-parent",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      ...defaultOutcomeAnnounce,
-    });
+    for (const testCase of cases) {
+      agentSpy.mockClear();
+      sendSpy.mockClear();
+      subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+        sessionKey === "agent:main:subagent:parent" ? 1 : 0,
+      );
 
-    expect(didAnnounce).toBe(false);
-    expect(agentSpy).not.toHaveBeenCalled();
-  });
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:parent",
+        childRunId: testCase.childRunId,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...(testCase.expectsCompletionMessage ? { expectsCompletionMessage: true } : {}),
+        ...defaultOutcomeAnnounce,
+      });
 
-  it("defers completion-mode announce while the finished run still has active descendants", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
-      sessionKey === "agent:main:subagent:parent" ? 1 : 0,
-    );
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:parent",
-      childRunId: "run-parent-completion",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      expectsCompletionMessage: true,
-      ...defaultOutcomeAnnounce,
-    });
-
-    expect(didAnnounce).toBe(false);
-    expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).not.toHaveBeenCalled();
+      expect(didAnnounce).toBe(false);
+      expect(agentSpy).not.toHaveBeenCalled();
+      expect(sendSpy).not.toHaveBeenCalled();
+    }
   });
 
   it("waits for updated synthesized output before announcing nested subagent completion", async () => {
@@ -1518,61 +1515,51 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
-  it("defers announce when child run is still active after wait timeout", async () => {
+  it("defers announce when child run stays active after settle timeout", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
-    sessionStore = {
-      "agent:main:subagent:test": {
-        sessionId: "child-session-active",
+    const cases = [
+      {
+        childRunId: "run-child-active",
+        task: "context-stress-test",
+        expectsCompletionMessage: false,
       },
-    };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-child-active",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "context-stress-test",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-    });
-
-    expect(didAnnounce).toBe(false);
-    expect(agentSpy).not.toHaveBeenCalled();
-  });
-
-  it("defers completion-mode announce when child run is still active after settle timeout", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
-    sessionStore = {
-      "agent:main:subagent:test": {
-        sessionId: "child-session-active",
+      {
+        childRunId: "run-child-active-completion",
+        task: "completion-context-stress-test",
+        expectsCompletionMessage: true,
       },
-    };
+    ] as const;
 
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-child-active-completion",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "completion-context-stress-test",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      expectsCompletionMessage: true,
-    });
+    for (const testCase of cases) {
+      agentSpy.mockClear();
+      sendSpy.mockClear();
+      embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+      embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+      sessionStore = {
+        "agent:main:subagent:test": {
+          sessionId: "child-session-active",
+        },
+      };
 
-    expect(didAnnounce).toBe(false);
-    expect(agentSpy).not.toHaveBeenCalled();
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: testCase.childRunId,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: testCase.task,
+        timeoutMs: 1000,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" },
+        ...(testCase.expectsCompletionMessage ? { expectsCompletionMessage: true } : {}),
+      });
+
+      expect(didAnnounce).toBe(false);
+      expect(agentSpy).not.toHaveBeenCalled();
+      expect(sendSpy).not.toHaveBeenCalled();
+    }
   });
 
   it("prefers requesterOrigin channel over stale session lastChannel in queued announce", async () => {
@@ -1607,145 +1594,102 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.to).toBe("telegram:123");
   });
 
-  it("routes to parent subagent when parent run ended but session still exists (#18037)", async () => {
-    // Scenario: Newton (depth-1) spawns Birdie (depth-2). Newton's agent turn ends
-    // after spawning but Newton's SESSION still exists (waiting for Birdie's result).
-    // Birdie completes → Birdie's announce should go to Newton, NOT to Jaris (depth-0).
+  it("routes or falls back for ended parent subagent sessions (#18037)", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-
-    // Parent's run has ended (no active run)
-    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
-    // BUT parent session still exists in the store
-    sessionStore = {
-      "agent:main:subagent:newton": {
-        sessionId: "newton-session-id-alive",
-        inputTokens: 100,
-        outputTokens: 50,
+    const cases = [
+      {
+        name: "routes to parent when parent session still exists",
+        childSessionKey: "agent:main:subagent:newton:subagent:birdie",
+        childRunId: "run-birdie",
+        requesterSessionKey: "agent:main:subagent:newton",
+        requesterDisplayKey: "subagent:newton",
+        sessionStoreFixture: {
+          "agent:main:subagent:newton": {
+            sessionId: "newton-session-id-alive",
+            inputTokens: 100,
+            outputTokens: 50,
+          },
+          "agent:main:subagent:newton:subagent:birdie": {
+            sessionId: "birdie-session-id",
+            inputTokens: 20,
+            outputTokens: 10,
+          },
+        },
+        expectedSessionKey: "agent:main:subagent:newton",
+        expectedDeliver: false,
+        expectedChannel: undefined,
       },
-      "agent:main:subagent:newton:subagent:birdie": {
-        sessionId: "birdie-session-id",
-        inputTokens: 20,
-        outputTokens: 10,
+      {
+        name: "falls back when parent session is deleted",
+        childSessionKey: "agent:main:subagent:birdie",
+        childRunId: "run-birdie-orphan",
+        requesterSessionKey: "agent:main:subagent:newton",
+        requesterDisplayKey: "subagent:newton",
+        sessionStoreFixture: {
+          "agent:main:subagent:birdie": {
+            sessionId: "birdie-session-id",
+            inputTokens: 20,
+            outputTokens: 10,
+          },
+        },
+        expectedSessionKey: "agent:main:main",
+        expectedDeliver: true,
+        expectedChannel: "discord",
       },
-    };
-    // Fallback would be available to Jaris (grandparent)
-    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "discord" },
-    });
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:newton:subagent:birdie",
-      childRunId: "run-birdie",
-      requesterSessionKey: "agent:main:subagent:newton",
-      requesterDisplayKey: "subagent:newton",
-      task: "QA the outline",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-    });
-
-    expect(didAnnounce).toBe(true);
-    // Verify announce went to Newton (the parent), NOT to Jaris (grandparent fallback)
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.sessionKey).toBe("agent:main:subagent:newton");
-    // deliver=false because Newton is a subagent (internal injection)
-    expect(call?.params?.deliver).toBe(false);
-    // Should NOT have used the grandparent fallback
-    expect(call?.params?.sessionKey).not.toBe("agent:main:main");
-  });
-
-  it("falls back to grandparent only when parent session is deleted (#18037)", async () => {
-    // Scenario: Parent session was cleaned up. Only then should we fallback.
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-
-    // Parent's run ended AND session is gone
-    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
-    // Parent session does NOT exist (was deleted)
-    sessionStore = {
-      "agent:main:subagent:birdie": {
-        sessionId: "birdie-session-id",
-        inputTokens: 20,
-        outputTokens: 10,
+      {
+        name: "falls back when parent sessionId is blank",
+        childSessionKey: "agent:main:subagent:newton:subagent:birdie",
+        childRunId: "run-birdie-empty-parent",
+        requesterSessionKey: "agent:main:subagent:newton",
+        requesterDisplayKey: "subagent:newton",
+        sessionStoreFixture: {
+          "agent:main:subagent:newton": {
+            sessionId: " ",
+            inputTokens: 100,
+            outputTokens: 50,
+          },
+          "agent:main:subagent:newton:subagent:birdie": {
+            sessionId: "birdie-session-id",
+            inputTokens: 20,
+            outputTokens: 10,
+          },
+        },
+        expectedSessionKey: "agent:main:main",
+        expectedDeliver: true,
+        expectedChannel: "discord",
       },
-      // Newton's entry is MISSING (session was deleted)
-    };
-    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "discord", accountId: "jaris-account" },
-    });
+    ] as const;
 
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:birdie",
-      childRunId: "run-birdie-orphan",
-      requesterSessionKey: "agent:main:subagent:newton",
-      requesterDisplayKey: "subagent:newton",
-      task: "QA task",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-    });
+    for (const testCase of cases) {
+      agentSpy.mockClear();
+      embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+      embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+      subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+      sessionStore = testCase.sessionStoreFixture as Record<string, Record<string, unknown>>;
+      subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: { channel: "discord", accountId: "jaris-account" },
+      });
 
-    expect(didAnnounce).toBe(true);
-    // Verify announce fell back to Jaris (grandparent) since Newton is gone
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.sessionKey).toBe("agent:main:main");
-    // deliver=true because Jaris is main (user-facing)
-    expect(call?.params?.deliver).toBe(true);
-    expect(call?.params?.channel).toBe("discord");
-  });
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: testCase.childSessionKey,
+        childRunId: testCase.childRunId,
+        requesterSessionKey: testCase.requesterSessionKey,
+        requesterDisplayKey: testCase.requesterDisplayKey,
+        task: "QA task",
+        timeoutMs: 1000,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" },
+      });
 
-  it("falls back when parent session is missing a sessionId (#18037)", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-
-    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:subagent:newton": {
-        sessionId: " ",
-        inputTokens: 100,
-        outputTokens: 50,
-      },
-      "agent:main:subagent:newton:subagent:birdie": {
-        sessionId: "birdie-session-id",
-        inputTokens: 20,
-        outputTokens: 10,
-      },
-    };
-    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "discord" },
-    });
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:newton:subagent:birdie",
-      childRunId: "run-birdie-empty-parent",
-      requesterSessionKey: "agent:main:subagent:newton",
-      requesterDisplayKey: "subagent:newton",
-      task: "QA task",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-    });
-
-    expect(didAnnounce).toBe(true);
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(call?.params?.deliver).toBe(true);
-    expect(call?.params?.channel).toBe("discord");
+      expect(didAnnounce, testCase.name).toBe(true);
+      const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      expect(call?.params?.sessionKey, testCase.name).toBe(testCase.expectedSessionKey);
+      expect(call?.params?.deliver, testCase.name).toBe(testCase.expectedDeliver);
+      expect(call?.params?.channel, testCase.name).toBe(testCase.expectedChannel);
+    }
   });
 });
