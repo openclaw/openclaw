@@ -895,9 +895,14 @@
                   "channels/mattermost",
                   "channels/signal",
                   "channels/imessage",
+                  "channels/bluebubbles",
                   "channels/msteams",
                   "channels/line",
                   "channels/matrix",
+                  "channels/nextcloud-talk",
+                  "channels/nostr",
+                  "channels/tlon",
+                  "channels/twitch",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
