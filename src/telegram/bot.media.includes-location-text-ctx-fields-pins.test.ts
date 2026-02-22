@@ -1,21 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { onSpy } from "./bot.media.e2e-harness.js";
 
-async function createMessageHandlerAndReplySpy() {
+let handler: (ctx: Record<string, unknown>) => Promise<void>;
+let replySpy: ReturnType<typeof vi.fn>;
+
+beforeAll(async () => {
   const { createTelegramBot } = await import("./bot.js");
   const replyModule = await import("../auto-reply/reply.js");
-  const replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
+  replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 
   onSpy.mockClear();
-  replySpy.mockClear();
-
   createTelegramBot({ token: "tok" });
-  const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+  const registeredHandler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
     ctx: Record<string, unknown>,
   ) => Promise<void>;
-  expect(handler).toBeDefined();
-  return { handler, replySpy };
-}
+  expect(registeredHandler).toBeDefined();
+  handler = registeredHandler;
+});
+
+beforeEach(() => {
+  replySpy.mockClear();
+});
 
 function expectSingleReplyPayload(replySpy: ReturnType<typeof vi.fn>) {
   expect(replySpy).toHaveBeenCalledTimes(1);
@@ -27,8 +32,6 @@ describe("telegram inbound media", () => {
   it(
     "includes location text and ctx fields for pins",
     async () => {
-      const { handler, replySpy } = await createMessageHandlerAndReplySpy();
-
       await handler({
         message: {
           chat: { id: 42, type: "private" },
@@ -59,8 +62,6 @@ describe("telegram inbound media", () => {
   it(
     "captures venue fields for named places",
     async () => {
-      const { handler, replySpy } = await createMessageHandlerAndReplySpy();
-
       await handler({
         message: {
           chat: { id: 42, type: "private" },
