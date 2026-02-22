@@ -151,7 +151,25 @@ export async function checkInboundAccessControl(params: {
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
+      // Allow outbound DMs through for contacts in the allowlist so the agent
+      // can see both sides of the conversation.  Without this the agent loses
+      // the owner's messages and only sees inbound replies, breaking context.
+      const candidate = params.from;
+      const contactAllowed =
+        dmPolicy !== "disabled" &&
+        (dmPolicy === "open" ||
+          dmHasWildcard ||
+          (normalizedAllowFrom.length > 0 && normalizedAllowFrom.includes(candidate)));
+      if (contactAllowed) {
+        logVerbose("Including outbound DM (fromMe) for allowed contact.");
+        return {
+          allowed: true,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+      logVerbose("Skipping outbound DM (fromMe); contact not in allowlist.");
       return {
         allowed: false,
         shouldMarkRead: false,

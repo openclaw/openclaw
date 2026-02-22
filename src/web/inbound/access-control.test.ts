@@ -67,6 +67,131 @@ describe("checkInboundAccessControl pairing grace", () => {
   });
 });
 
+describe("outbound DM (fromMe) context inclusion (#12480)", () => {
+  it("allows outbound DMs for contacts in the allowlist", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.shouldMarkRead).toBe(false);
+  });
+
+  it("blocks outbound DMs for contacts NOT in the allowlist", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15559999999"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+
+  it("allows outbound DMs when dmPolicy is open", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "open",
+          allowFrom: [],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.shouldMarkRead).toBe(false);
+  });
+
+  it("allows outbound DMs when allowFrom has wildcard", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("blocks outbound DMs when dmPolicy is disabled even for allowed contacts", async () => {
+    // dmPolicy: "disabled" blocks all DMs unconditionally, including outbound.
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "disabled",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+});
+
 describe("WhatsApp dmPolicy precedence", () => {
   it("uses account-level dmPolicy instead of channel-level (#8736)", async () => {
     // Channel-level says "pairing" but the account-level says "allowlist".
