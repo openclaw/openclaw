@@ -556,6 +556,35 @@ export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
+/** Strongly-typed health response from the gateway (richer than HealthSnapshot). */
+export type HealthSummary = {
+  ok: boolean;
+  ts: number;
+  durationMs: number;
+  heartbeatSeconds: number;
+  defaultAgentId: string;
+  agents: Array<{ id: string; name?: string }>;
+  sessions: {
+    path: string;
+    count: number;
+    recent: Array<{
+      key: string;
+      updatedAt: number | null;
+      age: number | null;
+    }>;
+  };
+};
+
+/** A model entry returned by the gateway model-catalog endpoint. */
+export type ModelCatalogEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  input?: Array<"text" | "image">;
+};
+
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 export type LogEntry = {
@@ -565,4 +594,17 @@ export type LogEntry = {
   subsystem?: string | null;
   message?: string | null;
   meta?: Record<string, unknown> | null;
+};
+
+// ── Attention ───────────────────────────────────────
+
+export type AttentionSeverity = "error" | "warning" | "info";
+
+export type AttentionItem = {
+  severity: AttentionSeverity;
+  icon: string;
+  title: string;
+  description: string;
+  href?: string;
+  external?: boolean;
 };
