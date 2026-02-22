@@ -1,7 +1,8 @@
+import type { BreakPreferenceType } from "../config/types.base.js";
 import type { FenceSpan } from "../markdown/fences.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
 
-export type BreakType = "paragraph" | "newline" | "sentence";
+export type BreakType = BreakPreferenceType;
 
 export type BlockReplyChunking = {
   minChars: number;
@@ -95,6 +96,17 @@ function findSafeNewlineBreakIndex(params: {
   return -1;
 }
 
+/** Default fallback chains that match the pre-refactor hardcoded behavior. */
+function defaultFallbacksFor(primary: BreakType): BreakType[] {
+  switch (primary) {
+    case "paragraph":
+      return ["newline", "sentence"];
+    case "sentence":
+    case "newline":
+      return [];
+  }
+}
+
 function findBreakByType(
   type: BreakType,
   text: string,
@@ -104,6 +116,8 @@ function findBreakByType(
 ): number {
   switch (type) {
     case "sentence":
+      // Sentence detection always returns the last (rightmost) match in range,
+      // so the `reverse` flag is effectively always true for this type.
       return findSafeSentenceBreakIndex(text, fenceSpans, minChars);
     case "newline":
       return findSafeNewlineBreakIndex({ text, fenceSpans, minChars, reverse });
@@ -123,7 +137,7 @@ export class EmbeddedBlockChunker {
   /** Returns the ordered list of break types: preference first, then fallbacks. */
   #breakTypeOrder(): BreakType[] {
     const primary = this.#chunking.breakPreference ?? "paragraph";
-    const fallbacks = this.#chunking.breakFallbacks ?? [];
+    const fallbacks = this.#chunking.breakFallbacks ?? defaultFallbacksFor(primary);
     // Deduplicate: skip fallbacks that duplicate the primary.
     const seen = new Set<BreakType>([primary]);
     const result: BreakType[] = [primary];

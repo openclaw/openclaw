@@ -14,6 +14,7 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { BreakPreferenceType } from "../../config/types.base.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -118,8 +119,8 @@ export async function runReplyAgent(params: {
   blockReplyChunking?: {
     minChars: number;
     maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    breakFallbacks?: ("paragraph" | "newline" | "sentence")[];
+    breakPreference: BreakPreferenceType;
+    breakFallbacks?: BreakPreferenceType[];
     flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";

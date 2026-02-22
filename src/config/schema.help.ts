@@ -232,6 +232,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Half-life in days for temporal decay (default: 30).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
+  "agents.defaults.blockStreamingChunk.breakPreference":
+    "Preferred break type for block streaming chunks (paragraph | newline | sentence). Default: paragraph.",
+  "agents.defaults.blockStreamingChunk.breakFallbacks":
+    'Ordered list of additional break types to try before whitespace fallback (e.g. ["newline", "sentence"]). Default: paragraph mode falls back to newline then sentence; others have no fallback.',
   memory: "Memory backend configuration (global).",
   "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
   "memory.citations": 'Default citation behavior ("auto", "on", or "off").',
