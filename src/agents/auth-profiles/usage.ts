@@ -3,6 +3,15 @@ import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+const VALID_FAILURE_REASONS: ReadonlySet<string> = new Set<AuthProfileFailureReason>([
+  "auth",
+  "format",
+  "rate_limit",
+  "billing",
+  "timeout",
+  "unknown",
+]);
+
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
 ): number | null {
@@ -13,6 +22,47 @@ export function resolveProfileUnusableUntil(
     return null;
   }
   return Math.max(...values);
+}
+
+/**
+ * Resolve the most representative failure reason across cooldown profiles.
+ * Aggregates `failureCounts` from each profile in cooldown and returns
+ * the reason with the highest total count.  Falls back to `"rate_limit"`
+ * when no failure data is recorded (backward-compatible default).
+ */
+export function resolveDominantCooldownReason(
+  store: AuthProfileStore,
+  profileIds: string[],
+): AuthProfileFailureReason {
+  const totals: Partial<Record<AuthProfileFailureReason, number>> = {};
+
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      continue;
+    }
+    if (stats.failureCounts) {
+      for (const [reason, count] of Object.entries(stats.failureCounts)) {
+        if (!VALID_FAILURE_REASONS.has(reason)) {
+          continue;
+        }
+        const key = reason as AuthProfileFailureReason;
+        const n = typeof count === "number" && Number.isFinite(count) && count > 0 ? count : 0;
+        totals[key] = (totals[key] ?? 0) + n;
+      }
+    }
+  }
+
+  let bestReason: AuthProfileFailureReason | null = null;
+  let bestCount = 0;
+  for (const [reason, count] of Object.entries(totals)) {
+    if ((count ?? 0) > bestCount) {
+      bestReason = reason as AuthProfileFailureReason;
+      bestCount = count ?? 0;
+    }
+  }
+
+  return bestReason ?? "rate_limit";
 }
 
 /**

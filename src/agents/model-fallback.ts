@@ -4,6 +4,7 @@ import {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveAuthProfileOrder,
+  resolveDominantCooldownReason,
 } from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -343,11 +344,12 @@ export async function runWithModelFallback<T>(params: {
         });
         if (!shouldProbe) {
           // Skip without attempting
+          const cooldownReason = resolveDominantCooldownReason(authStore, profileIds);
           attempts.push({
             provider: candidate.provider,
             model: candidate.model,
             error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: "rate_limit",
+            reason: cooldownReason,
           });
           continue;
         }
