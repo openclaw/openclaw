@@ -540,7 +540,7 @@ export function renderApp(state: AppViewState) {
         ${
           state.tab === "agents"
             ? renderAgents({
-                basePath: state.basePath,
+                basePath: state.basePath ?? "",
                 loading: state.agentsLoading,
                 error: state.agentsError,
                 agentsList: state.agentsList,
