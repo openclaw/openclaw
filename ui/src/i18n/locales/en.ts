@@ -12,6 +12,7 @@ export const en: TranslationMap = {
     na: "n/a",
     docs: "Docs",
     resources: "Resources",
+    search: "Search",
   },
   nav: {
     chat: "Chat",

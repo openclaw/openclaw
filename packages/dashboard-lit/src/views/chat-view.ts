@@ -1098,14 +1098,14 @@ export class AgentChat extends LitElement {
               title=${g.connected ? "Connected" : g.connecting ? "Connecting..." : g.retryStalled ? "Connection failed" : "Disconnected"}
             ></span>
             <button class="agent-chat__input-btn" @click=${() => this.triggerFileInput()} title="Attach file" ?disabled=${!g.connected}>
-              ${icon("paperclip", { className: "icon-sm" })}
+              ${icon("paperclip", { className: "icon" })}
             </button>
 
             ${
               hasVoice
                 ? html`
                   <button class="agent-chat__input-btn ${this.voiceActive ? "agent-chat__input-btn--active" : ""}" @click=${() => this.toggleVoice()} title="Voice input">
-                    ${icon(this.voiceActive ? "micOff" : "mic", { className: "icon-sm" })}
+                    ${icon(this.voiceActive ? "micOff" : "mic", { className: "icon" })}
                   </button>
                 `
                 : nothing
@@ -1129,20 +1129,20 @@ export class AgentChat extends LitElement {
 
             <div class="agent-chat__input-actions">
               <button class="btn-ghost" @click=${() => this.toggleSearch()} title="Search (Cmd+F)">
-                ${icon("search", { className: "icon-xs" })}
+                ${icon("search", { className: "icon-sm" })}
               </button>
               <button class="btn-ghost" @click=${() => this.exportMarkdown()} title="Export" ?disabled=${this.messages.length === 0}>
-                ${icon("download", { className: "icon-xs" })}
+                ${icon("download", { className: "icon-sm" })}
               </button>
               ${
                 this.messages.length > 0
                   ? html`
                     <span class="agent-chat__input-divider"></span>
                     <button class="btn-ghost" @click=${() => void this.onCompact()} title="Compact context" ?disabled=${this.submitting}>
-                      ${icon("refresh", { className: "icon-xs" })}
+                      ${icon("refresh", { className: "icon-sm" })}
                     </button>
                     <button class="btn-ghost agent-chat__new-chat-btn" @click=${() => void this.onNewChat()} title="New chat" ?disabled=${this.submitting}>
-                      ${icon("plus", { className: "icon-xs" })}
+                      ${icon("plus", { className: "icon-sm" })}
                     </button>
                   `
                   : nothing

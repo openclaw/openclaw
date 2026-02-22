@@ -12,6 +12,7 @@ export const zh_CN: TranslationMap = {
     na: "不适用",
     docs: "文档",
     resources: "资源",
+    search: "搜索",
   },
   nav: {
     chat: "聊天",

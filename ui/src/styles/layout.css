@@ -80,47 +80,184 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   padding: 0 20px;
   height: var(--shell-topbar-height);
   background: var(--chrome);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }
+
+/* --- Left: Breadcrumb --- */
 
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
 }
 
-/* Topbar status */
-.topbar-status {
+.topbar-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-breadcrumb__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.topbar-breadcrumb__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.topbar-breadcrumb__label {
+  color: var(--text-strong);
+}
+
+/* --- Center: Search / Command Palette Trigger --- */
+
+.topbar-search {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.topbar-status .pill {
   padding: 6px 12px;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  min-width: 200px;
+  max-width: 340px;
+  flex: 1;
   height: 34px;
-  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--secondary) 60%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-.topbar-status .pill .mono {
+.topbar-search:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--secondary) 85%, transparent);
+}
+
+.topbar-search:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.topbar-search svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.topbar-search__label {
+  flex: 1;
+  text-align: left;
+  pointer-events: none;
+}
+
+.topbar-search__kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  min-width: 22px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  line-height: 1;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+/* --- Right: Status area --- */
+
+.topbar-status {
   display: flex;
   align-items: center;
-  line-height: 1;
-  margin-top: 0px;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.topbar-status .statusDot {
+.topbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Connection indicator */
+
+.topbar-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--danger);
+  background: var(--danger-subtle);
+  transition:
+    color 250ms ease,
+    background 250ms ease;
+}
+
+.topbar-connection--ok {
+  color: var(--ok);
+  background: var(--ok-subtle);
+}
+
+.topbar-connection__dot {
   width: 6px;
   height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  flex-shrink: 0;
 }
+
+.topbar-connection:not(.topbar-connection--ok) .topbar-connection__dot {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+.topbar-connection__label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+/* Topbar theme toggle sizing */
 
 .topbar-status .theme-toggle {
   --theme-item: 24px;
@@ -707,8 +844,12 @@
     gap: 10px;
   }
 
+  .topbar-search__kbd {
+    display: none;
+  }
+
   .topbar-status {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .table-head,
