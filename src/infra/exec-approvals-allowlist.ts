@@ -18,8 +18,9 @@ import {
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
-  DISPATCH_WRAPPER_EXECUTABLES,
-  basenameLower,
+  extractShellWrapperInlineCommand,
+  isDispatchWrapperExecutable,
+  isShellWrapperExecutable,
   unwrapKnownDispatchWrapperInvocation,
 } from "./exec-wrapper-resolution.js";
 
@@ -221,98 +222,33 @@ export type ExecAllowlistAnalysis = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-const SHELL_WRAPPER_EXECUTABLES = new Set([
-  "ash",
-  "bash",
-  "cmd",
-  "cmd.exe",
-  "dash",
-  "fish",
-  "ksh",
-  "powershell",
-  "powershell.exe",
-  "pwsh",
-  "pwsh.exe",
-  "sh",
-  "zsh",
-]);
-
-function normalizeExecutableName(name: string | undefined): string {
-  return (name ?? "").trim().toLowerCase();
+function hasSegmentExecutableMatch(
+  segment: ExecCommandSegment,
+  predicate: (token: string) => boolean,
+): boolean {
+  const candidates = [
+    segment.resolution?.executableName,
+    segment.resolution?.rawExecutable,
+    segment.argv[0],
+  ];
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (predicate(trimmed)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
-  const candidates = [
-    normalizeExecutableName(segment.resolution?.executableName),
-    normalizeExecutableName(segment.resolution?.rawExecutable),
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    if (SHELL_WRAPPER_EXECUTABLES.has(candidate)) {
-      return true;
-    }
-    const base = candidate.split(/[\\/]/).pop();
-    if (base && SHELL_WRAPPER_EXECUTABLES.has(base)) {
-      return true;
-    }
-  }
-  return false;
+  return hasSegmentExecutableMatch(segment, isShellWrapperExecutable);
 }
 
 function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
-  const candidates = [
-    normalizeExecutableName(segment.resolution?.executableName),
-    normalizeExecutableName(segment.resolution?.rawExecutable),
-    normalizeExecutableName(segment.argv[0]),
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    if (DISPATCH_WRAPPER_EXECUTABLES.has(candidate)) {
-      return true;
-    }
-    const base = basenameLower(candidate);
-    if (DISPATCH_WRAPPER_EXECUTABLES.has(base)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function extractShellInlineCommand(argv: string[]): string | null {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token) {
-      continue;
-    }
-    const lower = token.toLowerCase();
-    if (lower === "--") {
-      break;
-    }
-    if (
-      lower === "-c" ||
-      lower === "--command" ||
-      lower === "-command" ||
-      lower === "/c" ||
-      lower === "/k"
-    ) {
-      const next = argv[i + 1]?.trim();
-      return next ? next : null;
-    }
-    if (/^-[^-]*c[^-]*$/i.test(token)) {
-      const commandIndex = lower.indexOf("c");
-      const inline = token.slice(commandIndex + 1).trim();
-      if (inline) {
-        return inline;
-      }
-      const next = argv[i + 1]?.trim();
-      return next ? next : null;
-    }
-  }
-  return null;
+  return hasSegmentExecutableMatch(segment, isDispatchWrapperExecutable);
 }
 
 function collectAllowAlwaysPatterns(params: {
@@ -328,15 +264,15 @@ function collectAllowAlwaysPatterns(params: {
   }
 
   if (isDispatchWrapperSegment(params.segment)) {
-    const unwrappedArgv = unwrapKnownDispatchWrapperInvocation(params.segment.argv);
-    if (!unwrappedArgv || unwrappedArgv.length === 0) {
+    const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(params.segment.argv);
+    if (dispatchUnwrap.kind !== "unwrapped" || dispatchUnwrap.argv.length === 0) {
       return;
     }
     collectAllowAlwaysPatterns({
       segment: {
-        raw: unwrappedArgv.join(" "),
-        argv: unwrappedArgv,
-        resolution: resolveCommandResolutionFromArgv(unwrappedArgv, params.cwd, params.env),
+        raw: dispatchUnwrap.argv.join(" "),
+        argv: dispatchUnwrap.argv,
+        resolution: resolveCommandResolutionFromArgv(dispatchUnwrap.argv, params.cwd, params.env),
       },
       cwd: params.cwd,
       env: params.env,
@@ -355,7 +291,7 @@ function collectAllowAlwaysPatterns(params: {
     params.out.add(candidatePath);
     return;
   }
-  const inlineCommand = extractShellInlineCommand(params.segment.argv);
+  const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
     return;
   }
