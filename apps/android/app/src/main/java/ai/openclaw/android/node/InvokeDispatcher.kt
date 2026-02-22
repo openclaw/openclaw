@@ -7,6 +7,7 @@ import ai.openclaw.android.protocol.OpenClawCameraCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
+import ai.openclaw.android.protocol.OpenClawFlashlightCommand
 
 class InvokeDispatcher(
   private val canvas: CanvasController,
@@ -14,6 +15,7 @@ class InvokeDispatcher(
   private val locationHandler: LocationHandler,
   private val screenHandler: ScreenHandler,
   private val smsHandler: SmsHandler,
+  private val flashlightHandler: FlashlightHandler,
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val appUpdateHandler: AppUpdateHandler,
@@ -158,6 +160,10 @@ class InvokeDispatcher(
 
       // SMS command
       OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+
+      // Flashlight commands
+      OpenClawFlashlightCommand.On.rawValue -> flashlightHandler.handleFlashlightOn(paramsJson)
+      OpenClawFlashlightCommand.Off.rawValue -> flashlightHandler.handleFlashlightOff(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
