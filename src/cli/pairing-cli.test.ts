@@ -54,10 +54,11 @@ describe("pairing cli", () => {
   beforeEach(() => {
     listChannelPairingRequests.mockReset();
     approveChannelPairingCode.mockReset();
-    notifyPairingApproved.mockReset();
+    notifyPairingApproved.mockClear();
     normalizeChannelId.mockClear();
     getPairingAdapter.mockClear();
     listPairingChannels.mockClear();
+    notifyPairingApproved.mockResolvedValue(undefined);
   });
 
   function createProgram() {
