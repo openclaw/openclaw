@@ -276,7 +276,7 @@ describe("/approve command", () => {
     } as OpenClawConfig;
     const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
 
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    callGatewayMock.mockResolvedValue({ ok: true });
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -299,7 +299,7 @@ describe("/approve command", () => {
       GatewayClientScopes: ["operator.write"],
     });
 
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    callGatewayMock.mockResolvedValue({ ok: true });
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -313,7 +313,7 @@ describe("/approve command", () => {
     } as OpenClawConfig;
     const scopeCases = [["operator.approvals"], ["operator.admin"]];
     for (const scopes of scopeCases) {
-      callGatewayMock.mockResolvedValueOnce({ ok: true });
+      callGatewayMock.mockResolvedValue({ ok: true });
       const params = buildParams("/approve abc allow-once", cfg, {
         Provider: "webchat",
         Surface: "webchat",
@@ -907,7 +907,7 @@ describe("handleCommands context", () => {
 describe("handleCommands subagents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear().mockImplementation(async () => ({}));
   });
 
   it("lists subagents when none exist", async () => {
