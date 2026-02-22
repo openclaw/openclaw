@@ -140,7 +140,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
-    maxConcurrentPerConversation: z.number().int().positive().optional(),
+    maxConcurrentPerConversation: z.number().int().positive().max(10).optional(),
     subagents: z
       .object({
         maxConcurrent: z.number().int().positive().optional(),

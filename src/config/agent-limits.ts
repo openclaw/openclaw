@@ -107,7 +107,10 @@ export function resolveMaxConcurrentPerConversation(params: {
     );
   }
 
-  // Flat providers: provider-level only via dynamic key
+  // Flat providers: provider-level only via dynamic key.
+  // Safety: the `as` cast is needed because ChannelsConfig uses `[key: string]: any`
+  // for extension providers. `asPositiveInt` performs full runtime validation so an
+  // incorrect field type falls through to `globalDefault` rather than producing a bad value.
   const providerConfig = params.cfg?.channels?.[channelKey] as
     | { maxConcurrentPerConversation?: number }
     | undefined;
