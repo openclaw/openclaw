@@ -3,9 +3,10 @@ import type { OpenClawConfig, MarkdownTableMode, RuntimeEnv } from "openclaw/plu
 import {
   createReplyPrefixOptions,
   mergeAllowlist,
-  resolveRuntimeGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
   resolveSenderCommandAuthorization,
   summarizeMapping,
+  warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
@@ -179,20 +180,17 @@ async function processMessage(
   const chatId = threadId;
 
   const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: config.channels?.zalouser !== undefined,
     groupPolicy: account.config.groupPolicy,
     defaultGroupPolicy,
-    configuredFallbackPolicy: "open",
-    missingProviderFallbackPolicy: "allowlist",
   });
-  if (providerMissingFallbackApplied) {
-    logVerbose(
-      core,
-      runtime,
-      'zalouser: channels.zalouser is missing; defaulting groupPolicy to "allowlist" (group messages blocked until explicitly configured).',
-    );
-  }
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "zalouser",
+    accountId: account.accountId,
+    log: (message) => logVerbose(core, runtime, message),
+  });
   const groups = account.config.groups ?? {};
   if (isGroup) {
     if (groupPolicy === "disabled") {

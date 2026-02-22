@@ -16,9 +16,11 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
-import type { GroupPolicy } from "../../config/types.base.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
@@ -122,23 +124,6 @@ class SentMessageCache {
   }
 }
 
-function resolveIMessageRuntimeGroupPolicy(params: {
-  providerConfigPresent: boolean;
-  groupPolicy?: GroupPolicy;
-  defaultGroupPolicy?: GroupPolicy;
-}): {
-  groupPolicy: GroupPolicy;
-  providerMissingFallbackApplied: boolean;
-} {
-  return resolveRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-    configuredFallbackPolicy: "open",
-    missingProviderFallbackPolicy: "allowlist",
-  });
-}
-
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -163,18 +148,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const { groupPolicy, providerMissingFallbackApplied } = resolveIMessageRuntimeGroupPolicy({
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: cfg.channels?.imessage !== undefined,
     groupPolicy: imessageCfg.groupPolicy,
     defaultGroupPolicy,
   });
-  if (providerMissingFallbackApplied) {
-    runtime.log?.(
-      warn(
-        'imessage: channels.imessage is missing; defaulting groupPolicy to "allowlist" (group messages blocked until explicitly configured).',
-      ),
-    );
-  }
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "imessage",
+    accountId: accountInfo.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
@@ -540,5 +524,5 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 }
 
 export const __testing = {
-  resolveIMessageRuntimeGroupPolicy,
+  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
 };

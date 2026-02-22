@@ -6,7 +6,8 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
   recordPendingHistoryEntryIfEnabled,
-  resolveRuntimeGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -78,7 +79,6 @@ const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-const groupPolicyFallbackWarningShown = new Set<string>();
 
 type SenderNameResult = {
   name?: string;
@@ -566,19 +566,17 @@ export async function handleFeishuMessage(params: {
 
   if (isGroup) {
     const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-    const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+    const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.feishu !== undefined,
       groupPolicy: feishuCfg?.groupPolicy,
       defaultGroupPolicy,
-      configuredFallbackPolicy: "open",
-      missingProviderFallbackPolicy: "allowlist",
     });
-    if (providerMissingFallbackApplied && !groupPolicyFallbackWarningShown.has(account.accountId)) {
-      groupPolicyFallbackWarningShown.add(account.accountId);
-      log(
-        'feishu: channels.feishu is missing; defaulting groupPolicy to "allowlist" (group messages blocked until explicitly configured).',
-      );
-    }
+    warnMissingProviderGroupPolicyFallbackOnce({
+      providerMissingFallbackApplied,
+      providerKey: "feishu",
+      accountId: account.accountId,
+      log,
+    });
     const groupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
     // DEBUG: log(`feishu[${account.accountId}]: groupPolicy=${groupPolicy}`);
 

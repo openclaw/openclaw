@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
-import { resolveRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type {
   TelegramAccountConfig,
   TelegramGroupConfig,
@@ -78,12 +78,10 @@ export const resolveTelegramRuntimeGroupPolicy = (params: {
   groupPolicy?: TelegramAccountConfig["groupPolicy"];
   defaultGroupPolicy?: TelegramAccountConfig["groupPolicy"];
 }) =>
-  resolveRuntimeGroupPolicy({
+  resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.providerConfigPresent,
     groupPolicy: params.groupPolicy,
     defaultGroupPolicy: params.defaultGroupPolicy,
-    configuredFallbackPolicy: "open",
-    missingProviderFallbackPolicy: "allowlist",
   });
 
 export const evaluateTelegramGroupPolicyAccess = (params: {
