@@ -426,6 +426,16 @@ function isRunnableJob(params: {
   if (typeof job.state.runningAtMs === "number") {
     return false;
   }
+  // Guard against duplicate fires: if the job ran very recently, skip it.
+  // This catches the race where a re-arm timer callback enters onTimer
+  // after state.running is cleared but before nextRunAtMs is recomputed
+  // to the next occurrence.  See #16094.
+  if (
+    typeof job.state.lastRunAtMs === "number" &&
+    nowMs - job.state.lastRunAtMs < MIN_REFIRE_GAP_MS
+  ) {
+    return false;
+  }
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
     // Any terminal status (ok, error, skipped) means the job already ran at least once.
     // Don't re-fire it on restart — applyJobResult disables one-shot jobs, but guard
