@@ -49,7 +49,7 @@ describe("sessions tools", () => {
   });
 
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {

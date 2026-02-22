@@ -76,7 +76,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("sessions_spawn only allows same-agent by default", async () => {

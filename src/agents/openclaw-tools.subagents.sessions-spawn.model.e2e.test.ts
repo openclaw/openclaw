@@ -100,7 +100,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("sessions_spawn applies a model to the child session", async () => {
