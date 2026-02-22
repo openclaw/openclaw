@@ -21,6 +21,7 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 3_000;
+const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
   // Yield a couple of macrotasks so any accidental async forwarding would fire.
@@ -107,6 +108,7 @@ describe("node.invoke approval bypass", () => {
         token: "secret",
         scopes,
         ...(resolveDevice ? { device: resolveDevice(await nonce) } : {}),
+        timeoutMs: CONNECT_REQ_TIMEOUT_MS,
       });
       return { ws, res };
     };
