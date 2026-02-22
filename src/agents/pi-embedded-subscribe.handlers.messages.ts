@@ -321,9 +321,23 @@ export function handleMessageEnd(
     ctx.state.emittedAssistantUpdate = true;
   }
 
+  // When the assistant message contains tool calls, any text emitted
+  // during streaming is narration (e.g., "Let me search for that…") and
+  // must not be delivered to the user.  Splice it out of assistantTexts
+  // before finalizing so it never reaches the channel.
+  const messageHasToolCall =
+    Array.isArray(assistantMessage.content) &&
+    assistantMessage.content.some((block: { type?: string }) => block.type === "toolCall");
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
+  if (messageHasToolCall && addedDuringMessage) {
+    ctx.state.assistantTexts.splice(ctx.state.assistantTextBaseline);
+  }
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  ctx.finalizeAssistantTexts({
+    text: messageHasToolCall ? "" : text,
+    addedDuringMessage: messageHasToolCall ? false : addedDuringMessage,
+    chunkerHasBuffered,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
   const shouldEmitReasoning = Boolean(
@@ -347,6 +361,7 @@ export function handleMessageEnd(
   }
 
   if (
+    !messageHasToolCall &&
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
