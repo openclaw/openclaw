@@ -60,8 +60,8 @@ const baseCfg = {
 describe("/subagents spawn command", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    spawnSubagentDirectMock.mockReset();
-    hoisted.callGatewayMock.mockReset();
+    spawnSubagentDirectMock.mockClear();
+    hoisted.callGatewayMock.mockClear();
   });
 
   it("shows usage when agentId is missing", async () => {

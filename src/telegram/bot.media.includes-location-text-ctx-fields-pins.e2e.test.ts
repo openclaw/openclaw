@@ -6,8 +6,8 @@ async function createMessageHandlerAndReplySpy() {
   const replyModule = await import("../auto-reply/reply.js");
   const replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 
-  onSpy.mockReset();
-  replySpy.mockReset();
+  onSpy.mockClear();
+  replySpy.mockClear();
 
   createTelegramBot({ token: "tok" });
   const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
