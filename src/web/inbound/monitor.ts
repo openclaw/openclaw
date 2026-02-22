@@ -309,6 +309,7 @@ export async function monitorWebInbox(options: {
         pushName: senderName,
         timestamp,
         chatType: group ? "group" : "direct",
+        fromMe: Boolean(msg.key?.fromMe),
         chatId: remoteJid,
         senderJid: participantJid,
         senderE164: senderE164 ?? undefined,
