@@ -123,6 +123,7 @@ function resolveFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs : undefined;
   return {
     workspaceOnly: agentFs?.workspaceOnly ?? globalFs?.workspaceOnly,
+    allowOutsideWorkspace: agentFs?.allowOutsideWorkspace ?? globalFs?.allowOutsideWorkspace,
   };
 }
 
@@ -284,10 +285,13 @@ export function createOpenClawCodingTools(options?: {
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
-  const workspaceOnly = fsConfig.workspaceOnly === true;
+  const workspaceOnly = sandboxRoot
+    ? fsConfig.workspaceOnly === true
+    : fsConfig.allowOutsideWorkspace !== true;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
-  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+  // (tools.fs.allowOutsideWorkspace controls host-mode fs escape hatch; tools.fs.workspaceOnly
+  // still controls sandbox-mounted path containment for read/write/edit/apply_patch.)
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     !!applyPatchConfig?.enabled &&

@@ -21,5 +21,8 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
+  if (cfg.tools?.fs?.allowOutsideWorkspace === true) {
+    enabledFlags.push("tools.fs.allowOutsideWorkspace=true");
+  }
   return enabledFlags;
 }
