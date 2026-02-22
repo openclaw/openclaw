@@ -1,5 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -179,7 +178,9 @@ describe("msteams messenger", () => {
     });
 
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"));
+      const parentDir = resolvePreferredOpenClawTmpDir();
+      await mkdir(parentDir, { recursive: true });
+      const tmpDir = await mkdtemp(path.join(parentDir, "msteams-mention-"));
       const localFile = path.join(tmpDir, "note.txt");
       await writeFile(localFile, "hello");
 

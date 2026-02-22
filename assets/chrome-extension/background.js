@@ -15,6 +15,12 @@ let relayConnectPromise = null
 let debuggerListenersInstalled = false
 
 let nextSession = 1
+let relayGatewayToken = ''
+let relayConnectRequestId = null
+let relayConnectResolve = null
+let relayConnectReject = null
+let relayConnectTimer = null
+let relayChallengeSeen = false
 
 /** @type {Map<number, {state:'connecting'|'connected', sessionId?:string, targetId?:string, attachOrder?:number}>} */
 const tabs = new Map()
@@ -82,6 +88,8 @@ async function ensureRelayConnection() {
 
     const ws = new WebSocket(wsUrl)
     relayWs = ws
+    relayGatewayToken = gatewayToken
+    ws.onmessage = (event) => void onRelayMessage(String(event.data || ''))
 
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('WebSocket connect timeout')), 5000)
@@ -99,7 +107,8 @@ async function ensureRelayConnection() {
       }
     })
 
-    ws.onmessage = (event) => void onRelayMessage(String(event.data || ''))
+    await waitForGatewayConnect()
+
     ws.onclose = () => onRelayClosed('closed')
     ws.onerror = () => onRelayClosed('error')
 
@@ -119,6 +128,10 @@ async function ensureRelayConnection() {
 
 function onRelayClosed(reason) {
   relayWs = null
+  relayGatewayToken = ''
+  const rejectConnect = relayConnectReject
+  clearRelayConnectState()
+  rejectConnect?.(new Error(`Relay disconnected (${reason})`))
   for (const [id, p] of pending.entries()) {
     pending.delete(id)
     p.reject(new Error(`Relay disconnected (${reason})`))
@@ -143,6 +156,64 @@ function sendToRelay(payload) {
     throw new Error('Relay not connected')
   }
   ws.send(JSON.stringify(payload))
+}
+
+function clearRelayConnectState() {
+  relayConnectRequestId = null
+  relayConnectResolve = null
+  relayConnectReject = null
+  relayChallengeSeen = false
+  if (relayConnectTimer) {
+    clearTimeout(relayConnectTimer)
+    relayConnectTimer = null
+  }
+}
+
+function ensureGatewayHandshakeStarted() {
+  if (!relayConnectResolve || relayConnectRequestId) return
+  relayConnectRequestId = `ext-connect-${Date.now()}`
+  sendToRelay({
+    type: 'req',
+    id: relayConnectRequestId,
+    method: 'connect',
+    params: {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: 'webchat-ui',
+        version: '1.0.0',
+        platform: 'chrome-extension',
+        mode: 'webchat',
+      },
+      role: 'operator',
+      scopes: ['operator.read', 'operator.write'],
+      caps: [],
+      commands: [],
+      auth: relayGatewayToken ? { token: relayGatewayToken } : undefined,
+    },
+  })
+}
+
+function waitForGatewayConnect() {
+  return new Promise((resolve, reject) => {
+    relayConnectResolve = resolve
+    relayConnectReject = reject
+    if (relayChallengeSeen) {
+      try {
+        ensureGatewayHandshakeStarted()
+      } catch (err) {
+        const rejectFn = relayConnectReject
+        clearRelayConnectState()
+        rejectFn?.(err instanceof Error ? err : new Error(String(err)))
+        return
+      }
+    }
+    relayConnectTimer = setTimeout(() => {
+      const rejectFn = relayConnectReject
+      clearRelayConnectState()
+      rejectFn?.(new Error('Gateway connect timeout'))
+    }, 8000)
+  })
 }
 
 async function maybeOpenHelpOnce() {
@@ -175,6 +246,32 @@ async function onRelayMessage(text) {
   try {
     msg = JSON.parse(text)
   } catch {
+    return
+  }
+
+  if (msg && msg.type === 'event' && msg.event === 'connect.challenge') {
+    relayChallengeSeen = true
+    try {
+      ensureGatewayHandshakeStarted()
+    } catch (err) {
+      const rejectConnect = relayConnectReject
+      clearRelayConnectState()
+      rejectConnect?.(err instanceof Error ? err : new Error(String(err)))
+    }
+    return
+  }
+
+  if (msg && msg.type === 'res' && relayConnectRequestId && msg.id === relayConnectRequestId) {
+    if (msg.ok) {
+      const resolveConnect = relayConnectResolve
+      clearRelayConnectState()
+      resolveConnect?.()
+    } else {
+      const rejectConnect = relayConnectReject
+      const detail = msg.error?.message || 'gateway connect failed'
+      clearRelayConnectState()
+      rejectConnect?.(new Error(String(detail)))
+    }
     return
   }
 
