@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { shouldShowPairingHint } from "./overview-hints.ts";
 
 describe("shouldShowPairingHint", () => {
@@ -24,5 +25,15 @@ describe("shouldShowPairingHint", () => {
 
   it("returns false for auth errors", () => {
     expect(shouldShowPairingHint(false, "disconnected (4008): unauthorized")).toBe(false);
+  });
+
+  it("returns true for structured pairing code", () => {
+    expect(
+      shouldShowPairingHint(
+        false,
+        "disconnected (4008): connect failed",
+        ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      ),
+    ).toBe(true);
   });
 });
