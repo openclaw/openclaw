@@ -18,6 +18,28 @@ export const AgentDefaultsSchema = z
       .object({
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
+        routing: z
+          .object({
+            enabled: z.boolean().optional(),
+            rules: z
+              .array(
+                z
+                  .object({
+                    match: z
+                      .object({
+                        keywords: z.array(z.string()).optional(),
+                        tools: z.array(z.string()).optional(),
+                      })
+                      .strict(),
+                    model: z.string().min(1),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            fallbackToPrimary: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

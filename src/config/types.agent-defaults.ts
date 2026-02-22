@@ -20,9 +20,30 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
+/** Task-based routing rule: match prompt/tools and use a specific model. */
+export type AgentModelRoutingRuleConfig = {
+  match: {
+    /** If any keyword appears in the user prompt (case-insensitive), this rule matches. */
+    keywords?: string[];
+    /** If the run allows any of these tool names, this rule matches. */
+    tools?: string[];
+  };
+  /** Model to use when this rule matches (provider/model). */
+  model: string;
+};
+
+export type AgentModelRoutingConfig = {
+  enabled?: boolean;
+  rules?: AgentModelRoutingRuleConfig[];
+  /** When true (default), use primary model when no rule matches. */
+  fallbackToPrimary?: boolean;
+};
+
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /** Task-based model routing (e.g. code keywords → coder model). */
+  routing?: AgentModelRoutingConfig;
 };
 
 export type AgentContextPruningConfig = {

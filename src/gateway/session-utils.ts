@@ -8,6 +8,7 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
+import { resolveTaskRoutedModelRef } from "../agents/task-routing.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -652,6 +653,7 @@ export function resolveSessionModelRef(
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
+  prompt?: string,
 ): { provider: string; model: string } {
   const resolved = agentId
     ? resolveDefaultModelForAgent({ cfg, agentId })
@@ -679,6 +681,17 @@ export function resolveSessionModelRef(
       provider = runtimeProvider || provider;
       model = runtimeModel;
     }
+    if (prompt?.trim() && cfg?.agents?.defaults?.model?.routing?.enabled) {
+      const routed = resolveTaskRoutedModelRef({
+        cfg,
+        primaryProvider: provider,
+        primaryModel: model,
+        prompt: prompt.trim(),
+      });
+      if (routed) {
+        return routed;
+      }
+    }
     return { provider, model };
   }
 
@@ -694,6 +707,17 @@ export function resolveSessionModelRef(
     } else {
       provider = overrideProvider;
       model = storedModelOverride;
+    }
+  }
+  if (prompt?.trim() && cfg?.agents?.defaults?.model?.routing?.enabled) {
+    const routed = resolveTaskRoutedModelRef({
+      cfg,
+      primaryProvider: provider,
+      primaryModel: model,
+      prompt: prompt.trim(),
+    });
+    if (routed) {
+      return routed;
     }
   }
   return { provider, model };

@@ -618,7 +618,26 @@ export const chatHandlers: GatewayRequestHandlers = {
         thinkingLevel = configured;
       } else {
         const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        const lastUserMessage = bounded.messages
+          .slice()
+          .reverse()
+          .find((m: { role?: string }) => m?.role === "user");
+        const promptForRouting =
+          typeof (lastUserMessage as { content?: unknown })?.content === "string"
+            ? (lastUserMessage as { content: string }).content
+            : Array.isArray((lastUserMessage as { content?: unknown[] })?.content)
+              ? (
+                  (lastUserMessage as { content: Array<{ type?: string; text?: string }> }).content.find(
+                    (b) => b?.type === "text",
+                  ) as { text?: string } | undefined
+                )?.text
+              : undefined;
+        const { provider, model } = resolveSessionModelRef(
+          cfg,
+          entry,
+          sessionAgentId,
+          promptForRouting,
+        );
         const catalog = await context.loadGatewayModelCatalog();
         thinkingLevel = resolveThinkingDefault({
           cfg,

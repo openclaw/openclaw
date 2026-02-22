@@ -322,6 +322,13 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.routing":
+    "Task-based model routing: select a model per run from rules that match prompt keywords or allowed tools.",
+  "agents.defaults.model.routing.enabled": "Enable task-based routing (default: false).",
+  "agents.defaults.model.routing.rules":
+    "Ordered rules: first match wins. Each rule has match.keywords (prompt) and/or match.tools, and model (provider/model).",
+  "agents.defaults.model.routing.fallbackToPrimary":
+    "When true (default), use primary model when no rule matches.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

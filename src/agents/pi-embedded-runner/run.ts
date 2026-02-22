@@ -27,6 +27,7 @@ import {
   type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { resolveTaskRoutedModelRef } from "../task-routing.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
@@ -283,6 +284,25 @@ export async function runEmbeddedPiAgent(
       if (modelResolveOverride?.modelOverride) {
         modelId = modelResolveOverride.modelOverride;
         log.info(`[hooks] model overridden to ${modelId}`);
+      }
+
+      // Task-based routing: select model from rules by prompt keywords (and optionally tools).
+      const routingApplied =
+        !modelResolveOverride?.providerOverride &&
+        !modelResolveOverride?.modelOverride &&
+        params.config?.agents?.defaults?.model?.routing?.enabled;
+      if (routingApplied) {
+        const routed = resolveTaskRoutedModelRef({
+          cfg: params.config,
+          primaryProvider: provider,
+          primaryModel: modelId,
+          prompt: params.prompt,
+        });
+        if (routed) {
+          provider = routed.provider;
+          modelId = routed.model;
+          log.info(`[task-routing] routed to ${provider}/${modelId}`);
+        }
       }
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
