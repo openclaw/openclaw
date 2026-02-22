@@ -121,7 +121,7 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
     });
 
     it("memoizes WSL2 detection across repeated defaults", () => {
-      vi.mocked(isWSL2Sync).mockReset();
+      vi.mocked(isWSL2Sync).mockClear();
       vi.mocked(isWSL2Sync).mockReturnValue(false);
       resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
       resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
