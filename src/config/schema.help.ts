@@ -320,6 +320,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.primaryRecoveryProbeEvery":
+    "How often to re-probe a cooldowned primary model for recovery and promote it back over fallbacks (duration string, default: 5m).",
+  "agents.list.*.model.primaryRecoveryProbeEvery":
+    "Per-agent override for how often to re-probe a cooldowned primary model (duration string, default unit: minutes).",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

@@ -79,11 +79,36 @@ describe("runWithModelFallback – probe logic", () => {
     vi.restoreAllMocks();
   });
 
-  it("skips primary model when far from cooldown expiry (30 min remaining)", async () => {
+  it("probes primary model periodically even when far from cooldown expiry", async () => {
     const cfg = makeCfg();
     // Cooldown expires in 30 min — well beyond the 2-min margin
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+
+    const run = vi.fn().mockResolvedValue("probed-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("probed-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  });
+
+  it("skips primary when regular probe interval has not elapsed", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+
+    // Probed recently, but outside the 30s throttle window.
+    _probeThrottleInternals.lastProbeAttempt.set(
+      "openai",
+      NOW - (_probeThrottleInternals.MIN_PROBE_INTERVAL_MS + 1_000),
+    );
 
     const run = vi.fn().mockResolvedValue("ok");
 
@@ -94,11 +119,32 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-    // Should skip primary and use fallback
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
     expect(result.attempts[0]?.reason).toBe("rate_limit");
+  });
+
+  it("respects custom primary recovery probe interval", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+
+    _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 46_000);
+
+    const run = vi.fn().mockResolvedValue("custom-probed");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      primaryRecoveryProbeIntervalMs: 45_000,
+      run,
+    });
+
+    expect(result.result).toBe("custom-probed");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {

@@ -23,6 +23,12 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /**
+   * How often to re-probe a cooldowned primary model to detect recovery and
+   * promote it back over fallbacks (duration string, default unit: minutes).
+   * Default: 5m.
+   */
+  primaryRecoveryProbeEvery?: string;
 };
 
 export type AgentContextPruningConfig = {

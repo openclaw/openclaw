@@ -77,6 +77,46 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts model primaryRecoveryProbeEvery duration", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.3-codex",
+            primaryRecoveryProbeEvery: "3m",
+          },
+        },
+        list: [
+          {
+            id: "agent-test",
+            model: {
+              primaryRecoveryProbeEvery: "45s",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid model primaryRecoveryProbeEvery duration", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          model: {
+            primaryRecoveryProbeEvery: "sometimes",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.defaults.model.primaryRecoveryProbeEvery");
+    }
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {

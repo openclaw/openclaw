@@ -1,10 +1,12 @@
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  resolveAgentModelFallbacksOverride,
+  resolveEffectiveModelRecoveryProbeIntervalMs,
+} from "../../agents/agent-scope.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
@@ -138,14 +140,16 @@ export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
+  const agentId = run.agentId;
   return {
     cfg: run.config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveAgentModelFallbacksOverride(
+    fallbacksOverride: resolveAgentModelFallbacksOverride(run.config, agentId),
+    primaryRecoveryProbeIntervalMs: resolveEffectiveModelRecoveryProbeIntervalMs(
       run.config,
-      resolveAgentIdFromSessionKey(run.sessionKey),
+      agentId,
     ),
   };
 }

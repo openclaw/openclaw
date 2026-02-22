@@ -305,7 +305,68 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });
 
-  it("skips providers when all profiles are in cooldown", async () => {
+  it("promotes to highest-priority fallback when currently on a lower fallback", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2.0-flash"],
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "openai") {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      }
+      if (providerId === "anthropic") {
+        return "promoted";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-2.0-flash",
+      run,
+    });
+
+    expect(result.result).toBe("promoted");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
+  it("keeps current model first when fallbacksOverride is explicit", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2.0-flash"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValue("current-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-2.0-flash",
+      fallbacksOverride: ["anthropic/claude-haiku-3-5", "google/gemini-2.0-flash"],
+      run,
+    });
+
+    expect(result.result).toBe("current-ok");
+    expect(run.mock.calls).toEqual([["google", "gemini-2.0-flash"]]);
+  });
+
+  it("probes cooldowned primary periodically, then falls back on rate-limit", async () => {
     const provider = `cooldown-test-${crypto.randomUUID()}`;
     const profileId = `${provider}:default`;
 
@@ -327,6 +388,9 @@ describe("runWithModelFallback", () => {
 
     const cfg = makeProviderFallbackCfg(provider);
     const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === provider) {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      }
       if (providerId === "fallback") {
         return "ok";
       }
@@ -341,7 +405,10 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+    expect(run.mock.calls).toEqual([
+      [provider, "m1"],
+      ["fallback", "ok-model"],
+    ]);
     expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 

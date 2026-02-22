@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
+  resolveEffectiveModelRecoveryProbeIntervalMs,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
@@ -167,6 +168,22 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
       }),
     ).toEqual([]);
+  });
+
+  it("resolves primary recovery probe interval from per-agent override or defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primaryRecoveryProbeEvery: "7m",
+          },
+        },
+        list: [{ id: "linus", model: { primaryRecoveryProbeEvery: "2m" } }, { id: "ada" }],
+      },
+    };
+
+    expect(resolveEffectiveModelRecoveryProbeIntervalMs(cfg, "linus")).toBe(2 * 60_000);
+    expect(resolveEffectiveModelRecoveryProbeIntervalMs(cfg, "ada")).toBe(7 * 60_000);
   });
 
   it("should return agent-specific sandbox config", () => {

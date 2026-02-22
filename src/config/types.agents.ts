@@ -16,6 +16,12 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /**
+       * How often to re-probe a cooldowned primary model to detect recovery and
+       * promote it back over fallbacks (duration string, default unit: minutes).
+       * Default: 5m.
+       */
+      primaryRecoveryProbeEvery?: string;
     };
 
 export type AgentConfig = {
@@ -37,8 +43,8 @@ export type AgentConfig = {
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
-    /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
+    /** Per-agent default model for spawned sub-agents (string or object model config). */
+    model?: AgentModelConfig;
   };
   sandbox?: {
     mode?: "off" | "non-main" | "all";
