@@ -72,6 +72,84 @@ export async function getMessageFeishu(params: {
       const parsed = JSON.parse(content);
       if (item.msg_type === "text" && parsed.text) {
         content = parsed.text;
+      } else if (item.msg_type === "post") {
+        // Extract readable text from rich text post
+        const title = parsed.title || "";
+        const blocks = parsed.content || [];
+        const parts: string[] = [];
+        if (title) parts.push(title);
+        for (const paragraph of blocks) {
+          if (Array.isArray(paragraph)) {
+            const line = paragraph
+              .map((el: any) => {
+                if (el.tag === "text") return el.text || "";
+                if (el.tag === "a") return el.text || el.href || "";
+                if (el.tag === "at") return `@${el.user_name || el.user_id || ""}`;
+                if (el.tag === "img") return "[图片]";
+                if (el.tag === "media") return `[${el.file_name || "视频"}]`;
+                return "";
+              })
+              .join("");
+            if (line) parts.push(line);
+          }
+        }
+        content = parts.join("\n") || content;
+      } else if (item.msg_type === "interactive") {
+        // Card message: extract what we can from degraded content
+        // For full content recovery, use session log lookup at agent level
+        {
+          const cardTexts: string[] = [];
+          const extractText = (els: unknown[]) => {
+            for (const el of els) {
+              const e = el as { tag?: string; text?: string; content?: string };
+              if (
+                e.tag === "text" ||
+                e.tag === "lark_md" ||
+                e.tag === "md" ||
+                e.tag === "markdown"
+              ) {
+                const t = e.text ?? e.content ?? "";
+                if (t) cardTexts.push(t);
+              }
+            }
+          };
+          // Try card body.elements (schema 2.0) or top-level elements
+          const elements = parsed.body?.elements ?? parsed.elements ?? [];
+          if (Array.isArray(elements)) {
+            for (const row of elements) {
+              if (Array.isArray(row)) extractText(row);
+              else extractText([row]);
+            }
+          }
+          if (cardTexts.length > 0) {
+            content = cardTexts.join("\n");
+          } else {
+            // Fallback: try degraded post format
+            const fallback = parsed.fallback_text || parsed.config?.fallback_text || "";
+            if (fallback) {
+              content = fallback;
+            } else if (parsed.elements || parsed.title) {
+              const title = parsed.title || "";
+              const blocks = parsed.elements || parsed.content || [];
+              const parts: string[] = [];
+              if (title) parts.push(title);
+              for (const paragraph of blocks) {
+                if (Array.isArray(paragraph)) {
+                  const line = paragraph
+                    .map((el: any) => {
+                      if (el.tag === "text") return el.text || "";
+                      if (el.tag === "a") return el.text || el.href || "";
+                      if (el.tag === "img") return "[图片]";
+                      return "";
+                    })
+                    .join("");
+                  if (line) parts.push(line);
+                }
+              }
+              if (parts.length > 0) content = parts.join("\n");
+            }
+          }
+        }
       }
     } catch {
       // Keep raw content if parsing fails
@@ -186,6 +264,9 @@ export type SendFeishuCardParams = {
   accountId?: string;
 };
 
+// Card content cache removed — session logs are the reliable source for
+// recovering sent card content. See MEMORY.md for the lookup procedure.
+
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -211,7 +292,9 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
-    return toFeishuSendResult(response, receiveId);
+    const result = toFeishuSendResult(response, receiveId);
+
+    return result;
   }
 
   const response = await client.im.message.create({
@@ -223,7 +306,8 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     },
   });
   assertFeishuMessageApiSuccess(response, "Feishu card send failed");
-  return toFeishuSendResult(response, receiveId);
+  const result = toFeishuSendResult(response, receiveId);
+  return result;
 }
 
 export async function updateCardFeishu(params: {

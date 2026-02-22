@@ -1,6 +1,5 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import {
-  buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
@@ -11,14 +10,8 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessage } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
-import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { downloadMessageResourceFeishu } from "./media.js";
-import {
-  escapeRegExp,
-  extractMentionTargets,
-  extractMessageBody,
-  isMentionForwardRequest,
-} from "./mention.js";
+import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
+import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -191,30 +184,23 @@ function parseMessageContent(content: string, messageType: string): string {
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  if (!botOpenId) return false;
   const mentions = event.message.mentions ?? [];
-  if (mentions.length > 0) {
-    return mentions.some((m) => m.id.open_id === botOpenId);
-  }
-  // Post (rich text) messages may have empty message.mentions when they contain docs/paste
-  if (event.message.message_type === "post") {
-    const { mentionedOpenIds } = parsePostContent(event.message.content);
-    return mentionedOpenIds.some((id) => id === botOpenId);
-  }
-  return false;
+  if (mentions.length === 0) return false;
+  if (!botOpenId) return false;
+  return mentions.some((m) => m.id.open_id === botOpenId);
 }
 
-export function stripBotMention(
+function stripBotMention(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
 ): string {
   if (!mentions || mentions.length === 0) return text;
   let result = text;
   for (const mention of mentions) {
-    result = result.replace(new RegExp(`@${escapeRegExp(mention.name)}\\s*`, "g"), "");
-    result = result.replace(new RegExp(escapeRegExp(mention.key), "g"), "");
+    result = result.replace(new RegExp(`@${mention.name}\\s*`, "g"), "").trim();
+    result = result.replace(new RegExp(mention.key, "g"), "").trim();
   }
-  return result.trim();
+  return result;
 }
 
 /**
@@ -230,20 +216,21 @@ function parseMediaKeys(
 } {
   try {
     const parsed = JSON.parse(content);
-    const imageKey = normalizeFeishuExternalKey(parsed.image_key);
-    const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey };
+        return { imageKey: parsed.image_key };
       case "file":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "audio":
-        return { fileKey };
+        return { fileKey: parsed.file_key };
       case "video":
         // Video has both file_key (video) and image_key (thumbnail)
-        return { fileKey, imageKey };
+        return { fileKey: parsed.file_key, imageKey: parsed.image_key };
+      case "media":
+        // Feishu may use "media" as message_type for video/audio files
+        return { fileKey: parsed.file_key, imageKey: parsed.image_key, fileName: parsed.file_name };
       case "sticker":
-        return { fileKey };
+        return { fileKey: parsed.file_key };
       default:
         return {};
     }
@@ -259,6 +246,7 @@ function parseMediaKeys(
 function parsePostContent(content: string): {
   textContent: string;
   imageKeys: string[];
+  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
   mentionedOpenIds: string[];
 } {
   try {
@@ -267,6 +255,7 @@ function parsePostContent(content: string): {
     const contentBlocks = parsed.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
+    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
     const mentionedOpenIds: string[] = [];
 
     for (const paragraph of contentBlocks) {
@@ -275,20 +264,16 @@ function parsePostContent(content: string): {
           if (element.tag === "text") {
             textContent += element.text || "";
           } else if (element.tag === "a") {
-            // Link: show text or href
             textContent += element.text || element.href || "";
           } else if (element.tag === "at") {
-            // Mention: @username
             textContent += `@${element.user_name || element.user_id || ""}`;
             if (element.user_id) {
               mentionedOpenIds.push(element.user_id);
             }
           } else if (element.tag === "img" && element.image_key) {
-            // Embedded image
-            const imageKey = normalizeFeishuExternalKey(element.image_key);
-            if (imageKey) {
-              imageKeys.push(imageKey);
-            }
+            imageKeys.push(element.image_key);
+          } else if (element.tag === "media" && element.file_key) {
+            mediaKeys.push({ fileKey: element.file_key, fileName: element.file_name });
           }
         }
         textContent += "\n";
@@ -296,12 +281,13 @@ function parsePostContent(content: string): {
     }
 
     return {
-      textContent: textContent.trim() || "[Rich text message]",
+      textContent: textContent.trim() || "[富文本消息]",
       imageKeys,
+      mediaKeys,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: "[Rich text message]", imageKeys: [], mentionedOpenIds: [] };
+    return { textContent: "[富文本消息]", imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
   }
 }
 
@@ -341,7 +327,7 @@ async function resolveFeishuMediaList(params: {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
 
   // Only process media message types (including post for embedded images)
-  const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) {
     return [];
   }
@@ -349,14 +335,19 @@ async function resolveFeishuMediaList(params: {
   const out: FeishuMediaInfo[] = [];
   const core = getFeishuRuntime();
 
-  // Handle post (rich text) messages with embedded images
+  // Handle post (rich text) messages with embedded images and media
   if (messageType === "post") {
-    const { imageKeys } = parsePostContent(content);
-    if (imageKeys.length === 0) {
+    const { imageKeys, mediaKeys: postMediaKeys } = parsePostContent(content);
+    if (imageKeys.length === 0 && postMediaKeys.length === 0) {
       return [];
     }
 
-    log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
+    if (imageKeys.length > 0) {
+      log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
+    }
+    if (postMediaKeys.length > 0) {
+      log?.(`feishu: post message contains ${postMediaKeys.length} embedded media file(s)`);
+    }
 
     for (const imageKey of imageKeys) {
       try {
@@ -393,6 +384,38 @@ async function resolveFeishuMediaList(params: {
       }
     }
 
+    // Download embedded video/audio media from post
+    for (const media of postMediaKeys) {
+      try {
+        const result = await downloadMessageResourceFeishu({
+          cfg,
+          messageId,
+          fileKey: media.fileKey,
+          type: "file",
+          accountId,
+        });
+        let contentType = result.contentType;
+        if (!contentType) {
+          contentType = await core.media.detectMime({ buffer: result.buffer });
+        }
+        const saved = await core.channel.media.saveMediaBuffer(
+          result.buffer,
+          contentType,
+          "inbound",
+          maxBytes,
+        );
+        out.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          fileName: media.fileName,
+          placeholder: "<media:video>",
+        });
+        log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
+      } catch (err) {
+        log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
+      }
+    }
+
     return out;
   }
 
@@ -409,7 +432,11 @@ async function resolveFeishuMediaList(params: {
 
     // For message media, always use messageResource API
     // The image.get API is only for images uploaded via im/v1/images, not for message attachments
-    const fileKey = mediaKeys.imageKey || mediaKeys.fileKey;
+    // For video/media types, prefer fileKey (actual video) over imageKey (thumbnail)
+    const isVideoLike = messageType === "video" || messageType === "media";
+    const fileKey = isVideoLike
+      ? mediaKeys.fileKey || mediaKeys.imageKey
+      : mediaKeys.imageKey || mediaKeys.fileKey;
     if (!fileKey) {
       return [];
     }
@@ -458,6 +485,184 @@ async function resolveFeishuMediaList(params: {
  * Build media payload for inbound context.
  * Similar to Discord's buildDiscordMediaPayload().
  */
+function buildFeishuMediaPayload(mediaList: FeishuMediaInfo[]): {
+  MediaPath?: string;
+  MediaType?: string;
+  MediaUrl?: string;
+  MediaPaths?: string[];
+  MediaUrls?: string[];
+  MediaTypes?: string[];
+} {
+  const first = mediaList[0];
+  const mediaPaths = mediaList.map((media) => media.path);
+  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
+  return {
+    MediaPath: first?.path,
+    MediaType: first?.contentType,
+    MediaUrl: first?.path,
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+  };
+}
+
+/**
+ * Resolve merge_forward message content by fetching sub-messages via message.get API.
+ * Returns a human-readable text representation of the forwarded conversation.
+ */
+async function resolveMergeForwardContent(params: {
+  cfg: ClawdbotConfig;
+  messageId: string;
+  accountId?: string;
+  log?: (msg: string) => void;
+}): Promise<{
+  text: string;
+  mediaSubMessages: Array<{ messageId: string; fileKey: string; msgType: string }>;
+} | null> {
+  const { cfg, messageId, accountId, log } = params;
+  try {
+    const account = resolveFeishuAccount({ cfg, accountId });
+    if (!account.configured) return null;
+    const client = createFeishuClient(account);
+
+    const response = (await client.im.message.get({
+      path: { message_id: messageId },
+    })) as {
+      code?: number;
+      data?: {
+        items?: Array<{
+          message_id?: string;
+          msg_type?: string;
+          body?: { content?: string };
+          sender?: { id?: string; sender_type?: string };
+          mentions?: Array<{ key: string; name: string }>;
+          create_time?: string;
+        }>;
+      };
+    };
+
+    if (response.code !== 0) return null;
+    const items = response.data?.items ?? [];
+    if (items.length <= 1) return null; // Only the parent message itself
+
+    const lines: string[] = ["[合并转发消息内容]"];
+    const mediaSubMessages: Array<{ messageId: string; fileKey: string; msgType: string }> = [];
+    for (const item of items) {
+      if (item.message_id === messageId) continue; // Skip the parent wrapper
+      // Skip nested merge_forward (just note it)
+      if (item.msg_type === "merge_forward") {
+        lines.push("[嵌套合并转发消息]");
+        continue;
+      }
+      let text = "";
+      try {
+        const content = JSON.parse(item.body?.content ?? "{}");
+        if (item.msg_type === "text") {
+          text = content.text ?? "";
+        } else if (item.msg_type === "post") {
+          // Extract text from rich text post, including embedded media
+          const title = content.title || "";
+          const blocks = content.content || [];
+          const parts: string[] = title ? [title] : [];
+          for (const para of blocks) {
+            if (Array.isArray(para)) {
+              for (const el of para) {
+                const e = el as {
+                  tag: string;
+                  text?: string;
+                  href?: string;
+                  file_key?: string;
+                  image_key?: string;
+                };
+                if (e.tag === "text") {
+                  parts.push(e.text ?? "");
+                } else if (e.tag === "a") {
+                  parts.push(e.text ?? e.href ?? "");
+                } else if (e.tag === "media" && e.file_key && item.message_id) {
+                  parts.push("[嵌入视频]");
+                  mediaSubMessages.push({
+                    messageId: item.message_id,
+                    fileKey: e.file_key,
+                    msgType: "media",
+                  });
+                } else if (e.tag === "img" && e.image_key && item.message_id) {
+                  parts.push("[嵌入图片]");
+                  mediaSubMessages.push({
+                    messageId: item.message_id,
+                    fileKey: e.image_key,
+                    msgType: "image",
+                  });
+                }
+              }
+            }
+          }
+          text = parts.filter(Boolean).join("\n") || "[富文本]";
+        } else if (item.msg_type === "interactive") {
+          // Card message - extract text elements
+          const elements = content.elements ?? [];
+          const cardTexts: string[] = [];
+          const extractText = (els: unknown[]) => {
+            for (const el of els) {
+              const e = el as { tag?: string; text?: string; content?: string };
+              if (e.tag === "text" || e.tag === "lark_md" || e.tag === "md") {
+                cardTexts.push(e.text ?? e.content ?? "");
+              }
+            }
+          };
+          if (Array.isArray(elements)) {
+            for (const row of elements) {
+              if (Array.isArray(row)) extractText(row);
+              else extractText([row]);
+            }
+          }
+          text = cardTexts.filter(Boolean).join("\n") || "[卡片消息]";
+        } else if (item.msg_type === "image") {
+          text = "[图片]";
+          if (content.image_key && item.message_id) {
+            mediaSubMessages.push({
+              messageId: item.message_id,
+              fileKey: content.image_key,
+              msgType: "image",
+            });
+          }
+        } else if (item.msg_type === "file") {
+          text = `[文件: ${content.file_name ?? "unknown"}]`;
+        } else if (item.msg_type === "audio") {
+          text = "[语音]";
+        } else if (item.msg_type === "video" || item.msg_type === "media") {
+          text = `[视频: ${content.file_name ?? "video"}, duration=${content.duration ?? "?"}ms]`;
+          if (content.file_key && item.message_id) {
+            mediaSubMessages.push({
+              messageId: item.message_id,
+              fileKey: content.file_key,
+              msgType: item.msg_type ?? "media",
+            });
+          }
+        } else {
+          text = `[${item.msg_type ?? "unknown"}消息]`;
+        }
+      } catch {
+        text = item.body?.content ?? "[无法解析]";
+      }
+
+      // Replace mention placeholders with names
+      if (item.mentions) {
+        for (const m of item.mentions) {
+          text = text.replace(new RegExp(m.key, "g"), `@${m.name}`);
+        }
+      }
+
+      const sender = item.sender?.sender_type === "app" ? "Bot" : "User";
+      lines.push(`${sender}: ${text}`);
+    }
+
+    return { text: lines.join("\n"), mediaSubMessages };
+  } catch (err) {
+    log?.(`feishu: failed to resolve merge_forward content: ${String(err)}`);
+    return null;
+  }
+}
+
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
@@ -519,6 +724,96 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+
+  // Resolve merge_forward messages: fetch sub-messages and expand into readable text
+  if (event.message.message_type === "merge_forward") {
+    const mergeResult = await resolveMergeForwardContent({
+      cfg,
+      messageId: ctx.messageId,
+      accountId: account.accountId,
+      log,
+    });
+    if (mergeResult) {
+      ctx = { ...ctx, content: mergeResult.text };
+      log(
+        `feishu[${account.accountId}]: expanded merge_forward message (${mergeResult.text.length} chars, ${mergeResult.mediaSubMessages.length} media sub-messages)`,
+      );
+
+      // For media sub-messages, resolve original file_keys by re-fetching each sub-message directly
+      // The merge_forward returns placeholder file_keys that can't be downloaded;
+      // direct message.get returns the real/original file_key that works.
+      if (mergeResult.mediaSubMessages.length > 0) {
+        const account2 = resolveFeishuAccount({ cfg, accountId: account.accountId });
+        if (account2.configured) {
+          const client2 = createFeishuClient(account2);
+          for (const sub of mergeResult.mediaSubMessages) {
+            try {
+              const directRes = (await client2.im.message.get({
+                path: { message_id: sub.messageId },
+              })) as {
+                code?: number;
+                data?: {
+                  items?: Array<{
+                    message_id?: string;
+                    msg_type?: string;
+                    body?: { content?: string };
+                  }>;
+                };
+              };
+              if (directRes.code === 0) {
+                const directItem = directRes.data?.items?.find(
+                  (i) => i.message_id === sub.messageId,
+                );
+                if (directItem?.body?.content) {
+                  try {
+                    const directContent = JSON.parse(directItem.body.content);
+                    const realFileKey =
+                      directContent.file_key ?? directContent.content?.[0]?.[0]?.file_key;
+                    if (realFileKey && realFileKey !== sub.fileKey) {
+                      log(
+                        `feishu: resolved original file_key for sub-message ${sub.messageId}: ${realFileKey}`,
+                      );
+                      // Download the media using the real file_key
+                      const mediaList = await resolveFeishuMediaList({
+                        cfg,
+                        messageId: sub.messageId,
+                        messageType: sub.msgType === "media" ? "video" : sub.msgType,
+                        content: directItem.body.content,
+                        maxBytes: (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024,
+                        log,
+                        accountId: account.accountId,
+                      });
+                      if (mediaList.length > 0) {
+                        log(
+                          `feishu: downloaded ${mediaList.length} media from merge_forward sub-message`,
+                        );
+                        // Inject media into the event so it gets picked up by the normal media flow
+                        // We'll append to the existing media processing below
+                        (event as Record<string, unknown>).__mergeForwardMedia =
+                          ((event as Record<string, unknown>).__mergeForwardMedia as
+                            | FeishuMediaInfo[]
+                            | undefined) ?? [];
+                        (
+                          (event as Record<string, unknown>)
+                            .__mergeForwardMedia as FeishuMediaInfo[]
+                        ).push(...mediaList);
+                      }
+                    }
+                  } catch {
+                    /* parse error, skip */
+                  }
+                }
+              }
+            } catch (err) {
+              log?.(
+                `feishu: failed to resolve original file_key for ${sub.messageId}: ${String(err)}`,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
@@ -772,7 +1067,14 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
+    // Append merge_forward media if any were downloaded
+    const mergeForwardMedia = (event as Record<string, unknown>).__mergeForwardMedia as
+      | FeishuMediaInfo[]
+      | undefined;
+    if (mergeForwardMedia && mergeForwardMedia.length > 0) {
+      mediaList.push(...mergeForwardMedia);
+    }
+    const mediaPayload = buildFeishuMediaPayload(mediaList);
 
     // Fetch quoted/replied message content if parentId exists
     let quotedContent: string | undefined;
@@ -932,6 +1234,7 @@ export async function handleFeishuMessage(params: {
       Surface: "feishu" as const,
       MessageSid: ctx.messageId,
       ReplyToBody: quotedContent ?? undefined,
+      ReplyToId: ctx.parentId ?? undefined,
       Timestamp: Date.now(),
       WasMentioned: ctx.mentionedBot,
       CommandAuthorized: commandAuthorized,
