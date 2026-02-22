@@ -121,7 +121,13 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[]; modelId?: string; provider?: string; contextWindowTokens?: number },
+    event: {
+      prompt: string;
+      messages: unknown[];
+      modelId?: string;
+      provider?: string;
+      contextWindowTokens?: number;
+    },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
@@ -1023,9 +1029,7 @@ export async function runEmbeddedAttempt(
           modelId: params.modelId,
           provider: params.provider,
           contextWindowTokens:
-            params.model?.contextWindow ??
-            params.model?.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
+            params.model?.contextWindow ?? params.model?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
         });
         const hookResult = promptBuildResult;
         {
@@ -1037,40 +1041,53 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        // Model routing: if before_prompt_build returned a modelOverride, resolve and apply it.
-        if (promptBuildResult?.modelOverride) {
-          const { resolveModel } = await import("../model.js");
-          const routedProvider = promptBuildResult.providerOverride ?? params.provider;
-          const routedResult = resolveModel(
-            routedProvider,
-            promptBuildResult.modelOverride,
-            agentDir,
-            params.config,
-          );
-          if (routedResult.model) {
-            const routedModel = routedResult.model;
-            const originalStreamFn = activeSession.agent.streamFn;
-            activeSession.agent.streamFn = (_model, ...rest) =>
-              originalStreamFn(routedModel, ...rest);
+        // Dynamic per-call model routing (env-based, takes precedence over plugin hooks).
+        const { installDynamicModelRouter } = await import("../../model-router/index.js");
+        const routerResult = await installDynamicModelRouter({
+          activeSession,
+          sessionManager,
+          provider: params.provider,
+          modelId: params.modelId,
+          agentDir,
+          config: params.config,
+        });
 
-            // Update context-hooks runtime so before_context_send sees the routed model.
-            const { getContextHooksRuntime } =
-              await import("../../pi-extensions/context-hooks/runtime.js");
-            const contextHooksRuntime = getContextHooksRuntime(sessionManager);
-            if (contextHooksRuntime) {
-              contextHooksRuntime.modelId = promptBuildResult.modelOverride;
-              contextHooksRuntime.provider = routedProvider;
-              contextHooksRuntime.contextWindowTokens =
-                routedModel.contextWindow ?? routedModel.maxTokens ?? DEFAULT_CONTEXT_TOKENS;
+        if (!routerResult.installed) {
+          // Fall back to static per-turn routing from plugin hooks.
+          if (promptBuildResult?.modelOverride) {
+            const { resolveModel } = await import("../model.js");
+            const routedProvider = promptBuildResult.providerOverride ?? params.provider;
+            const routedResult = resolveModel(
+              routedProvider,
+              promptBuildResult.modelOverride,
+              agentDir,
+              params.config,
+            );
+            if (routedResult.model) {
+              const routedModel = routedResult.model;
+              const originalStreamFn = activeSession.agent.streamFn;
+              activeSession.agent.streamFn = (_model, ...rest) =>
+                originalStreamFn(routedModel, ...rest);
+
+              // Update context-hooks runtime so before_context_send sees the routed model.
+              const { getContextHooksRuntime } =
+                await import("../../pi-extensions/context-hooks/runtime.js");
+              const contextHooksRuntime = getContextHooksRuntime(sessionManager);
+              if (contextHooksRuntime) {
+                contextHooksRuntime.modelId = promptBuildResult.modelOverride;
+                contextHooksRuntime.provider = routedProvider;
+                contextHooksRuntime.contextWindowTokens =
+                  routedModel.contextWindow ?? routedModel.maxTokens ?? DEFAULT_CONTEXT_TOKENS;
+              }
+
+              log.debug(
+                `hooks: model routed from ${params.provider}/${params.modelId} to ${routedProvider}/${promptBuildResult.modelOverride}`,
+              );
+            } else {
+              log.warn(
+                `hooks: modelOverride "${promptBuildResult.modelOverride}" could not be resolved, using original model`,
+              );
             }
-
-            log.debug(
-              `hooks: model routed from ${params.provider}/${params.modelId} to ${routedProvider}/${promptBuildResult.modelOverride}`,
-            );
-          } else {
-            log.warn(
-              `hooks: modelOverride "${promptBuildResult.modelOverride}" could not be resolved, using original model`,
-            );
           }
         }
 
