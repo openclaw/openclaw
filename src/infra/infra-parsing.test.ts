@@ -63,8 +63,32 @@ describe("infra parsing", () => {
           argv: ["node", "/repo/openclaw.mjs"],
           cwd: "/repo",
           env: {},
+          wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
         }),
       ).toBe(true);
+    });
+
+    it("returns false for wrapper launches when wrapper pair is not configured", () => {
+      expect(
+        isMainModule({
+          currentFile: "/repo/dist/entry.js",
+          argv: ["node", "/repo/openclaw.mjs"],
+          cwd: "/repo",
+          env: {},
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false when wrapper pair targets a different entry basename", () => {
+      expect(
+        isMainModule({
+          currentFile: "/repo/dist/index.js",
+          argv: ["node", "/repo/openclaw.mjs"],
+          cwd: "/repo",
+          env: {},
+          wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+        }),
+      ).toBe(false);
     });
 
     it("returns false when running under PM2 but this module is imported", () => {

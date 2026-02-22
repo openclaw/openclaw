@@ -10,12 +10,22 @@ import { isMainModule } from "./infra/is-main.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
+const ENTRY_WRAPPER_PAIRS = [
+  { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
+  { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
+] as const;
+
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
 // is the actual entry point; without this guard the top-level code below
 // would call runCli a second time, starting a duplicate gateway that fails
 // on the lock / port and crashes the process.
-if (!isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
+if (
+  !isMainModule({
+    currentFile: fileURLToPath(import.meta.url),
+    wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
+  })
+) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
   process.title = "openclaw";

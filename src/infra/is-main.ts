@@ -6,6 +6,10 @@ type IsMainModuleOptions = {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  wrapperEntryPairs?: Array<{
+    wrapperBasename: string;
+    entryBasename: string;
+  }>;
 };
 
 function normalizePathCandidate(candidate: string | undefined, cwd: string): string | undefined {
@@ -26,6 +30,7 @@ export function isMainModule({
   argv = process.argv,
   env = process.env,
   cwd = process.cwd(),
+  wrapperEntryPairs = [],
 }: IsMainModuleOptions): boolean {
   const normalizedCurrent = normalizePathCandidate(currentFile, cwd);
   const normalizedArgv1 = normalizePathCandidate(argv[1], cwd);
@@ -41,12 +46,15 @@ export function isMainModule({
     return true;
   }
 
-  // The published/open-source wrapper binary is openclaw.mjs, which then imports
-  // dist/entry.js. Treat that pair as the main module so entry bootstrap runs.
-  if (normalizedCurrent && normalizedArgv1) {
+  // Optional wrapper->entry mapping for wrapper launchers that import the real entry.
+  if (normalizedCurrent && normalizedArgv1 && wrapperEntryPairs.length > 0) {
     const currentBase = path.basename(normalizedCurrent);
     const argvBase = path.basename(normalizedArgv1);
-    if (currentBase === "entry.js" && (argvBase === "openclaw.mjs" || argvBase === "openclaw.js")) {
+    const matched = wrapperEntryPairs.some(
+      ({ wrapperBasename, entryBasename }) =>
+        currentBase === entryBasename && argvBase === wrapperBasename,
+    );
+    if (matched) {
       return true;
     }
   }
