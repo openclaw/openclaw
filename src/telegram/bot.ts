@@ -119,6 +119,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     // Cast baseFetch to global fetch to avoid node-fetch ↔ global-fetch type divergence;
     // they are runtime-compatible (the codebase already casts at every fetch boundary).
     const callFetch = baseFetch as unknown as typeof globalThis.fetch;
+    // Use manual event forwarding instead of AbortSignal.any() to avoid the cross-realm
+    // AbortSignal issue in Node.js (grammY's signal may come from a different module context,
+    // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const controller = new AbortController();
       const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
