@@ -376,6 +376,20 @@ export async function setOpenrouterApiKey(
   });
 }
 
+export const FAL_OPENROUTER_DEFAULT_MODEL_REF = "fal-openrouter/google/gemini-2.5-flash";
+
+export async function setFalOpenrouterApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "fal-openrouter:default",
+    credential: buildApiKeyCredential("fal-openrouter", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setCloudflareAiGatewayConfig(
   accountId: string,
   gatewayId: string,

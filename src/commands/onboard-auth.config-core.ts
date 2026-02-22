@@ -1,4 +1,9 @@
 import {
+  buildFalOpenrouterModelDefinition,
+  FAL_OPENROUTER_BASE_URL,
+  FAL_OPENROUTER_MODEL_CATALOG,
+} from "../agents/fal-openrouter-models.js";
+import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -32,6 +37,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
+  FAL_OPENROUTER_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
@@ -169,6 +175,28 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyFalOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[FAL_OPENROUTER_DEFAULT_MODEL_REF] = {
+    ...models[FAL_OPENROUTER_DEFAULT_MODEL_REF],
+    alias: models[FAL_OPENROUTER_DEFAULT_MODEL_REF]?.alias ?? "fal OpenRouter",
+  };
+
+  const falModels = FAL_OPENROUTER_MODEL_CATALOG.map(buildFalOpenrouterModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "fal-openrouter",
+    api: "openai-completions",
+    baseUrl: FAL_OPENROUTER_BASE_URL,
+    catalogModels: falModels,
+  });
+}
+
+export function applyFalOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyFalOpenrouterProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, FAL_OPENROUTER_DEFAULT_MODEL_REF);
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

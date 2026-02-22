@@ -7,6 +7,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "mistralApiKey"
   | "openrouterApiKey"
   | "kilocodeApiKey"
+  | "falOpenrouterApiKey"
   | "aiGatewayApiKey"
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
@@ -71,6 +72,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--kilocode-api-key",
     cliOption: "--kilocode-api-key <key>",
     description: "Kilo Gateway API key",
+  },
+  {
+    optionKey: "falOpenrouterApiKey",
+    authChoice: "fal-openrouter-api-key",
+    cliFlag: "--fal-openrouter-api-key",
+    cliOption: "--fal-openrouter-api-key <key>",
+    description: "fal OpenRouter API key (FAL_API_KEY)",
   },
   {
     optionKey: "aiGatewayApiKey",

@@ -156,6 +156,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "fal-openrouter",
+    label: "fal OpenRouter",
+    hint: "API key",
+    choices: ["fal-openrouter-api-key"],
+  },
+  {
     value: "huggingface",
     label: "Hugging Face",
     hint: "Inference API (HF token)",

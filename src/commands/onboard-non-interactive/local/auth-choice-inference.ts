@@ -15,6 +15,7 @@ type AuthChoiceFlagOptions = Pick<
   | "mistralApiKey"
   | "openrouterApiKey"
   | "kilocodeApiKey"
+  | "falOpenrouterApiKey"
   | "aiGatewayApiKey"
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
