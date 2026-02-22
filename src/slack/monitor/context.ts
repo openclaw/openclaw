@@ -3,7 +3,7 @@ import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import type { OpenClawConfig, SlackReactionNotificationMode } from "../../config/config.js";
 import { resolveSessionKey, type SessionScope } from "../../config/sessions.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy, ReactionDelivery } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { getChildLogger } from "../../logging.js";
@@ -76,6 +76,9 @@ export type SlackMonitorContext = {
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
+  reactionDelivery: ReactionDelivery;
+  reactionBundleWindowMs?: number;
+  reactionIncludeMessage?: boolean;
   replyToMode: "off" | "first" | "all";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
@@ -137,6 +140,9 @@ export function createSlackMonitorContext(params: {
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
+  reactionDelivery: SlackMonitorContext["reactionDelivery"];
+  reactionBundleWindowMs?: number;
+  reactionIncludeMessage?: boolean;
   replyToMode: SlackMonitorContext["replyToMode"];
   threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
@@ -399,6 +405,9 @@ export function createSlackMonitorContext(params: {
     useAccessGroups: params.useAccessGroups,
     reactionMode: params.reactionMode,
     reactionAllowlist: params.reactionAllowlist,
+    reactionDelivery: params.reactionDelivery,
+    reactionBundleWindowMs: params.reactionBundleWindowMs,
+    reactionIncludeMessage: params.reactionIncludeMessage,
     replyToMode: params.replyToMode,
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,

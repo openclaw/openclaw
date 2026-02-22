@@ -44,6 +44,10 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./reaction-dispatch": {
+      "types": "./dist/infra/reaction-dispatch/index.d.ts",
+      "default": "./dist/infra/reaction-dispatch/index.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {

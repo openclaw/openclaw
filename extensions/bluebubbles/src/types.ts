@@ -55,6 +55,12 @@ export type BlueBubblesAccountConfig = {
   sendReadReceipts?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Reaction delivery mode: "deferred" queues for next message; "immediate" triggers own agent turn. Default: deferred. */
+  reactionDelivery?: "deferred" | "immediate";
+  /** Debounce window (ms) for bundling multiple reactions to the same message (0–60000). Default: 2000. */
+  reactionBundleWindowMs?: number;
+  /** When true, include the reacted-to message content in the agent context. Default: false. */
+  reactionIncludeMessage?: boolean;
 };
 
 export type BlueBubblesActionConfig = {

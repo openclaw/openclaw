@@ -1,5 +1,6 @@
 import type { Guild, User } from "@buape/carbon";
 import type { AllowlistMatch } from "../../channels/allowlist-match.js";
+import type { ReactionDelivery } from "../../config/types.reactions.js";
 import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
@@ -21,6 +22,9 @@ export type DiscordGuildEntryResolved = {
   slug?: string;
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
+  reactionDelivery?: ReactionDelivery;
+  reactionBundleWindowMs?: number;
+  reactionIncludeMessage?: boolean;
   users?: string[];
   roles?: string[];
   channels?: Record<

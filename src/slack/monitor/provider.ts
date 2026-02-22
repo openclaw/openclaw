@@ -117,6 +117,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
+  const reactionDelivery = slackCfg.reactionDelivery ?? "deferred";
+  const reactionBundleWindowMs = slackCfg.reactionBundleWindowMs;
+  const reactionIncludeMessage = slackCfg.reactionIncludeMessage;
   const replyToMode = slackCfg.replyToMode ?? "all";
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
@@ -214,6 +217,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     useAccessGroups,
     reactionMode,
     reactionAllowlist,
+    reactionDelivery,
+    reactionBundleWindowMs,
+    reactionIncludeMessage,
     replyToMode,
     threadHistoryScope,
     threadInheritParent,

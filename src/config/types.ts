@@ -30,3 +30,4 @@ export * from "./types.tts.js";
 export * from "./types.tools.js";
 export * from "./types.whatsapp.js";
 export * from "./types.memory.js";
+export * from "./types.reactions.js";

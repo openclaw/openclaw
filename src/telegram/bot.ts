@@ -1,6 +1,6 @@
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import { type Message, type UserFromGetMe } from "@grammyjs/types";
+import { type Message, type ReactionTypeEmoji, type UserFromGetMe } from "@grammyjs/types";
 import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -21,8 +21,10 @@ import {
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
@@ -36,10 +38,12 @@ import {
 } from "./bot-updates.js";
 import {
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -356,6 +360,139 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
+  });
+
+  // Handle emoji reactions to messages
+  bot.on("message_reaction", async (ctx) => {
+    try {
+      const reaction = ctx.messageReaction;
+      if (!reaction) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+
+      const chatId = reaction.chat.id;
+      const messageId = reaction.message_id;
+      const user = reaction.user;
+
+      // Resolve reaction notification mode (default: "own")
+      const reactionMode = telegramCfg.reactionNotifications ?? "own";
+      if (reactionMode === "off") {
+        return;
+      }
+      if (user?.is_bot) {
+        return;
+      }
+      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
+        return;
+      }
+
+      // Detect added reactions
+      const oldEmojis = new Set(
+        reaction.old_reaction
+          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+          .map((r) => r.emoji),
+      );
+      const addedReactions = reaction.new_reaction
+        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+        .filter((r) => !oldEmojis.has(r.emoji));
+
+      if (addedReactions.length === 0) {
+        return;
+      }
+
+      // Build sender label
+      const senderName = user
+        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
+        : undefined;
+      const senderUsername = user?.username ? `@${user.username}` : undefined;
+      let senderLabel = senderName;
+      if (senderName && senderUsername) {
+        senderLabel = `${senderName} (${senderUsername})`;
+      } else if (!senderName && senderUsername) {
+        senderLabel = senderUsername;
+      }
+      if (!senderLabel && user?.id) {
+        senderLabel = `id:${user.id}`;
+      }
+      senderLabel = senderLabel || "unknown";
+
+      // Reactions target a specific message_id; the Telegram Bot API does not include
+      // message_thread_id on MessageReactionUpdated, so we route to the chat-level
+      // session (forum topic routing is not available for reactions).
+      const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+      const isForum = reaction.chat.is_forum === true;
+      const resolvedThreadId = isForum
+        ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
+        : undefined;
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      // Fresh config for bindings lookup; other routing inputs are payload-derived.
+      const route = resolveAgentRoute({
+        cfg: loadConfig(),
+        channel: "telegram",
+        accountId: account.accountId,
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
+        parentPeer,
+      });
+      const sessionKey = route.sessionKey;
+
+      // Enqueue system event for each added reaction
+      if (telegramCfg?.reactionDelivery === "immediate") {
+        try {
+          const { getReactionDebouncer } = await import("../infra/reaction-dispatch/index.js");
+          const debouncer = getReactionDebouncer(telegramCfg.reactionBundleWindowMs);
+
+          for (const r of addedReactions) {
+            await debouncer.enqueue(
+              {
+                emoji: r.emoji,
+                actorLabel: senderLabel,
+                actorId: user?.id ? String(user.id) : undefined,
+                action: "added",
+                ts: Date.now(),
+              },
+              {
+                channel: "telegram",
+                accountId: account.accountId,
+                sessionKey,
+                messageId: String(messageId),
+                conversationLabel: isGroup ? `group:${chatId}` : `dm:${chatId}`,
+              },
+            );
+          }
+          logVerbose(
+            `telegram: ${addedReactions.length} reaction(s) enqueued for immediate dispatch on msg ${messageId}`,
+          );
+        } catch (err) {
+          logVerbose(
+            `telegram: reaction dispatch failed, falling back to deferred: ${String(err)}`,
+          );
+          for (const r of addedReactions) {
+            const emoji = r.emoji;
+            const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
+            enqueueSystemEvent(text, {
+              sessionKey,
+              contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+            });
+          }
+        }
+      } else {
+        for (const r of addedReactions) {
+          const emoji = r.emoji;
+          const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
+          enqueueSystemEvent(text, {
+            sessionKey,
+            contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+          });
+          logVerbose(`telegram: reaction event enqueued: ${text}`);
+        }
+      }
+    } catch (err) {
+      runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
+    }
   });
 
   registerTelegramHandlers({

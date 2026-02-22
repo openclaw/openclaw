@@ -68,6 +68,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       useAccessGroups: false,
       reactionMode: "off",
       reactionAllowlist: [],
+      reactionDelivery: "deferred",
       replyToMode: params.replyToMode ?? "off",
       threadHistoryScope: "thread",
       threadInheritParent: false,
