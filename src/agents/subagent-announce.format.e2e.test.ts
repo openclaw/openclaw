@@ -149,7 +149,7 @@ describe("subagent announce formatting", () => {
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
     sessionsDeleteSpy.mockClear().mockImplementation((_req: AgentCallRequest) => undefined);
-    embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
