@@ -40,6 +40,27 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onClosed = resolve;
   });
   let stopped = false;
+  let onGatewayReadyResolve!: () => void;
+  let onGatewayReadyReject!: (err: Error) => void;
+  let gatewayReadySettled = false;
+  const gatewayReady = new Promise<void>((resolve, reject) => {
+    onGatewayReadyResolve = resolve;
+    onGatewayReadyReject = reject;
+  });
+  const resolveGatewayReady = () => {
+    if (gatewayReadySettled) {
+      return;
+    }
+    gatewayReadySettled = true;
+    onGatewayReadyResolve();
+  };
+  const rejectGatewayReady = (err: unknown) => {
+    if (gatewayReadySettled) {
+      return;
+    }
+    gatewayReadySettled = true;
+    onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
+  };
 
   const gateway = new GatewayClient({
     url: connection.url,
@@ -53,9 +74,16 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       void agent?.handleGatewayEvent(evt);
     },
     onHelloOk: () => {
+      resolveGatewayReady();
       agent?.handleGatewayReconnect();
     },
+    onConnectError: (err) => {
+      rejectGatewayReady(err);
+    },
     onClose: (code, reason) => {
+      if (!stopped) {
+        rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
+      }
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
       // Resolve only on intentional shutdown (gateway.stop() sets closed
       // which skips scheduleReconnect, then fires onClose).  Transient
@@ -71,6 +99,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       return;
     }
     stopped = true;
+    resolveGatewayReady();
     gateway.stop();
     // If no WebSocket is active (e.g. between reconnect attempts),
     // gateway.stop() won't trigger onClose, so resolve directly.
@@ -80,20 +109,15 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
-  // Start gateway first and wait for connection before processing ACP messages
+  // Start gateway first and wait for hello before accepting ACP requests.
   gateway.start();
-
-  // Use a promise to wait for hello (connection established)
-  const helloReceived = new Promise<void>((resolve) => {
-    const originalOnHelloOk = gateway.opts.onHelloOk;
-    gateway.opts.onHelloOk = (hello) => {
-      originalOnHelloOk?.(hello);
-      resolve();
-    };
+  await gatewayReady.catch((err) => {
+    shutdown();
+    throw err;
   });
-
-  // Wait for gateway connection before creating AgentSideConnection
-  await helloReceived;
+  if (stopped) {
+    return closed;
+  }
 
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
