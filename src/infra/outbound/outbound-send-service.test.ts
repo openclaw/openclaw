@@ -19,9 +19,9 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 
 describe("executeSendAction", () => {
   beforeEach(() => {
-    mocks.dispatchChannelMessageAction.mockReset();
-    mocks.sendMessage.mockReset();
-    mocks.sendPoll.mockReset();
+    mocks.dispatchChannelMessageAction.mockClear();
+    mocks.sendMessage.mockClear();
+    mocks.sendPoll.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
