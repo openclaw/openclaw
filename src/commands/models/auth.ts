@@ -16,6 +16,7 @@ import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js"
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { loginAnthropicOAuth } from "../anthropic-oauth.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
@@ -49,6 +50,7 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   });
 
 type TokenProvider = "anthropic";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 
 function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
   const trimmed = raw?.trim();
@@ -159,6 +161,59 @@ export async function modelsAuthPasteTokenCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
+export async function modelsAuthAnthropicOAuthCommand(params: {
+  runtime: RuntimeEnv;
+  agentDir?: string;
+  setDefault?: boolean;
+}) {
+  const { runtime, agentDir, setDefault = false } = params;
+  if (!process.stdin.isTTY) {
+    throw new Error("models auth oauth requires an interactive TTY.");
+  }
+
+  const prompter = createClackPrompter();
+  const creds = await loginAnthropicOAuth({
+    prompter,
+    runtime,
+    isRemote: isRemoteEnvironment(),
+    openUrl: async (url) => {
+      await openUrl(url);
+    },
+  });
+  if (!creds) {
+    return;
+  }
+
+  const profileId = "anthropic:default";
+  upsertAuthProfile({
+    profileId,
+    agentDir,
+    credential: {
+      type: "oauth",
+      provider: "anthropic",
+      ...creds,
+    },
+  });
+
+  await updateConfig((cfg) => {
+    let next = applyAuthProfileConfig(cfg, {
+      profileId,
+      provider: "anthropic",
+      mode: "oauth",
+    });
+    if (setDefault) {
+      next = applyDefaultModel(next, DEFAULT_ANTHROPIC_MODEL);
+    }
+    return next;
+  });
+
+  logConfigUpdated(runtime);
+  runtime.log(`Auth profile: ${profileId} (anthropic/oauth)`);
+  if (setDefault) {
+    runtime.log(`Default model set to ${DEFAULT_ANTHROPIC_MODEL}`);
+  }
+}
+
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
   const provider = (await select({
     message: "Token provider",
@@ -186,6 +241,11 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       ...(providerId === "anthropic"
         ? [
             {
+              value: "oauth",
+              label: "oauth (refreshable)",
+              hint: "Sign in with Anthropic OAuth (auto-refresh)",
+            },
+            {
               value: "setup-token",
               label: "setup-token (claude)",
               hint: "Paste a setup-token from `claude setup-token`",
@@ -194,7 +254,15 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
         : []),
       { value: "paste", label: "paste token" },
     ],
-  })) as "setup-token" | "paste";
+  })) as "oauth" | "setup-token" | "paste";
+
+  if (method === "oauth") {
+    const config = await loadValidConfigOrThrow();
+    const defaultAgentId = resolveDefaultAgentId(config);
+    const agentDir = resolveAgentDir(config, defaultAgentId);
+    await modelsAuthAnthropicOAuthCommand({ runtime, agentDir });
+    return;
+  }
 
   if (method === "setup-token") {
     await modelsAuthSetupTokenCommand({ provider: providerId }, runtime);
@@ -284,6 +352,23 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
   const providers = resolvePluginProviders({ config, workspaceDir });
+  const requestedProviderId = opts.provider?.trim()
+    ? normalizeProviderId(opts.provider)
+    : undefined;
+
+  if (requestedProviderId === "anthropic") {
+    if (opts.method && normalizeProviderId(opts.method) !== "oauth") {
+      throw new Error(
+        `Unknown auth method "${opts.method}" for Anthropic. Use \`--method oauth\` or omit --method.`,
+      );
+    }
+    await modelsAuthAnthropicOAuthCommand({
+      runtime,
+      agentDir,
+      setDefault: opts.setDefault,
+    });
+    return;
+  }
   if (providers.length === 0) {
     throw new Error(
       `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,

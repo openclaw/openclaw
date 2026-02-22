@@ -31,8 +31,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "setup-token + API key",
-    choices: ["token", "apiKey"],
+    hint: "OAuth (refreshable) + setup-token + API key",
+    choices: ["anthropic-oauth", "token", "apiKey"],
   },
   {
     value: "chutes",
@@ -175,6 +175,11 @@ const AUTH_CHOICE_GROUP_DEFS: {
 ];
 
 const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
+  {
+    value: "anthropic-oauth",
+    label: "Anthropic OAuth (refreshable)",
+    hint: "sign in once; OpenClaw can auto-refresh the OAuth token",
+  },
   {
     value: "token",
     label: "Anthropic token (paste setup-token)",

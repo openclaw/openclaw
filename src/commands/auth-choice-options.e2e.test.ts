@@ -28,6 +28,12 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.some((opt) => opt.value === "token")).toBe(true);
   });
 
+  it("includes OAuth option for Anthropic", () => {
+    const options = getOptions();
+
+    expect(options.some((opt) => opt.value === "anthropic-oauth")).toBe(true);
+  });
+
   it.each([
     ["Z.AI (GLM) auth choice", ["zai-api-key"]],
     ["Xiaomi auth choice", ["xiaomi-api-key"]],
