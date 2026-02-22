@@ -2,10 +2,10 @@ import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
-  enabled: true as const,
-  disabled: false as const,
-  unknown: null as const,
-};
+  enabled: true,
+  disabled: false,
+  unknown: null,
+} as const;
 
 type BlueBubblesPrivateApiStatusMock = {
   mockReturnValue: (value: boolean | null) => unknown;
@@ -47,6 +47,7 @@ export function createBlueBubblesAccountsMockModule() {
 
 type BlueBubblesProbeMockModule = {
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
+  isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
 };
 
 export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
@@ -54,6 +55,7 @@ export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
     getCachedBlueBubblesPrivateApiStatus: vi
       .fn()
       .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown),
+    isBlueBubblesPrivateApiStatusEnabled: vi.fn((status: boolean | null) => status === true),
   };
 }
 
