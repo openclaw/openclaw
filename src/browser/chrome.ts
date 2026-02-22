@@ -212,6 +212,9 @@ export async function launchOpenClawChrome(
     }
     if (process.platform === "linux") {
       args.push("--disable-dev-shm-usage");
+      if (process.env.WAYLAND_DISPLAY && !process.env.DISPLAY) {
+        args.push("--ozone-platform=wayland");
+      }
     }
 
     // Stealth: hide navigator.webdriver from automation detection (#80)
