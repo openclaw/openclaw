@@ -33,11 +33,11 @@ function envHomedir(env: NodeJS.ProcessEnv): () => string {
 }
 
 function legacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
-  return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
+  return LEGACY_STATE_DIRNAMES.map((dir) => path.resolve(homedir(), dir));
 }
 
 function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return path.join(homedir(), NEW_STATE_DIRNAME);
+  return path.resolve(homedir(), NEW_STATE_DIRNAME);
 }
 
 export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
