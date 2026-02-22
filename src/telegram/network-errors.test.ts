@@ -40,9 +40,13 @@ describe("isRecoverableTelegramNetworkError", () => {
   });
 
   it("skips broad message matches for send context", () => {
-    const err = new Error("Network request for 'sendMessage' failed!");
-    expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(false);
-    expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+    const networkRequestErr = new Error("Network request for 'sendMessage' failed!");
+    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "polling" })).toBe(true);
+
+    const undiciSnippetErr = new Error("Undici: socket failure");
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
   it("returns false for unrelated errors", () => {

@@ -27,9 +27,9 @@ const RECOVERABLE_ERROR_NAMES = new Set([
   "BodyTimeoutError",
 ]);
 
+const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
+
 const RECOVERABLE_MESSAGE_SNIPPETS = [
-  "fetch failed",
-  "typeerror: fetch failed",
   "undici",
   "network error",
   "network request",
@@ -39,13 +39,6 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "timeout", // catch timeout messages not covered by error codes/names
   "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
 ];
-
-// Undici surface errors as TypeError("fetch failed") with optional nested causes.
-// Treat this exact shape as recoverable even when broad message matching is disabled.
-function isUndiciFetchFailedError(err: unknown): boolean {
-  const message = formatErrorMessage(err).trim().toLowerCase();
-  return message === "fetch failed" || message === "typeerror: fetch failed";
-}
 
 function normalizeCode(code?: string): string {
   return code?.trim().toUpperCase() ?? "";
@@ -135,10 +128,6 @@ export function isRecoverableTelegramNetworkError(
       : options.context !== "send";
 
   for (const candidate of collectErrorCandidates(err)) {
-    if (isUndiciFetchFailedError(candidate)) {
-      return true;
-    }
-
     const code = normalizeCode(getErrorCode(candidate));
     if (code && RECOVERABLE_ERROR_CODES.has(code)) {
       return true;
@@ -149,9 +138,12 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
 
-    if (allowMessageMatch) {
-      const message = formatErrorMessage(candidate).toLowerCase();
-      if (message && RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+      return true;
+    }
+    if (allowMessageMatch && message) {
+      if (RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
         return true;
       }
     }
