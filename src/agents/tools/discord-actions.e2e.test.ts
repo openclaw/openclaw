@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
@@ -77,31 +77,37 @@ const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelI
 const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
 
 describe("handleDiscordMessagingAction", () => {
-  it("adds reactions", async () => {
-    await handleDiscordMessagingAction(
-      "react",
-      {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    {
+      name: "without account",
+      params: {
         channelId: "C1",
         messageId: "M1",
         emoji: "✅",
       },
-      enableAllActions,
-    );
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
-  });
-
-  it("forwards accountId for reactions", async () => {
-    await handleDiscordMessagingAction(
-      "react",
-      {
+      expectedOptions: undefined,
+    },
+    {
+      name: "with accountId",
+      params: {
         channelId: "C1",
         messageId: "M1",
         emoji: "✅",
         accountId: "ops",
       },
-      enableAllActions,
-    );
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", { accountId: "ops" });
+      expectedOptions: { accountId: "ops" },
+    },
+  ])("adds reactions $name", async ({ params, expectedOptions }) => {
+    await handleDiscordMessagingAction("react", params, enableAllActions);
+    if (expectedOptions) {
+      expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
+      return;
+    }
+    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -297,6 +303,10 @@ const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
 const channelsDisabled = () => false;
 
 describe("handleDiscordGuildAction - channel management", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("creates a channel", async () => {
     const result = await handleDiscordGuildAction(
       "channelCreate",
@@ -487,45 +497,43 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
   });
 
-  it("sets channel permissions for role", async () => {
-    await handleDiscordGuildAction(
-      "channelPermissionSet",
-      {
+  it.each([
+    {
+      name: "role",
+      params: {
         channelId: "C1",
         targetId: "R1",
-        targetType: "role",
+        targetType: "role" as const,
         allow: "1024",
         deny: "2048",
       },
-      channelsEnabled,
-    );
-    expect(setChannelPermissionDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      targetId: "R1",
-      targetType: 0,
-      allow: "1024",
-      deny: "2048",
-    });
-  });
-
-  it("sets channel permissions for member", async () => {
-    await handleDiscordGuildAction(
-      "channelPermissionSet",
-      {
+      expected: {
+        channelId: "C1",
+        targetId: "R1",
+        targetType: 0,
+        allow: "1024",
+        deny: "2048",
+      },
+    },
+    {
+      name: "member",
+      params: {
         channelId: "C1",
         targetId: "U1",
-        targetType: "member",
+        targetType: "member" as const,
         allow: "1024",
       },
-      channelsEnabled,
-    );
-    expect(setChannelPermissionDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      targetId: "U1",
-      targetType: 1,
-      allow: "1024",
-      deny: undefined,
-    });
+      expected: {
+        channelId: "C1",
+        targetId: "U1",
+        targetType: 1,
+        allow: "1024",
+        deny: undefined,
+      },
+    },
+  ])("sets channel permissions for $name", async ({ params, expected }) => {
+    await handleDiscordGuildAction("channelPermissionSet", params, channelsEnabled);
+    expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected);
   });
 
   it("removes channel permissions", async () => {

@@ -10,6 +10,9 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
 type PathSegment = string;
+type ConfigSetParseOpts = {
+  strictJson?: boolean;
+};
 
 function isIndexSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
@@ -67,9 +70,9 @@ function parsePath(raw: string): PathSegment[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function parseValue(raw: string, opts: { json?: boolean }): unknown {
+function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
   const trimmed = raw.trim();
-  if (opts.json) {
+  if (opts.strictJson) {
     try {
       return JSON5.parse(trimmed);
     } catch (err) {
@@ -269,7 +272,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
-    await writeConfigFile(next);
+    await writeConfigFile(next, { unsetPaths: [parsedPath] });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
     runtime.error(danger(String(err)));
@@ -313,14 +316,17 @@ export function registerConfigCli(program: Command) {
     .description("Set a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
     .argument("<value>", "Value (JSON5 or raw string)")
-    .option("--json", "Parse value as JSON5 (required)", false)
+    .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
+    .option("--json", "Legacy alias for --strict-json", false)
     .action(async (path: string, value: string, opts) => {
       try {
         const parsedPath = parsePath(path);
         if (parsedPath.length === 0) {
           throw new Error("Path is empty.");
         }
-        const parsedValue = parseValue(value, opts);
+        const parsedValue = parseValue(value, {
+          strictJson: Boolean(opts.strictJson || opts.json),
+        });
         const snapshot = await loadValidConfig();
         // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
         // instead of snapshot.config (runtime-merged with defaults).

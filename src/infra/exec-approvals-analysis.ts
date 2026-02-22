@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { unwrapDispatchWrappersForResolution } from "./exec-wrapper-resolution.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
@@ -101,7 +102,8 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
-  const rawExecutable = argv[0]?.trim();
+  const effectiveArgv = unwrapDispatchWrappersForResolution(argv);
+  const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
     return null;
   }
@@ -338,12 +340,13 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   type HeredocSpec = {
     delimiter: string;
     stripTabs: boolean;
+    quoted: boolean;
   };
 
   const parseHeredocDelimiter = (
     source: string,
     start: number,
-  ): { delimiter: string; end: number } | null => {
+  ): { delimiter: string; end: number; quoted: boolean } | null => {
     let i = start;
     while (i < source.length && (source[i] === " " || source[i] === "\t")) {
       i += 1;
@@ -368,7 +371,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           continue;
         }
         if (ch === quote) {
-          return { delimiter, end: i + 1 };
+          return { delimiter, end: i + 1, quoted: true };
         }
         delimiter += ch;
         i += 1;
@@ -388,7 +391,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     if (!delimiter) {
       return null;
     }
-    return { delimiter, end: i };
+    return { delimiter, end: i, quoted: false };
   };
 
   const segments: string[] = [];
@@ -409,6 +412,30 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     buf = "";
   };
 
+  const isEscapedInHeredocLine = (line: string, index: number): boolean => {
+    let slashes = 0;
+    for (let i = index - 1; i >= 0 && line[i] === "\\"; i -= 1) {
+      slashes += 1;
+    }
+    return slashes % 2 === 1;
+  };
+
+  const hasUnquotedHeredocExpansionToken = (line: string): boolean => {
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === "`" && !isEscapedInHeredocLine(line, i)) {
+        return true;
+      }
+      if (ch === "$" && !isEscapedInHeredocLine(line, i)) {
+        const next = line[i + 1];
+        if (next === "(" || next === "{") {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const next = command[i + 1];
@@ -420,6 +447,8 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
           if (line === current.delimiter) {
             pendingHeredocs.shift();
+          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
+            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
           }
         }
         heredocLine = "";
@@ -530,7 +559,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
 
       const parsed = parseHeredocDelimiter(command, scanIndex);
       if (parsed) {
-        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs });
+        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
         buf += command.slice(scanIndex, parsed.end);
         i = parsed.end - 1;
       }
@@ -551,7 +580,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
     if (line === current.delimiter) {
       pendingHeredocs.shift();
+      if (pendingHeredocs.length === 0) {
+        inHeredocBody = false;
+      }
     }
+  }
+
+  if (pendingHeredocs.length > 0 || inHeredocBody) {
+    return { ok: false, reason: "unterminated heredoc", segments: [] };
   }
 
   if (escaped || inSingle || inDouble) {

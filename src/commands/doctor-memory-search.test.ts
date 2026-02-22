@@ -50,12 +50,12 @@ describe("noteMemorySearchHealth", () => {
   }
 
   beforeEach(() => {
-    note.mockReset();
+    note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
-    resolveMemorySearchConfig.mockReset();
-    resolveApiKeyForProvider.mockReset();
-    resolveMemoryBackendConfig.mockReset();
+    resolveMemorySearchConfig.mockClear();
+    resolveApiKeyForProvider.mockClear();
+    resolveMemoryBackendConfig.mockClear();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
 

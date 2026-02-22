@@ -57,8 +57,8 @@ function resolveClaudeWebSessionKey(): string | undefined {
   if (!cookieHeader) {
     return undefined;
   }
-  const stripped = cookieHeader.replace(/^cookie:\\s*/i, "");
-  const match = stripped.match(/(?:^|;\\s*)sessionKey=([^;\\s]+)/i);
+  const stripped = cookieHeader.replace(/^cookie:\s*/i, "");
+  const match = stripped.match(/(?:^|;\s*)sessionKey=([^;\s]+)/i);
   const value = match?.[1]?.trim();
   return value?.startsWith("sk-ant-") ? value : undefined;
 }

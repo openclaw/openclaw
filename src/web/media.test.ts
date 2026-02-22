@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { resolveStateDir } from "../config/paths.js";
 import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -50,7 +51,9 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
 }
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
+  fixtureRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
+  );
   largeJpegBuffer = await sharp({
     create: {
       width: 400,
@@ -108,7 +111,7 @@ afterEach(() => {
 describe("web media loading", () => {
   beforeAll(() => {
     // Ensure state dir is stable and not influenced by other tests that stub OPENCLAW_STATE_DIR.
-    // Also keep it outside os.tmpdir() so tmpdir localRoots doesn't accidentally make all state readable.
+    // Also keep it outside the OpenClaw temp root so default localRoots doesn't accidentally make all state readable.
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = path.join(
       path.parse(os.tmpdir()).root,
@@ -197,25 +200,27 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
-  it("blocks private network URL fetches (SSRF guard)", async () => {
+  it("blocks SSRF URLs before fetch", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
+    const cases = [
+      {
+        name: "private network host",
+        url: "http://127.0.0.1:8080/internal-api",
+        expectedMessage: /blocked|private|internal/i,
+      },
+      {
+        name: "cloud metadata hostname",
+        url: "http://metadata.google.internal/computeMetadata/v1/",
+        expectedMessage: /blocked|private|internal|metadata/i,
+      },
+    ] as const;
 
-    await expect(loadWebMedia("http://127.0.0.1:8080/internal-api", 1024 * 1024)).rejects.toThrow(
-      /blocked|private|internal/i,
-    );
+    for (const testCase of cases) {
+      await expect(loadWebMedia(testCase.url, 1024 * 1024), testCase.name).rejects.toThrow(
+        testCase.expectedMessage,
+      );
+    }
     expect(fetchMock).not.toHaveBeenCalled();
-
-    fetchMock.mockRestore();
-  });
-
-  it("blocks cloud metadata hostnames (SSRF guard)", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch");
-
-    await expect(
-      loadWebMedia("http://metadata.google.internal/computeMetadata/v1/", 1024 * 1024),
-    ).rejects.toThrow(/blocked|private|internal|metadata/i);
-    expect(fetchMock).not.toHaveBeenCalled();
-
     fetchMock.mockRestore();
   });
 
@@ -305,23 +310,31 @@ describe("web media loading", () => {
 });
 
 describe("Discord voice message input hardening", () => {
-  it("rejects local paths outside allowed media roots", async () => {
-    const candidate = path.join(process.cwd(), "package.json");
-    await expect(sendVoiceMessageDiscord("channel:123", candidate)).rejects.toThrow(
-      /Local media path is not under an allowed directory/i,
-    );
-  });
+  it("rejects unsafe voice message inputs", async () => {
+    const cases = [
+      {
+        name: "local path outside allowed media roots",
+        candidate: path.join(process.cwd(), "package.json"),
+        expectedMessage: /Local media path is not under an allowed directory/i,
+      },
+      {
+        name: "private-network URL",
+        candidate: "http://127.0.0.1/voice.ogg",
+        expectedMessage: /Failed to fetch media|Blocked|private|internal/i,
+      },
+      {
+        name: "non-http URL scheme",
+        candidate: "rtsp://example.com/voice.ogg",
+        expectedMessage: /Local media path is not under an allowed directory|ENOENT|no such file/i,
+      },
+    ] as const;
 
-  it("blocks SSRF targets when given a private-network URL", async () => {
-    await expect(
-      sendVoiceMessageDiscord("channel:123", "http://127.0.0.1/voice.ogg"),
-    ).rejects.toThrow(/Failed to fetch media|Blocked|private|internal/i);
-  });
-
-  it("rejects non-http URL schemes", async () => {
-    await expect(
-      sendVoiceMessageDiscord("channel:123", "rtsp://example.com/voice.ogg"),
-    ).rejects.toThrow(/Local media path is not under an allowed directory|ENOENT|no such file/i);
+    for (const testCase of cases) {
+      await expect(
+        sendVoiceMessageDiscord("channel:123", testCase.candidate),
+        testCase.name,
+      ).rejects.toThrow(testCase.expectedMessage);
+    }
   });
 });
 
@@ -334,7 +347,9 @@ describe("local media root guard", () => {
   });
 
   it("allows local paths under an explicit root", async () => {
-    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: [os.tmpdir()] });
+    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+      localRoots: [resolvePreferredOpenClawTmpDir()],
+    });
     expect(result.kind).toBe("image");
   });
 

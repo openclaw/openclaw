@@ -1,5 +1,68 @@
 import { describe, expect, it } from "vitest";
-import { resolveSessionDeliveryTarget } from "./targets.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
+import {
+  installResolveOutboundTargetPluginRegistryHooks,
+  runResolveOutboundTargetCoreTests,
+} from "./targets.shared-test.js";
+
+runResolveOutboundTargetCoreTests();
+
+describe("resolveOutboundTarget defaultTo config fallback", () => {
+  installResolveOutboundTargetPluginRegistryHooks();
+
+  it("uses whatsapp defaultTo when no explicit target is provided", () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { defaultTo: "+15551234567", allowFrom: ["*"] } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "whatsapp",
+      to: undefined,
+      cfg,
+      mode: "implicit",
+    });
+    expect(res).toEqual({ ok: true, to: "+15551234567" });
+  });
+
+  it("uses telegram defaultTo when no explicit target is provided", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { defaultTo: "123456789" } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "telegram",
+      to: "",
+      cfg,
+      mode: "implicit",
+    });
+    expect(res).toEqual({ ok: true, to: "123456789" });
+  });
+
+  it("explicit --reply-to overrides defaultTo", () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { defaultTo: "+15551234567", allowFrom: ["*"] } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "whatsapp",
+      to: "+15559999999",
+      cfg,
+      mode: "explicit",
+    });
+    expect(res).toEqual({ ok: true, to: "+15559999999" });
+  });
+
+  it("still errors when no defaultTo and no explicit target", () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { allowFrom: ["+1555"] } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "whatsapp",
+      to: "",
+      cfg,
+      mode: "implicit",
+    });
+    expect(res.ok).toBe(false);
+  });
+});
 
 describe("resolveSessionDeliveryTarget", () => {
   it("derives implicit delivery from the last route", () => {

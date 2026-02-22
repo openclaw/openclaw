@@ -20,7 +20,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.useRealTimers();
-  runEmbeddedAttemptMock.mockReset();
+  runEmbeddedAttemptMock.mockClear();
 });
 
 const baseUsage = {
@@ -196,6 +196,24 @@ function mockSingleSuccessfulAttempt() {
   );
 }
 
+function mockSingleErrorAttempt(params: {
+  errorMessage: string;
+  provider?: string;
+  model?: string;
+}) {
+  runEmbeddedAttemptMock.mockResolvedValueOnce(
+    makeAttempt({
+      assistantTexts: [],
+      lastAssistant: buildAssistant({
+        stopReason: "error",
+        errorMessage: params.errorMessage,
+        ...(params.provider ? { provider: params.provider } : {}),
+        ...(params.model ? { model: params.model } : {}),
+      }),
+    }),
+  );
+}
+
 async function withTimedAgentWorkspace<T>(
   run: (ctx: { agentDir: string; workspaceDir: string; now: number }) => Promise<T>,
 ) {
@@ -254,45 +272,40 @@ async function runTurnWithCooldownSeed(params: {
 }
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {
-  it("rotates for auto-pinned profiles", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
-    try {
-      await writeAuthStore(agentDir);
-      mockFailedThenSuccessfulAttempt("rate limit");
-      await runAutoPinnedOpenAiTurn({
-        agentDir,
-        workspaceDir,
+  it("rotates for auto-pinned profiles across retryable stream failures", async () => {
+    const cases = [
+      {
+        errorMessage: "rate limit",
         sessionKey: "agent:test:auto",
         runId: "run:auto",
-      });
-
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      await expectProfileP2UsageUpdated(agentDir);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rotates when stream ends without sending chunks", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
-    try {
-      await writeAuthStore(agentDir);
-      mockFailedThenSuccessfulAttempt("request ended without sending any chunks");
-      await runAutoPinnedOpenAiTurn({
-        agentDir,
-        workspaceDir,
+      },
+      {
+        errorMessage: "request ended without sending any chunks",
         sessionKey: "agent:test:empty-chunk-stream",
         runId: "run:empty-chunk-stream",
-      });
+      },
+    ] as const;
 
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      await expectProfileP2UsageUpdated(agentDir);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-      await fs.rm(workspaceDir, { recursive: true, force: true });
+    for (const testCase of cases) {
+      runEmbeddedAttemptMock.mockClear();
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+      try {
+        await writeAuthStore(agentDir);
+        mockFailedThenSuccessfulAttempt(testCase.errorMessage);
+        await runAutoPinnedOpenAiTurn({
+          agentDir,
+          workspaceDir,
+          sessionKey: testCase.sessionKey,
+          runId: testCase.runId,
+        });
+
+        expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+        await expectProfileP2UsageUpdated(agentDir);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -347,15 +360,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     try {
       await writeAuthStore(agentDir);
 
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: [],
-          lastAssistant: buildAssistant({
-            stopReason: "error",
-            errorMessage: "rate limit",
-          }),
-        }),
-      );
+      mockSingleErrorAttempt({ errorMessage: "rate limit" });
 
       await runEmbeddedPiAgent({
         sessionId: "session:test",
@@ -523,17 +528,11 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     try {
       await writeAuthStore(agentDir);
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: [],
-          lastAssistant: buildAssistant({
-            stopReason: "error",
-            errorMessage: "insufficient credits",
-            provider: "openai",
-            model: "mock-rotated",
-          }),
-        }),
-      );
+      mockSingleErrorAttempt({
+        errorMessage: "insufficient credits",
+        provider: "openai",
+        model: "mock-rotated",
+      });
 
       let thrown: unknown;
       try {

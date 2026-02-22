@@ -15,8 +15,7 @@ import {
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveHostName,
-  parseForwardedForClientIp,
-  resolveGatewayClientIp,
+  resolveClientIp,
 } from "./net.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
@@ -52,6 +51,29 @@ type ConnectAuth = {
   password?: string;
 };
 
+export type GatewayAuthSurface = "http" | "ws-control-ui";
+
+export type AuthorizeGatewayConnectParams = {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  tailscaleWhois?: TailscaleWhoisLookup;
+  /**
+   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
+   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   */
+  authSurface?: GatewayAuthSurface;
+  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  rateLimiter?: AuthRateLimiter;
+  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  clientIp?: string;
+  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
+  /** Trust X-Real-IP only when explicitly enabled. */
+  allowRealIpFallback?: boolean;
+};
+
 type TailscaleUser = {
   login: string;
   name: string;
@@ -68,34 +90,45 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
+
 function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   if (!req) {
     return undefined;
   }
-  const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
-  return forwardedFor ? parseForwardedForClientIp(forwardedFor) : undefined;
+  return resolveClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
+  });
 }
 
 function resolveRequestClientIp(
   req?: IncomingMessage,
   trustedProxies?: string[],
+  allowRealIpFallback = false,
 ): string | undefined {
   if (!req) {
     return undefined;
   }
-  return resolveGatewayClientIp({
+  return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     realIp: headerValue(req.headers?.["x-real-ip"]),
     trustedProxies,
+    allowRealIpFallback,
   });
 }
 
-export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): boolean {
   if (!req) {
     return false;
   }
-  const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
+  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
     return false;
   }
@@ -319,22 +352,22 @@ function authorizeTrustedProxy(params: {
   return { user };
 }
 
-export async function authorizeGatewayConnect(params: {
-  auth: ResolvedGatewayAuth;
-  connectAuth?: ConnectAuth | null;
-  req?: IncomingMessage;
-  trustedProxies?: string[];
-  tailscaleWhois?: TailscaleWhoisLookup;
-  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
-  rateLimiter?: AuthRateLimiter;
-  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
-  clientIp?: string;
-  /** Optional limiter scope; defaults to shared-secret auth scope. */
-  rateLimitScope?: string;
-}): Promise<GatewayAuthResult> {
+function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
+  return authSurface === "ws-control-ui";
+}
+
+export async function authorizeGatewayConnect(
+  params: AuthorizeGatewayConnectParams,
+): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const authSurface = params.authSurface ?? "http";
+  const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const localDirect = isLocalDirectRequest(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
 
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -362,7 +395,9 @@ export async function authorizeGatewayConnect(params: {
 
   const limiter = params.rateLimiter;
   const ip =
-    params.clientIp ?? resolveRequestClientIp(req, trustedProxies) ?? req?.socket?.remoteAddress;
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
   const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
@@ -376,7 +411,7 @@ export async function authorizeGatewayConnect(params: {
     }
   }
 
-  if (auth.allowTailscale && !localDirect) {
+  if (allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -426,4 +461,22 @@ export async function authorizeGatewayConnect(params: {
 
   limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
+}
+
+export async function authorizeHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http",
+  });
+}
+
+export async function authorizeWsControlUiGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "ws-control-ui",
+  });
 }

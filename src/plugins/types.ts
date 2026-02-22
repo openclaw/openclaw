@@ -314,6 +314,10 @@ export type PluginHookName =
   | "before_message_write"
   | "session_start"
   | "session_end"
+  | "subagent_spawning"
+  | "subagent_delivery_target"
+  | "subagent_spawned"
+  | "subagent_ended"
   | "gateway_start"
   | "gateway_stop";
 
@@ -547,6 +551,93 @@ export type PluginHookSessionEndEvent = {
   durationMs?: number;
 };
 
+// Subagent context
+export type PluginHookSubagentContext = {
+  runId?: string;
+  childSessionKey?: string;
+  requesterSessionKey?: string;
+};
+
+export type PluginHookSubagentTargetKind = "subagent" | "acp";
+
+// subagent_spawning hook
+export type PluginHookSubagentSpawningEvent = {
+  childSessionKey: string;
+  agentId: string;
+  label?: string;
+  mode: "run" | "session";
+  requester?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  threadRequested: boolean;
+};
+
+export type PluginHookSubagentSpawningResult =
+  | {
+      status: "ok";
+      threadBindingReady?: boolean;
+    }
+  | {
+      status: "error";
+      error: string;
+    };
+
+// subagent_delivery_target hook
+export type PluginHookSubagentDeliveryTargetEvent = {
+  childSessionKey: string;
+  requesterSessionKey: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  childRunId?: string;
+  spawnMode?: "run" | "session";
+  expectsCompletionMessage: boolean;
+};
+
+export type PluginHookSubagentDeliveryTargetResult = {
+  origin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+};
+
+// subagent_spawned hook
+export type PluginHookSubagentSpawnedEvent = {
+  runId: string;
+  childSessionKey: string;
+  agentId: string;
+  label?: string;
+  mode: "run" | "session";
+  requester?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  threadRequested: boolean;
+};
+
+// subagent_ended hook
+export type PluginHookSubagentEndedEvent = {
+  targetSessionKey: string;
+  targetKind: PluginHookSubagentTargetKind;
+  reason: string;
+  sendFarewell?: boolean;
+  accountId?: string;
+  runId?: string;
+  endedAt?: number;
+  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  error?: string;
+};
+
 // Gateway context
 export type PluginHookGatewayContext = {
   port?: number;
@@ -632,6 +723,25 @@ export type PluginHookHandlerMap = {
   session_end: (
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
+  ) => Promise<void> | void;
+  subagent_spawning: (
+    event: PluginHookSubagentSpawningEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<PluginHookSubagentSpawningResult | void> | PluginHookSubagentSpawningResult | void;
+  subagent_delivery_target: (
+    event: PluginHookSubagentDeliveryTargetEvent,
+    ctx: PluginHookSubagentContext,
+  ) =>
+    | Promise<PluginHookSubagentDeliveryTargetResult | void>
+    | PluginHookSubagentDeliveryTargetResult
+    | void;
+  subagent_spawned: (
+    event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  subagent_ended: (
+    event: PluginHookSubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,

@@ -70,7 +70,7 @@ describe("announce loop guard (#18264)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    loadSubagentRegistryFromDisk.mockReset();
+    loadSubagentRegistryFromDisk.mockClear();
     loadSubagentRegistryFromDisk.mockReturnValue(new Map());
     saveSubagentRegistryToDisk.mockClear();
     vi.clearAllMocks();
