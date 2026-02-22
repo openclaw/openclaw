@@ -1048,6 +1048,9 @@ export async function processMessage(
               currentEntries.length > 0 ? currentEntries : (chatHistories.get(historyKey) ?? []),
             limit: historyLimit,
           });
+          if (chatHistories.has(historyKey)) {
+            chatHistories.delete(historyKey);
+          }
           chatHistories.set(historyKey, merged);
           evictOldHistoryKeys(chatHistories);
           logVerbose(
