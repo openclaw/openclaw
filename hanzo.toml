@@ -1,0 +1,60 @@
+# Hanzo Bot — deployment manifest for Hanzo PaaS
+# Deploy: hanzo deploy create bot-gateway --config hanzo.toml
+# Docs:   https://docs.hanzo.ai/bot/install/hanzo-paas
+
+[app]
+name = "bot-gateway"
+type = "deployment"
+dockerfile = "Dockerfile"
+
+[env]
+NODE_ENV = "production"
+BOT_PREFER_PNPM = "1"
+BOT_STATE_DIR = "/data/.bot"
+BOT_WORKSPACE_DIR = "/data/workspace"
+NODE_OPTIONS = "--max-old-space-size=1536"
+
+# Secrets are injected from Hanzo KMS at deploy time.
+# Set them with:
+#   hanzo kms set <project> production HANZO_API_KEY hz-...
+#   hanzo kms set <project> production BOT_GATEWAY_TOKEN $(openssl rand -hex 32)
+#
+# Required:
+#   HANZO_API_KEY          — Hanzo Cloud unified billing (Zen + 300+ models)
+#   BOT_GATEWAY_TOKEN      — Gateway authentication token
+#
+# Optional provider overrides (bypass Hanzo unified billing):
+#   ANTHROPIC_API_KEY      — Direct Anthropic access
+#   OPENAI_API_KEY         — Direct OpenAI access
+#   GEMINI_API_KEY         — Direct Google Gemini access
+
+[networking]
+port = 3000
+ingress = true
+force_https = true
+
+[resources]
+cpu = "2000m"
+memory = "2048Mi"
+
+[storage]
+enabled = true
+mount = "/data"
+size = "1Gi"
+
+[deploy]
+replicas = 1
+strategy = "RollingUpdate"
+command = "node hanzo-bot.mjs gateway --allow-unconfigured --port 3000 --bind lan"
+
+[probes.readiness]
+path = "/health"
+port = 3000
+period = 30
+timeout = 10
+
+[probes.liveness]
+path = "/health"
+port = 3000
+period = 30
+timeout = 10
