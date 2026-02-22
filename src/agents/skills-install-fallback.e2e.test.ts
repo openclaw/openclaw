@@ -87,9 +87,9 @@ describe("skills-install fallback edge cases", () => {
   });
 
   beforeEach(async () => {
-    runCommandWithTimeoutMock.mockReset();
-    scanDirectoryWithSummaryMock.mockReset();
-    hasBinaryMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
+    scanDirectoryWithSummaryMock.mockClear();
+    hasBinaryMock.mockClear();
     scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
   });
 
