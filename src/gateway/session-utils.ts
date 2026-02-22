@@ -66,6 +66,19 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+
+function tryResolveExistingPath(value: string): string | null {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return null;
+  }
+}
+
+function areSameFileIdentity(preOpen: fs.Stats, opened: fs.Stats): boolean {
+  return preOpen.dev === opened.dev && preOpen.ino === opened.ino;
+}
+
 function resolveIdentityAvatarUrl(
   cfg: OpenClawConfig,
   agentId: string,
@@ -85,21 +98,42 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const workspaceRoot = path.resolve(workspaceDir);
-  const resolved = path.resolve(workspaceRoot, trimmed);
-  if (!isPathWithinRoot(workspaceRoot, resolved)) {
+  const workspaceRoot = tryResolveExistingPath(workspaceDir) ?? path.resolve(workspaceDir);
+  const resolvedCandidate = path.resolve(workspaceRoot, trimmed);
+  if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
     return undefined;
   }
+  let fd: number | null = null;
   try {
-    const stat = fs.statSync(resolved);
-    if (!stat.isFile() || stat.size > AVATAR_MAX_BYTES) {
+    const resolvedReal = fs.realpathSync(resolvedCandidate);
+    if (!isPathWithinRoot(workspaceRoot, resolvedReal)) {
       return undefined;
     }
-    const buffer = fs.readFileSync(resolved);
-    const mime = resolveAvatarMime(resolved);
+    const preOpenStat = fs.lstatSync(resolvedReal);
+    if (!preOpenStat.isFile() || preOpenStat.size > AVATAR_MAX_BYTES) {
+      return undefined;
+    }
+    const openFlags =
+      fs.constants.O_RDONLY |
+      (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
+    fd = fs.openSync(resolvedReal, openFlags);
+    const openedStat = fs.fstatSync(fd);
+    if (
+      !openedStat.isFile() ||
+      openedStat.size > AVATAR_MAX_BYTES ||
+      !areSameFileIdentity(preOpenStat, openedStat)
+    ) {
+      return undefined;
+    }
+    const buffer = fs.readFileSync(fd);
+    const mime = resolveAvatarMime(resolvedCandidate);
     return `data:${mime};base64,${buffer.toString("base64")}`;
   } catch {
     return undefined;
+  } finally {
+    if (fd !== null) {
+      fs.closeSync(fd);
+    }
   }
 }
 
