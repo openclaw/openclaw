@@ -8,6 +8,7 @@ import { healthCommand } from "../health.js";
 import { applyOnboardingLocalWorkspaceConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
+  detectDockerSandboxAvailability,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   resolveControlUiLinks,
@@ -36,7 +37,20 @@ export async function runNonInteractiveOnboardingLocal(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  const dockerAvailableForSandbox = await detectDockerSandboxAvailability();
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir, {
+    enableSandboxDefaults: dockerAvailableForSandbox,
+  });
+  if (dockerAvailableForSandbox && !opts.json) {
+    runtime.log(
+      [
+        "Docker detected. Applying sandbox defaults:",
+        '- agents.defaults.sandbox.mode = "non-main"',
+        '- agents.defaults.sandbox.workspaceAccess = "none"',
+        `Opt out: ${formatCliCommand("openclaw config set agents.defaults.sandbox.mode off")}`,
+      ].join("\n"),
+    );
+  }
 
   const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {

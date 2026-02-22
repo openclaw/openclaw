@@ -334,7 +334,22 @@ export async function runOnboardingWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  const dockerAvailableForSandbox = await onboardHelpers.detectDockerSandboxAvailability();
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir, {
+    enableSandboxDefaults: dockerAvailableForSandbox,
+  });
+  if (dockerAvailableForSandbox) {
+    await prompter.note(
+      [
+        "Docker detected. Using secure sandbox onboarding defaults:",
+        '- agents.defaults.sandbox.mode = "non-main"',
+        '- agents.defaults.sandbox.workspaceAccess = "none"',
+        "",
+        `Opt out: ${formatCliCommand("openclaw config set agents.defaults.sandbox.mode off")}`,
+      ].join("\n"),
+      "Sandbox defaults",
+    );
+  }
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");

@@ -153,6 +153,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable: vi.fn(async () => ({ ok: true })),
   waitForGatewayReachable: vi.fn(async () => {}),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
+  detectDockerSandboxAvailability: vi.fn(async () => false),
   resolveControlUiLinks: vi.fn(() => ({
     httpUrl: "http://127.0.0.1:18789",
     wsUrl: "ws://127.0.0.1:18789",
