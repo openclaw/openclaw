@@ -592,11 +592,16 @@ export async function loginGeminiCliOAuth(
     if ("error" in parsed) {
       throw new Error(parsed.error);
     }
-    if (parsed.state !== verifier) {
-      throw new Error("OAuth state mismatch - please try again");
-    }
     ctx.progress.update("Exchanging authorization code for tokens...");
-    return exchangeCodeForTokens(parsed.code, verifier);
+    if (parsed.state === verifier) {
+      return exchangeCodeForTokens(parsed.code, verifier);
+    }
+    // Cross-process flow: the user pasted a redirect URL from a different CLI run.
+    // buildAuthUrl sets state=verifier, so parsed.state IS the original PKCE verifier.
+    // Use it instead of the current process's verifier so the token exchange succeeds.
+    // Google still validates the code_verifier against the original challenge server-side.
+    ctx.log("Note: using verifier from pasted URL (cross-process OAuth flow detected).");
+    return exchangeCodeForTokens(parsed.code, parsed.state);
   }
 
   ctx.progress.update("Complete sign-in in browser...");
@@ -628,11 +633,13 @@ export async function loginGeminiCliOAuth(
       if ("error" in parsed) {
         throw new Error(parsed.error, { cause: err });
       }
-      if (parsed.state !== verifier) {
-        throw new Error("OAuth state mismatch - please try again", { cause: err });
-      }
       ctx.progress.update("Exchanging authorization code for tokens...");
-      return exchangeCodeForTokens(parsed.code, verifier);
+      if (parsed.state === verifier) {
+        return exchangeCodeForTokens(parsed.code, verifier);
+      }
+      // Cross-process fallback (see manual-flow comment above for rationale).
+      ctx.log("Note: using verifier from pasted URL (cross-process OAuth flow detected).");
+      return exchangeCodeForTokens(parsed.code, parsed.state);
     }
     throw err;
   }

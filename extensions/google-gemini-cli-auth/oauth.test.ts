@@ -1,5 +1,6 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import type { GeminiCliOAuthContext } from "./oauth.js";
 
 vi.mock("openclaw/plugin-sdk", () => ({
   isWSL2Sync: () => false,
@@ -158,5 +159,156 @@ describe("extractGeminiCliCredentials", () => {
     const result2 = extractGeminiCliCredentials();
     expect(result2).toEqual(result1);
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
+  });
+});
+
+describe("loginGeminiCliOAuth cross-process PKCE fallback", () => {
+  const FAKE_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
+  const FAKE_CLIENT_SECRET = "GOCSPX-TestSecret";
+  const FAKE_ACCESS_TOKEN = "ya29.test-access-token";
+  const FAKE_REFRESH_TOKEN = "1//test-refresh-token";
+  const FAKE_PROJECT_ID = "test-project-123";
+
+  let savedEnv: Record<string, string | undefined>;
+
+  function makeCtx(promptResponse: string): GeminiCliOAuthContext & { logs: string[] } {
+    const logs: string[] = [];
+    return {
+      isRemote: true,
+      openUrl: vi.fn(),
+      log: (msg: string) => logs.push(msg),
+      note: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockResolvedValue(promptResponse),
+      progress: { update: vi.fn(), stop: vi.fn() },
+      logs,
+    };
+  }
+
+  function mockTokenExchangeFetch() {
+    const calls: { url: string; body: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        if (urlStr.includes("oauth2.googleapis.com/token")) {
+          calls.push({ url: urlStr, body: String(init?.body ?? "") });
+          return new Response(
+            JSON.stringify({
+              access_token: FAKE_ACCESS_TOKEN,
+              refresh_token: FAKE_REFRESH_TOKEN,
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (urlStr.includes("googleapis.com/oauth2/v1/userinfo")) {
+          return new Response(JSON.stringify({ email: "test@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (urlStr.includes("loadCodeAssist") || urlStr.includes("onboardUser")) {
+          return new Response(
+            JSON.stringify({
+              currentTier: { id: "free-tier" },
+              cloudaicompanionProject: FAKE_PROJECT_ID,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+    return calls;
+  }
+
+  function extractVerifierFromAuthUrl(logs: string[]): string {
+    const urlLog = logs.find((l) => l.includes("accounts.google.com"));
+    if (!urlLog) throw new Error("Auth URL not found in logs");
+    const match = urlLog.match(/https:\/\/accounts\.google\.com[^\s]+/);
+    if (!match) throw new Error("Could not parse auth URL from log");
+    const url = new URL(match[0]);
+    const state = url.searchParams.get("state");
+    if (!state) throw new Error("No state parameter in auth URL");
+    return state;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    savedEnv = {
+      OPENCLAW_GEMINI_OAUTH_CLIENT_ID: process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_ID,
+      OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET: process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET,
+      GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT,
+    };
+    process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_ID = FAKE_CLIENT_ID;
+    process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET = FAKE_CLIENT_SECRET;
+    process.env.GOOGLE_CLOUD_PROJECT = FAKE_PROJECT_ID;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
+  it("uses local verifier when state matches (same-process flow)", async () => {
+    const fetchCalls = mockTokenExchangeFetch();
+    // We need to capture the verifier from the auth URL, then construct a matching callback
+    const ctx = makeCtx("PLACEHOLDER");
+    // Override prompt to build the correct callback URL after we see the auth URL
+    let authUrlVerifier: string | undefined;
+    ctx.log = (msg: string) => {
+      ctx.logs.push(msg);
+      if (msg.includes("accounts.google.com") && !authUrlVerifier) {
+        authUrlVerifier = extractVerifierFromAuthUrl([msg]);
+        // Now set prompt to return a URL with the SAME state (same-process scenario)
+        (ctx.prompt as ReturnType<typeof vi.fn>).mockResolvedValue(
+          `http://localhost:8085/oauth2callback?code=test-auth-code&state=${authUrlVerifier}`,
+        );
+      }
+    };
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const result = await loginGeminiCliOAuth(ctx);
+
+    expect(result.access).toBe(FAKE_ACCESS_TOKEN);
+    expect(result.refresh).toBe(FAKE_REFRESH_TOKEN);
+
+    // Verify the token exchange used the local verifier
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
+    const tokenCall = fetchCalls[0];
+    const params = new URLSearchParams(tokenCall.body);
+    expect(params.get("code_verifier")).toBe(authUrlVerifier);
+    // No cross-process log message should appear
+    expect(ctx.logs.some((l) => l.includes("cross-process"))).toBe(false);
+  });
+
+  it("falls back to parsed.state when state mismatches (cross-process flow)", async () => {
+    const FOREIGN_VERIFIER = "foreign-verifier-from-another-process-run-abc123";
+    const fetchCalls = mockTokenExchangeFetch();
+
+    // Simulate pasting a redirect URL from a different CLI run with a foreign state
+    const ctx = makeCtx(
+      `http://localhost:8085/oauth2callback?code=test-auth-code&state=${FOREIGN_VERIFIER}`,
+    );
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const result = await loginGeminiCliOAuth(ctx);
+
+    expect(result.access).toBe(FAKE_ACCESS_TOKEN);
+    expect(result.refresh).toBe(FAKE_REFRESH_TOKEN);
+
+    // Verify the token exchange used the FOREIGN verifier (from parsed.state)
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
+    const tokenCall = fetchCalls[0];
+    const params = new URLSearchParams(tokenCall.body);
+    expect(params.get("code_verifier")).toBe(FOREIGN_VERIFIER);
+    // Cross-process log message should appear
+    expect(ctx.logs.some((l) => l.includes("cross-process"))).toBe(true);
   });
 });
