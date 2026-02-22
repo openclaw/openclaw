@@ -8,6 +8,7 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isRetryableApiError,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -92,7 +93,8 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
-  const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+  const API_RETRY_MAX_ATTEMPTS = 3;
+  const API_RETRY_BACKOFF_MS = [2_500, 5_000, 10_000];
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -119,7 +121,7 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
-  let didRetryTransientHttpError = false;
+  let apiRetryAttempt = 0;
 
   while (true) {
     try {
@@ -537,25 +539,28 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
-        didRetryTransientHttpError = true;
-        // Retry the full runWithModelFallback() cycle — transient errors
-        // (502/521/etc.) typically affect the whole provider, so falling
-        // back to an alternate model first would not help. Instead we wait
-        // and retry the complete primary→fallback chain.
+      const isRetryable = isRetryableApiError(message);
+      if (isRetryable && apiRetryAttempt < API_RETRY_MAX_ATTEMPTS) {
+        const delayMs = API_RETRY_BACKOFF_MS[apiRetryAttempt] ?? API_RETRY_BACKOFF_MS.at(-1)!;
+        apiRetryAttempt += 1;
+        // Retry the full runWithModelFallback() cycle — transient/overloaded
+        // errors typically affect the whole provider, so falling back to an
+        // alternate model first would not help. Wait and retry the complete
+        // primary→fallback chain.
         defaultRuntime.error(
-          `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+          `Retryable API error before reply (attempt ${apiRetryAttempt}/${API_RETRY_MAX_ATTEMPTS}): ${message}. Retrying in ${delayMs}ms.`,
         );
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
+          setTimeout(resolve, delayMs);
         });
         continue;
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
-        : message;
+      const safeMessage =
+        isTransientHttp || isRetryable
+          ? sanitizeUserFacingText(message, { errorContext: true })
+          : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."

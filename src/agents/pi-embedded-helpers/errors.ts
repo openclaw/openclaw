@@ -696,6 +696,20 @@ function isJsonApiInternalServerError(raw: string): boolean {
   return value.includes('"type":"api_error"') && value.includes("internal server error");
 }
 
+/**
+ * Returns true for transient provider errors eligible for automatic retry:
+ * HTTP 5xx, overloaded, rate-limited, and timeout errors.
+ * Non-transient errors (auth 401/403, billing 402, format) are excluded.
+ */
+export function isRetryableApiError(raw: string): boolean {
+  return (
+    isTransientHttpError(raw) ||
+    isOverloadedErrorMessage(raw) ||
+    isRateLimitErrorMessage(raw) ||
+    isTimeoutErrorMessage(raw)
+  );
+}
+
 export function parseImageDimensionError(raw: string): {
   maxDimensionPx?: number;
   messageIndex?: number;
