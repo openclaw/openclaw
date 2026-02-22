@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import { loadConfig } from "../config/io.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -15,6 +16,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { listAgentsForGateway } from "./session-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -154,11 +156,70 @@ function resolveAgentResponseText(result: unknown): string {
   return content || "No response from OpenClaw.";
 }
 
+/**
+ * Handle GET /v1/models — return all configured agents as OpenAI-compatible model objects.
+ *
+ * Each agent is exposed as a model with id `openclaw/<agentId>`.
+ * The default agent is additionally exposed as the plain `openclaw` model.
+ */
+async function handleModelsRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  const modelsMatch = url.pathname.match(/^\/v1\/models(?:\/(.+))?$/);
+  if (!modelsMatch) {
+    return false;
+  }
+
+  if (req.method !== "GET") {
+    sendJson(res, 405, {
+      error: { message: "Method not allowed. Use GET.", type: "invalid_request_error" },
+    });
+    return true;
+  }
+
+  const cfg = loadConfig();
+  const { agents } = listAgentsForGateway(cfg);
+  const now = Math.floor(Date.now() / 1000);
+
+  const toModelObject = (id: string, name?: string) => ({
+    id: `openclaw/${id}`,
+    object: "model" as const,
+    created: now,
+    owned_by: "openclaw",
+    ...(name ? { name } : {}),
+  });
+
+  const models = [
+    { id: "openclaw", object: "model" as const, created: now, owned_by: "openclaw" },
+    ...agents.map((a) => toModelObject(a.id, a.name ?? a.identity?.name)),
+  ];
+
+  const requestedModelId = modelsMatch[1];
+  if (requestedModelId) {
+    const found = models.find((m) => m.id === requestedModelId);
+    if (!found) {
+      sendJson(res, 404, {
+        error: { message: `Model '${requestedModelId}' not found.`, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    sendJson(res, 200, found);
+    return true;
+  }
+
+  sendJson(res, 200, { object: "list", data: models });
+  return true;
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenAiHttpOptions,
 ): Promise<boolean> {
+  // Handle /v1/models before /v1/chat/completions
+  if (await handleModelsRequest(req, res)) {
+    return true;
+  }
+
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
     auth: opts.auth,
