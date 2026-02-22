@@ -723,7 +723,9 @@ export async function runHeartbeatOnce(opts: {
       ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
       : { isHeartbeat: true, suppressToolErrorWarnings };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
-    const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    const replyPayload = resolveHeartbeatReplyPayload(
+      Array.isArray(replyResult) ? replyResult.filter((p) => !p.isError) : replyResult,
+    );
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
