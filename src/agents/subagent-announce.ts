@@ -21,7 +21,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
-import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isDeliverableMessageChannel, isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -333,9 +333,12 @@ function resolveAnnounceOrigin(
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && !isDeliverableMessageChannel(normalizedRequester.channel)) {
-    // Ignore internal/non-deliverable channel hints (for example webchat)
-    // so a valid persisted route can still be used for outbound delivery.
+  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
+    // Ignore internal channel hints (webchat) so a valid persisted route
+    // can still be used for outbound delivery. Non-standard channels that
+    // are not in the deliverable list should NOT be stripped here — doing
+    // so causes the session entry's stale lastChannel (often WhatsApp) to
+    // override the actual requester origin, leading to delivery failures.
     return mergeDeliveryContext(
       {
         accountId: normalizedRequester.accountId,
@@ -464,6 +467,10 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
   const origin = item.origin;
+  const channelIsDeliverable =
+    !requesterIsSubagent &&
+    typeof origin?.channel === "string" &&
+    isDeliverableMessageChannel(origin.channel);
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
   // Share one announce identity across direct and queued delivery paths so
@@ -480,11 +487,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: channelIsDeliverable ? origin?.channel : undefined,
+      accountId: channelIsDeliverable ? origin?.accountId : undefined,
+      to: channelIsDeliverable ? origin?.to : undefined,
+      threadId: channelIsDeliverable ? threadId : undefined,
+      deliver: !requesterIsSubagent && channelIsDeliverable,
       idempotencyKey,
     },
     timeoutMs: 15_000,
@@ -617,75 +624,11 @@ async function sendSubagentAnnounceDirectly(params: {
     params.targetRequesterSessionKey,
   );
   try {
-    const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
-    const completionChannelRaw =
-      typeof completionDirectOrigin?.channel === "string"
-        ? completionDirectOrigin.channel.trim()
-        : "";
-    const completionChannel =
-      completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
-        ? completionChannelRaw
-        : "";
-    const completionTo =
-      typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
-    const hasCompletionDirectTarget =
-      !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
-
-    if (
-      params.expectsCompletionMessage &&
-      hasCompletionDirectTarget &&
-      params.completionMessage?.trim()
-    ) {
-      const forceBoundSessionDirectDelivery =
-        params.spawnMode === "session" &&
-        (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
-      let shouldSendCompletionDirectly = true;
-      if (!forceBoundSessionDirectDelivery) {
-        let activeDescendantRuns = 0;
-        try {
-          const { countActiveDescendantRuns } = await import("./subagent-registry.js");
-          activeDescendantRuns = Math.max(
-            0,
-            countActiveDescendantRuns(canonicalRequesterSessionKey),
-          );
-        } catch {
-          // Best-effort only; when unavailable keep historical direct-send behavior.
-        }
-        // Keep non-bound completion announcements coordinated via requester
-        // session routing while sibling/descendant runs are still active.
-        if (activeDescendantRuns > 0) {
-          shouldSendCompletionDirectly = false;
-        }
-      }
-
-      if (shouldSendCompletionDirectly) {
-        const completionThreadId =
-          completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
-            ? String(completionDirectOrigin.threadId)
-            : undefined;
-        await callGateway({
-          method: "send",
-          params: {
-            channel: completionChannel,
-            to: completionTo,
-            accountId: completionDirectOrigin?.accountId,
-            threadId: completionThreadId,
-            sessionKey: canonicalRequesterSessionKey,
-            message: params.completionMessage,
-            idempotencyKey: params.directIdempotencyKey,
-          },
-          timeoutMs: 15_000,
-        });
-
-        return {
-          delivered: true,
-          path: "direct",
-        };
-      }
-    }
-
+    // Always inject the announce into the requester's session via method:agent.
+    // Never use method:send to push raw subagent output directly to the user —
+    // the requester agent must process the announce and formulate its own reply.
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
-    const threadId =
+    const directThreadId =
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
@@ -698,7 +641,7 @@ async function sendSubagentAnnounceDirectly(params: {
         channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
         accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
         to: params.requesterIsSubagent ? undefined : directOrigin?.to,
-        threadId: params.requesterIsSubagent ? undefined : threadId,
+        threadId: params.requesterIsSubagent ? undefined : directThreadId,
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,
