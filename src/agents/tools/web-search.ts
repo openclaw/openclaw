@@ -210,7 +210,10 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
-function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+function missingSearchKeyPayload(
+  provider: (typeof SEARCH_PROVIDERS)[number],
+  searchConfigPresent: boolean,
+) {
   if (provider === "perplexity") {
     return {
       error: "missing_perplexity_api_key",
@@ -227,9 +230,12 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  const configHint = searchConfigPresent
+    ? ""
+    : " If you have already configured a key, your config file may have validation errors preventing it from loading — check the gateway logs or run `openclaw gateway status`.";
   return {
     error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.${configHint}`,
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }
@@ -763,7 +769,7 @@ export function createWebSearchTool(options?: {
             : resolveSearchApiKey(search);
 
       if (!apiKey) {
-        return jsonResult(missingSearchKeyPayload(provider));
+        return jsonResult(missingSearchKeyPayload(provider, search !== undefined));
       }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
