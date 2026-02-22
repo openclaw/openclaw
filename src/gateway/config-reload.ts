@@ -291,7 +291,7 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     restartQueued = true;
-    opts.onRestart(plan, nextConfig);
+    void opts.onRestart(plan, nextConfig);
   };
 
   const handleMissingSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
