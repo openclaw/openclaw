@@ -354,6 +354,11 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3-flash") {
     return "gemini-3-flash-preview";
   }
+  // Gemini 3.1 Pro launched 2026-02-19 as "gemini-3.1-pro-preview".
+  // Accept the short alias so users can write "gemini-3.1-pro" in config.
+  if (id === "gemini-3.1-pro") {
+    return "gemini-3.1-pro-preview";
+  }
   return id;
 }
 

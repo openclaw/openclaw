@@ -63,15 +63,17 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "codex-max": "gpt-5.1-codex-max",
 
   // Gemini
-  gemini: "gemini-3-pro",
-  "gemini-pro": "gemini-3-pro",
-  "gemini-3": "gemini-3-pro",
+  gemini: "gemini-3.1-pro",
+  "gemini-pro": "gemini-3.1-pro",
+  "gemini-3": "gemini-3.1-pro",
+  "gemini-3.1": "gemini-3.1-pro",
   flash: "gemini-3-flash",
   "gemini-flash": "gemini-3-flash",
 
-  // Legacy Gemini 2.5 aliases (map to the nearest current Gemini tier).
-  "gemini-2.5": "gemini-3-pro",
-  "gemini-2.5-pro": "gemini-3-pro",
+  // Legacy Gemini 3.0/2.5 aliases (map to the nearest current Gemini tier).
+  "gemini-3-pro": "gemini-3.1-pro",
+  "gemini-2.5": "gemini-3.1-pro",
+  "gemini-2.5-pro": "gemini-3.1-pro",
   "gemini-2.5-flash": "gemini-3-flash",
 
   // GLM (free)
@@ -129,6 +131,7 @@ const MODEL_COSTS: Record<
   "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+  "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
   "gpt-5.1-codex-mini": {
     input: 0.25,
     output: 2,
@@ -154,6 +157,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-opus-4-6": 1000000,
   "claude-opus-4-5": 200000,
   "gemini-3-pro": 1048576,
+  "gemini-3.1-pro": 1048576,
   "gpt-5.1-codex-mini": 400000,
   "gpt-5.1": 400000,
   "glm-4.7": 204800,
@@ -171,6 +175,7 @@ const MODEL_MAX_TOKENS: Record<string, number> = {
   "claude-opus-4-6": 128000,
   "claude-opus-4-5": 64000,
   "gemini-3-pro": 65536,
+  "gemini-3.1-pro": 65536,
   "gpt-5.1-codex-mini": 128000,
   "gpt-5.1": 128000,
   "glm-4.7": 131072,
@@ -208,6 +213,7 @@ const MODEL_NAMES: Record<string, string> = {
   "claude-opus-4-6": "Claude Opus 4.6",
   "claude-opus-4-5": "Claude Opus 4.5",
   "gemini-3-pro": "Gemini 3 Pro",
+  "gemini-3.1-pro": "Gemini 3.1 Pro",
   "gpt-5.1-codex-mini": "GPT-5.1 Codex Mini",
   "gpt-5.1": "GPT-5.1",
   "glm-4.7": "GLM-4.7",
@@ -236,6 +242,7 @@ export function getOpencodeZenStaticFallbackModels(): ModelDefinitionConfig[] {
     "claude-opus-4-6",
     "claude-opus-4-5",
     "gemini-3-pro",
+    "gemini-3.1-pro",
     "gpt-5.1-codex-mini",
     "gpt-5.1",
     "glm-4.7",
