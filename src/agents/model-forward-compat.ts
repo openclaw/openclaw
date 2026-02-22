@@ -37,6 +37,23 @@ const ANTIGRAVITY_SONNET_THINKING_TEMPLATE_MODEL_IDS = [
   "claude-sonnet-4.5-thinking",
 ] as const;
 
+export const ANTIGRAVITY_SONNET_46_FORWARD_COMPAT_CANDIDATES = [
+  {
+    id: ANTIGRAVITY_SONNET_46_THINKING_MODEL_ID,
+    templatePrefixes: [
+      "google-antigravity/claude-sonnet-4-5-thinking",
+      "google-antigravity/claude-sonnet-4.5-thinking",
+    ],
+  },
+  {
+    id: ANTIGRAVITY_SONNET_46_MODEL_ID,
+    templatePrefixes: [
+      "google-antigravity/claude-sonnet-4-5",
+      "google-antigravity/claude-sonnet-4.5",
+    ],
+  },
+] as const;
+
 export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   {
     id: ANTIGRAVITY_OPUS_46_THINKING_MODEL_ID,
