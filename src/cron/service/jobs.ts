@@ -354,6 +354,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     updatedAtMs: now,
     schedule,
     sessionTarget: input.sessionTarget,
+    sessionFreshness: input.sessionFreshness,
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
@@ -400,6 +401,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;
+  }
+  if ("sessionFreshness" in patch) {
+    job.sessionFreshness = patch.sessionFreshness;
   }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;

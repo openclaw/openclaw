@@ -12,6 +12,7 @@ export type CronSchedule =
     };
 
 export type CronSessionTarget = "main" | "isolated";
+export type CronSessionFreshness = "reuse-if-fresh" | "always-new";
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
@@ -108,6 +109,7 @@ export type CronJob = {
   updatedAtMs: number;
   schedule: CronSchedule;
   sessionTarget: CronSessionTarget;
+  sessionFreshness?: CronSessionFreshness;
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
