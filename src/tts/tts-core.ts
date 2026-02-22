@@ -10,12 +10,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-} from "./tts.js";
+import { retryHttpAsync } from "../infra/retry-http.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
@@ -554,29 +549,33 @@ export async function elevenLabsTTS(params: {
       url.searchParams.set("output_format", outputFormat);
     }
 
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: modelId,
-        seed: normalizedSeed,
-        apply_text_normalization: normalizedNormalization,
-        language_code: normalizedLanguage,
-        voice_settings: {
-          stability: voiceSettings.stability,
-          similarity_boost: voiceSettings.similarityBoost,
-          style: voiceSettings.style,
-          use_speaker_boost: voiceSettings.useSpeakerBoost,
-          speed: voiceSettings.speed,
-        },
-      }),
-      signal: controller.signal,
-    });
+    const response = await retryHttpAsync(
+      () =>
+        fetch(url.toString(), {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+          },
+          body: JSON.stringify({
+            text,
+            model_id: modelId,
+            seed: normalizedSeed,
+            apply_text_normalization: normalizedNormalization,
+            language_code: normalizedLanguage,
+            voice_settings: {
+              stability: voiceSettings.stability,
+              similarity_boost: voiceSettings.similarityBoost,
+              style: voiceSettings.style,
+              use_speaker_boost: voiceSettings.useSpeakerBoost,
+              speed: voiceSettings.speed,
+            },
+          }),
+          signal: controller.signal,
+        }),
+      { label: "elevenlabs-tts" },
+    );
 
     if (!response.ok) {
       throw new Error(`ElevenLabs API error (${response.status})`);
@@ -609,20 +608,24 @@ export async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-      }),
-      signal: controller.signal,
-    });
+    const response = await retryHttpAsync(
+      () =>
+        fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            input: text,
+            voice,
+            response_format: responseFormat,
+          }),
+          signal: controller.signal,
+        }),
+      { label: "openai-tts" },
+    );
 
     if (!response.ok) {
       throw new Error(`OpenAI TTS API error (${response.status})`);

@@ -2,6 +2,8 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { isHttpRetryable } from "../../infra/retry-http.js";
+import { retryAsync } from "../../infra/retry.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -485,7 +487,14 @@ async function maybeFetchFirecrawlWebFetchPayload(
     return null;
   }
 
-  const firecrawl = await fetchFirecrawlContent(firecrawlParams);
+  const firecrawl = await retryAsync(async () => await fetchFirecrawlContent(firecrawlParams), {
+    label: "web-fetch-firecrawl",
+    shouldRetry: isHttpRetryable,
+    onRetry: (info) => {
+      const errMsg = info.err instanceof Error ? info.err.message : String(info.err);
+      console.warn(`[${info.label}] Retry ${info.attempt}/${info.maxAttempts} failed: ${errMsg}`);
+    },
+  });
   const payload = buildFirecrawlWebFetchPayload({
     firecrawl,
     rawUrl: params.url,
@@ -523,18 +532,31 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    const result = await fetchWithSsrFGuard({
-      url: params.url,
-      maxRedirects: params.maxRedirects,
-      timeoutMs: params.timeoutSeconds * 1000,
-      init: {
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
+    const result = await retryAsync(
+      async () =>
+        await fetchWithSsrFGuard({
+          url: params.url,
+          maxRedirects: params.maxRedirects,
+          timeoutMs: params.timeoutSeconds * 1000,
+          init: {
+            headers: {
+              Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+              "User-Agent": params.userAgent,
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+          },
+        }),
+      {
+        label: "web-fetch",
+        shouldRetry: isHttpRetryable,
+        onRetry: (info) => {
+          const errMsg = info.err instanceof Error ? info.err.message : String(info.err);
+          console.warn(
+            `[${info.label}] Retry ${info.attempt}/${info.maxAttempts} failed: ${errMsg}`,
+          );
         },
       },
-    });
+    );
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
@@ -685,7 +707,14 @@ async function tryFirecrawlFallback(
     return null;
   }
   try {
-    const firecrawl = await fetchFirecrawlContent(firecrawlParams);
+    const firecrawl = await retryAsync(async () => await fetchFirecrawlContent(firecrawlParams), {
+      label: "web-fetch-firecrawl-fallback",
+      shouldRetry: isHttpRetryable,
+      onRetry: (info) => {
+        const errMsg = info.err instanceof Error ? info.err.message : String(info.err);
+        console.warn(`[${info.label}] Retry ${info.attempt}/${info.maxAttempts} failed: ${errMsg}`);
+      },
+    });
     return { text: firecrawl.text, title: firecrawl.title };
   } catch {
     return null;

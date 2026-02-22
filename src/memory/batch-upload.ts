@@ -1,3 +1,4 @@
+import { retryHttpAsync } from "../infra/retry-http.js";
 import {
   buildBatchHeaders,
   normalizeBatchBaseUrl,
@@ -20,11 +21,15 @@ export async function uploadBatchJsonlFile(params: {
     `memory-embeddings.${hashText(String(Date.now()))}.jsonl`,
   );
 
-  const fileRes = await fetch(`${baseUrl}/files`, {
-    method: "POST",
-    headers: buildBatchHeaders(params.client, { json: false }),
-    body: form,
-  });
+  const fileRes = await retryHttpAsync(
+    () =>
+      fetch(`${baseUrl}/files`, {
+        method: "POST",
+        headers: buildBatchHeaders(params.client, { json: false }),
+        body: form,
+      }),
+    { label: "batch-jsonl-upload" },
+  );
   if (!fileRes.ok) {
     const text = await fileRes.text();
     throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
