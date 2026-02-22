@@ -480,6 +480,7 @@ export async function runCronIsolatedAgentTurn(params: {
           agentAccountId: resolvedDelivery.accountId,
           sessionFile,
           workspaceDir,
+          agentDir,
           config: cfgWithAgentDefaults,
           skillsSnapshot,
           prompt: commandBody,
