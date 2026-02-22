@@ -91,3 +91,26 @@ export function resolveThreadSessionKeys(params: {
     : params.baseSessionKey;
   return { sessionKey, parentSessionKey: params.parentSessionKey };
 }
+
+/**
+ * Strip bot mention from message text while preserving newlines and
+ * block-level Markdown formatting (headings, lists, blockquotes).
+ */
+export function normalizeMention(text: string, mention: string | undefined): string {
+  if (!mention) {
+    return text.trim();
+  }
+  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`@${escaped}\\b`, "gi");
+  // Replace the mention itself, then clean up without destroying Markdown structure.
+  // 1. Remove the mention (replace with empty to avoid injecting spaces into indentation)
+  // 2. Collapse only runs of multiple spaces/tabs within a line (preserving leading indent)
+  // 3. Trim blank lines left by mention removal
+  return text
+    .replace(re, "")
+    .split("\n")
+    .map((line) => line.replace(/(\S) {2,}/g, "$1 "))
+    .join("\n")
+    .replace(/^\s*\n/, "")
+    .trim();
+}

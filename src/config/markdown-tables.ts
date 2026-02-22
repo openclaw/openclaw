@@ -13,9 +13,10 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
   accounts?: Record<string, MarkdownConfigEntry>;
 };
 
-const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
+export const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
   ["signal", "bullets"],
   ["whatsapp", "bullets"],
+  ["mattermost", "off"],
 ]);
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
