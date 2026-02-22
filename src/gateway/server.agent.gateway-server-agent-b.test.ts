@@ -11,11 +11,12 @@ import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
-  connectWebchatClient,
   connectOk,
+  connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
+  startConnectedServerWithClient,
   startServerWithClient,
   testState,
   trackConnectChallengeNonce,
@@ -30,11 +31,10 @@ let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 let port: number;
 
 beforeAll(async () => {
-  const started = await startServerWithClient();
+  const started = await startConnectedServerWithClient();
   server = started.server;
   ws = started.ws;
   port = started.port;
-  await connectOk(ws);
 });
 
 afterAll(async () => {

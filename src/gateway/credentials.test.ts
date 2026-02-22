@@ -9,20 +9,57 @@ function cfg(input: Partial<OpenClawConfig>): OpenClawConfig {
   return input as OpenClawConfig;
 }
 
+type ResolveFromConfigInput = Parameters<typeof resolveGatewayCredentialsFromConfig>[0];
+type GatewayConfig = NonNullable<OpenClawConfig["gateway"]>;
+
+const DEFAULT_GATEWAY_AUTH = { token: "config-token", password: "config-password" };
+const DEFAULT_REMOTE_AUTH = { token: "remote-token", password: "remote-password" };
+const DEFAULT_GATEWAY_ENV = {
+  OPENCLAW_GATEWAY_TOKEN: "env-token",
+  OPENCLAW_GATEWAY_PASSWORD: "env-password",
+} as NodeJS.ProcessEnv;
+
+function resolveGatewayCredentialsFor(
+  gateway: GatewayConfig,
+  overrides: Partial<Omit<ResolveFromConfigInput, "cfg" | "env">> = {},
+) {
+  return resolveGatewayCredentialsFromConfig({
+    cfg: cfg({ gateway }),
+    env: DEFAULT_GATEWAY_ENV,
+    ...overrides,
+  });
+}
+
+function expectEnvGatewayCredentials(resolved: { token?: string; password?: string }) {
+  expect(resolved).toEqual({
+    token: "env-token",
+    password: "env-password",
+  });
+}
+
+function resolveRemoteModeWithRemoteCredentials(
+  overrides: Partial<Omit<ResolveFromConfigInput, "cfg" | "env">> = {},
+) {
+  return resolveGatewayCredentialsFor(
+    {
+      mode: "remote",
+      remote: DEFAULT_REMOTE_AUTH,
+      auth: DEFAULT_GATEWAY_AUTH,
+    },
+    overrides,
+  );
+}
+
 describe("resolveGatewayCredentialsFromConfig", () => {
   it("prefers explicit credentials over config and environment", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          auth: { token: "config-token", password: "config-password" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
-      explicitAuth: { token: "explicit-token", password: "explicit-password" },
-    });
+    const resolved = resolveGatewayCredentialsFor(
+      {
+        auth: DEFAULT_GATEWAY_AUTH,
+      },
+      {
+        explicitAuth: { token: "explicit-token", password: "explicit-password" },
+      },
+    );
     expect(resolved).toEqual({
       token: "explicit-token",
       password: "explicit-password",
@@ -30,54 +67,27 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   });
 
   it("returns empty credentials when url override is used without explicit auth", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          auth: { token: "config-token", password: "config-password" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
-      urlOverride: "wss://example.com",
-    });
+    const resolved = resolveGatewayCredentialsFor(
+      {
+        auth: DEFAULT_GATEWAY_AUTH,
+      },
+      {
+        urlOverride: "wss://example.com",
+      },
+    );
     expect(resolved).toEqual({});
   });
 
   it("uses local-mode environment values before local config", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "local",
-          auth: { token: "config-token", password: "config-password" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
+    const resolved = resolveGatewayCredentialsFor({
+      mode: "local",
+      auth: DEFAULT_GATEWAY_AUTH,
     });
-    expect(resolved).toEqual({
-      token: "env-token",
-      password: "env-password",
-    });
+    expectEnvGatewayCredentials(resolved);
   });
 
   it("uses remote-mode remote credentials before env and local config", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "remote",
-          remote: { token: "remote-token", password: "remote-password" },
-          auth: { token: "config-token", password: "config-password" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
-    });
+    const resolved = resolveRemoteModeWithRemoteCredentials();
     expect(resolved).toEqual({
       token: "remote-token",
       password: "env-password",
@@ -85,43 +95,49 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   });
 
   it("falls back to env/config when remote mode omits remote credentials", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "remote",
-          remote: {},
-          auth: { token: "config-token", password: "config-password" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
+    const resolved = resolveGatewayCredentialsFor({
+      mode: "remote",
+      remote: {},
+      auth: DEFAULT_GATEWAY_AUTH,
     });
-    expect(resolved).toEqual({
-      token: "env-token",
-      password: "env-password",
-    });
+    expectEnvGatewayCredentials(resolved);
   });
 
   it("supports env-first password override in remote mode for gateway call path", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "remote",
-          remote: { token: "remote-token", password: "remote-password" },
-          auth: { token: "config-token", password: "config-password" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
+    const resolved = resolveRemoteModeWithRemoteCredentials({
       remotePasswordPrecedence: "env-first",
     });
     expect(resolved).toEqual({
       token: "remote-token",
       password: "env-password",
+    });
+  });
+
+  it("supports env-first token precedence in remote mode", () => {
+    const resolved = resolveRemoteModeWithRemoteCredentials({
+      remoteTokenPrecedence: "env-first",
+      remotePasswordPrecedence: "remote-first",
+    });
+    expect(resolved).toEqual({
+      token: "env-token",
+      password: "remote-password",
+    });
+  });
+
+  it("supports remote-only password fallback for strict remote override call sites", () => {
+    const resolved = resolveGatewayCredentialsFor(
+      {
+        mode: "remote",
+        remote: { token: "remote-token" },
+        auth: DEFAULT_GATEWAY_AUTH,
+      },
+      {
+        remotePasswordFallback: "remote-only",
+      },
+    );
+    expect(resolved).toEqual({
+      token: "remote-token",
+      password: undefined,
     });
   });
 
