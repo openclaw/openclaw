@@ -81,6 +81,11 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("172.19.5.100", proxies)).toBe(true); // CIDR match
       expect(isTrustedProxyAddress("10.43.0.1", proxies)).toBe(false); // no match
     });
+
+    it("supports IPv6 CIDR notation", () => {
+      expect(isTrustedProxyAddress("2001:db8::1234", ["2001:db8::/32"])).toBe(true);
+      expect(isTrustedProxyAddress("2001:db9::1234", ["2001:db8::/32"])).toBe(false);
+    });
   });
 
   describe("backward compatibility", () => {
