@@ -7,6 +7,7 @@ import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
+import { formatLocalIsoWithOffset } from "./timestamps.js";
 
 export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
@@ -124,7 +125,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
+      const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
     } catch {

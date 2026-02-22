@@ -8,6 +8,7 @@ import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
+import { formatLocalIsoWithOffset } from "./timestamps.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -188,7 +189,7 @@ function formatConsoleLine(opts: {
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
     return JSON.stringify({
-      time: new Date().toISOString(),
+      time: formatLocalIsoWithOffset(new Date()),
       level: opts.level,
       subsystem: displaySubsystem,
       message: opts.message,
@@ -209,10 +210,11 @@ function formatConsoleLine(opts: {
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
-      return color.gray(new Date().toISOString().slice(11, 19));
+      const now = formatLocalIsoWithOffset(new Date());
+      return color.gray(now.slice(11, 19));
     }
     if (loggingState.consoleTimestampPrefix) {
-      return color.gray(new Date().toISOString());
+      return color.gray(formatLocalIsoWithOffset(new Date()));
     }
     return "";
   })();
