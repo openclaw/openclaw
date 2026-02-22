@@ -7,7 +7,69 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import { createRatelimitFetchHook } from "./anthropic-ratelimit.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+
+/**
+ * Create a standalone StreamFn wrapper that captures Anthropic rate-limit
+ * headers.  Unlike `createAnthropicPayloadLogger`, this is always active
+ * (no env-var opt-in) and only captures rate-limit data, not full payloads.
+ */
+export function createRatelimitStreamWrapper(params: {
+  env?: NodeJS.ProcessEnv;
+  sessionKey?: string;
+  modelId?: string;
+}): (streamFn: StreamFn) => StreamFn {
+  return (streamFn: StreamFn): StreamFn => {
+    return (model, context, options) => {
+      if (!isAnthropicModel(model)) {
+        return streamFn(model, context, options);
+      }
+
+      const rlHook = createRatelimitFetchHook({
+        env: params.env,
+        sessionKey: params.sessionKey,
+        modelId: params.modelId,
+      });
+      rlHook.install();
+
+      const stream = streamFn(model, context, options);
+
+      if (
+        stream &&
+        typeof (stream as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function"
+      ) {
+        const origIterator = (stream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        const wrappedIterator: AsyncIterator<unknown> = {
+          async next(...args: [] | [undefined]) {
+            const result = await origIterator.next(...args);
+            if (result.done) {
+              rlHook.uninstall();
+            }
+            return result;
+          },
+          async return(value?: unknown) {
+            rlHook.uninstall();
+            return origIterator.return?.(value) ?? { done: true as const, value: undefined };
+          },
+          async throw(err?: unknown) {
+            rlHook.uninstall();
+            if (origIterator.throw) {
+              return origIterator.throw(err);
+            }
+            throw err;
+          },
+        };
+        (stream as { [Symbol.asyncIterator]: () => AsyncIterator<unknown> })[Symbol.asyncIterator] =
+          () => wrappedIterator;
+      } else {
+        rlHook.uninstall();
+      }
+
+      return stream;
+    };
+  };
+}
 
 type PayloadLogStage = "request" | "usage";
 
