@@ -1371,3 +1371,72 @@ describe("initSessionState stale threadId fallback", () => {
     expect(result.sessionEntry.lastThreadId).toBe(99);
   });
 });
+
+describe("initSessionState internal channel routing preservation", () => {
+  it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {
+    const storePath = await createStorePath("preserve-external-channel-");
+    const sessionKey = "agent:main:telegram:group:12345";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "group:12345",
+        deliveryContext: {
+          channel: "telegram",
+          to: "group:12345",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "internal follow-up",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("telegram");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+  });
+
+  it("uses session key channel hint when first turn is internal webchat", async () => {
+    const storePath = await createStorePath("session-key-channel-hint-");
+    const sessionKey = "agent:main:telegram:group:98765";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("telegram");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+  });
+
+  it("keeps webchat channel for webchat/main sessions", async () => {
+    const storePath = await createStorePath("preserve-webchat-main-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:main",
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+  });
+});
