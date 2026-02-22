@@ -120,11 +120,11 @@ describe("resolveAndValidateIP", () => {
 
 describe("safeFetch", () => {
   it("fetches a URL directly when no redirect occurs", async () => {
-    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok", { status: 200 }));
     const res = await safeFetch({
       url: "https://teams.sharepoint.com/file.pdf",
       allowHosts: ["sharepoint.com"],
-      fetchFn: fetchMock as unknown as typeof fetch,
+      fetchFn: fetchMock,
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
