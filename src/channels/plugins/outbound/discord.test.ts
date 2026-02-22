@@ -71,19 +71,19 @@ describe("normalizeDiscordOutboundTarget", () => {
 
 describe("discordOutbound", () => {
   beforeEach(() => {
-    hoisted.sendMessageDiscordMock.mockReset().mockResolvedValue({
+    hoisted.sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "ch-1",
     });
-    hoisted.sendPollDiscordMock.mockReset().mockResolvedValue({
+    hoisted.sendPollDiscordMock.mockClear().mockResolvedValue({
       messageId: "poll-1",
       channelId: "ch-1",
     });
-    hoisted.sendWebhookMessageDiscordMock.mockReset().mockResolvedValue({
+    hoisted.sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-webhook-1",
       channelId: "thread-1",
     });
-    hoisted.getThreadBindingManagerMock.mockReset().mockReturnValue(null);
+    hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
