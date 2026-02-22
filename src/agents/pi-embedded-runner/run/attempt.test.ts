@@ -60,8 +60,8 @@ describe("injectHistoryImagesIntoMessages", () => {
 });
 
 describe("resolvePromptBuildHookResult", () => {
-  it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
-    const hookRunner = {
+  function createLegacyOnlyHookRunner() {
+    return {
       hasHooks: vi.fn(
         (hookName: "before_prompt_build" | "before_agent_start") =>
           hookName === "before_agent_start",
@@ -69,6 +69,10 @@ describe("resolvePromptBuildHookResult", () => {
       runBeforePromptBuild: vi.fn(async () => undefined),
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
     };
+  }
+
+  it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
+    const hookRunner = createLegacyOnlyHookRunner();
     const result = await resolvePromptBuildHookResult({
       prompt: "hello",
       messages: [],
@@ -85,14 +89,7 @@ describe("resolvePromptBuildHookResult", () => {
   });
 
   it("calls legacy hook when precomputed result is absent", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn(
-        (hookName: "before_prompt_build" | "before_agent_start") =>
-          hookName === "before_agent_start",
-      ),
-      runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
-    };
+    const hookRunner = createLegacyOnlyHookRunner();
     const messages = [{ role: "user", content: "ctx" }];
     const result = await resolvePromptBuildHookResult({
       prompt: "hello",
