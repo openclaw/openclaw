@@ -31,6 +31,8 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** Max concurrent agent runs in this channel's conversation lane. */
+  maxConcurrentPerConversation?: number;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -53,6 +55,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** Max concurrent agent runs in this guild's conversation lanes. */
+  maxConcurrentPerConversation?: number;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -223,6 +227,8 @@ export type DiscordAccountConfig = {
   maxLinesPerMessage?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
+  /** Max concurrent agent runs per conversation lane (overrides global default). */
+  maxConcurrentPerConversation?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
   /** Per-DM config overrides keyed by user ID. */

@@ -4,3 +4,6 @@ export const enum CommandLane {
   Subagent = "subagent",
   Nested = "nested",
 }
+
+/** Prefix for per-conversation lanes — used by lane creation and idle eviction. */
+export const CONV_LANE_PREFIX = "conv:";

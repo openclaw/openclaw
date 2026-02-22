@@ -66,6 +66,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
@@ -144,6 +145,7 @@ export const TelegramAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
@@ -265,6 +267,7 @@ export const DiscordGuildChannelSchema = z
   .object({
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -281,6 +284,7 @@ export const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
@@ -331,6 +335,7 @@ export const DiscordAccountSchema = z
     allowBots: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
@@ -569,6 +574,7 @@ export const SlackChannelSchema = z
     enabled: z.boolean().optional(),
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     allowBots: z.boolean().optional(),
@@ -613,6 +619,7 @@ export const SlackAccountSchema = z
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
+    maxConcurrentPerConversation: z.number().int().min(1).max(10).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
