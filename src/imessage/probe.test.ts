@@ -37,4 +37,29 @@ describe("probeIMessage", () => {
     expect(result.error).toMatch(/rpc/i);
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
+
+  it("marks permission denied probe failures as fatal", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    createIMessageRpcClientMock.mockResolvedValueOnce({
+      request: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error(
+            "imsg permission denied for /Users/alice/Library/Messages/chat.db (authorization denied (code: 23))",
+          ),
+        ),
+      stop: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const result = await probeIMessage(1000, { cliPath: "imsg-permission" });
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toContain("imsg permission denied");
+  });
 });

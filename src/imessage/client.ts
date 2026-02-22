@@ -45,6 +45,28 @@ function isTestEnv(): boolean {
   return Boolean(vitest);
 }
 
+export function parseIMessageRpcPlaintextError(line: string): Error | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^permissionDenied\(/i.test(trimmed)) {
+    const pathMatch = trimmed.match(/\bpath:\s*(?:"([^"]+)"|([^,]+))/i);
+    const path = (pathMatch?.[1] ?? pathMatch?.[2] ?? "").trim();
+    const underlyingMatch = trimmed.match(/\bunderlying:\s*(.+)\)$/i);
+    const underlying = underlyingMatch?.[1]?.trim();
+
+    const pathSuffix = path ? ` for ${path}` : "";
+    const detailSuffix = underlying ? ` (${underlying})` : "";
+    return new Error(
+      `imsg permission denied${pathSuffix}${detailSuffix}; grant Full Disk Access to the process running OpenClaw/imsg and restart the gateway`,
+    );
+  }
+
+  return null;
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
   private readonly dbPath?: string;
@@ -188,6 +210,12 @@ export class IMessageRpcClient {
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
     } catch (err) {
+      const plainTextError = parseIMessageRpcPlaintextError(line);
+      if (plainTextError) {
+        this.runtime?.error?.(`imsg rpc: ${plainTextError.message}`);
+        this.failAll(plainTextError);
+        return;
+      }
       const detail = err instanceof Error ? err.message : String(err);
       this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
       return;
