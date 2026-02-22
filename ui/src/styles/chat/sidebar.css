@@ -19,12 +19,11 @@
 .chat-sidebar {
   flex: 1;
   min-width: 300px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: slide-in 200ms ease-out;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
 }
 
 @keyframes slide-in {
@@ -51,13 +50,12 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   position: sticky;
   top: 0;
   z-index: 10;
-  background: color-mix(in srgb, var(--panel) 95%, transparent);
-  backdrop-filter: blur(6px);
+  background: var(--panel);
 }
 
 /* Smaller close button for sidebar */
@@ -81,13 +79,12 @@
 
 .sidebar-markdown {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .sidebar-markdown pre {
-  background: color-mix(in srgb, var(--secondary) 90%, transparent);
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
   padding: 12px;
   overflow-x: auto;
 }

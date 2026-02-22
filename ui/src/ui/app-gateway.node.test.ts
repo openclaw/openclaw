@@ -50,7 +50,7 @@ function createHost() {
       token: "",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "dark",
+      theme: "system",
       chatFocusMode: false,
       chatShowThinking: true,
       splitRatio: 0.6,
