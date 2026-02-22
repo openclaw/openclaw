@@ -109,7 +109,6 @@ export function resolveTranscriptPolicy(params: {
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
   const sanitizeThoughtSignatures =
     isOpenRouterGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
   const sanitizeThinkingSignatures = isAntigravityClaudeModel;
@@ -118,7 +117,9 @@ export function resolveTranscriptPolicy(params: {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
     toolCallIdMode,
-    repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
+    // Enable for all non-OpenAI providers: Moonshot, MiniMax, and other OpenAI-compatible
+    // APIs also reject orphaned tool_result messages after history truncation.
+    repairToolUseResultPairing: !isOpenAi,
     preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures,
@@ -126,6 +127,6 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
-    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    allowSyntheticToolResults: !isOpenAi,
   };
 }
