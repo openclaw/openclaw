@@ -273,6 +273,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/CLI: fix `openclaw memory search` (and other memory CLI commands) hanging after completion by closing the global undici HTTP connection pool once all CLI command handlers finish, and by destroying the stdio streams of timed-out QMD child processes so that inherited pipe file descriptors cannot keep the Node.js event loop alive. (#21018)
 - Agents/Streaming: keep assistant partial streaming active during reasoning streams, handle native `thinking_*` stream events consistently, dedupe mixed reasoning-end signals, and clear stale mutating tool errors after same-target retry success. (#20635) Thanks @obviyus.
 - iOS/Chat: use a dedicated iOS chat session key for ChatSheet routing to avoid cross-client session collisions with main-session traffic. (#21139) thanks @mbelinky.
 - iOS/Chat: auto-resync chat history after reconnect sequence gaps, clear stale pending runs, and avoid dead-end manual refresh errors after transient disconnects. (#21135) thanks @mbelinky.

@@ -11,19 +11,30 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logInfoMock: vi.fn(),
 }));
 
+type MockStream = EventEmitter & { destroy: () => void; destroyCalled: boolean };
+
 type MockChild = EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+  stdout: MockStream;
+  stderr: MockStream;
+  stdin: MockStream;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
 };
 
+function makeMockStream(): MockStream {
+  const s = new EventEmitter() as MockStream;
+  s.destroyCalled = false;
+  s.destroy = () => {
+    s.destroyCalled = true;
+  };
+  return s;
+}
+
 function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
   const child = new EventEmitter() as MockChild;
-  child.stdout = stdout;
-  child.stderr = stderr;
+  child.stdout = makeMockStream();
+  child.stderr = makeMockStream();
+  child.stdin = makeMockStream();
   child.closeWith = (code = 0) => {
     child.emit("close", code);
   };
@@ -578,6 +589,63 @@ describe("QmdMemoryManager", () => {
     const rejected = expect(syncPromise).rejects.toThrow("qmd update timed out after 20ms");
     await vi.advanceTimersByTimeAsync(20);
     await rejected;
+    await manager.close();
+  });
+
+  it("destroys timed-out child stdio streams so pipes do not keep the event loop alive", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            updateTimeoutMs: 20,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Collect hung "update" children via an array so tsgo's CFA can resolve
+    // the element type correctly (closure-mutated `let` variables may be
+    // narrowed to `null` by strict CFA implementations).
+    const hungChildren: MockChild[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        // Return a hung child that will be killed by the timeout
+        const child = createMockChild({ autoClose: false });
+        hungChildren.push(child);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
+    await vi.advanceTimersByTimeAsync(0);
+    const manager = await createPromise;
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const syncPromise = manager.sync({ reason: "manual" });
+    // Register the rejection handler BEFORE advancing fake timers so the
+    // rejection is always handled and never triggers the unhandled-rejection hook.
+    const rejected = expect(syncPromise).rejects.toThrow("qmd update timed out after 20ms");
+    await vi.advanceTimersByTimeAsync(20);
+    await rejected;
+
+    expect(hungChildren).toHaveLength(1);
+    expect(hungChildren[0].stdout.destroyCalled).toBe(true);
+    expect(hungChildren[0].stderr.destroyCalled).toBe(true);
+    expect(hungChildren[0].stdin.destroyCalled).toBe(true);
+
     await manager.close();
   });
 

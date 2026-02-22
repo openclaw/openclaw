@@ -954,6 +954,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       const timer = opts?.timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
+            // Destroy the stdio pipes so that the parent-side handles are
+            // released immediately.  child.unref() alone is insufficient:
+            // it only unrefs the ChildProcess handle, leaving the stdout /
+            // stderr / stdin Sockets ref'd.  If the killed process has a
+            // grandchild that inherited those file descriptors, Node.js
+            // never receives EOF and the event loop hangs indefinitely.
+            // Destroying the streams closes the read/write ends on our
+            // side regardless of what the child (or its descendants) holds.
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+            child.stdin?.destroy();
             reject(new Error(`qmd ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
           }, opts.timeoutMs)
         : null;
