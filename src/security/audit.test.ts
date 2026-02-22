@@ -1009,6 +1009,40 @@ describe("security audit", () => {
         },
         expectedSeverity: "critical",
       },
+      {
+        name: "loopback trusted-proxy with loopback-only proxies",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            allowRealIpFallback: true,
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+              },
+            },
+          },
+        },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "loopback trusted-proxy with non-loopback proxy range",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            allowRealIpFallback: true,
+            trustedProxies: ["127.0.0.1", "10.0.0.0/8"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+              },
+            },
+          },
+        },
+        expectedSeverity: "critical",
+      },
     ];
 
     for (const testCase of cases) {
