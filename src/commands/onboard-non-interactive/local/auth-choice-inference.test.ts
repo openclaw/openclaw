@@ -9,7 +9,7 @@ describe("auth-choice-inference", () => {
     expect(result.choice).toBe("together-api-key");
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]).toMatchObject({
-      flag: "togetherApiKey",
+      optionKey: "togetherApiKey",
       authChoice: "together-api-key",
       label: "--together-api-key",
     });
@@ -22,7 +22,7 @@ describe("auth-choice-inference", () => {
     expect(result.choice).toBe("huggingface-api-key");
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]).toMatchObject({
-      flag: "huggingfaceApiKey",
+      optionKey: "huggingfaceApiKey",
       authChoice: "huggingface-api-key",
       label: "--huggingface-api-key",
     });
