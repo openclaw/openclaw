@@ -41,6 +41,16 @@ export function isMainModule({
     return true;
   }
 
+  // The published/open-source wrapper binary is openclaw.mjs, which then imports
+  // dist/entry.js. Treat that pair as the main module so entry bootstrap runs.
+  if (normalizedCurrent && normalizedArgv1) {
+    const currentBase = path.basename(normalizedCurrent);
+    const argvBase = path.basename(normalizedArgv1);
+    if (currentBase === "entry.js" && (argvBase === "openclaw.mjs" || argvBase === "openclaw.js")) {
+      return true;
+    }
+  }
+
   // Fallback: basename match (relative paths, symlinked bins).
   if (
     normalizedCurrent &&
