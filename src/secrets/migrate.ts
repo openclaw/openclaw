@@ -129,6 +129,21 @@ function formatBackupId(now: Date): string {
   return `${year}${month}${day}T${hour}${minute}${second}Z`;
 }
 
+function resolveUniqueBackupId(stateDir: string, now: Date): string {
+  const backupRoot = resolveBackupRoot(stateDir);
+  const base = formatBackupId(now);
+  let candidate = base;
+  let attempt = 0;
+
+  while (fs.existsSync(path.join(backupRoot, candidate))) {
+    attempt += 1;
+    const suffix = `${String(attempt).padStart(2, "0")}-${crypto.randomBytes(2).toString("hex")}`;
+    candidate = `${base}-${suffix}`;
+  }
+
+  return candidate;
+}
+
 function parseEnvValue(raw: string): string {
   const trimmed = raw.trim();
   if (
@@ -778,7 +793,7 @@ export async function runSecretsMigration(
   }
 
   const now = options.now ?? new Date();
-  const backupId = formatBackupId(now);
+  const backupId = resolveUniqueBackupId(plan.stateDir, now);
   const backup = createBackupManifest({
     stateDir: plan.stateDir,
     targets: plan.backupTargets,

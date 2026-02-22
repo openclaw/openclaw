@@ -201,4 +201,16 @@ describe("secrets migrate", () => {
     const rolledBackEnv = await fs.readFile(envPath, "utf8");
     expect(rolledBackEnv).toContain("OPENAI_API_KEY=sk-openai-plaintext");
   });
+
+  it("uses a unique backup id when multiple writes happen in the same second", async () => {
+    const now = new Date("2026-02-22T00:00:00.000Z");
+    const first = await runSecretsMigration({ env, write: true, now });
+    await rollbackSecretsMigration({ env, backupId: first.backupId! });
+
+    const second = await runSecretsMigration({ env, write: true, now });
+
+    expect(first.backupId).toBeTruthy();
+    expect(second.backupId).toBeTruthy();
+    expect(second.backupId).not.toBe(first.backupId);
+  });
 });
