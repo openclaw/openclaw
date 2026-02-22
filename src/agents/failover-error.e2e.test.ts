@@ -66,6 +66,22 @@ describe("failover-error", () => {
     expect(err?.status).toBe(400);
   });
 
+  it("classifies HTTP 400 insufficient_quota as billing, not format", () => {
+    // Anthropic returns insufficient_quota with HTTP 400
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message:
+          '{"type":"error","error":{"type":"insufficient_quota","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+      }),
+    ).toBe("billing");
+  });
+
+  it("still classifies plain HTTP 400 as format", () => {
+    expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
+    expect(resolveFailoverReasonFromError({ status: 400, message: "bad request" })).toBe("format");
+  });
+
   it("describes non-Error values consistently", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");

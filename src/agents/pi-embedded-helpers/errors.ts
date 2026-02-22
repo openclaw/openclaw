@@ -590,6 +590,7 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    "insufficient_quota",
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
