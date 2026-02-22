@@ -208,6 +208,28 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
+  it("does NOT emit media for malformed MEDIA:-prefixed prose", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "browser",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:-prefixed paths (lenient whitespace) when loading outbound media",
+          },
+        ],
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
   it("emits media from details.path fallback when no MEDIA: text", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
