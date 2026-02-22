@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { isLoopbackAddress } from "../gateway/net.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
@@ -340,7 +339,7 @@ function collectGatewayConfigFindings(
 
   if (allowRealIpFallback) {
     const hasNonLoopbackTrustedProxy = trustedProxies.some(
-      (proxy) => !isLoopbackOnlyTrustedProxyEntry(proxy),
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
     );
     const exposed =
       bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
@@ -508,13 +507,15 @@ function collectGatewayConfigFindings(
   return findings;
 }
 
-function isLoopbackOnlyTrustedProxyEntry(entry: string): boolean {
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
   const candidate = entry.trim();
   if (!candidate) {
     return false;
   }
   if (!candidate.includes("/")) {
-    return isLoopbackAddress(candidate);
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
   }
 
   const [rawIp, rawPrefix] = candidate.split("/", 2);
@@ -527,11 +528,7 @@ function isLoopbackOnlyTrustedProxyEntry(entry: string): boolean {
     return false;
   }
   if (ipVersion === 4) {
-    if (prefix < 8 || prefix > 32) {
-      return false;
-    }
-    const firstOctet = Number.parseInt(rawIp.trim().split(".")[0] ?? "", 10);
-    return firstOctet === 127;
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
   }
   if (ipVersion === 6) {
     return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
