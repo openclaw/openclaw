@@ -77,11 +77,12 @@ runs:
         which node
         node -v
         pnpm -v
+        ERR_PREFIX="::error::"
         case "$FROZEN_LOCKFILE" in
           true) LOCKFILE_FLAG="--frozen-lockfile" ;;
           false) LOCKFILE_FLAG="" ;;
           *)
-            echo "::error::Invalid frozen-lockfile input: '$FROZEN_LOCKFILE' (expected true or false)"
+            echo "${ERR_PREFIX}Invalid frozen-lockfile input: '$FROZEN_LOCKFILE' (expected true or false)"
             exit 2
             ;;
         esac

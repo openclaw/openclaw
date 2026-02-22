@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveUserPath } from "../config/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -13,6 +13,19 @@ export function resolveDefaultAgentWorkspaceDir(
 ): string {
   const home = resolveRequiredHomeDir(env, homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
+
+  // Check for explicit state dir override first
+  const stateDirOverride = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  if (stateDirOverride) {
+    // resolveUserPath from config/paths.ts respects the env/homedir parameters.
+    // For the gateway runtime, env === process.env usually.
+    const resolvedState = resolveUserPath(stateDirOverride, env, homedir);
+    if (profile && profile.toLowerCase() !== "default") {
+      return path.join(resolvedState, `workspace-${profile}`);
+    }
+    return path.join(resolvedState, "workspace");
+  }
+
   if (profile && profile.toLowerCase() !== "default") {
     return path.join(home, ".openclaw", `workspace-${profile}`);
   }

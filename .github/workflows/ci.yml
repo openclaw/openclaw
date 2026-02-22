@@ -137,6 +137,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "false"
 
       - name: Build dist
@@ -163,6 +165,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "false"
 
       - name: Download dist artifact
@@ -206,6 +210,8 @@ jobs:
         if: matrix.runtime != 'bun' || github.event_name != 'push'
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "${{ matrix.runtime == 'bun' }}"
 
       - name: Configure vitest JSON reports
@@ -254,6 +260,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "false"
 
       - name: Check types and lint and oxfmt
@@ -287,6 +295,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "false"
 
       - name: Run ${{ matrix.tool }} dead-code scan
@@ -312,6 +322,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "false"
 
       - name: Check docs
@@ -476,6 +488,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          pnpm-version: "10.23.0"
+          frozen-lockfile: "true"
           install-bun: "false"
 
       # --- Run all checks sequentially (fast gates first) ---

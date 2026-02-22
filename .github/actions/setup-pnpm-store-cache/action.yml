@@ -18,8 +18,9 @@ runs:
         PNPM_VERSION: ${{ inputs.pnpm-version }}
       run: |
         set -euo pipefail
+        ERR_PREFIX="::error::"
         if [[ ! "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
-          echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
+          echo "${ERR_PREFIX}Invalid pnpm-version input: '$PNPM_VERSION'"
           exit 2
         fi
         corepack enable
