@@ -172,7 +172,7 @@ describe("nodes camera helpers", () => {
     ] as const;
 
     for (const testCase of cases) {
-      if (testCase.response) {
+      if ("response" in testCase && testCase.response) {
         stubFetchResponse(testCase.response);
       }
       await expect(writeUrlToFile("/tmp/ignored", testCase.url), testCase.name).rejects.toThrow(
