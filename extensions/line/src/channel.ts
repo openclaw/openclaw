@@ -6,6 +6,7 @@ import {
   resolveRuntimeGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
+  type GroupPolicy,
   type OpenClawConfig,
   type LineConfig,
   type LineChannelData,
@@ -162,7 +163,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy as
+        | GroupPolicy
+        | undefined;
       const { groupPolicy } = resolveRuntimeGroupPolicy({
         providerConfigPresent: cfg.channels?.line !== undefined,
         groupPolicy: account.config.groupPolicy,

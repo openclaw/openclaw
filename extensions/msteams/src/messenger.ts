@@ -441,7 +441,11 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
-  const sendMessagesInContext = async (ctx: SendContext): Promise<string[]> => {
+  if (params.replyStyle === "thread") {
+    const ctx = params.context;
+    if (!ctx) {
+      throw new Error("Missing context for replyStyle=thread");
+    }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const response = await sendWithRetry(
@@ -460,14 +464,6 @@ export async function sendMSTeamsMessages(params: {
       messageIds.push(extractMessageId(response) ?? "unknown");
     }
     return messageIds;
-  };
-
-  if (params.replyStyle === "thread") {
-    const ctx = params.context;
-    if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
-    }
-    return await sendMessagesInContext(ctx);
   }
 
   const baseRef = buildConversationReference(params.conversationRef);
@@ -478,7 +474,22 @@ export async function sendMSTeamsMessages(params: {
 
   const messageIds: string[] = [];
   await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-    messageIds.push(...(await sendMessagesInContext(ctx)));
+    for (const [idx, message] of messages.entries()) {
+      const response = await sendWithRetry(
+        async () =>
+          await ctx.sendActivity(
+            await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+            ),
+          ),
+        { messageIndex: idx, messageCount: messages.length },
+      );
+      messageIds.push(extractMessageId(response) ?? "unknown");
+    }
   });
   return messageIds;
 }

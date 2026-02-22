@@ -24,6 +24,11 @@ export function getBlueBubblesRuntime(): PluginRuntime {
 
 export function warnBlueBubbles(message: string): void {
   const formatted = `[bluebubbles] ${message}`;
+  const logger = runtime?.logging?.getChildLogger?.();
+  if (logger?.warn) {
+    logger.warn(formatted);
+    return;
+  }
   // Backward-compatible with tests/legacy injections that pass { log }.
   const log = (runtime as unknown as LegacyRuntimeLogShape | null)?.log;
   if (typeof log === "function") {

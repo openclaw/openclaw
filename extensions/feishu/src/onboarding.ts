@@ -104,25 +104,6 @@ async function noteFeishuCredentialHelp(prompter: WizardPrompter): Promise<void>
   );
 }
 
-async function promptFeishuCredentials(prompter: WizardPrompter): Promise<{
-  appId: string;
-  appSecret: string;
-}> {
-  const appId = String(
-    await prompter.text({
-      message: "Enter Feishu App ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  const appSecret = String(
-    await prompter.text({
-      message: "Enter Feishu App Secret",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  return { appId, appSecret };
-}
-
 function setFeishuGroupPolicy(
   cfg: ClawdbotConfig,
   groupPolicy: "open" | "allowlist" | "disabled",
@@ -229,9 +210,18 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
           },
         };
       } else {
-        const entered = await promptFeishuCredentials(prompter);
-        appId = entered.appId;
-        appSecret = entered.appSecret;
+        appId = String(
+          await prompter.text({
+            message: "Enter Feishu App ID",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+        appSecret = String(
+          await prompter.text({
+            message: "Enter Feishu App Secret",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
       }
     } else if (hasConfigCreds) {
       const keep = await prompter.confirm({
@@ -239,14 +229,32 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (!keep) {
-        const entered = await promptFeishuCredentials(prompter);
-        appId = entered.appId;
-        appSecret = entered.appSecret;
+        appId = String(
+          await prompter.text({
+            message: "Enter Feishu App ID",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+        appSecret = String(
+          await prompter.text({
+            message: "Enter Feishu App Secret",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
       }
     } else {
-      const entered = await promptFeishuCredentials(prompter);
-      appId = entered.appId;
-      appSecret = entered.appSecret;
+      appId = String(
+        await prompter.text({
+          message: "Enter Feishu App ID",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
+      appSecret = String(
+        await prompter.text({
+          message: "Enter Feishu App Secret",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
     }
 
     if (appId && appSecret) {
