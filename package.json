@@ -142,7 +142,6 @@
     "@aws-sdk/client-bedrock": "^3.995.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.0.1",
-    "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
@@ -216,6 +215,9 @@
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.10.0"
   },
   "engines": {
     "node": ">=22.12.0"
