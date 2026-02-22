@@ -401,9 +401,18 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
+      apache-arrow:
+        specifier: '>=15.0.0 <=18.1.0'
+        version: 18.1.0
+      flatbuffers:
+        specifier: ^24.3.25
+        version: 24.12.23
       openai:
         specifier: ^6.22.0
         version: 6.22.0(ws@8.19.0)(zod@4.3.6)
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
     devDependencies:
       openclaw:
         specifier: workspace:*

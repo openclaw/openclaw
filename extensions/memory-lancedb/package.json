@@ -7,7 +7,10 @@
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "@sinclair/typebox": "0.34.48",
-    "openai": "^6.22.0"
+    "apache-arrow": ">=15.0.0 <=18.1.0",
+    "flatbuffers": "^24.3.25",
+    "openai": "^6.22.0",
+    "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
