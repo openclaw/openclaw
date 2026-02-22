@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/posthog",
+  "version": "2026.2.16",
+  "description": "PostHog LLM Analytics plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "posthog-node": "^5.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

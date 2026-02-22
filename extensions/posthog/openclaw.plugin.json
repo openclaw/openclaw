@@ -1,0 +1,58 @@
+{
+  "id": "posthog",
+  "name": "PostHog LLM Analytics",
+  "description": "Send LLM traces, generations, and tool spans to PostHog",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string", "description": "PostHog project API key" },
+      "host": {
+        "type": "string",
+        "default": "https://us.i.posthog.com",
+        "description": "PostHog instance URL"
+      },
+      "privacyMode": {
+        "type": "boolean",
+        "default": false,
+        "description": "When enabled, LLM input/output content is not sent to PostHog"
+      },
+      "traceGrouping": {
+        "type": "string",
+        "enum": ["message", "session"],
+        "default": "message",
+        "description": "Trace grouping mode. 'message': one trace per runId (default). 'session': group all generations in a session into one trace, splitting on timeout."
+      },
+      "sessionWindowMinutes": {
+        "type": "number",
+        "default": 60,
+        "description": "Minutes of inactivity before starting a new session window. Applies to both trace grouping modes."
+      },
+      "enabled": { "type": "boolean", "default": true }
+    },
+    "required": ["apiKey"]
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "PostHog API Key",
+      "sensitive": true,
+      "placeholder": "phc_..."
+    },
+    "host": {
+      "label": "PostHog Host",
+      "help": "Your PostHog instance URL"
+    },
+    "privacyMode": {
+      "label": "Privacy Mode",
+      "help": "When enabled, LLM input/output content is not sent to PostHog"
+    },
+    "traceGrouping": {
+      "label": "Trace Grouping",
+      "help": "How to group LLM generations into traces. 'message' creates a new trace per message, 'session' groups an entire conversation into one trace."
+    },
+    "sessionWindowMinutes": {
+      "label": "Session Window (minutes)",
+      "help": "Minutes of inactivity before starting a new session window. Applies to both trace grouping modes."
+    }
+  }
+}
