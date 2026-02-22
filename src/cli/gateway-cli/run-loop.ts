@@ -23,7 +23,7 @@ export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: typeof defaultRuntime;
 }) {
-  const lock = await acquireGatewayLock();
+  let lock = await acquireGatewayLock();
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -83,8 +83,12 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
+          const hadLock = lock != null;
           // Release the lock BEFORE spawning so the child can acquire it immediately.
-          await lock?.release();
+          if (lock) {
+            await lock.release();
+            lock = null;
+          }
           const respawn = restartGatewayProcessWithFreshPid();
           if (respawn.mode === "spawned" || respawn.mode === "supervised") {
             const modeLabel =
@@ -102,11 +106,29 @@ export async function runGatewayLoop(params: {
             } else {
               gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
             }
-            shuttingDown = false;
-            restartResolver?.();
+            let canContinueInProcessRestart = true;
+            if (hadLock) {
+              try {
+                lock = await acquireGatewayLock();
+              } catch (err) {
+                gatewayLog.error(
+                  `failed to reacquire gateway lock for in-process restart: ${String(err)}`,
+                );
+                cleanupSignals();
+                params.runtime.exit(1);
+                canContinueInProcessRestart = false;
+              }
+            }
+            if (canContinueInProcessRestart) {
+              shuttingDown = false;
+              restartResolver?.();
+            }
           }
         } else {
-          await lock?.release();
+          if (lock) {
+            await lock.release();
+            lock = null;
+          }
           cleanupSignals();
           params.runtime.exit(0);
         }
@@ -161,7 +183,10 @@ export async function runGatewayLoop(params: {
       });
     }
   } finally {
-    await lock?.release();
+    if (lock) {
+      await lock.release();
+      lock = null;
+    }
     cleanupSignals();
   }
 }
