@@ -494,16 +494,54 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
+/**
+ * Bootstrap loading tiers control which workspace files are injected
+ * into a session's context window.
+ *
+ * - `"minimal"` — Only AGENTS.md and TOOLS.md. Used by subagent and cron
+ *   sessions to keep context lean.
+ * - `"standard"` — All recognized bootstrap files (SOUL.md, IDENTITY.md,
+ *   USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md, plus minimal set).
+ *   Default for main sessions.
+ * - `"full"` — Standard set plus any extra bootstrap file patterns
+ *   configured via `agents.defaults.extraBootstrapFiles`.
+ */
+export type BootstrapTier = "minimal" | "standard" | "full";
+
 const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+
+/**
+ * Resolve the effective bootstrap tier for a session.
+ *
+ * Priority: explicit tier override > session-type heuristic.
+ * Subagent and cron sessions default to `"minimal"`;
+ * all other sessions default to `"standard"`.
+ */
+export function resolveBootstrapTier(
+  sessionKey?: string,
+  tierOverride?: BootstrapTier,
+): BootstrapTier {
+  if (tierOverride) {
+    return tierOverride;
+  }
+  if (sessionKey && (isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey))) {
+    return "minimal";
+  }
+  return "standard";
+}
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  tierOverride?: BootstrapTier,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
-    return files;
+  const tier = resolveBootstrapTier(sessionKey, tierOverride);
+  if (tier === "minimal") {
+    return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  // "standard" and "full" both include all loaded files.
+  // "full" additionally loads extra bootstrap patterns — handled by the caller.
+  return files;
 }
 
 export async function loadExtraBootstrapFiles(

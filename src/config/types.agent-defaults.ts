@@ -134,6 +134,12 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
+  /**
+   * Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md only),
+   * "standard" (all recognized files, default), or "full" (standard + extra patterns).
+   * Subagent/cron sessions default to "minimal"; main sessions default to "standard".
+   */
+  bootstrapTier?: "minimal" | "standard" | "full";
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
