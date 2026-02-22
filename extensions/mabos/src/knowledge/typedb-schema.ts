@@ -20,7 +20,7 @@ export interface TypeQLEntityDef {
 
 export interface TypeQLAttributeDef {
   name: string;
-  valueType: "string" | "long" | "double" | "boolean" | "datetime";
+  valueType: "string" | "integer" | "double" | "boolean" | "datetime";
 }
 
 export interface TypeQLRelationDef {
@@ -59,8 +59,8 @@ function typeqlName(id: string): string {
 
 const XSD_TYPE_MAP: Record<string, TypeQLAttributeDef["valueType"]> = {
   "xsd:string": "string",
-  "xsd:integer": "long",
-  "xsd:long": "long",
+  "xsd:integer": "integer",
+  "xsd:long": "integer",
   "xsd:float": "double",
   "xsd:double": "double",
   "xsd:decimal": "double",
@@ -177,40 +177,40 @@ export function jsonldToTypeQL(graph: MergedGraph): TypeQLSchema {
 export function generateDefineQuery(schema: TypeQLSchema): string {
   const lines: string[] = ["define"];
 
-  // Attributes
+  // Attributes — TypeQL 3.x: `attribute <name>, value <type>;`
   for (const attr of schema.attributes) {
-    lines.push(`  ${attr.name} sub attribute, value ${attr.valueType};`);
+    lines.push(`  attribute ${attr.name}, value ${attr.valueType};`);
   }
 
   if (schema.attributes.length > 0 && schema.entities.length > 0) {
     lines.push("");
   }
 
-  // Entities
+  // Entities — TypeQL 3.x: `entity <name> ...;` (use `sub` only for subtypes)
   for (const ent of schema.entities) {
-    const parent = ent.parent || "entity";
+    const subClause = ent.parent ? ` sub ${ent.parent}` : "";
     const ownsClause = ent.owns.length > 0 ? `,\n    owns ${ent.owns.join(",\n    owns ")}` : "";
-    lines.push(`  ${ent.name} sub ${parent}${ownsClause};`);
+    lines.push(`  entity ${ent.name}${subClause}${ownsClause};`);
   }
 
   if (schema.entities.length > 0 && schema.relations.length > 0) {
     lines.push("");
   }
 
-  // Relations
+  // Relations — TypeQL 3.x: `relation <name>, relates ...;`
   for (const rel of schema.relations) {
     const rolesClauses = rel.roles.map((r) => `relates ${r.roleName}`).join(",\n    ");
-    lines.push(`  ${rel.name} sub relation,\n    ${rolesClauses};`);
+    lines.push(`  relation ${rel.name},\n    ${rolesClauses};`);
 
     // Add role-playing declarations for entities
     for (const role of rel.roles) {
-      lines.push(`  ${role.playerEntity} sub entity, plays ${rel.name}:${role.roleName};`);
+      lines.push(`  ${role.playerEntity} plays ${rel.name}:${role.roleName};`);
     }
   }
 
   // Agent scoping relation
   lines.push("");
-  lines.push("  agent_owns sub relation,");
+  lines.push("  relation agent_owns,");
   lines.push("    relates owner,");
   lines.push("    relates owned;");
 

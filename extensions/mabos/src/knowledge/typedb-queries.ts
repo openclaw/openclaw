@@ -343,40 +343,101 @@ export class CBRQueries {
  */
 export function getBaseSchema(): string {
   return `define
-  uid sub attribute, value string;
-  name sub attribute, value string;
-  description sub attribute, value string;
-  confidence sub attribute, value double;
-  source sub attribute, value string;
-  created_at sub attribute, value string;
-  updated_at sub attribute, value string;
-  subject sub attribute, value string;
-  predicate sub attribute, value string;
-  object_value sub attribute, value string;
-  valid_from sub attribute, value string;
-  valid_until sub attribute, value string;
-  rule_id sub attribute, value string;
-  rule_type sub attribute, value string;
-  condition_count sub attribute, value long;
-  confidence_factor sub attribute, value double;
-  enabled sub attribute, value boolean;
-  domain sub attribute, value string;
-  content sub attribute, value string;
-  memory_type sub attribute, value string;
-  importance sub attribute, value double;
-  store_name sub attribute, value string;
-  access_count sub attribute, value long;
-  accessed_at sub attribute, value string;
-  tag sub attribute, value string;
-  situation sub attribute, value string;
-  solution sub attribute, value string;
-  outcome sub attribute, value string;
 
-  agent sub entity,
+  # ── Core Attributes ──────────────────────────────────────────────────
+  attribute uid, value string;
+  attribute name, value string;
+  attribute description, value string;
+  attribute confidence, value double;
+  attribute source, value string;
+  attribute created_at, value string;
+  attribute updated_at, value string;
+  attribute subject, value string;
+  attribute predicate, value string;
+  attribute object_value, value string;
+  attribute valid_from, value string;
+  attribute valid_until, value string;
+  attribute rule_id, value string;
+  attribute rule_type, value string;
+  attribute condition_count, value integer;
+  attribute confidence_factor, value double;
+  attribute enabled, value boolean;
+  attribute domain, value string;
+  attribute content, value string;
+  attribute memory_type, value string;
+  attribute importance, value double;
+  attribute store_name, value string;
+  attribute access_count, value integer;
+  attribute accessed_at, value string;
+  attribute tag, value string;
+  attribute situation, value string;
+  attribute solution, value string;
+  attribute outcome, value string;
+  attribute status, value string;
+
+  # ── BDI Cognitive Attributes ─────────────────────────────────────────
+  attribute category, value string;
+  attribute certainty, value double;
+  attribute priority, value double;
+  attribute urgency, value double;
+  attribute alignment, value double;
+  attribute hierarchy_level, value string;
+  attribute success_criteria, value string;
+  attribute deadline, value string;
+  attribute progress, value double;
+  attribute parent_goal_id, value string;
+  attribute commitment_strategy, value string;
+  attribute plan_ref, value string;
+  attribute plan_source, value string;
+  attribute step_count, value integer;
+  attribute adaptation_notes, value string;
+  attribute step_type, value string;
+  attribute tool_binding, value string;
+  attribute estimated_duration, value string;
+  attribute sequence_order, value integer;
+
+  # ── Agent Identity & Role Attributes ─────────────────────────────────
+  attribute role_title, value string;
+  attribute department, value string;
+  attribute responsibilities, value string;
+  attribute autonomy_level, value string;
+  attribute approval_threshold, value double;
+  attribute proficiency_level, value double;
+  attribute skill_category, value string;
+  attribute tool_access, value string;
+
+  # ── Workflow & Execution Attributes ──────────────────────────────────
+  attribute workflow_type, value string;
+  attribute trigger, value string;
+  attribute current_step_id, value string;
+  attribute assigned_agent_id, value string;
+  attribute depends_on_ids, value string;
+  attribute task_type, value string;
+  attribute tool_used, value string;
+  attribute input_summary, value string;
+  attribute output_summary, value string;
+  attribute success, value boolean;
+  attribute duration_ms, value integer;
+
+  # ── Reasoning & Heuristics Attributes ────────────────────────────────
+  attribute method_category, value string;
+  attribute applicability, value string;
+  attribute method_used, value string;
+  attribute conclusion, value string;
+  attribute reasoning_trace, value string;
+  attribute decision_type, value string;
+  attribute options_count, value integer;
+  attribute chosen_option, value string;
+  attribute impact_level, value string;
+  attribute urgency_level, value string;
+  attribute resolved, value boolean;
+
+  # ── Core Entities ────────────────────────────────────────────────────
+  entity agent,
     owns uid @key,
     owns name;
 
-  spo_fact sub entity,
+  entity spo_fact,
     owns uid @key,
     owns subject,
     owns predicate,
@@ -389,7 +450,7 @@ export function getBaseSchema(): string {
     owns created_at,
     owns updated_at;
 
-  knowledge_rule sub entity,
+  entity knowledge_rule,
     owns uid @key,
     owns name,
     owns description,
@@ -400,7 +461,7 @@ export function getBaseSchema(): string {
     owns domain,
     owns created_at;
 
-  memory_item sub entity,
+  entity memory_item,
     owns uid @key,
     owns content,
     owns memory_type,
@@ -412,7 +473,7 @@ export function getBaseSchema(): string {
     owns created_at,
     owns accessed_at;
 
-  cbr_case sub entity,
+  entity cbr_case,
     owns uid @key,
     owns situation,
     owns solution,
@@ -420,13 +481,247 @@ export function getBaseSchema(): string {
     owns domain,
     owns created_at;
 
-  agent_owns sub relation,
+  # ── BDI Cognitive Entities ───────────────────────────────────────────
+  entity belief,
+    owns uid @key,
+    owns category,
+    owns certainty,
+    owns subject,
+    owns content,
+    owns source,
+    owns valid_from,
+    owns valid_until,
+    owns created_at,
+    owns updated_at;
+
+  entity desire,
+    owns uid @key,
+    owns name,
+    owns description,
+    owns priority,
+    owns importance,
+    owns urgency,
+    owns alignment,
+    owns status,
+    owns category,
+    owns created_at;
+
+  entity goal,
+    owns uid @key,
+    owns name,
+    owns description,
+    owns hierarchy_level,
+    owns success_criteria,
+    owns deadline,
+    owns progress,
+    owns status,
+    owns parent_goal_id,
+    owns created_at,
+    owns updated_at;
+
+  entity intention,
+    owns uid @key,
+    owns name,
+    owns commitment_strategy,
+    owns status,
+    owns plan_ref,
+    owns deadline,
+    owns created_at,
+    owns updated_at;
+
+  entity plan,
+    owns uid @key,
+    owns name,
+    owns description,
+    owns plan_source,
+    owns step_count,
+    owns confidence,
+    owns adaptation_notes,
+    owns status,
+    owns created_at,
+    owns updated_at;
+
+  entity plan_step,
+    owns uid @key,
+    owns name,
+    owns step_type,
+    owns tool_binding,
+    owns estimated_duration,
+    owns status,
+    owns sequence_order,
+    owns created_at;
+
+  # ── Agent Identity & Role Entities ───────────────────────────────────
+  entity persona,
+    owns uid @key,
+    owns role_title,
+    owns department,
+    owns responsibilities,
+    owns autonomy_level,
+    owns approval_threshold,
+    owns created_at;
+
+  entity skill,
+    owns uid @key,
+    owns name,
+    owns proficiency_level,
+    owns skill_category,
+    owns tool_access,
+    owns created_at;
+
+  # ── Workflow & Execution Entities ────────────────────────────────────
+  entity workflow,
+    owns uid @key,
+    owns name,
+    owns workflow_type,
+    owns trigger,
+    owns status,
+    owns current_step_id,
+    owns created_at,
+    owns updated_at;
+
+  entity task,
+    owns uid @key,
+    owns name,
+    owns description,
+    owns priority,
+    owns assigned_agent_id,
+    owns depends_on_ids,
+    owns status,
+    owns task_type,
+    owns estimated_duration,
+    owns created_at,
+    owns updated_at;
+
+  entity action_execution,
+    owns uid @key,
+    owns tool_used,
+    owns input_summary,
+    owns output_summary,
+    owns success,
+    owns duration_ms,
+    owns created_at;
+
+  # ── Reasoning & Heuristics Entities ──────────────────────────────────
+  entity reasoning_method,
+    owns uid @key,
+    owns name,
+    owns method_category,
+    owns applicability,
+    owns description,
+    owns created_at;
+
+  entity reasoning_result,
+    owns uid @key,
+    owns method_used,
+    owns conclusion,
+    owns confidence,
+    owns reasoning_trace,
+    owns created_at;
+
+  entity decision,
+    owns uid @key,
+    owns name,
+    owns decision_type,
+    owns options_count,
+    owns chosen_option,
+    owns impact_level,
+    owns urgency_level,
+    owns resolved,
+    owns created_at,
+    owns updated_at;
+
+  # ── Core Relations ──────────────────────────────────────────────────
+  relation agent_owns,
     relates owner,
     relates owned;
 
+  # ── BDI Relations ──────────────────────────────────────────────────
+  relation belief_supports_goal,
+    relates believer,
+    relates supported;
+
+  relation desire_motivates_goal,
+    relates motivator,
+    relates motivated;
+
+  relation goal_requires_plan,
+    relates requiring,
+    relates required;
+
+  relation plan_contains_step,
+    relates container,
+    relates contained;
+
+  relation step_depends_on,
+    relates dependent,
+    relates dependency;
+
+  # ── Agent Identity Relations ────────────────────────────────────────
+  relation agent_has_skill,
+    relates skilled,
+    relates possessed;
+
+  relation agent_has_persona,
+    relates personified,
+    relates persona_role;
+
+  # ── Reasoning Relations ─────────────────────────────────────────────
+  relation method_produces_result,
+    relates method,
+    relates result;
+
+  relation decision_resolves_goal,
+    relates resolver,
+    relates resolved_goal;
+
+  # ── Role-Playing Declarations: Core ─────────────────────────────────
   agent plays agent_owns:owner;
   spo_fact plays agent_owns:owned;
   knowledge_rule plays agent_owns:owned;
   memory_item plays agent_owns:owned;
-  cbr_case plays agent_owns:owned;`;
+  cbr_case plays agent_owns:owned;
+
+  # ── Role-Playing Declarations: BDI ─────────────────────────────────
+  belief plays agent_owns:owned;
+  desire plays agent_owns:owned;
+  goal plays agent_owns:owned;
+  intention plays agent_owns:owned;
+  plan plays agent_owns:owned;
+  plan_step plays agent_owns:owned;
+  persona plays agent_owns:owned;
+  skill plays agent_owns:owned;
+  workflow plays agent_owns:owned;
+  task plays agent_owns:owned;
+  action_execution plays agent_owns:owned;
+  reasoning_method plays agent_owns:owned;
+  reasoning_result plays agent_owns:owned;
+  decision plays agent_owns:owned;
+
+  belief plays belief_supports_goal:believer;
+  goal plays belief_supports_goal:supported;
+
+  desire plays desire_motivates_goal:motivator;
+  goal plays desire_motivates_goal:motivated;
+
+  goal plays goal_requires_plan:requiring;
+  plan plays goal_requires_plan:required;
+
+  plan plays plan_contains_step:container;
+  plan_step plays plan_contains_step:contained;
+
+  plan_step plays step_depends_on:dependent;
+  plan_step plays step_depends_on:dependency;
+
+  agent plays agent_has_skill:skilled;
+  skill plays agent_has_skill:possessed;
+
+  agent plays agent_has_persona:personified;
+  persona plays agent_has_persona:persona_role;
+
+  reasoning_method plays method_produces_result:method;
+  reasoning_result plays method_produces_result:result;
+
+  decision plays decision_resolves_goal:resolver;
+  goal plays decision_resolves_goal:resolved_goal;`;
 }
