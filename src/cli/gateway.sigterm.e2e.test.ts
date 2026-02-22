@@ -2,12 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-
-const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
-// tsx currently crashes with "__name is not a function" on Node 25 in child bootstrap mode.
-const runSigtermTest = nodeMajor >= 25 ? it.skip : it;
 
 const waitForReady = async (
   proc: ReturnType<typeof spawn>,
@@ -82,7 +77,7 @@ describe("gateway SIGTERM", () => {
     child = null;
   });
 
-  runSigtermTest("exits 0 on SIGTERM", { timeout: 180_000 }, async () => {
+  it("exits 0 on SIGTERM", { timeout: 180_000 }, async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-test-"));
     const out: string[] = [];
     const err: string[] = [];
@@ -98,30 +93,34 @@ describe("gateway SIGTERM", () => {
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_CANVAS_HOST: "1",
     };
-    const bootstrapPath = path.join(stateDir, "openclaw-entry-bootstrap.mjs");
+    const bootstrapPath = path.join(stateDir, "openclaw-entry-bootstrap.cjs");
     const runLoopPath = path.resolve("src/cli/gateway-cli/run-loop.ts");
     const runtimePath = path.resolve("src/runtime.ts");
+    const jitiPath = require.resolve("jiti");
     fs.writeFileSync(
       bootstrapPath,
       [
-        'import { pathToFileURL } from "node:url";',
-        `const runLoopUrl = ${JSON.stringify(pathToFileURL(runLoopPath).href)};`,
-        `const runtimeUrl = ${JSON.stringify(pathToFileURL(runtimePath).href)};`,
-        "const { runGatewayLoop } = await import(runLoopUrl);",
-        "const { defaultRuntime } = await import(runtimeUrl);",
-        "await runGatewayLoop({",
-        "  start: async () => {",
-        '    process.stdout.write("READY\\\\n");',
-        "    if (process.send) process.send({ ready: true });",
-        "    const keepAlive = setInterval(() => {}, 1000);",
-        "    return { close: async () => clearInterval(keepAlive) };",
-        "  },",
-        "  runtime: defaultRuntime,",
+        `const jiti = require(${JSON.stringify(jitiPath)})(__filename);`,
+        `const { runGatewayLoop } = jiti(${JSON.stringify(runLoopPath)});`,
+        `const { defaultRuntime } = jiti(${JSON.stringify(runtimePath)});`,
+        "(async () => {",
+        "  await runGatewayLoop({",
+        "    start: async () => {",
+        '      process.stdout.write("READY\\\\n");',
+        "      if (process.send) process.send({ ready: true });",
+        "      const keepAlive = setInterval(() => {}, 1000);",
+        "      return { close: async () => clearInterval(keepAlive) };",
+        "    },",
+        "    runtime: defaultRuntime,",
+        "  });",
+        "})().catch((err) => {",
+        "  console.error(err);",
+        "  process.exitCode = 1;",
         "});",
       ].join("\n"),
       "utf8",
     );
-    const childArgs = ["--import", "tsx", bootstrapPath];
+    const childArgs = [bootstrapPath];
 
     child = spawn(nodeBin, childArgs, {
       cwd: process.cwd(),
