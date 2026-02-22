@@ -289,17 +289,20 @@ describe("devices cli local fallback", () => {
 
 afterEach(() => {
   callGateway.mockReset();
-  buildGatewayConnectionDetails.mockReset();
+  buildGatewayConnectionDetails.mockClear();
   buildGatewayConnectionDetails.mockReturnValue({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
     message: "",
   });
-  listDevicePairing.mockReset();
-  approveDevicePairing.mockReset();
-  summarizeDeviceTokens.mockReset();
+  listDevicePairing.mockClear();
+  listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
+  approveDevicePairing.mockClear();
+  approveDevicePairing.mockResolvedValue(undefined);
+  summarizeDeviceTokens.mockClear();
+  summarizeDeviceTokens.mockReturnValue(undefined);
   withProgress.mockClear();
-  runtime.log.mockReset();
-  runtime.error.mockReset();
-  runtime.exit.mockReset();
+  runtime.log.mockClear();
+  runtime.error.mockClear();
+  runtime.exit.mockClear();
 });

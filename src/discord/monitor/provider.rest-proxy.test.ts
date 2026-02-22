@@ -30,8 +30,8 @@ describe("resolveDiscordRestFetch", () => {
       error: vi.fn(),
       exit: vi.fn(),
     } as const;
-    undiciFetchMock.mockReset().mockResolvedValue(new Response("ok", { status: 200 }));
-    proxyAgentSpy.mockReset();
+    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
+    proxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");

@@ -1,10 +1,13 @@
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   GRAPH_ROOT,
   inferPlaceholder,
   isRecord,
+  isUrlAllowed,
   normalizeContentType,
+  resolveRequestUrl,
   resolveAllowedHosts,
 } from "./shared.js";
 import type {
@@ -28,6 +31,25 @@ type GraphAttachment = {
   thumbnailUrl?: string | null;
   content?: unknown;
 };
+
+function isRedirectStatus(status: number): boolean {
+  return [301, 302, 303, 307, 308].includes(status);
+}
+
+function readRedirectUrl(baseUrl: string, res: Response): string | null {
+  if (!isRedirectStatus(res.status)) {
+    return null;
+  }
+  const location = res.headers.get("location");
+  if (!location) {
+    return null;
+  }
+  try {
+    return new URL(location, baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
 
 function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
   let current: unknown = value;
@@ -262,38 +284,37 @@ export async function downloadMSTeamsGraphMedia(params: {
         try {
           // SharePoint URLs need to be accessed via Graph shares API
           const shareUrl = att.contentUrl!;
+          if (!isUrlAllowed(shareUrl, allowHosts)) {
+            continue;
+          }
           const encodedUrl = Buffer.from(shareUrl).toString("base64url");
           const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
-          const spRes = await fetchFn(sharesUrl, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            redirect: "follow",
+          const media = await downloadAndStoreMSTeamsRemoteMedia({
+            url: sharesUrl,
+            filePathHint: name,
+            maxBytes: params.maxBytes,
+            contentTypeHint: "application/octet-stream",
+            preserveFilenames: params.preserveFilenames,
+            fetchImpl: async (input, init) => {
+              const requestUrl = resolveRequestUrl(input);
+              const headers = new Headers(init?.headers);
+              headers.set("Authorization", `Bearer ${accessToken}`);
+              const res = await fetchFn(requestUrl, {
+                ...init,
+                headers,
+              });
+              const redirectUrl = readRedirectUrl(requestUrl, res);
+              if (redirectUrl && !isUrlAllowed(redirectUrl, allowHosts)) {
+                throw new Error(
+                  `MSTeams media redirect target blocked by allowlist: ${redirectUrl}`,
+                );
+              }
+              return res;
+            },
           });
-
-          if (spRes.ok) {
-            const buffer = Buffer.from(await spRes.arrayBuffer());
-            if (buffer.byteLength <= params.maxBytes) {
-              const mime = await getMSTeamsRuntime().media.detectMime({
-                buffer,
-                headerMime: spRes.headers.get("content-type") ?? undefined,
-                filePath: name,
-              });
-              const originalFilename = params.preserveFilenames ? name : undefined;
-              const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-                buffer,
-                mime ?? "application/octet-stream",
-                "inbound",
-                params.maxBytes,
-                originalFilename,
-              );
-              sharePointMedia.push({
-                path: saved.path,
-                contentType: saved.contentType,
-                placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
-              });
-              downloadedReferenceUrls.add(shareUrl);
-            }
-          }
+          sharePointMedia.push(media);
+          downloadedReferenceUrls.add(shareUrl);
         } catch {
           // Ignore SharePoint download failures.
         }
