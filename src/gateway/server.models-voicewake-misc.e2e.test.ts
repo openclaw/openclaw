@@ -230,6 +230,10 @@ describe("gateway server models + voicewake", () => {
         ),
       ) as { routes?: unknown };
       expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+
+      const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
+      expect(invalid.ok).toBe(false);
+      expect(invalid.error?.message ?? "").toMatch(/invalid voicewake\.routing\.set params/i);
     });
   });
 
