@@ -120,8 +120,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
   it("returns retry_limit when repeated retries never converge", async () => {
     mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedPickFallbackThinkingLevel.mockReset();
+    mockedCompactDirect.mockClear();
+    mockedPickFallbackThinkingLevel.mockClear();
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
     );
