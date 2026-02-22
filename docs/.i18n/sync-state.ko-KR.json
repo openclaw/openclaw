@@ -1,0 +1,874 @@
+{
+  "last_sync_sha": "c1815c9a213dc5345e0e22cab4255911c1f20f07",
+  "last_sync_date": "2026-02-22T06:00:00.000Z",
+  "synced_files": {
+    "docs/automation/cron-jobs.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/automation/gmail-pubsub.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/automation/hooks.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/automation/troubleshooting.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/automation/webhook.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/bluebubbles.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/broadcast-groups.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/channel-routing.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/discord.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/feishu.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/googlechat.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/grammy.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/groups.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/imessage.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/irc.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/line.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/matrix.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/mattermost.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/msteams.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/nextcloud-talk.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/pairing.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/signal.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/slack.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/telegram.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/tlon.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/troubleshooting.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/twitch.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/whatsapp.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/zalo.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/channels/zalouser.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/cron.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/devices.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/gateway.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/hooks.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/logs.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/memory.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/message.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/nodes.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/onboard.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/pairing.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/plugins.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/security.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/cli/tui.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/agent-loop.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/agent-workspace.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/agent.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/architecture.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/compaction.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/context.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/features.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/memory.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/messages.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/model-providers.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/models.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/multi-agent.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/session-pruning.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/session-tool.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/session.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/streaming.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/system-prompt.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/concepts/typebox.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/debug/node-issue.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/experiments/plans/browser-evaluate-cdp-refactor.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/experiments/plans/group-policy-hardening.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/experiments/plans/pty-process-supervision.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/background-process.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/bonjour.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/bridge-protocol.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/cli-backends.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/configuration-examples.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/configuration-reference.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/discovery.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/heartbeat.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/local-models.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/multiple-gateways.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/network-model.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/openai-http-api.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/openresponses-http-api.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/remote-gateway-readme.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/remote.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/sandboxing.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/security/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/tailscale.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/tools-invoke-http-api.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/troubleshooting.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/gateway/trusted-proxy-auth.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/help/debugging.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/help/environment.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/help/scripts.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/help/testing.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/help/troubleshooting.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/ansible.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T12:51:40.088Z"
+    },
+    "docs/install/docker.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/exe-dev.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T13:12:20.443Z"
+    },
+    "docs/install/fly.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/gcp.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T13:12:20.443Z"
+    },
+    "docs/install/hetzner.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/installer.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/nix.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/node.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/northflank.mdx": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/podman.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/railway.mdx": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/render.mdx": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/updating.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/ja-JP/AGENTS.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/ja-JP/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/ja-JP/start/getting-started.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/ja-JP/start/wizard.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/nodes/audio.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/nodes/camera.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/nodes/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/nodes/media-understanding.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/nodes/troubleshooting.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/android.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/digitalocean.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/ios.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/linux.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/mac/canvas.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/mac/dev-setup.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/mac/permissions.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/mac/release.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/mac/voice-overlay.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/mac/webchat.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/macos.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/oracle.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/raspberry-pi.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/platforms/windows.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/plugins/manifest.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/plugins/voice-call.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/anthropic.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/bedrock.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/claude-max-api-proxy.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/cloudflare-ai-gateway.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/deepgram.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/glm.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/huggingface.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/litellm.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/minimax.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/models.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/moonshot.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/nvidia.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/ollama.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/openai.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/opencode.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/qianfan.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/together.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/vercel-ai-gateway.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/vllm.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/providers/zai.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/refactor/plugin-sdk.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/refactor/strict-config.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/AGENTS.default.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/RELEASING.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/api-usage-costs.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/credits.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/session-management-compaction.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/AGENTS.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/BOOT.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/BOOTSTRAP.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/GOALS.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/HEARTBEAT.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/IDENTITY.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/SOUL.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/SOUVENIR.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/TOOLS.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/templates/USER.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/test.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/token-use.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/transcript-hygiene.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/reference/wizard.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/security/CONTRIBUTING-THREAT-MODEL.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/security/README.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/security/THREAT-MODEL-ATLAS.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/bootstrapping.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/docs-directory.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/getting-started.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/hubs.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T13:24:10.912Z"
+    },
+    "docs/start/lore.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/onboarding-overview.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/onboarding.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/openclaw.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/quickstart.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/setup.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T13:24:10.912Z"
+    },
+    "docs/start/wizard-cli-automation.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/wizard-cli-reference.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/start/wizard.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/apply-patch.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/browser-login.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/browser.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/elevated.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/exec-approvals.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/exec.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/index.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/llm-task.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/lobster.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/loop-detection.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/multi-agent-sandbox-tools.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/plugin.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/skills.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/slash-commands.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/subagents.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/thinking.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/tools/web.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/web/control-ui.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/web/dashboard.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/web/tui.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/web/webchat.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-17T11:11:24.317Z"
+    },
+    "docs/install/bun.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T12:51:40.088Z"
+    },
+    "docs/install/uninstall.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T12:53:57.196Z"
+    },
+    "docs/install/development-channels.md": {
+      "sha": "81fd771cb9989dbafea74f8912016a2cf8017ff2",
+      "synced_at": "2026-02-18T13:12:20.443Z"
+    }
+  }
+}

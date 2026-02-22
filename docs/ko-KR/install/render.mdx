@@ -1,0 +1,156 @@
+---
+title: Render에 배포하기
+---
+
+인프라를 코드로 사용하여 Render에 OpenClaw를 배포하십시오. 포함된 `render.yaml` 블루프린트는 전체 스택을 선언적으로 정의하며, 서비스, 디스크, 환경 변수를 포함하여 단 한 번의 클릭으로 배포하고 코드와 함께 인프라를 버전 관리할 수 있게 합니다.
+
+## 사전 요구사항
+
+- [Render 계정](https://render.com) (무료 플랜 가능)
+- 선호하는 [모델 프로바이더](/ko-KR/providers)에서의 API 키
+
+## Render 블루프린트를 사용한 배포
+
+[Render에 배포하기](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
+
+이 링크를 클릭하면 다음이 수행됩니다:
+
+1. 이 저장소의 루트에 있는 `render.yaml` 블루프린트로부터 새 Render 서비스를 생성합니다.
+2. `SETUP_PASSWORD`를 설정하도록 요청합니다.
+3. Docker 이미지를 빌드하고 배포합니다.
+
+배포 후 서비스 URL은 `https://<service-name>.onrender.com` 패턴을 따릅니다.
+
+## 블루프린트 이해하기
+
+Render 블루프린트는 인프라를 정의하는 YAML 파일입니다. 이 저장소의 `render.yaml`은 OpenClaw를 실행하는 데 필요한 모든 구성을 제공합니다:
+
+```yaml
+services:
+  - type: web
+    name: openclaw
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: SETUP_PASSWORD
+        sync: false # 배포 중에 프롬프트
+      - key: OPENCLAW_STATE_DIR
+        value: /data/.openclaw
+      - key: OPENCLAW_WORKSPACE_DIR
+        value: /data/workspace
+      - key: OPENCLAW_GATEWAY_TOKEN
+        generateValue: true # 보안 토큰 자동 생성
+    disk:
+      name: openclaw-data
+      mountPath: /data
+      sizeGB: 1
+```
+
+사용되는 주요 블루프린트 기능:
+
+| 기능                   | 목적                                                         |
+| --------------------- | ----------------------------------------------------------- |
+| `runtime: docker`     | 저장소의 Dockerfile에서 빌드                                  |
+| `healthCheckPath`     | Render가 `/health`를 모니터링하고 비정상 인스턴스를 재시작    |
+| `sync: false`         | 배포 중 값 요청 (비밀)                                       |
+| `generateValue: true` | 암호학적으로 안전한 값을 자동 생성                           |
+| `disk`                | 재배포 후에도 유지되는 영구 저장소                           |
+
+## 플랜 선택하기
+
+| 플랜      | 스핀 다운 기준       | 디스크       | 최적 용도                    |
+| --------- | ----------------- | ------------ | ----------------------------- |
+| Free      | 15분 비활성 후    | 사용 불가    | 테스트, 데모                  |
+| Starter   | 없음              | 1GB+         | 개인 사용, 소규모 팀          |
+| Standard+ | 없음              | 1GB+         | 생산 환경, 다중 채널          |
+
+블루프린트는 기본적으로 `starter`로 설정되어 있습니다. 무료 플랜을 사용하려면 포크된 `render.yaml`의 `plan: free`로 변경하세요 (하지만 영구 디스크가 없으므로 매 배포 시 설정이 초기화됩니다).
+
+## 배포 후에
+
+### 설정 마법사 완료하기
+
+1. `https://<your-service>.onrender.com/setup`로 이동합니다.
+2. `SETUP_PASSWORD`를 입력합니다.
+3. 모델 프로바이더를 선택하고 API 키를 입력합니다.
+4. 선택적으로 메시징 채널 (Telegram, Discord, Slack)을 구성합니다.
+5. **설정 실행**을 클릭합니다.
+
+### 제어 UI에 액세스
+
+웹 대시보드는 `https://<your-service>.onrender.com/openclaw`에서 사용할 수 있습니다.
+
+## Render 대시보드 기능
+
+### 로그
+
+**대시보드 → 서비스 → 로그**에서 실시간 로그를 볼 수 있습니다. 필터:
+
+- 빌드 로그 (Docker 이미지 생성)
+- 배포 로그 (서비스 시작)
+- 런타임 로그 (애플리케이션 출력)
+
+### 셸 액세스
+
+디버깅을 위해 **대시보드 → 서비스 → 셸**에서 셸 세션을 엽니다. 영구 디스크는 `/data`에 마운트됩니다.
+
+### 환경 변수
+
+**대시보드 → 서비스 → 환경**에서 변수를 수정합니다. 변경시 자동으로 재배포가 트리거됩니다.
+
+### 자동 배포
+
+원본 OpenClaw 저장소를 사용하는 경우 Render는 OpenClaw를 자동 배포하지 않습니다. 업데이트하려면 대시보드에서 수동으로 블루프린트를 동기화하십시오.
+
+## 사용자 지정 도메인
+
+1. **대시보드 → 서비스 → 설정 → 사용자 지정 도메인**으로 이동합니다.
+2. 도메인을 추가합니다.
+3. 지시에 따라 DNS를 구성합니다 (CNAME에서 `*.onrender.com`으로).
+4. Render는 자동으로 TLS 인증서를 제공합니다.
+
+## 확장
+
+Render는 수평 및 수직 확장을 지원합니다:
+
+- **수직**: 더 많은 CPU/RAM을 얻기 위해 플랜을 변경합니다.
+- **수평**: 인스턴스 수를 늘립니다 (Standard 플랜 이상).
+
+OpenClaw의 경우, 수직 확장이 일반적으로 충분합니다. 수평 확장은 지속적인 세션이나 외부 상태 관리가 필요합니다.
+
+## 백업 및 마이그레이션
+
+언제든지 구성과 작업 공간을 내보낼 수 있습니다:
+
+```
+https://<your-service>.onrender.com/setup/export
+```
+
+이러한 백업은 이식 가능하며, 다른 OpenClaw 호스트에서 복원할 수 있습니다.
+
+## 문제 해결
+
+### 서비스가 시작되지 않음
+
+Render 대시보드의 배포 로그를 확인하세요. 일반적인 문제:
+
+- 누락된 `SETUP_PASSWORD` — 블루프린트는 이를 요청하지만 설정되었는지 확인하세요.
+- 포트 불일치 — `PORT=8080`이 Dockerfile에 노출된 포트와 일치하는지 확인하세요.
+
+### 느린 콜드 스타트 (무료 플랜)
+
+무료 플랜 서비스는 15분의 비활성 후 스핀 다운합니다. 스핀 다운 후 첫 요청은 컨테이너 시작 시 몇 초가 걸립니다. 항상 켜져 있도록 Starter 플랜으로 업그레이드하세요.
+
+### 배포 후 데이터 손실
+
+이는 무료 플랜(영구 디스크 없음)에서 발생합니다. 유료 플랜으로 업그레이드하거나 `/setup/export`를 통해 정기적으로 설정을 내보내세요.
+
+### 상태 확인 실패
+
+Render는 30초 내에 `/health`로부터 200 응답을 기대합니다. 빌드는 성공하지만 배포가 실패할 경우, 서비스 시작이 너무 오래 걸릴 수 있습니다. 확인 사항:
+
+- 빌드 로그에서 오류 확인
+- `docker build && docker run`로 로컬에서 컨테이너 실행 여부 확인
