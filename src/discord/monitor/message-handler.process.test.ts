@@ -243,6 +243,52 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
+
+  it("skips intermediate reactions when statusReactions is disabled via messages config", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onToolStart?.({ name: "exec" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      cfg: { messages: { ackReaction: "👀", statusReactions: { enabled: false } }, session: { store: "/tmp/fake-test-store.json" } },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    const emojis = (
+      reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+    ).map((call) => call[2]);
+    expect(emojis).toContain("👀");
+    expect(emojis).not.toContain("✅");
+    expect(emojis).not.toContain("🧠");
+    expect(emojis).not.toContain("💻");
+  });
+
+  it("skips intermediate reactions when statusReactions is disabled via discord account config", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onToolStart?.({ name: "exec" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { statusReactions: false },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    const emojis = (
+      reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+    ).map((call) => call[2]);
+    expect(emojis).toContain("👀");
+    expect(emojis).not.toContain("✅");
+    expect(emojis).not.toContain("🧠");
+    expect(emojis).not.toContain("💻");
+  });
 });
 
 describe("processDiscordMessage session routing", () => {
