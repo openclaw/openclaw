@@ -36,24 +36,41 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   // Nodes + device tools
   "group:nodes": ["nodes"],
   // All OpenClaw native tools (excludes provider plugins).
+  // Must stay in sync with group:fs, group:runtime, and all other named groups above.
   "group:openclaw": [
-    "browser",
-    "canvas",
-    "nodes",
-    "cron",
-    "message",
-    "gateway",
-    "agents_list",
+    // group:fs
+    "read",
+    "write",
+    "edit",
+    "apply_patch",
+    // group:runtime
+    "exec",
+    "process",
+    // group:sessions
     "sessions_list",
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
     "subagents",
     "session_status",
+    // group:memory
     "memory_search",
     "memory_get",
+    // group:web
     "web_search",
     "web_fetch",
+    // group:ui
+    "browser",
+    "canvas",
+    // group:automation
+    "cron",
+    "gateway",
+    // group:messaging
+    "message",
+    // group:nodes
+    "nodes",
+    // standalone native tools
+    "agents_list",
     "image",
   ],
 };

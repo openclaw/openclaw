@@ -59,12 +59,37 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
-  it("includes core tool groups in group:openclaw", () => {
+  it("includes all named sub-groups in group:openclaw", () => {
     const group = TOOL_GROUPS["group:openclaw"];
-    expect(group).toContain("browser");
-    expect(group).toContain("message");
+    // group:fs — was previously missing (regression guard)
+    expect(group).toContain("read");
+    expect(group).toContain("write");
+    expect(group).toContain("edit");
+    expect(group).toContain("apply_patch");
+    // group:runtime — was previously missing (regression guard)
+    expect(group).toContain("exec");
+    expect(group).toContain("process");
+    // group:sessions
+    expect(group).toContain("sessions_spawn");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
+    // group:memory
+    expect(group).toContain("memory_search");
+    // group:web
+    expect(group).toContain("web_search");
+    // group:ui
+    expect(group).toContain("browser");
+    expect(group).toContain("canvas");
+    // group:automation
+    expect(group).toContain("cron");
+    expect(group).toContain("gateway");
+    // group:messaging
+    expect(group).toContain("message");
+    // group:nodes
+    expect(group).toContain("nodes");
+    // standalone
+    expect(group).toContain("agents_list");
+    expect(group).toContain("image");
   });
 
   it("normalizes tool names and aliases", () => {
