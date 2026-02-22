@@ -1,6 +1,7 @@
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -265,13 +266,47 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   });
 
   handler.onMembersAdded(async (context, next) => {
-    const membersAdded = (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
+    const ctx = context as MSTeamsTurnContext;
+    const activity = ctx.activity;
+    const membersAdded = activity?.membersAdded ?? [];
     for (const member of membersAdded) {
-      if (member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id) {
+      if (member.id !== activity?.recipient?.id) {
         deps.log.debug?.("member added", { member: member.id });
         // Don't send welcome message - let the user initiate conversation.
       }
     }
+
+    // Save the conversation reference on install so proactive messaging
+    // (e.g. cron announcements) works even before the user sends their
+    // first message.
+    const conversation = activity?.conversation;
+    const from = activity?.from;
+    const agent = activity?.recipient;
+    if (conversation?.id && from?.id && agent?.id) {
+      const conversationId = normalizeMSTeamsConversationId(conversation.id);
+      deps.conversationStore
+        .upsert(conversationId, {
+          activityId: activity.id,
+          user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+          agent,
+          bot: { id: agent.id, name: agent.name },
+          conversation: {
+            id: conversationId,
+            conversationType: conversation.conversationType,
+            tenantId: conversation.tenantId,
+          },
+          channelId: activity.channelId,
+          serviceUrl: activity.serviceUrl,
+          locale: activity.locale,
+        })
+        .catch((err) => {
+          deps.log.debug?.("failed to save install conversation reference", {
+            error: String(err),
+          });
+        });
+      deps.log.debug?.("saved conversation reference on install", { conversationId });
+    }
+
     await next();
   });
 

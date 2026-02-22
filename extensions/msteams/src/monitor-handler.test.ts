@@ -281,6 +281,79 @@ describe("registerMSTeamsHandlers", () => {
     });
   });
 
+  describe("onMembersAdded — conversation reference seeding", () => {
+    it("saves conversation reference on install for proactive messaging", async () => {
+      const handler = makeMockHandler();
+      const upsertFn = vi.fn().mockResolvedValue(undefined);
+      const deps = makeMockDeps({
+        conversationStore: {
+          upsert: upsertFn,
+        } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
+      });
+      registerMSTeamsHandlers(handler, deps);
+
+      const ctx = makeTurnContext({
+        type: "conversationUpdate",
+        membersAdded: [{ id: "user1" }],
+        recipient: { id: "bot1", name: "Bot" },
+        from: { id: "user1", name: "User One", aadObjectId: "aad-user1" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "personal",
+          tenantId: "tenant1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/teams/",
+        locale: "en-US",
+      });
+
+      const next = vi.fn().mockResolvedValue(undefined);
+      await handler._onMembersAddedCb!(ctx, next);
+
+      expect(upsertFn).toHaveBeenCalledOnce();
+      expect(upsertFn).toHaveBeenCalledWith(
+        "19:abc@thread.tacv2",
+        expect.objectContaining({
+          user: { id: "user1", name: "User One", aadObjectId: "aad-user1" },
+          agent: { id: "bot1", name: "Bot" },
+          conversation: {
+            id: "19:abc@thread.tacv2",
+            conversationType: "personal",
+            tenantId: "tenant1",
+          },
+          serviceUrl: "https://smba.trafficmanager.net/teams/",
+        }),
+      );
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("does not fail if conversation reference save errors", async () => {
+      const handler = makeMockHandler();
+      const upsertFn = vi.fn().mockRejectedValue(new Error("disk full"));
+      const deps = makeMockDeps({
+        conversationStore: {
+          upsert: upsertFn,
+        } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
+      });
+      registerMSTeamsHandlers(handler, deps);
+
+      const ctx = makeTurnContext({
+        type: "conversationUpdate",
+        membersAdded: [{ id: "user1" }],
+        recipient: { id: "bot1", name: "Bot" },
+        from: { id: "user1", name: "User One" },
+        conversation: { id: "conv1", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/teams/",
+      });
+
+      const next = vi.fn().mockResolvedValue(undefined);
+      // Should not throw
+      await handler._onMembersAddedCb!(ctx, next);
+      expect(next).toHaveBeenCalled();
+    });
+  });
+
   describe("global invoke queue", () => {
     it("accumulates multiple invokes in order", async () => {
       const handler = makeMockHandler();
