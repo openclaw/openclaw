@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -26,6 +27,32 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 const log = createSubsystemLogger("agents/tool-images");
+
+// LRU cache for resized images so session-history images aren't re-processed every turn.
+// Keyed by a SHA-256 hash of the base64 content + resize limits.
+const RESIZE_CACHE_MAX = 64;
+type ResizeCacheEntry = { base64: string; mimeType: string; width?: number; height?: number };
+const resizeCache = new Map<string, ResizeCacheEntry>();
+
+function resizeCacheKey(base64: string, maxDimensionPx: number, maxBytes: number): string {
+  return createHash("sha256").update(`${base64}\0${maxDimensionPx}\0${maxBytes}`).digest("hex");
+}
+
+function evictResizeCacheIfNeeded(): void {
+  if (resizeCache.size < RESIZE_CACHE_MAX) {
+    return;
+  }
+  // Delete oldest entry (first key in insertion order).
+  const oldest = resizeCache.keys().next().value;
+  if (oldest !== undefined) {
+    resizeCache.delete(oldest);
+  }
+}
+
+/** Clear the image resize cache. Exported for testing and memory management. */
+export function clearImageResizeCache(): void {
+  resizeCache.clear();
+}
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
   if (!block || typeof block !== "object") {
@@ -158,6 +185,13 @@ async function resizeImageBase64IfNeeded(params: {
   width?: number;
   height?: number;
 }> {
+  // Check cache first — avoids re-processing the same image on every session turn.
+  const cacheKey = resizeCacheKey(params.base64, params.maxDimensionPx, params.maxBytes);
+  const cached = resizeCache.get(cacheKey);
+  if (cached) {
+    return { ...cached, resized: cached.base64 !== params.base64 };
+  }
+
   const buf = Buffer.from(params.base64, "base64");
   const meta = await getImageMetadata(buf);
   const width = meta?.width;
@@ -172,13 +206,10 @@ async function resizeImageBase64IfNeeded(params: {
     width <= params.maxDimensionPx &&
     height <= params.maxDimensionPx
   ) {
-    return {
-      base64: params.base64,
-      mimeType: params.mimeType,
-      resized: false,
-      width,
-      height,
-    };
+    const result = { base64: params.base64, mimeType: params.mimeType, width, height };
+    resizeCache.set(cacheKey, result);
+    evictResizeCacheIfNeeded();
+    return { ...result, resized: false };
   }
 
   const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
@@ -229,12 +260,13 @@ async function resizeImageBase64IfNeeded(params: {
             byteReductionPct,
           },
         );
+        const resizedBase64 = out.toString("base64");
+        const result = { base64: resizedBase64, mimeType: "image/jpeg" as const, width, height };
+        resizeCache.set(cacheKey, result);
+        evictResizeCacheIfNeeded();
         return {
-          base64: out.toString("base64"),
-          mimeType: "image/jpeg",
+          ...result,
           resized: true,
-          width,
-          height,
         };
       }
     }
