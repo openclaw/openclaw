@@ -156,6 +156,23 @@ export function renderApp(state: AppViewState) {
           <kbd class="topbar-search__kbd">⌘K</kbd>
         </button>
         <div class="topbar-status">
+          <button
+            class="topbar-redact ${state.streamMode ? "topbar-redact--active" : ""}"
+            @click=${() => {
+              state.streamMode = !state.streamMode;
+              try {
+                localStorage.setItem("openclaw:stream-mode", String(state.streamMode));
+              } catch {
+                /* */
+              }
+            }}
+            title="${state.streamMode ? "Sensitive data hidden — click to reveal" : "Sensitive data visible — click to hide"}"
+            aria-label="Toggle redaction"
+            aria-pressed=${state.streamMode}
+          >
+            ${state.streamMode ? icons.eyeOff : icons.eye}
+          </button>
+          <span class="topbar-divider"></span>
           <div class="topbar-connection ${state.connected ? "topbar-connection--ok" : ""}">
             <span class="topbar-connection__dot"></span>
             <span class="topbar-connection__label">${state.connected ? t("common.ok") : t("common.offline")}</span>

@@ -313,9 +313,11 @@ export class OpenClawApp extends LitElement {
   paletteActiveIndex = 0;
   @state() streamMode = (() => {
     try {
-      return localStorage.getItem("openclaw:stream-mode") === "true";
+      const stored = localStorage.getItem("openclaw:stream-mode");
+      // Default to true (redacted) unless explicitly disabled
+      return stored === null ? true : stored === "true";
     } catch {
-      return false;
+      return true;
     }
   })();
   @state() overviewLogLines: string[] = [];

@@ -161,7 +161,7 @@ export function renderOverview(props: OverviewProps) {
       <div class="card">
         <div class="card-title">${t("overview.access.title")}</div>
         <div class="card-sub">${t("overview.access.subtitle")}</div>
-        <div class="form-grid" style="margin-top: 16px;">
+        <div class="form-grid ${props.streamMode ? "redacted" : ""}" style="margin-top: 16px;">
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
             <input
