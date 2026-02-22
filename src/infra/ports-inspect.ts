@@ -1,8 +1,8 @@
-import net from "node:net";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isErrno } from "./errors.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
+import { tryListenOnPort } from "./ports-probe.js";
 import type { PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
 
 type CommandResult = {
@@ -227,15 +227,7 @@ async function readWindowsListeners(
 
 async function tryListenOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
   try {
-    await new Promise<void>((resolve, reject) => {
-      const tester = net
-        .createServer()
-        .once("error", (err) => reject(err))
-        .once("listening", () => {
-          tester.close(() => resolve());
-        })
-        .listen({ port, host, exclusive: true });
-    });
+    await tryListenOnPort({ port, host, exclusive: true });
     return "free";
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
