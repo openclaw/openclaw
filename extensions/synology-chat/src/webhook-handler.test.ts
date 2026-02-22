@@ -4,9 +4,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler } from "./webhook-handler.js";
 
-// Mock sendMessage to prevent real HTTP calls
+// Mock client to prevent real HTTP calls
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
+  sendToChannel: vi.fn().mockResolvedValue(true),
 }));
 
 function makeAccount(
@@ -23,6 +24,10 @@ function makeAccount(
     allowedUserIds: [],
     rateLimitPerMinute: 30,
     botName: "TestBot",
+    groupPolicy: "disabled",
+    groupAllowFrom: [],
+    channelWebhooks: {},
+    channelTokens: {},
     allowInsecureSsl: true,
     ...overrides,
   };
@@ -259,5 +264,148 @@ describe("createWebhookHandler", () => {
         body: expect.stringContaining("[FILTERED]"),
       }),
     );
+  });
+
+  describe("group/channel support", () => {
+    const channelToken = "channel-outgoing-token-abc";
+    const channelId = "9";
+
+    function makeGroupAccount(overrides: Partial<ResolvedSynologyChatAccount> = {}) {
+      return makeAccount({
+        accountId: "group-test-" + Date.now(),
+        groupPolicy: "open",
+        channelTokens: { [channelId]: channelToken },
+        channelWebhooks: { [channelId]: "https://nas.example.com/channel-webhook" },
+        ...overrides,
+      });
+    }
+
+    const channelBody = makeFormBody({
+      token: channelToken,
+      user_id: "456",
+      username: "channeluser",
+      text: "Merlin hello from channel",
+      trigger_word: "Merlin",
+      channel_id: channelId,
+      channel_name: "Roboteam",
+    });
+
+    it("accepts channel outgoing webhook token and delivers as group", async () => {
+      const deliver = vi.fn().mockResolvedValue(null);
+      const handler = createWebhookHandler({
+        account: makeGroupAccount(),
+        deliver,
+        log,
+      });
+
+      const req = makeReq("POST", channelBody);
+      const res = makeRes();
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatType: "group",
+          sessionKey: `synology-chat:group:${channelId}`,
+          body: "hello from channel",
+        }),
+      );
+    });
+
+    it("rejects unknown token (neither bot nor channel)", async () => {
+      const handler = createWebhookHandler({
+        account: makeGroupAccount(),
+        deliver: vi.fn(),
+        log,
+      });
+
+      const body = makeFormBody({
+        token: "totally-unknown-token",
+        user_id: "456",
+        username: "attacker",
+        text: "hack attempt",
+      });
+
+      const req = makeReq("POST", body);
+      const res = makeRes();
+      await handler(req, res);
+
+      expect(res._status).toBe(401);
+    });
+
+    it("returns 200 silently when groupPolicy is disabled", async () => {
+      const deliver = vi.fn();
+      const handler = createWebhookHandler({
+        account: makeGroupAccount({ groupPolicy: "disabled" }),
+        deliver,
+        log,
+      });
+
+      const req = makeReq("POST", channelBody);
+      const res = makeRes();
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(deliver).not.toHaveBeenCalled();
+    });
+
+    it("returns 200 silently when groupPolicy is allowlist and user not allowed", async () => {
+      const deliver = vi.fn();
+      const handler = createWebhookHandler({
+        account: makeGroupAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["999"],
+        }),
+        deliver,
+        log,
+      });
+
+      const req = makeReq("POST", channelBody);
+      const res = makeRes();
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(deliver).not.toHaveBeenCalled();
+    });
+
+    it("allows group message when groupPolicy is allowlist and user is allowed", async () => {
+      const deliver = vi.fn().mockResolvedValue(null);
+      const handler = createWebhookHandler({
+        account: makeGroupAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["456"],
+        }),
+        deliver,
+        log,
+      });
+
+      const req = makeReq("POST", channelBody);
+      const res = makeRes();
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(deliver).toHaveBeenCalled();
+    });
+
+    it("bot token still works for DMs alongside channel tokens", async () => {
+      const deliver = vi.fn().mockResolvedValue(null);
+      const handler = createWebhookHandler({
+        account: makeGroupAccount(),
+        deliver,
+        log,
+      });
+
+      const req = makeReq("POST", validBody);
+      const res = makeRes();
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatType: "direct",
+          sessionKey: "synology-chat-123",
+        }),
+      );
+    });
   });
 });

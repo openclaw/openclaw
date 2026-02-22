@@ -5,7 +5,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
-import { sendMessage } from "./client.js";
+import { sendMessage, sendToChannel } from "./client.js";
 import { validateToken, checkUserAllowed, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
@@ -56,6 +56,7 @@ function parsePayload(body: string): SynologyWebhookPayload | null {
   return {
     token,
     channel_id: parsed.channel_id ? String(parsed.channel_id) : undefined,
+    channel_type: parsed.channel_type ? String(parsed.channel_type) : undefined,
     channel_name: parsed.channel_name ? String(parsed.channel_name) : undefined,
     user_id: userId,
     username,
@@ -130,26 +131,58 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       return;
     }
 
-    // Token validation
-    if (!validateToken(payload.token, account.token)) {
-      log?.warn(`Invalid token from ${req.socket?.remoteAddress}`);
-      respond(res, 401, { error: "Invalid token" });
-      return;
+    // Token validation: accept bot token (DMs) or channel outgoing webhook tokens (groups).
+    // The token determines whether this is a DM or a channel message.
+    const isBotToken = validateToken(payload.token, account.token);
+    let matchedChannelId: string | undefined;
+
+    if (!isBotToken) {
+      // Check channel outgoing webhook tokens
+      for (const [channelId, token] of Object.entries(account.channelTokens)) {
+        if (validateToken(payload.token, token)) {
+          matchedChannelId = channelId;
+          break;
+        }
+      }
+      if (!matchedChannelId) {
+        log?.warn(`Invalid token from ${req.socket?.remoteAddress}`);
+        respond(res, 401, { error: "Invalid token" });
+        return;
+      }
     }
 
-    // User allowlist check
-    if (
-      account.dmPolicy === "allowlist" &&
-      !checkUserAllowed(payload.user_id, account.allowedUserIds)
-    ) {
-      log?.warn(`Unauthorized user: ${payload.user_id}`);
-      respond(res, 403, { error: "User not authorized" });
-      return;
-    }
+    // DM vs group is determined by which token matched:
+    // - Bot token → DM (Synology Chat bot only receives direct messages)
+    // - Channel outgoing webhook token → group message from that channel
+    const isGroup = Boolean(matchedChannelId);
 
-    if (account.dmPolicy === "disabled") {
-      respond(res, 403, { error: "DMs are disabled" });
-      return;
+    // Apply the appropriate access policy (DM vs group)
+    if (isGroup) {
+      if (account.groupPolicy === "disabled") {
+        respond(res, 200, { text: "" });
+        return;
+      }
+      if (
+        account.groupPolicy === "allowlist" &&
+        !checkUserAllowed(payload.user_id, account.groupAllowFrom)
+      ) {
+        log?.warn(`User ${payload.user_id} not allowed in group mode`);
+        respond(res, 200, { text: "" });
+        return;
+      }
+    } else {
+      if (account.dmPolicy === "disabled") {
+        respond(res, 403, { error: "DMs are disabled" });
+        return;
+      }
+      if (
+        account.dmPolicy === "allowlist" &&
+        !checkUserAllowed(payload.user_id, account.allowedUserIds)
+      ) {
+        log?.warn(`Unauthorized user: ${payload.user_id}`);
+        respond(res, 403, { error: "User not authorized" });
+        return;
+      }
     }
 
     // Rate limit
@@ -172,21 +205,28 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       return;
     }
 
+    // Build chat context
+    const chatType = isGroup ? "group" : "direct";
+    const channelId = matchedChannelId ?? payload.channel_id;
+    const sessionKey = isGroup
+      ? `synology-chat:group:${channelId}`
+      : `synology-chat-${payload.user_id}`;
+
     const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
-    log?.info(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+    const channelHint = isGroup ? ` [channel:${payload.channel_name ?? channelId}]` : "";
+    log?.info(`Message from ${payload.username} (${payload.user_id})${channelHint}: ${preview}`);
 
     // Respond 200 immediately to avoid Synology Chat timeout
     respond(res, 200, { text: "Processing..." });
 
     // Deliver to agent asynchronously (with 120s timeout to match nginx proxy_read_timeout)
     try {
-      const sessionKey = `synology-chat-${payload.user_id}`;
       const deliverPromise = deliver({
         body: cleanText,
         from: payload.user_id,
         senderName: payload.username,
         provider: "synology-chat",
-        chatType: "direct",
+        chatType,
         sessionKey,
         accountId: account.accountId,
       });
@@ -197,21 +237,56 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
 
       const reply = await Promise.race([deliverPromise, timeoutPromise]);
 
-      // Send reply back to Synology Chat
+      // Send reply back via the appropriate method
       if (reply) {
-        await sendMessage(account.incomingUrl, reply, payload.user_id, account.allowInsecureSsl);
+        if (isGroup && channelId) {
+          // Group: use the channel-specific incoming webhook
+          const channelUrl = account.channelWebhooks[channelId];
+          if (channelUrl) {
+            await sendToChannel(channelUrl, reply, account.allowInsecureSsl);
+          } else {
+            log?.warn(
+              `No incoming webhook configured for channel ${channelId}, falling back to DM`,
+            );
+            await sendMessage(
+              account.incomingUrl,
+              reply,
+              payload.user_id,
+              account.allowInsecureSsl,
+            );
+          }
+        } else {
+          // DM: use the bot's chatbot API with user_ids
+          await sendMessage(account.incomingUrl, reply, payload.user_id, account.allowInsecureSsl);
+        }
         const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
-        log?.info(`Reply sent to ${payload.username} (${payload.user_id}): ${replyPreview}`);
+        log?.info(`Reply sent to ${payload.username}${channelHint}: ${replyPreview}`);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
       log?.error(`Failed to process message from ${payload.username}: ${errMsg}`);
-      await sendMessage(
-        account.incomingUrl,
-        "Sorry, an error occurred while processing your message.",
-        payload.user_id,
-        account.allowInsecureSsl,
-      );
+      // Send error message via appropriate method
+      const errorText = "Sorry, an error occurred while processing your message.";
+      if (isGroup && channelId) {
+        const channelUrl = account.channelWebhooks[channelId];
+        if (channelUrl) {
+          await sendToChannel(channelUrl, errorText, account.allowInsecureSsl);
+        } else {
+          await sendMessage(
+            account.incomingUrl,
+            errorText,
+            payload.user_id,
+            account.allowInsecureSsl,
+          );
+        }
+      } else {
+        await sendMessage(
+          account.incomingUrl,
+          errorText,
+          payload.user_id,
+          account.allowInsecureSsl,
+        );
+      }
     }
   };
 }

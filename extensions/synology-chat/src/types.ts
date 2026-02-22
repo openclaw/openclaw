@@ -2,6 +2,9 @@
  * Type definitions for the Synology Chat channel plugin.
  */
 
+/** Policy type for DM and group access control */
+export type AccessPolicy = "open" | "allowlist" | "disabled";
+
 /** Raw channel config from openclaw.json channels.synology-chat */
 export interface SynologyChatChannelConfig {
   enabled?: boolean;
@@ -9,8 +12,14 @@ export interface SynologyChatChannelConfig {
   incomingUrl?: string;
   nasHost?: string;
   webhookPath?: string;
-  dmPolicy?: "open" | "allowlist" | "disabled";
+  dmPolicy?: AccessPolicy;
   allowedUserIds?: string | string[];
+  groupPolicy?: AccessPolicy;
+  groupAllowFrom?: string | string[];
+  /** Map of Synology channel_id to incoming webhook URL for channel replies */
+  channelWebhooks?: Record<string, string>;
+  /** Map of Synology channel_id to outgoing webhook token for channel reception */
+  channelTokens?: Record<string, string>;
   rateLimitPerMinute?: number;
   botName?: string;
   allowInsecureSsl?: boolean;
@@ -24,8 +33,12 @@ export interface SynologyChatAccountRaw {
   incomingUrl?: string;
   nasHost?: string;
   webhookPath?: string;
-  dmPolicy?: "open" | "allowlist" | "disabled";
+  dmPolicy?: AccessPolicy;
   allowedUserIds?: string | string[];
+  groupPolicy?: AccessPolicy;
+  groupAllowFrom?: string | string[];
+  channelWebhooks?: Record<string, string>;
+  channelTokens?: Record<string, string>;
   rateLimitPerMinute?: number;
   botName?: string;
   allowInsecureSsl?: boolean;
@@ -39,8 +52,14 @@ export interface ResolvedSynologyChatAccount {
   incomingUrl: string;
   nasHost: string;
   webhookPath: string;
-  dmPolicy: "open" | "allowlist" | "disabled";
+  dmPolicy: AccessPolicy;
   allowedUserIds: string[];
+  groupPolicy: AccessPolicy;
+  groupAllowFrom: string[];
+  /** Map of Synology channel_id to incoming webhook URL for channel replies */
+  channelWebhooks: Record<string, string>;
+  /** Map of Synology channel_id to outgoing webhook token for channel reception */
+  channelTokens: Record<string, string>;
   rateLimitPerMinute: number;
   botName: string;
   allowInsecureSsl: boolean;
@@ -50,6 +69,7 @@ export interface ResolvedSynologyChatAccount {
 export interface SynologyWebhookPayload {
   token: string;
   channel_id?: string;
+  channel_type?: string;
   channel_name?: string;
   user_id: string;
   username: string;
