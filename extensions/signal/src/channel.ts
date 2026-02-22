@@ -18,6 +18,7 @@ import {
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSignalAccount,
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
@@ -124,7 +125,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
         providerConfigPresent: cfg.channels?.signal !== undefined,
         groupPolicy: account.config.groupPolicy,

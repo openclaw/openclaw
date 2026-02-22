@@ -23,6 +23,7 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -131,7 +132,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
         providerConfigPresent: cfg.channels?.discord !== undefined,
         groupPolicy: account.config.groupPolicy,

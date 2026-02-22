@@ -1,7 +1,9 @@
 import { format } from "node:util";
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
   mergeAllowlist,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
   type RuntimeEnv,
@@ -248,7 +250,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, opts.accountId);
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.matrix !== undefined,
@@ -259,7 +261,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     providerMissingFallbackApplied,
     providerKey: "matrix",
     accountId: account.accountId,
-    blockedLabel: "room messages",
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (message) => logVerboseMessage(message),
   });
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
