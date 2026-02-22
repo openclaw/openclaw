@@ -622,19 +622,22 @@ export function attachGatewayWsMessageHandler(params: {
               `security audit: device access upgrade requested reason=${reason} device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} roleFrom=${formatAuditList(currentRoles)} roleTo=${role} scopesFrom=${formatAuditList(currentScopes)} scopesTo=${formatAuditList(scopes)} client=${connectParams.client.id} conn=${connId}`,
             );
           };
+          const clientAccessMetadata = {
+            displayName: connectParams.client.displayName,
+            platform: connectParams.client.platform,
+            clientId: connectParams.client.id,
+            clientMode: connectParams.client.mode,
+            role,
+            scopes,
+            remoteIp: reportedClientIp,
+          };
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade",
           ) => {
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
-              displayName: connectParams.client.displayName,
-              platform: connectParams.client.platform,
-              clientId: connectParams.client.id,
-              clientMode: connectParams.client.mode,
-              role,
-              scopes,
-              remoteIp: reportedClientIp,
+              ...clientAccessMetadata,
               silent: isLocalClient && reason === "not-paired",
             });
             const context = buildRequestContext();
@@ -735,15 +738,7 @@ export function attachGatewayWsMessageHandler(params: {
               }
             }
 
-            await updatePairedDeviceMetadata(device.id, {
-              displayName: connectParams.client.displayName,
-              platform: connectParams.client.platform,
-              clientId: connectParams.client.id,
-              clientMode: connectParams.client.mode,
-              role,
-              scopes,
-              remoteIp: reportedClientIp,
-            });
+            await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
           }
         }
 
