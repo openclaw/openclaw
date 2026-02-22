@@ -2513,6 +2513,57 @@ describe("BlueBubbles webhook monitor", () => {
         expect.any(Object),
       );
     });
+
+    it("does not start typing indicator for tapback/reaction messages", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      // Tapback message with standard iMessage reaction text pattern
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Loved "hello world"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-tapback-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        // Simulate what happens when onReplyStart is called for tapback messages
+        await params.dispatcherOptions.onReplyStart?.();
+        // Agent returns NO_REPLY for tapback messages, so no deliver() call
+      });
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      // Typing indicator should NOT be started for tapback messages
+      // because they typically result in NO_REPLY and the indicator would linger
+      const typingStartCalls = vi
+        .mocked(sendBlueBubblesTyping)
+        .mock.calls.filter(([, isTyping]) => isTyping === true);
+      expect(typingStartCalls).toHaveLength(0);
+    });
   });
 
   describe("outbound message ids", () => {
