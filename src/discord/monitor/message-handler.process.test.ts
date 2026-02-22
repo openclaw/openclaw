@@ -106,10 +106,10 @@ beforeEach(() => {
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
-  dispatchInboundMessage.mockReset();
-  recordInboundSession.mockReset();
-  readSessionUpdatedAt.mockReset();
-  resolveStorePath.mockReset();
+  dispatchInboundMessage.mockClear();
+  recordInboundSession.mockClear();
+  readSessionUpdatedAt.mockClear();
+  resolveStorePath.mockClear();
   dispatchInboundMessage.mockResolvedValue({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
