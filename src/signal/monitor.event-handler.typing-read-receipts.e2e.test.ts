@@ -33,8 +33,8 @@ vi.mock("../pairing/pairing-store.js", () => ({
 describe("signal event handler typing + read receipts", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    sendTypingMock.mockReset().mockResolvedValue(true);
-    sendReadReceiptMock.mockReset().mockResolvedValue(true);
+    sendTypingMock.mockClear().mockResolvedValue(true);
+    sendReadReceiptMock.mockClear().mockResolvedValue(true);
     dispatchInboundMessageMock.mockClear();
   });
 
