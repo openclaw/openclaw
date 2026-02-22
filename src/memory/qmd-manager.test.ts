@@ -985,8 +985,9 @@ describe("QmdMemoryManager", () => {
     );
     expect(mcporterCall).toBeDefined();
     const spawnOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(spawnOpts?.env?.XDG_CONFIG_HOME).toContain("/agents/main/qmd/xdg-config");
-    expect(spawnOpts?.env?.XDG_CACHE_HOME).toContain("/agents/main/qmd/xdg-cache");
+    const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
+    expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
+    expect(normalizePath(spawnOpts?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
 
     await manager.close();
   });

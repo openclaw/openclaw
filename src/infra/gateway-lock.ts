@@ -231,7 +231,11 @@ export async function acquireGatewayLock(
             const st = await fs.stat(lockPath);
             stale = Date.now() - st.mtimeMs > staleMs;
           } catch {
-            stale = true;
+            // On Windows or locked filesystems we may be unable to stat the
+            // lock file even though the existing gateway is still healthy.
+            // Treat the lock as non-stale so we keep waiting instead of
+            // forcefully removing another gateway's lock.
+            stale = false;
           }
         }
         if (stale) {
