@@ -57,6 +57,35 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   return normalizeMessageChannel(head);
 }
 
+function resolveLastChannelRaw(params: {
+  originatingChannelRaw?: string;
+  persistedLastChannel?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
+  let resolved = params.originatingChannelRaw || params.persistedLastChannel;
+  // Internal webchat/system turns should not overwrite previously known external
+  // delivery routes (or explicit channel hints encoded in the session key).
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
+    if (
+      persistedChannel &&
+      persistedChannel !== INTERNAL_MESSAGE_CHANNEL &&
+      isDeliverableMessageChannel(persistedChannel)
+    ) {
+      resolved = persistedChannel;
+    } else if (
+      sessionKeyChannelHint &&
+      sessionKeyChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+      isDeliverableMessageChannel(sessionKeyChannelHint)
+    ) {
+      resolved = sessionKeyChannelHint;
+    }
+  }
+  return resolved;
+}
+
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -289,27 +318,11 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
-  const originatingChannel = normalizeMessageChannel(originatingChannelRaw);
-  const persistedChannel = normalizeMessageChannel(baseEntry?.lastChannel);
-  const sessionKeyChannelHint = resolveSessionKeyChannelHint(sessionKey);
-  let lastChannelRaw = originatingChannelRaw || baseEntry?.lastChannel;
-  // Internal webchat/system turns should not overwrite previously known external
-  // delivery routes (or explicit channel hints encoded in the session key).
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
-    if (
-      persistedChannel &&
-      persistedChannel !== INTERNAL_MESSAGE_CHANNEL &&
-      isDeliverableMessageChannel(persistedChannel)
-    ) {
-      lastChannelRaw = persistedChannel;
-    } else if (
-      sessionKeyChannelHint &&
-      sessionKeyChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-      isDeliverableMessageChannel(sessionKeyChannelHint)
-    ) {
-      lastChannelRaw = sessionKeyChannelHint;
-    }
-  }
+  const lastChannelRaw = resolveLastChannelRaw({
+    originatingChannelRaw,
+    persistedLastChannel: baseEntry?.lastChannel,
+    sessionKey,
+  });
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
