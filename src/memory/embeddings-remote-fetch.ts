@@ -1,5 +1,5 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { withRemoteHttpResponse } from "./remote-http.js";
+import { postJson } from "./post-json.js";
 
 export async function fetchRemoteEmbeddingVectors(params: {
   url: string;
@@ -8,23 +8,17 @@ export async function fetchRemoteEmbeddingVectors(params: {
   body: unknown;
   errorPrefix: string;
 }): Promise<number[][]> {
-  return await withRemoteHttpResponse({
+  return await postJson({
     url: params.url,
+    headers: params.headers,
     ssrfPolicy: params.ssrfPolicy,
-    init: {
-      method: "POST",
-      headers: params.headers,
-      body: JSON.stringify(params.body),
-    },
-    onResponse: async (res) => {
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`${params.errorPrefix}: ${res.status} ${text}`);
-      }
-      const payload = (await res.json()) as {
+    body: params.body,
+    errorPrefix: params.errorPrefix,
+    parse: (payload) => {
+      const typedPayload = payload as {
         data?: Array<{ embedding?: number[] }>;
       };
-      const data = payload.data ?? [];
+      const data = typedPayload.data ?? [];
       return data.map((entry) => entry.embedding ?? []);
     },
   });
