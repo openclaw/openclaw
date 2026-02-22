@@ -216,6 +216,7 @@ function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
+  const optionsReceiverContexts: unknown[] = [];
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
@@ -226,7 +227,8 @@ function createArgMenusHarness() {
     action: (id: string, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
     },
-    options: (id: string, handler: (args: unknown) => Promise<void>) => {
+    options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+      optionsReceiverContexts.push(this);
       options.set(id, handler);
     },
   };
@@ -264,7 +266,16 @@ function createArgMenusHarness() {
     config: { commands: { native: true, nativeSkills: false } },
   } as unknown;
 
-  return { commands, actions, options, postEphemeral, ctx, account };
+  return {
+    commands,
+    actions,
+    options,
+    optionsReceiverContexts,
+    postEphemeral,
+    ctx,
+    account,
+    app,
+  };
 }
 
 function requireHandler(
@@ -379,59 +390,12 @@ describe("Slack native command argument menus", () => {
   });
 
   it("registers options handlers without losing app receiver binding", async () => {
-    const commands = new Map<string, (args: unknown) => Promise<void>>();
-    const actions = new Map<string, (args: unknown) => Promise<void>>();
-    const options = new Map<string, (args: unknown) => Promise<void>>();
-    const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
-    const app = {
-      client: { chat: { postEphemeral } },
-      command: (name: string, handler: (args: unknown) => Promise<void>) => {
-        commands.set(name, handler);
-      },
-      action: (id: string, handler: (args: unknown) => Promise<void>) => {
-        actions.set(id, handler);
-      },
-      options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
-        expect(this).toBe(app);
-        options.set(id, handler);
-      },
-    };
-    const ctx = {
-      cfg: { commands: { native: true, nativeSkills: false } },
-      runtime: {},
-      botToken: "bot-token",
-      botUserId: "bot",
-      teamId: "T1",
-      allowFrom: ["*"],
-      dmEnabled: true,
-      dmPolicy: "open",
-      groupDmEnabled: false,
-      groupDmChannels: [],
-      defaultRequireMention: true,
-      groupPolicy: "open",
-      useAccessGroups: false,
-      channelsConfig: undefined,
-      slashCommand: {
-        enabled: true,
-        name: "openclaw",
-        ephemeral: true,
-        sessionPrefix: "slack:slash",
-      },
-      textLimit: 4000,
-      app,
-      isChannelAllowed: () => true,
-      resolveChannelName: async () => ({ name: "dm", type: "im" }),
-      resolveUserName: async () => ({ name: "Ada" }),
-    } as unknown;
-    const account = {
-      accountId: "acct",
-      config: { commands: { native: true, nativeSkills: false } },
-    } as unknown;
-
-    await registerCommands(ctx, account);
-    expect(commands.size).toBeGreaterThan(0);
-    expect(actions.has("openclaw_cmdarg")).toBe(true);
-    expect(options.has("openclaw_cmdarg")).toBe(true);
+    const testHarness = createArgMenusHarness();
+    await registerCommands(testHarness.ctx, testHarness.account);
+    expect(testHarness.commands.size).toBeGreaterThan(0);
+    expect(testHarness.actions.has("openclaw_cmdarg")).toBe(true);
+    expect(testHarness.options.has("openclaw_cmdarg")).toBe(true);
+    expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
   it("shows a button menu when required args are omitted", async () => {

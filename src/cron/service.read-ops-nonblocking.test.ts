@@ -11,6 +11,12 @@ const noopLogger = {
   error: vi.fn(),
 };
 
+type IsolatedRunResult = {
+  status: "ok" | "error" | "skipped";
+  summary?: string;
+  error?: string;
+};
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   try {
@@ -48,6 +54,27 @@ async function makeStorePath() {
   };
 }
 
+function createDeferredIsolatedRun() {
+  let resolveRun: ((value: IsolatedRunResult) => void) | undefined;
+  let resolveRunStarted: (() => void) | undefined;
+  const runStarted = new Promise<void>((resolve) => {
+    resolveRunStarted = resolve;
+  });
+  const runIsolatedAgentJob = vi.fn(async () => {
+    resolveRunStarted?.();
+    return await new Promise<IsolatedRunResult>((resolve) => {
+      resolveRun = resolve;
+    });
+  });
+  return {
+    runIsolatedAgentJob,
+    runStarted,
+    completeRun: (result: IsolatedRunResult) => {
+      resolveRun?.(result);
+    },
+  };
+}
+
 describe("CronService read ops while job is running", () => {
   it("keeps list and status responsive during a long isolated run", async () => {
     vi.useFakeTimers();
@@ -60,25 +87,7 @@ describe("CronService read ops while job is running", () => {
       resolveFinished = resolve;
     });
 
-    let resolveRun:
-      | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
-      | undefined;
-
-    let resolveRunStarted: (() => void) | undefined;
-    const runStarted = new Promise<void>((resolve) => {
-      resolveRunStarted = resolve;
-    });
-
-    const runIsolatedAgentJob = vi.fn(async () => {
-      resolveRunStarted?.();
-      return await new Promise<{
-        status: "ok" | "error" | "skipped";
-        summary?: string;
-        error?: string;
-      }>((resolve) => {
-        resolveRun = resolve;
-      });
-    });
+    const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
       storePath: store.storePath,
@@ -86,7 +95,7 @@ describe("CronService read ops while job is running", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       onEvent: (evt) => {
         if (evt.action === "finished" && evt.status === "ok") {
           resolveFinished?.();
@@ -115,8 +124,8 @@ describe("CronService read ops while job is running", () => {
       vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
       await vi.runOnlyPendingTimersAsync();
 
-      await runStarted;
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      await isolatedRun.runStarted;
+      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf("object");
       await expect(cron.status()).resolves.toBeTypeOf("object");
@@ -124,7 +133,7 @@ describe("CronService read ops while job is running", () => {
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
 
-      resolveRun?.({ status: "ok", summary: "done" });
+      isolatedRun.completeRun({ status: "ok", summary: "done" });
 
       // Wait until the scheduler writes the result back to the store.
       await finished;
@@ -182,24 +191,7 @@ describe("CronService read ops while job is running", () => {
       "utf-8",
     );
 
-    let resolveRun:
-      | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
-      | undefined;
-    let resolveRunStarted: (() => void) | undefined;
-    const runStarted = new Promise<void>((resolve) => {
-      resolveRunStarted = resolve;
-    });
-
-    const runIsolatedAgentJob = vi.fn(async () => {
-      resolveRunStarted?.();
-      return await new Promise<{
-        status: "ok" | "error" | "skipped";
-        summary?: string;
-        error?: string;
-      }>((resolve) => {
-        resolveRun = resolve;
-      });
-    });
+    const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
       storePath: store.storePath,
@@ -208,12 +200,13 @@ describe("CronService read ops while job is running", () => {
       nowMs: () => nowMs,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
     });
 
     try {
       const startPromise = cron.start();
-      await runStarted;
+      await isolatedRun.runStarted;
+      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
@@ -222,7 +215,7 @@ describe("CronService read ops while job is running", () => {
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
 
-      resolveRun?.({ status: "ok", summary: "done" });
+      isolatedRun.completeRun({ status: "ok", summary: "done" });
       await startPromise;
 
       const jobs = await cron.list({ includeDisabled: true });
