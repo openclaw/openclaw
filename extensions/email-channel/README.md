@@ -67,6 +67,40 @@ Add email channel configuration to your OpenClaw config:
 - **allowedSenders**: Array of email addresses to accept emails from (optional, accepts all if not set)
 - **maxAttachmentSize**: Maximum attachment size in bytes (default: 10MB = 10485760)
 
+## Security Considerations
+
+### ⚠️ Important: allowedSenders Security Limitation
+
+The `allowedSenders` configuration checks the email's "From" address, which **can be forged by attackers**. This provides:
+
+**✅ Useful for:**
+
+- Filtering out unwanted emails from automated systems
+- Organizing emails by sender in trusted environments
+- Basic filtering in low-risk scenarios
+
+**❌ NOT secure against:**
+
+- Spoofed emails (attackers can set any "From" address)
+- Targeted attacks from sophisticated attackers
+- Phishing attempts with forged sender addresses
+
+**For production use, consider:**
+
+1. **IMAP Server-Level Filtering**: Configure your IMAP server to verify DKIM, SPF, and DMARC records
+2. **Email Gateway**: Use a secure email gateway that validates sender authenticity
+3. **Private Email Server**: Deploy in a controlled environment with trusted senders only
+
+**Technical Details:**
+The email "From" field is set by the sender and cannot be cryptographically verified without additional infrastructure (DKIM/SPF/DMARC). Only properly configured mail servers can validate sender authenticity, which is beyond the scope of this plugin.
+
+If security is critical, ensure your IMAP server:
+
+- Verifies DKIM signatures
+- Checks SPF records
+- Enforces DMARC policies
+- Rejects unauthenticated emails before they reach the inbox
+
 ## Attachment Handling
 
 ### How Attachments Work

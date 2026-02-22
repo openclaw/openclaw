@@ -115,9 +115,14 @@ const emailPlugin: ChannelPlugin<EmailAccount> = {
       ctx.log?.info?.(`[${account.accountId}] Starting email channel`);
 
       // Log allowed senders configuration
+      // SECURITY WARNING: allowedSenders checks the "From" email address, which can be forged.
+      // For production security, ensure IMAP server validates DKIM/SPF/DMARC.
       if (account.allowedSenders && account.allowedSenders.length > 0) {
         ctx.log?.info?.(
           `[${account.accountId}] Only accepting emails from: ${account.allowedSenders.join(", ")}`,
+        );
+        ctx.log?.warn?.(
+          `[${account.accountId}] WARNING: allowedSenders checks "From" address which can be forged. Use with IMAP server-level DKIM/SPF/DMARC validation for security.`,
         );
       } else {
         ctx.log?.info?.(`[${account.accountId}] Accepting emails from all senders`);

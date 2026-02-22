@@ -185,6 +185,18 @@ class EmailAccountRuntime {
     return emailMatch ? emailMatch[1].trim().toLowerCase() : from.trim().toLowerCase();
   }
 
+  /**
+   * Check if sender is in the allowed list.
+   *
+   * SECURITY WARNING: This checks the "From" email address from the email headers,
+   * which can be forged by attackers. This provides basic filtering but NOT security.
+   *
+   * For production security, ensure your IMAP server:
+   * - Verifies DKIM signatures
+   * - Checks SPF records
+   * - Enforces DMARC policies
+   * - Rejects unauthenticated emails
+   */
   private isSenderAllowed(fromEmail: string): boolean {
     if (!this.allowedSenders || this.allowedSenders.length === 0) {
       return true; // No restrictions
