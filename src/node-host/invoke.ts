@@ -21,6 +21,12 @@ import {
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
+import type {
+  ExecEventPayload,
+  RunResult,
+  SkillBinsProvider,
+  SystemRunParams,
+} from "./invoke-types.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
@@ -29,20 +35,6 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
-
-type SystemRunParams = {
-  command: string[];
-  rawCommand?: string | null;
-  cwd?: string | null;
-  env?: Record<string, string>;
-  timeoutMs?: number | null;
-  needsScreenRecording?: boolean | null;
-  agentId?: string | null;
-  sessionKey?: string | null;
-  approved?: boolean | null;
-  approvalDecision?: string | null;
-  runId?: string | null;
-};
 
 type SystemWhichParams = {
   bins: string[];
@@ -60,28 +52,6 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-type RunResult = {
-  exitCode?: number;
-  timedOut: boolean;
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  error?: string | null;
-  truncated: boolean;
-};
-
-type ExecEventPayload = {
-  sessionKey: string;
-  runId: string;
-  host: string;
-  command?: string;
-  exitCode?: number;
-  timedOut?: boolean;
-  success?: boolean;
-  output?: string;
-  reason?: string;
-};
-
 export type NodeInvokeRequestPayload = {
   id: string;
   nodeId: string;
@@ -91,9 +61,7 @@ export type NodeInvokeRequestPayload = {
   idempotencyKey?: string | null;
 };
 
-export type SkillBinsProvider = {
-  current(force?: boolean): Promise<Set<string>>;
-};
+export type { SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";

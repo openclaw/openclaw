@@ -9,6 +9,7 @@ import {
   evaluateShellAllowlist,
   recordAllowlistUse,
   requiresExecApproval,
+  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   resolveSafeBins,
   type ExecAllowlistEntry,
@@ -19,46 +20,12 @@ import {
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
-
-type SystemRunParams = {
-  command: string[];
-  rawCommand?: string | null;
-  cwd?: string | null;
-  env?: Record<string, string>;
-  timeoutMs?: number | null;
-  needsScreenRecording?: boolean | null;
-  agentId?: string | null;
-  sessionKey?: string | null;
-  approved?: boolean | null;
-  approvalDecision?: string | null;
-  runId?: string | null;
-};
-
-type RunResult = {
-  exitCode?: number;
-  timedOut: boolean;
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  error?: string | null;
-  truncated: boolean;
-};
-
-type ExecEventPayload = {
-  sessionKey: string;
-  runId: string;
-  host: string;
-  command?: string;
-  exitCode?: number;
-  timedOut?: boolean;
-  success?: boolean;
-  output?: string;
-  reason?: string;
-};
-
-export type SkillBinsProvider = {
-  current(force?: boolean): Promise<Set<string>>;
-};
+import type {
+  ExecEventPayload,
+  RunResult,
+  SkillBinsProvider,
+  SystemRunParams,
+} from "./invoke-types.js";
 
 type SystemRunInvokeResult = {
   ok: boolean;
@@ -314,8 +281,13 @@ export async function handleSystemRunInvoke(opts: {
   }
   if (approvalDecision === "allow-always" && security === "allowlist") {
     if (analysisOk) {
-      for (const segment of segments) {
-        const pattern = segment.resolution?.resolvedPath ?? "";
+      const patterns = resolveAllowAlwaysPatterns({
+        segments,
+        cwd: opts.params.cwd ?? undefined,
+        env,
+        platform: process.platform,
+      });
+      for (const pattern of patterns) {
         if (pattern) {
           addAllowlistEntry(approvals.file, agentId, pattern);
         }

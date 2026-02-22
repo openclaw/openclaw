@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
   sanitizeHostExecEnv,
@@ -39,10 +40,13 @@ describe("sanitizeHostExecEnv", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
         PATH: "/usr/bin:/bin",
-        HOME: "/tmp/home",
+        HOME: "/tmp/trusted-home",
+        ZDOTDIR: "/tmp/trusted-zdotdir",
       },
       overrides: {
         PATH: "/tmp/evil",
+        HOME: "/tmp/evil-home",
+        ZDOTDIR: "/tmp/evil-zdotdir",
         BASH_ENV: "/tmp/pwn.sh",
         SAFE: "ok",
       },
@@ -51,7 +55,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.PATH).toBe("/usr/bin:/bin");
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.SAFE).toBe("ok");
-    expect(env.HOME).toBe("/tmp/home");
+    expect(env.HOME).toBe("/tmp/trusted-home");
+    expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
   });
 
   it("drops non-portable env key names", () => {
@@ -69,6 +74,15 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOOD_KEY).toBe("ok");
     expect(env[" BAD KEY"]).toBeUndefined();
     expect(env["NOT-PORTABLE"]).toBeUndefined();
+  });
+});
+
+describe("isDangerousHostEnvOverrideVarName", () => {
+  it("matches override-only blocked keys case-insensitively", () => {
+    expect(isDangerousHostEnvOverrideVarName("HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("zdotdir")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
+    expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
 });
 

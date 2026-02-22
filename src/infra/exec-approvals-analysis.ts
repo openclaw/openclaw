@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { unwrapDispatchWrappersForResolution } from "./exec-wrapper-resolution.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
@@ -101,7 +102,8 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
-  const rawExecutable = argv[0]?.trim();
+  const effectiveArgv = unwrapDispatchWrappersForResolution(argv);
+  const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
     return null;
   }

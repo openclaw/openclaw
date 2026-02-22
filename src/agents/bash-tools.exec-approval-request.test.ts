@@ -18,7 +18,7 @@ describe("requestExecApprovalDecision", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(callGatewayTool).mockReset();
+    vi.mocked(callGatewayTool).mockClear();
   });
 
   it("returns string decisions", async () => {

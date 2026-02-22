@@ -14,6 +14,11 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforePromptBuildResult,
+} from "../../../plugins/types.js";
 import {
   isCronSessionKey,
   isSubagentSessionKey,
@@ -42,6 +47,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -100,6 +106,7 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
+import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
@@ -110,6 +117,18 @@ import {
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+type PromptBuildHookRunner = {
+  hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
+  runBeforePromptBuild: (
+    event: { prompt: string; messages: unknown[] },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
+  runBeforeAgentStart: (
+    event: { prompt: string; messages: unknown[] },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
+};
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -157,6 +176,53 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+export async function resolvePromptBuildHookResult(params: {
+  prompt: string;
+  messages: unknown[];
+  hookCtx: PluginHookAgentContext;
+  hookRunner?: PromptBuildHookRunner | null;
+  legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+}): Promise<PluginHookBeforePromptBuildResult> {
+  const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
+    ? await params.hookRunner
+        .runBeforePromptBuild(
+          {
+            prompt: params.prompt,
+            messages: params.messages,
+          },
+          params.hookCtx,
+        )
+        .catch((hookErr: unknown) => {
+          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+          return undefined;
+        })
+    : undefined;
+  const legacyResult =
+    params.legacyBeforeAgentStartResult ??
+    (params.hookRunner?.hasHooks("before_agent_start")
+      ? await params.hookRunner
+          .runBeforeAgentStart(
+            {
+              prompt: params.prompt,
+              messages: params.messages,
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(
+              `before_agent_start hook (legacy prompt build path) failed: ${String(hookErr)}`,
+            );
+            return undefined;
+          })
+      : undefined);
+  return {
+    systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
+    prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n"),
+  };
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -331,6 +397,10 @@ export async function runEmbeddedAttempt(
           disableMessageTool: params.disableMessageTool,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    const allowedToolNames = collectAllowedToolNames({
+      tools,
+      clientTools: params.clientTools,
+    });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();
@@ -436,6 +506,7 @@ export async function runEmbeddedAttempt(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -443,11 +514,8 @@ export async function runEmbeddedAttempt(
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
-      ownerDisplay: params.config?.commands?.ownerDisplay,
-      ownerDisplaySecret:
-        params.config?.commands?.ownerDisplaySecret ??
-        params.config?.gateway?.auth?.token ??
-        params.config?.gateway?.remote?.token,
+      ownerDisplay: ownerDisplay.ownerDisplay,
+      ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
@@ -527,6 +595,7 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
 
@@ -713,6 +782,7 @@ export async function runEmbeddedAttempt(
           modelApi: params.model.api,
           modelId: params.modelId,
           provider: params.provider,
+          allowedToolNames,
           config: params.config,
           sessionManager,
           sessionId: params.sessionId,
@@ -934,42 +1004,13 @@ export async function runEmbeddedAttempt(
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
         };
-        const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
-          ? await hookRunner
-              .runBeforePromptBuild(
-                {
-                  prompt: params.prompt,
-                  messages: activeSession.messages,
-                },
-                hookCtx,
-              )
-              .catch((hookErr: unknown) => {
-                log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-                return undefined;
-              })
-          : undefined;
-        const legacyResult = hookRunner?.hasHooks("before_agent_start")
-          ? await hookRunner
-              .runBeforeAgentStart(
-                {
-                  prompt: params.prompt,
-                  messages: activeSession.messages,
-                },
-                hookCtx,
-              )
-              .catch((hookErr: unknown) => {
-                log.warn(
-                  `before_agent_start hook (legacy prompt build path) failed: ${String(hookErr)}`,
-                );
-                return undefined;
-              })
-          : undefined;
-        const hookResult = {
-          systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
-          prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
-            .filter((value): value is string => Boolean(value))
-            .join("\n\n"),
-        };
+        const hookResult = await resolvePromptBuildHookResult({
+          prompt: params.prompt,
+          messages: activeSession.messages,
+          hookCtx,
+          hookRunner,
+          legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+        });
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;

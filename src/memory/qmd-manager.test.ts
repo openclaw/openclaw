@@ -118,11 +118,11 @@ describe("QmdMemoryManager", () => {
   });
 
   beforeEach(async () => {
-    spawnMock.mockReset();
+    spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
-    logWarnMock.mockReset();
-    logDebugMock.mockReset();
-    logInfoMock.mockReset();
+    logWarnMock.mockClear();
+    logDebugMock.mockClear();
+    logInfoMock.mockClear();
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
     await fs.mkdir(tmpRoot);
     workspaceDir = path.join(tmpRoot, "workspace");
@@ -148,6 +148,8 @@ describe("QmdMemoryManager", () => {
   afterEach(async () => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
+    delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
+    delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -410,6 +412,132 @@ describe("QmdMemoryManager", () => {
       return nameIdx >= 0 && args[nameIdx + 1] === sessionCollectionName;
     });
     expect(addSessions).toBeDefined();
+  });
+
+  it("migrates unscoped legacy collections before adding scoped names", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const legacyCollections = new Map<
+      string,
+      {
+        path: string;
+        mask: string;
+      }
+    >([
+      ["memory-root", { path: workspaceDir, mask: "MEMORY.md" }],
+      ["memory-alt", { path: workspaceDir, mask: "memory.md" }],
+      ["memory-dir", { path: path.join(workspaceDir, "memory"), mask: "**/*.md" }],
+    ]);
+    const removeCalls: string[] = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify(
+            [...legacyCollections.entries()].map(([name, info]) => ({
+              name,
+              path: info.path,
+              mask: info.mask,
+            })),
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        legacyCollections.delete(name);
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const pathArg = args[2] ?? "";
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const hasConflict = [...legacyCollections.entries()].some(
+          ([existingName, info]) =>
+            existingName !== name && info.path === pathArg && info.mask === mask,
+        );
+        if (hasConflict) {
+          emitAndClose(child, "stderr", "collection already exists", 1);
+          return child;
+        }
+        legacyCollections.set(name, { path: pathArg, mask });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removeCalls).toEqual(["memory-root", "memory-alt", "memory-dir"]);
+    expect(legacyCollections.has("memory-root-main")).toBe(true);
+    expect(legacyCollections.has("memory-alt-main")).toBe(true);
+    expect(legacyCollections.has("memory-dir-main")).toBe(true);
+    expect(legacyCollections.has("memory-root")).toBe(false);
+    expect(legacyCollections.has("memory-alt")).toBe(false);
+    expect(legacyCollections.has("memory-dir")).toBe(false);
+  });
+
+  it("does not migrate unscoped collections when listed metadata differs", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const differentPath = path.join(tmpRoot, "other-memory");
+    await fs.mkdir(differentPath, { recursive: true });
+    const removeCalls: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ name: "memory-root", path: differentPath, mask: "MEMORY.md" }]),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removeCalls).not.toContain("memory-root");
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd legacy collection migration skipped for memory-root"),
+    );
   });
 
   it("times out qmd update during sync when configured", async () => {
@@ -910,6 +1038,171 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("runs qmd searches via mcporter and warns when startDaemon=false", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (cmd === "mcporter" && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+
+    logWarnMock.mockClear();
+    await expect(
+      manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    const mcporterCalls = spawnMock.mock.calls.filter((call: unknown[]) => call[0] === "mcporter");
+    expect(mcporterCalls.length).toBeGreaterThan(0);
+    expect(mcporterCalls.some((call: unknown[]) => (call[1] as string[])[0] === "daemon")).toBe(
+      false,
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
+
+    await manager.close();
+  });
+
+  it("passes manager-scoped XDG env to mcporter commands", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (cmd === "mcporter" && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => call[0] === "mcporter" && (call[1] as string[])[0] === "call",
+    );
+    expect(mcporterCall).toBeDefined();
+    const spawnOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
+    expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
+    expect(normalizePath(spawnOpts?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
+
+    await manager.close();
+  });
+
+  it("retries mcporter daemon start after a failure", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    let daemonAttempts = 0;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (cmd === "mcporter" && args[0] === "daemon") {
+        daemonAttempts += 1;
+        if (daemonAttempts === 1) {
+          emitAndClose(child, "stderr", "failed", 1);
+        } else {
+          emitAndClose(child, "stdout", "");
+        }
+        return child;
+      }
+      if (cmd === "mcporter" && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+
+    await manager.search("one", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.search("two", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(daemonAttempts).toBe(2);
+
+    await manager.close();
+  });
+
+  it("starts the mcporter daemon only once when enabled", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (cmd === "mcporter" && args[0] === "daemon") {
+        emitAndClose(child, "stdout", "");
+        return child;
+      }
+      if (cmd === "mcporter" && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+
+    await manager.search("one", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.search("two", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const daemonStarts = spawnMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === "mcporter" && (call[1] as string[])[0] === "daemon",
+    );
+    expect(daemonStarts).toHaveLength(1);
+
+    await manager.close();
+  });
+
   it("fails closed when no managed collections are configured", async () => {
     cfg = {
       ...cfg,
@@ -1373,7 +1666,7 @@ describe("QmdMemoryManager", () => {
     ] as const;
 
     for (const testCase of cases) {
-      spawnMock.mockReset();
+      spawnMock.mockClear();
       spawnMock.mockImplementation(() => createMockChild());
       const { manager } = await createManager();
       try {
@@ -1664,7 +1957,7 @@ describe("QmdMemoryManager", () => {
         await fs.rm(customModelsDir, { recursive: true, force: true });
         await fs.mkdir(defaultModelsDir, { recursive: true });
         await fs.writeFile(path.join(defaultModelsDir, "model.bin"), "fake-model");
-        logWarnMock.mockReset();
+        logWarnMock.mockClear();
         await testCase.setup?.();
         const { manager } = await createManager({ mode: "full" });
         expect(manager, testCase.name).toBeTruthy();
