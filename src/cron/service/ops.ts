@@ -1,4 +1,5 @@
-import type { CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronConfig } from "../../config/types.cron.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -13,6 +14,23 @@ import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
+
+function resolveCronWebhookToken(cronConfig?: CronConfig): string {
+  return typeof cronConfig?.webhookToken === "string" ? cronConfig.webhookToken.trim() : "";
+}
+
+function assertWebhookDeliveryAuthConfigured(params: {
+  job: Pick<CronJob, "delivery">;
+  cronConfig?: CronConfig;
+}) {
+  if (params.job.delivery?.mode !== "webhook") {
+    return;
+  }
+  if (resolveCronWebhookToken(params.cronConfig)) {
+    return;
+  }
+  throw new Error("cron webhook delivery requires cron.webhookToken for authenticated delivery");
+}
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -98,6 +116,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
     const job = createJob(state, input);
+    assertWebhookDeliveryAuthConfigured({ job, cronConfig: state.deps.cronConfig });
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -134,6 +153,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     applyJobPatch(job, patch);
+    assertWebhookDeliveryAuthConfigured({ job, cronConfig: state.deps.cronConfig });
     if (job.schedule.kind === "every") {
       const anchor = job.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {

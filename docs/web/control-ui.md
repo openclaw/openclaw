@@ -85,7 +85,7 @@ Cron jobs panel notes:
 - Channel/target fields appear when announce is selected.
 - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
 - For main-session jobs, webhook and none delivery modes are available.
-- Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
+- Set `cron.webhookToken` to send a dedicated bearer token; webhook delivery mode is rejected when this token is missing.
 - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
 ## Chat behavior

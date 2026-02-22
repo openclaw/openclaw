@@ -215,7 +215,7 @@ Behavior details:
 - The endpoint must be a valid HTTP(S) URL.
 - No channel delivery is attempted in webhook mode.
 - No main-session summary is posted in webhook mode.
-- If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
+- `cron.webhookToken` is required; auth header is `Authorization: Bearer <cron.webhookToken>`.
 - Deprecated fallback: stored legacy jobs with `notify: true` still post to `cron.webhook` (if configured), with a warning so you can migrate to `delivery.mode = "webhook"`.
 
 ### Model and thinking overrides
@@ -361,7 +361,7 @@ Notes:
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 1, // default 1
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
-    webhookToken: "replace-with-dedicated-webhook-token", // optional bearer token for webhook mode
+    webhookToken: "replace-with-dedicated-webhook-token", // required bearer token for webhook mode
   },
 }
 ```
@@ -371,8 +371,7 @@ Webhook behavior:
 - Preferred: set `delivery.mode: "webhook"` with `delivery.to: "https://..."` per job.
 - Webhook URLs must be valid `http://` or `https://` URLs.
 - When posted, payload is the cron finished event JSON.
-- If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
-- If `cron.webhookToken` is not set, no `Authorization` header is sent.
+- `cron.webhookToken` is required; auth header is `Authorization: Bearer <cron.webhookToken>`.
 - Deprecated fallback: stored legacy jobs with `notify: true` still use `cron.webhook` when present.
 
 Disable cron entirely:

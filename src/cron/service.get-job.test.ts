@@ -14,6 +14,7 @@ function createCronService(storePath: string) {
   return new CronService({
     storePath,
     cronEnabled: true,
+    cronConfig: { webhookToken: "cron-webhook-token" },
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),

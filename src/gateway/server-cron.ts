@@ -237,53 +237,61 @@ export function buildGatewayCronService(params: {
         }
 
         if (webhookTarget && evt.summary) {
-          const headers: Record<string, string> = {
-            "Content-Type": "application/json",
-          };
-          if (webhookToken) {
-            headers.Authorization = `Bearer ${webhookToken}`;
-          }
-          const abortController = new AbortController();
-          const timeout = setTimeout(() => {
-            abortController.abort();
-          }, CRON_WEBHOOK_TIMEOUT_MS);
+          if (!webhookToken) {
+            cronLogger.warn(
+              {
+                jobId: evt.jobId,
+                webhookUrl: redactWebhookUrl(webhookTarget.url),
+              },
+              "cron: skipped webhook delivery because cron.webhookToken is not configured",
+            );
+          } else {
+            const headers: Record<string, string> = {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${webhookToken}`,
+            };
+            const abortController = new AbortController();
+            const timeout = setTimeout(() => {
+              abortController.abort();
+            }, CRON_WEBHOOK_TIMEOUT_MS);
 
-          void (async () => {
-            try {
-              const result = await fetchWithSsrFGuard({
-                url: webhookTarget.url,
-                init: {
-                  method: "POST",
-                  headers,
-                  body: JSON.stringify(evt),
-                  signal: abortController.signal,
-                },
-              });
-              await result.release();
-            } catch (err) {
-              if (err instanceof SsrFBlockedError) {
-                cronLogger.warn(
-                  {
-                    reason: formatErrorMessage(err),
-                    jobId: evt.jobId,
-                    webhookUrl: redactWebhookUrl(webhookTarget.url),
+            void (async () => {
+              try {
+                const result = await fetchWithSsrFGuard({
+                  url: webhookTarget.url,
+                  init: {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify(evt),
+                    signal: abortController.signal,
                   },
-                  "cron: webhook delivery blocked by SSRF guard",
-                );
-              } else {
-                cronLogger.warn(
-                  {
-                    err: formatErrorMessage(err),
-                    jobId: evt.jobId,
-                    webhookUrl: redactWebhookUrl(webhookTarget.url),
-                  },
-                  "cron: webhook delivery failed",
-                );
+                });
+                await result.release();
+              } catch (err) {
+                if (err instanceof SsrFBlockedError) {
+                  cronLogger.warn(
+                    {
+                      reason: formatErrorMessage(err),
+                      jobId: evt.jobId,
+                      webhookUrl: redactWebhookUrl(webhookTarget.url),
+                    },
+                    "cron: webhook delivery blocked by SSRF guard",
+                  );
+                } else {
+                  cronLogger.warn(
+                    {
+                      err: formatErrorMessage(err),
+                      jobId: evt.jobId,
+                      webhookUrl: redactWebhookUrl(webhookTarget.url),
+                    },
+                    "cron: webhook delivery failed",
+                  );
+                }
+              } finally {
+                clearTimeout(timeout);
               }
-            } finally {
-              clearTimeout(timeout);
-            }
-          })();
+            })();
+          }
         }
         const logPath = resolveCronRunLogPath({
           storePath,

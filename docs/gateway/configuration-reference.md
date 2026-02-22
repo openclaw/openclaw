@@ -2439,14 +2439,14 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
     enabled: true,
     maxConcurrentRuns: 2,
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
-    webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
+    webhookToken: "replace-with-dedicated-token", // bearer token required for outbound webhook auth
     sessionRetention: "24h", // duration string or false
   },
 }
 ```
 
 - `sessionRetention`: how long to keep completed cron sessions before pruning. Default: `24h`.
-- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`). Jobs using webhook delivery are rejected when this token is missing.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
 See [Cron Jobs](/automation/cron-jobs).
