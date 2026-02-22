@@ -116,7 +116,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("Browser");
-    expect(payloads[0]?.text).toContain("tab not found");
+    expect(payloads[0]?.text).not.toContain("tab not found");
   });
 
   it("does not add tool error fallback when assistant output exists", () => {
@@ -245,7 +245,8 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("connection timeout");
+    expect(payloads[0]?.text).toContain("Write");
+    expect(payloads[0]?.text).not.toContain("connection timeout");
   });
 
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
@@ -264,7 +265,8 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("required");
+    expect(payloads[0]?.text).toContain("Message");
+    expect(payloads[0]?.text).not.toContain("required");
   });
 
   it("shows mutating tool errors even when assistant output exists", () => {
@@ -277,7 +279,8 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("Done.");
     expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("missing");
+    expect(payloads[1]?.text).toContain("Write");
+    expect(payloads[1]?.text).not.toContain("missing");
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
@@ -320,7 +323,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(warningText);
   });
 
-  it("shows non-recoverable tool errors to the user", () => {
+  it("shows non-recoverable tool failure summaries to the user", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
     });
@@ -328,6 +331,19 @@ describe("buildEmbeddedRunPayloads", () => {
     // Non-recoverable errors should still be shown
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Browser");
+    expect(payloads[0]?.text).not.toContain("connection timeout");
+  });
+
+  it("includes non-recoverable tool error details when verbose mode is on", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+      verboseLevel: "on",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Browser");
     expect(payloads[0]?.text).toContain("connection timeout");
   });
 });

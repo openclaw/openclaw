@@ -32,5 +32,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("Write");
+    expect(payloads[0]?.text).not.toContain("permission denied");
+  });
+
+  it("includes mutating tool error details when verbose mode is on", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "permission denied" },
+      verboseLevel: "on",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Write");
+    expect(payloads[0]?.text).toContain("permission denied");
   });
 });
