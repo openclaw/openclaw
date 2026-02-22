@@ -260,7 +260,9 @@ Triggered when the gateway starts:
 Triggered when messages are received or sent:
 
 - **`message`**: All message events (general listener)
-- **`message:received`**: When an inbound message is received from any channel
+- **`message:received`**: When an inbound message is received from any channel. Fires early in processing before media understanding. Content may contain raw placeholders like `<media:audio>` for media attachments that haven't been processed yet.
+- **`message:transcribed`**: When a message has been fully processed, including audio transcription and link understanding. At this point, `transcript` contains the full transcript text for audio messages. Use this hook when you need access to transcribed audio content.
+- **`message:preprocessed`**: Fires for every message after all media + link understanding completes, giving hooks access to the fully enriched body (transcripts, image descriptions, link summaries) before the agent sees it.
 - **`message:sent`**: When an outbound message is successfully sent
 
 #### Message Event Context
