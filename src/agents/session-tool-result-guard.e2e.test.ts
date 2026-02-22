@@ -191,6 +191,43 @@ describe("installSessionToolResultGuard", () => {
     expect(messages).toHaveLength(0);
   });
 
+  it("drops malformed tool calls with invalid name tokens before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bad_name",
+            name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
+            arguments: {},
+          },
+        ],
+      }),
+    );
+
+    expect(getPersistedMessages(sm)).toHaveLength(0);
+  });
+
+  it("drops tool calls not present in allowedToolNames", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      allowedToolNames: ["read"],
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
+      }),
+    );
+
+    expect(getPersistedMessages(sm)).toHaveLength(0);
+  });
+
   it("flushes pending tool results when a sanitized assistant message is dropped", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

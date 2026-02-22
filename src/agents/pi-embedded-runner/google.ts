@@ -426,6 +426,7 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  allowedToolNames?: Iterable<string>;
   config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
@@ -458,7 +459,9 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.sanitizeThinkingSignatures
     ? sanitizeAntigravityThinkingBlocks(droppedThinking)
     : droppedThinking;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking, {
+    allowedToolNames: params.allowedToolNames,
+  });
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;

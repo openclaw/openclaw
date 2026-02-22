@@ -241,6 +241,65 @@ describe("sanitizeToolCallInputs", () => {
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_ok");
   });
 
+  it("drops tool calls with malformed or overlong names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_bad_chars",
+            name: 'toolu_01abc <|tool_call_argument_begin|> {"command"',
+            arguments: {},
+          },
+          {
+            type: "toolUse",
+            id: "call_too_long",
+            name: `read_${"x".repeat(80)}`,
+            input: {},
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCalls = Array.isArray(assistant.content)
+      ? assistant.content.filter((block) => {
+          const type = (block as { type?: unknown }).type;
+          return typeof type === "string" && ["toolCall", "toolUse", "functionCall"].includes(type);
+        })
+      : [];
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("drops unknown tool names when an allowlist is provided", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_unknown", name: "write", arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCalls = Array.isArray(assistant.content)
+      ? assistant.content.filter((block) => {
+          const type = (block as { type?: unknown }).type;
+          return typeof type === "string" && ["toolCall", "toolUse", "functionCall"].includes(type);
+        })
+      : [];
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
   it("keeps valid tool calls and preserves text blocks", () => {
     const input = [
       {
