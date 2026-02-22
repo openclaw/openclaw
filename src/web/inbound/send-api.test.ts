@@ -38,14 +38,14 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to default document filename when fileName is absent", async () => {
+  it("falls back to extension-aware document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
         document: payload,
-        fileName: "file",
+        fileName: "file.pdf",
         caption: "doc",
         mimetype: "application/pdf",
       }),
