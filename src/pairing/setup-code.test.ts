@@ -28,6 +28,7 @@ describe("pairing setup code", () => {
         bind: "custom",
         customBindHost: "gateway.local",
         port: 19001,
+        tls: { enabled: true },
         auth: { mode: "token", token: "tok_123" },
       },
     });
@@ -35,7 +36,7 @@ describe("pairing setup code", () => {
     expect(resolved).toEqual({
       ok: true,
       payload: {
-        url: "ws://gateway.local:19001",
+        url: "wss://gateway.local:19001",
         token: "tok_123",
         password: undefined,
       },
@@ -50,6 +51,7 @@ describe("pairing setup code", () => {
         gateway: {
           bind: "custom",
           customBindHost: "gateway.local",
+          tls: { enabled: true },
           auth: { mode: "token", token: "old" },
         },
       },
@@ -145,5 +147,63 @@ describe("pairing setup code", () => {
       urlSource: "gateway.remote.url",
     });
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("rejects insecure remote ws:// URLs", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          remote: { url: "ws://attacker.example:18789" },
+          auth: { mode: "token", token: "tok_123" },
+        },
+      },
+      { preferRemoteUrl: true },
+    );
+
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) {
+      throw new Error("expected setup resolution to fail");
+    }
+    expect(resolved.error).toContain("insecure ws://");
+  });
+
+  it("allows loopback ws:// URLs for local development", async () => {
+    const resolved = await resolvePairingSetupFromConfig({
+      gateway: {
+        remote: { url: "ws://127.0.0.1:18789" },
+        auth: { mode: "token", token: "tok_123" },
+      },
+    });
+
+    expect(resolved).toEqual({
+      ok: true,
+      payload: {
+        url: "ws://127.0.0.1:18789",
+        token: "tok_123",
+        password: undefined,
+      },
+      authLabel: "token",
+      urlSource: "gateway.remote.url",
+    });
+  });
+
+  it("allows IPv6 loopback ws:// URLs", async () => {
+    const resolved = await resolvePairingSetupFromConfig({
+      gateway: {
+        remote: { url: "ws://[0:0:0:0:0:0:0:1]:18789" },
+        auth: { mode: "token", token: "tok_123" },
+      },
+    });
+
+    expect(resolved).toEqual({
+      ok: true,
+      payload: {
+        url: "ws://[::1]:18789",
+        token: "tok_123",
+        password: undefined,
+      },
+      authLabel: "token",
+      urlSource: "gateway.remote.url",
+    });
   });
 });

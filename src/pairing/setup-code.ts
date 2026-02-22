@@ -1,7 +1,24 @@
 import os from "node:os";
 import type { OpenClawConfig } from "../config/types.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
+
+function validateTransportSecurity(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const protocol = parsed.protocol.toLowerCase();
+    if (protocol !== "ws:" && protocol !== "wss:") {
+      return "Gateway URL must use ws:// or wss://.";
+    }
+    if (isSecureWebSocketUrl(url)) {
+      return null;
+    }
+    return "Refusing to generate setup code with insecure ws:// for non-loopback host. Use wss://.";
+  } catch {
+    return "Gateway URL is invalid.";
+  }
+}
 
 export type PairingSetupPayload = {
   url: string;
@@ -377,6 +394,10 @@ export async function resolvePairingSetupFromConfig(
 
   if (!urlResult.url) {
     return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
+  }
+  const transportError = validateTransportSecurity(urlResult.url);
+  if (transportError) {
+    return { ok: false, error: transportError };
   }
 
   if (!auth.label) {

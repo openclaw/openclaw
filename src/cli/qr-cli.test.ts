@@ -79,6 +79,7 @@ describe("registerQrCli", () => {
       gateway: {
         bind: "custom",
         customBindHost: "gateway.local",
+        tls: { enabled: true },
         auth: { mode: "token", token: "tok" },
       },
     });
@@ -86,7 +87,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only"]);
 
     const expected = encodePairingSetupCode({
-      url: "ws://gateway.local:18789",
+      url: "wss://gateway.local:18789",
       token: "tok",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
@@ -98,6 +99,7 @@ describe("registerQrCli", () => {
       gateway: {
         bind: "custom",
         customBindHost: "gateway.local",
+        tls: { enabled: true },
         auth: { mode: "token", token: "tok" },
       },
     });
@@ -117,16 +119,31 @@ describe("registerQrCli", () => {
       gateway: {
         bind: "custom",
         customBindHost: "gateway.local",
+        tls: { enabled: true },
       },
     });
 
     await runQr(["--setup-code-only", "--token", "override-token"]);
 
     const expected = encodePairingSetupCode({
-      url: "ws://gateway.local:18789",
+      url: "wss://gateway.local:18789",
       token: "override-token",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
+  });
+
+  it("exits when custom host uses insecure ws transport", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.local",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only"]);
+    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(output).toContain("insecure ws://");
   });
 
   it("exits with error when gateway config is not pairable", async () => {
