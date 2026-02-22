@@ -575,7 +575,18 @@ function mapContainerPathToWorkspaceRoot(params: {
     try {
       candidate = fileURLToPath(candidate);
     } catch {
-      return params.filePath;
+      try {
+        const parsed = new URL(candidate);
+        if (parsed.protocol !== "file:") {
+          return params.filePath;
+        }
+        candidate = decodeURIComponent(parsed.pathname || "");
+        if (!candidate.startsWith("/")) {
+          return params.filePath;
+        }
+      } catch {
+        return params.filePath;
+      }
     }
   }
 
