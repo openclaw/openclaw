@@ -1,12 +1,13 @@
-## OpenClaw Vision
+# OpenClaw Vision
 
 OpenClaw is the AI that actually does things.
 It runs on your devices, in your channels, with your rules.
 
 This document explains the current state and direction of the project.
 We are still early, so iteration is fast.
-Project overview and developer docs: [`README.md`](README.md)
-Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+
+- Project overview and developer docs: [`README.md`](README.md)
+- Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 OpenClaw started as a personal playground to learn AI and build something genuinely useful:
 an assistant that can run real tasks on a real computer.
