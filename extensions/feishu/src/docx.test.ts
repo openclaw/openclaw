@@ -24,6 +24,7 @@ describe("feishu_doc image fetch hardening", () => {
   const blockListMock = vi.hoisted(() => vi.fn());
   const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
   const driveUploadAllMock = vi.hoisted(() => vi.fn());
+  const permissionPublicPatchMock = vi.hoisted(() => vi.fn());
   const blockPatchMock = vi.hoisted(() => vi.fn());
   const scopeListMock = vi.hoisted(() => vi.fn());
 
@@ -44,6 +45,9 @@ describe("feishu_doc image fetch hardening", () => {
         },
       },
       drive: {
+        permissionPublic: {
+          patch: permissionPublicPatchMock,
+        },
         media: {
           uploadAll: driveUploadAllMock,
         },
@@ -78,6 +82,15 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     driveUploadAllMock.mockResolvedValue({ file_token: "token_1" });
+    permissionPublicPatchMock.mockResolvedValue({
+      code: 0,
+      data: {
+        permission_public: {
+          external_access: true,
+          link_share_entity: "anyone_readable",
+        },
+      },
+    });
     blockPatchMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
@@ -119,5 +132,46 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.images_processed).toBe(0);
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("sets document public permission with explicit access mode", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "set_public_permission",
+      doc_token: "doc_1",
+      access: "edit",
+    });
+
+    expect(permissionPublicPatchMock).toHaveBeenCalledTimes(1);
+    expect(permissionPublicPatchMock.mock.calls[0]?.[0]).toMatchObject({
+      path: { token: "doc_1" },
+      params: { type: "docx" },
+      data: {
+        external_access: true,
+        share_entity: "anyone",
+        security_entity: "anyone_can_edit",
+        link_share_entity: "anyone_editable",
+      },
+    });
+    expect(result.details.success).toBe(true);
+    expect(result.details.access).toBe("edit");
   });
 });
