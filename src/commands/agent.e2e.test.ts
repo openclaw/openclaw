@@ -5,10 +5,12 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import "../cron/isolated-agent.mocks.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import * as cliRunnerModule from "../agents/cli-runner.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
+import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -25,6 +27,7 @@ const runtime: RuntimeEnv = {
 };
 
 const configSpy = vi.spyOn(configModule, "loadConfig");
+const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -64,6 +67,13 @@ function writeSessionStoreSeed(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runCliAgentSpy.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  } as never);
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
     payloads: [{ text: "ok" }],
     meta: {
@@ -128,6 +138,28 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("resolves resumed session transcript path from custom session store directory", async () => {
+    await withTempHome(async (home) => {
+      const customStoreDir = path.join(home, "custom-state");
+      const store = path.join(customStoreDir, "sessions.json");
+      writeSessionStoreSeed(store, {});
+      mockConfig(home, store);
+      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
+
+      await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
+
+      const matchingCall = resolveSessionFilePathSpy.mock.calls.find(
+        (call) => call[0] === "session-custom-123",
+      );
+      expect(matchingCall?.[2]).toEqual(
+        expect.objectContaining({
+          agentId: "main",
+          sessionsDir: customStoreDir,
+        }),
+      );
     });
   });
 
