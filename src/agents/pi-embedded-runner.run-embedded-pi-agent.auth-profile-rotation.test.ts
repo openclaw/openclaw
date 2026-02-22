@@ -331,6 +331,25 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     }
   });
 
+  it("rotates on timeout without cooling down the timed-out profile", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockFailedThenSuccessfulAttempt("request ended without sending any chunks");
+
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:timeout-no-cooldown",
+        runId: "run:timeout-no-cooldown",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const usageStats = await readUsageStats(agentDir);
+      expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    });
+  });
+
   it("does not rotate for compaction timeouts", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
