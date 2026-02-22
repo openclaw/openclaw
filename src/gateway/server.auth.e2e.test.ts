@@ -696,6 +696,8 @@ describe("gateway server auth/connect", () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         token,
+        scopes: [],
+        device: null,
         client: {
           ...BROWSER_MODE_TEST_CLIENT,
         },
@@ -710,6 +712,8 @@ describe("gateway server auth/connect", () => {
       const ws = await openWs(port, { origin: "null" });
       const res = await connectReq(ws, {
         token,
+        scopes: [],
+        device: null,
         client: {
           ...BROWSER_MODE_TEST_CLIENT,
         },
@@ -724,6 +728,8 @@ describe("gateway server auth/connect", () => {
       const ws = await openWs(port, { origin: "https://attacker.example.com" });
       const res = await connectReq(ws, {
         token,
+        scopes: [],
+        device: null,
         client: {
           ...BROWSER_MODE_TEST_CLIENT,
         },
@@ -738,6 +744,8 @@ describe("gateway server auth/connect", () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       const res = await connectReq(ws, {
         token,
+        scopes: [],
+        device: null,
         client: {
           ...BROWSER_MODE_TEST_CLIENT,
         },
