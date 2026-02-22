@@ -32,6 +32,7 @@ const modelSelectionMock = vi.hoisted(() => ({
     allowedModelCatalog: [],
     resetModelOverride: false,
     resolveDefaultThinkingLevel: async () => "off",
+    resolveDefaultReasoningLevel: async (): Promise<"on" | "off"> => "off",
     needsModelCatalog: false,
   })),
   resolveContextTokens: vi.fn(() => 2048),
