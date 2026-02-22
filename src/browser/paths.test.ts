@@ -167,6 +167,32 @@ describe("resolvePathWithinRoot", () => {
   });
 });
 
+describe("resolvePathWithinRoot — symlink root", () => {
+  it.runIf(process.platform !== "win32")(
+    "accepts absolute path when root is behind a symlink",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const symlinkDir = path.join(baseDir, "link-uploads");
+        await fs.symlink(uploadsDir, symlinkDir);
+        const filePath = path.join(uploadsDir, "ok.txt");
+        await fs.writeFile(filePath, "ok", "utf8");
+
+        // Pass the realpath-resolved file but use symlinked root (or vice-versa).
+        const realFile = await fs.realpath(filePath);
+        const result = resolvePathWithinRoot({
+          rootDir: symlinkDir,
+          requestedPath: realFile,
+          scopeLabel: "uploads directory",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.path).toContain("ok.txt");
+        }
+      });
+    },
+  );
+});
+
 describe("resolvePathsWithinRoot", () => {
   it("resolves all valid in-root paths", () => {
     const result = resolvePathsWithinRoot({
