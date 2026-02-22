@@ -26,6 +26,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { type StoredMessage, readInboundMessages } from "./inbound-message-store.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -1178,4 +1179,45 @@ export async function createForumTopicTelegram(
     name: result.name ?? trimmedName,
     chatId: normalizedChatId,
   };
+}
+
+type TelegramReadOpts = {
+  token?: string;
+  accountId?: string;
+};
+
+type TelegramMessageQuery = {
+  limit?: number;
+  before?: number;
+  after?: number;
+};
+
+/**
+ * Read recent messages from a Telegram chat.
+ *
+ * Reads from the in-memory inbound message store, which records messages
+ * as they flow through the bot handler pipeline. This avoids calling
+ * getUpdates (which conflicts with the running long-poll loop and doesn't
+ * support per-chat history retrieval).
+ *
+ * **Limitations:**
+ * - Only messages received while the process is running are available.
+ * - Messages older than 24 hours are evicted.
+ * - Maximum ~200 messages retained per chat.
+ *
+ * @param chatId - Telegram chat ID (numeric or string)
+ * @param query - Query parameters (limit, before, after — by message_id)
+ * @param _opts - Options (unused — no API call needed, kept for interface consistency)
+ * @returns Array of stored messages, newest first
+ */
+export function readMessagesTelegram(
+  chatId: string | number,
+  query: TelegramMessageQuery = {},
+  _opts: TelegramReadOpts = {},
+): StoredMessage[] {
+  return readInboundMessages(chatId, {
+    limit: query.limit,
+    before: query.before,
+    after: query.after,
+  });
 }

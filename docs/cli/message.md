@@ -84,10 +84,12 @@ Name lookup:
   - Optional: `--limit`
 
 - `read`
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Telegram
   - Required: `--target`
   - Optional: `--limit`, `--before`, `--after`
-  - Discord only: `--around`
+  - Discord only: `--around`, `--offset`
+  - Telegram: `--target` must be a numeric chat ID; reads from the inbound message store (messages received while the bot is running, up to 24h / ~200 per chat); `--before` and `--after` filter by message_id
+  - Requires `actions.messages: true` in Telegram config
 
 - `edit`
   - Channels: Discord/Slack

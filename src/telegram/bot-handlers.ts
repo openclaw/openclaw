@@ -49,6 +49,7 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
+import { recordInboundMessage } from "./inbound-message-store.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   buildModelsKeyboard,
@@ -1087,6 +1088,11 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
+
+      // Record for inbound message store (enables chat history reads).
+      // Placed before access checks so the store reflects what the bot received,
+      // not what it acted on. The store is in-memory with TTL — no disk persistence.
+      recordInboundMessage(event.msg);
 
       const groupAllowContext = await resolveTelegramGroupAllowFromContext({
         chatId: event.chatId,

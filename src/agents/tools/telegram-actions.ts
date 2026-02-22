@@ -12,6 +12,7 @@ import {
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
+  readMessagesTelegram,
   sendMessageTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
@@ -367,6 +368,30 @@ export async function handleTelegramAction(
       topicId: result.topicId,
       name: result.name,
       chatId: result.chatId,
+    });
+  }
+
+  if (action === "read" || action === "readMessages") {
+    if (!isActionEnabled("messages")) {
+      throw new Error("Telegram message reads are disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const limit = readNumberParam(params, "limit", { integer: true });
+    const before = readNumberParam(params, "before", { integer: true });
+    const after = readNumberParam(params, "after", { integer: true });
+    const messages = readMessagesTelegram(chatId ?? "", {
+      limit: limit ?? undefined,
+      before: before ?? undefined,
+      after: after ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      count: messages.length,
+      messages,
+      source: "inbound-store",
+      note: "Only messages received while the bot is running (up to 24h, ~200 per chat).",
     });
   }
 

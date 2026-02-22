@@ -20,6 +20,8 @@ export type TelegramActionConfig = {
   sticker?: boolean;
   /** Enable forum topic creation. */
   createForumTopic?: boolean;
+  /** Enable reading messages from inbound message store. */
+  messages?: boolean;
 };
 
 export type TelegramNetworkConfig = {
