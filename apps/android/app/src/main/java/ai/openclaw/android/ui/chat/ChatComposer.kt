@@ -148,9 +148,8 @@ fun ChatComposer(
         maxLines = 6,
       )
 
-      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ConnectionPill(sessionLabel = currentSessionLabel, healthOk = healthOk)
-        Spacer(modifier = Modifier.weight(1f))
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        ConnectionPill(sessionLabel = currentSessionLabel, healthOk = healthOk, modifier = Modifier.weight(1f, fill = false))
 
         if (pendingRunCount > 0) {
           FilledTonalIconButton(
@@ -187,8 +186,9 @@ fun ChatComposer(
 }
 
 @Composable
-private fun ConnectionPill(sessionLabel: String, healthOk: Boolean) {
+private fun ConnectionPill(sessionLabel: String, healthOk: Boolean, modifier: Modifier = Modifier) {
   Surface(
+    modifier = modifier,
     shape = RoundedCornerShape(999.dp),
     color = MaterialTheme.colorScheme.surfaceContainerHighest,
   ) {
@@ -202,7 +202,7 @@ private fun ConnectionPill(sessionLabel: String, healthOk: Boolean) {
         shape = androidx.compose.foundation.shape.CircleShape,
         color = if (healthOk) Color(0xFF2ECC71) else Color(0xFFF39C12),
       ) {}
-      Text(sessionLabel, style = MaterialTheme.typography.labelSmall)
+      Text(sessionLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
       Text(
         if (healthOk) "Connected" else "Connecting…",
         style = MaterialTheme.typography.labelSmall,
