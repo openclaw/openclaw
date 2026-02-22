@@ -5,13 +5,17 @@ export type RuntimeGroupPolicyResolution = {
   providerMissingFallbackApplied: boolean;
 };
 
-export function resolveRuntimeGroupPolicy(params: {
+export type RuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
   configuredFallbackPolicy?: GroupPolicy;
   missingProviderFallbackPolicy?: GroupPolicy;
-}): RuntimeGroupPolicyResolution {
+};
+
+export function resolveRuntimeGroupPolicy(
+  params: RuntimeGroupPolicyParams,
+): RuntimeGroupPolicyResolution {
   const configuredFallbackPolicy = params.configuredFallbackPolicy ?? "open";
   const missingProviderFallbackPolicy = params.missingProviderFallbackPolicy ?? "allowlist";
   const groupPolicy = params.providerConfigPresent
@@ -20,4 +24,68 @@ export function resolveRuntimeGroupPolicy(params: {
   const providerMissingFallbackApplied =
     !params.providerConfigPresent && params.groupPolicy === undefined;
   return { groupPolicy, providerMissingFallbackApplied };
+}
+
+export type ResolveProviderRuntimeGroupPolicyParams = {
+  providerConfigPresent: boolean;
+  groupPolicy?: GroupPolicy;
+  defaultGroupPolicy?: GroupPolicy;
+};
+
+/**
+ * Standard provider runtime policy:
+ * - configured provider fallback: open
+ * - missing provider fallback: allowlist (fail-closed)
+ */
+export function resolveOpenProviderRuntimeGroupPolicy(
+  params: ResolveProviderRuntimeGroupPolicyParams,
+): RuntimeGroupPolicyResolution {
+  return resolveRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.groupPolicy,
+    defaultGroupPolicy: params.defaultGroupPolicy,
+    configuredFallbackPolicy: "open",
+    missingProviderFallbackPolicy: "allowlist",
+  });
+}
+
+/**
+ * Strict provider runtime policy:
+ * - configured provider fallback: allowlist
+ * - missing provider fallback: allowlist (fail-closed)
+ */
+export function resolveAllowlistProviderRuntimeGroupPolicy(
+  params: ResolveProviderRuntimeGroupPolicyParams,
+): RuntimeGroupPolicyResolution {
+  return resolveRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.groupPolicy,
+    defaultGroupPolicy: params.defaultGroupPolicy,
+    configuredFallbackPolicy: "allowlist",
+    missingProviderFallbackPolicy: "allowlist",
+  });
+}
+
+const warnedMissingProviderGroupPolicy = new Set<string>();
+
+export function warnMissingProviderGroupPolicyFallbackOnce(params: {
+  providerMissingFallbackApplied: boolean;
+  providerKey: string;
+  accountId?: string;
+  blockedLabel?: string;
+  log: (message: string) => void;
+}): boolean {
+  if (!params.providerMissingFallbackApplied) {
+    return false;
+  }
+  const key = `${params.providerKey}:${params.accountId ?? "*"}`;
+  if (warnedMissingProviderGroupPolicy.has(key)) {
+    return false;
+  }
+  warnedMissingProviderGroupPolicy.add(key);
+  const blockedLabel = params.blockedLabel?.trim() || "group messages";
+  params.log(
+    `${params.providerKey}: channels.${params.providerKey} is missing; defaulting groupPolicy to "allowlist" (${blockedLabel} blocked until explicitly configured).`,
+  );
+  return true;
 }

@@ -5,10 +5,11 @@ import {
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
-  resolveRuntimeGroupPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
+  warnMissingProviderGroupPolicyFallbackOnce,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk";
@@ -68,7 +69,6 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
 }
 
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
-const warnedMissingProviderGroupPolicy = new Set<string>();
 function warnDeprecatedUsersEmailEntries(
   core: GoogleChatCoreRuntime,
   runtime: GoogleChatRuntimeEnv,
@@ -429,21 +429,19 @@ async function processMessageWithPipeline(params: {
   }
 
   const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
-    providerConfigPresent: config.channels?.googlechat !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy,
-    configuredFallbackPolicy: "allowlist",
-    missingProviderFallbackPolicy: "allowlist",
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.googlechat !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "googlechat",
+    accountId: account.accountId,
+    blockedLabel: "space messages",
+    log: (message) => logVerbose(core, runtime, message),
   });
-  if (providerMissingFallbackApplied && !warnedMissingProviderGroupPolicy.has(account.accountId)) {
-    warnedMissingProviderGroupPolicy.add(account.accountId);
-    logVerbose(
-      core,
-      runtime,
-      'googlechat: channels.googlechat is missing; defaulting groupPolicy to "allowlist" (space messages blocked until explicitly configured).',
-    );
-  }
   const groupConfigResolved = resolveGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,

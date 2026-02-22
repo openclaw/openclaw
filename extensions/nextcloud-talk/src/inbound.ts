@@ -2,7 +2,8 @@ import {
   createReplyPrefixOptions,
   logInboundDrop,
   resolveControlCommandGate,
-  resolveRuntimeGroupPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
@@ -21,7 +22,6 @@ import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
-const warnedMissingProviderGroupPolicy = new Set<string>();
 
 async function deliverNextcloudTalkReply(params: {
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
@@ -91,21 +91,21 @@ export async function handleNextcloudTalkInbound(params: {
       | { groupPolicy?: string }
       | undefined
   )?.groupPolicy as GroupPolicy | undefined;
-  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
-    providerConfigPresent:
-      ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
-        undefined) !== undefined,
-    groupPolicy: account.config.groupPolicy as GroupPolicy | undefined,
-    defaultGroupPolicy,
-    configuredFallbackPolicy: "allowlist",
-    missingProviderFallbackPolicy: "allowlist",
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent:
+        ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
+          undefined) !== undefined,
+      groupPolicy: account.config.groupPolicy as GroupPolicy | undefined,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "nextcloud-talk",
+    accountId: account.accountId,
+    blockedLabel: "room messages",
+    log: (message) => runtime.log?.(message),
   });
-  if (providerMissingFallbackApplied && !warnedMissingProviderGroupPolicy.has(account.accountId)) {
-    warnedMissingProviderGroupPolicy.add(account.accountId);
-    runtime.log?.(
-      'nextcloud-talk: channels.nextcloud-talk is missing; defaulting groupPolicy to "allowlist" (room messages blocked until explicitly configured).',
-    );
-  }
 
   const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
