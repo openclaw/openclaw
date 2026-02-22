@@ -4,6 +4,7 @@ import {
   isWindowsPlatform,
   matchAllowlist,
   resolveAllowlistCandidatePath,
+  resolveCommandResolutionFromArgv,
   splitCommandChain,
   type ExecCommandAnalysis,
   type CommandResolution,
@@ -16,6 +17,11 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+import {
+  DISPATCH_WRAPPER_EXECUTABLES,
+  basenameLower,
+  unwrapKnownDispatchWrapperInvocation,
+} from "./exec-wrapper-resolution.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -255,6 +261,27 @@ function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
   return false;
 }
 
+function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
+  const candidates = [
+    normalizeExecutableName(segment.resolution?.executableName),
+    normalizeExecutableName(segment.resolution?.rawExecutable),
+    normalizeExecutableName(segment.argv[0]),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (DISPATCH_WRAPPER_EXECUTABLES.has(candidate)) {
+      return true;
+    }
+    const base = basenameLower(candidate);
+    if (DISPATCH_WRAPPER_EXECUTABLES.has(base)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function extractShellInlineCommand(argv: string[]): string | null {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i];
@@ -296,15 +323,36 @@ function collectAllowAlwaysPatterns(params: {
   depth: number;
   out: Set<string>;
 }) {
+  if (params.depth >= 3) {
+    return;
+  }
+
+  if (isDispatchWrapperSegment(params.segment)) {
+    const unwrappedArgv = unwrapKnownDispatchWrapperInvocation(params.segment.argv);
+    if (!unwrappedArgv || unwrappedArgv.length === 0) {
+      return;
+    }
+    collectAllowAlwaysPatterns({
+      segment: {
+        raw: unwrappedArgv.join(" "),
+        argv: unwrappedArgv,
+        resolution: resolveCommandResolutionFromArgv(unwrappedArgv, params.cwd, params.env),
+      },
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      depth: params.depth + 1,
+      out: params.out,
+    });
+    return;
+  }
+
   const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
   if (!candidatePath) {
     return;
   }
   if (!isShellWrapperSegment(params.segment)) {
     params.out.add(candidatePath);
-    return;
-  }
-  if (params.depth >= 3) {
     return;
   }
   const inlineCommand = extractShellInlineCommand(params.segment.argv);

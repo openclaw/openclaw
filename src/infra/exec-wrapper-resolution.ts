@@ -5,6 +5,30 @@ export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 export const POSIX_SHELL_WRAPPERS = new Set(["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"]);
 export const WINDOWS_CMD_WRAPPERS = new Set(["cmd.exe", "cmd"]);
 export const POWERSHELL_WRAPPERS = new Set(["powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
+export const DISPATCH_WRAPPER_EXECUTABLES = new Set([
+  "chrt",
+  "chrt.exe",
+  "doas",
+  "doas.exe",
+  "env",
+  "env.exe",
+  "ionice",
+  "ionice.exe",
+  "nice",
+  "nice.exe",
+  "nohup",
+  "nohup.exe",
+  "setsid",
+  "setsid.exe",
+  "stdbuf",
+  "stdbuf.exe",
+  "sudo",
+  "sudo.exe",
+  "taskset",
+  "taskset.exe",
+  "timeout",
+  "timeout.exe",
+]);
 
 const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
 const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
@@ -21,6 +45,10 @@ const ENV_OPTIONS_WITH_VALUE = new Set([
   "--block-signal",
 ]);
 const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
+const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
+const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
+const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
+const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -122,20 +150,198 @@ export function unwrapEnvInvocation(argv: string[]): string[] | null {
   return idx < argv.length ? argv.slice(idx) : null;
 }
 
+function unwrapNiceInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  let expectsOptionValue = false;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (/^-\d+$/.test(lower)) {
+        idx += 1;
+        continue;
+      }
+      if (NICE_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!lower.includes("=") && lower === flag) {
+          expectsOptionValue = true;
+        }
+        idx += 1;
+        continue;
+      }
+      if (lower.startsWith("-n") && lower.length > 2) {
+        idx += 1;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  if (expectsOptionValue) {
+    return null;
+  }
+  return idx < argv.length ? argv.slice(idx) : null;
+}
+
+function unwrapNohupInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const lower = token.toLowerCase();
+      if (lower === "--help" || lower === "--version") {
+        idx += 1;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  return idx < argv.length ? argv.slice(idx) : null;
+}
+
+function unwrapStdbufInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  let expectsOptionValue = false;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (STDBUF_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!lower.includes("=")) {
+          expectsOptionValue = true;
+        }
+        idx += 1;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  if (expectsOptionValue) {
+    return null;
+  }
+  return idx < argv.length ? argv.slice(idx) : null;
+}
+
+function unwrapTimeoutInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  let expectsOptionValue = false;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (TIMEOUT_FLAG_OPTIONS.has(flag)) {
+        idx += 1;
+        continue;
+      }
+      if (TIMEOUT_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!lower.includes("=")) {
+          expectsOptionValue = true;
+        }
+        idx += 1;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  if (expectsOptionValue || idx >= argv.length) {
+    return null;
+  }
+  idx += 1; // duration
+  return idx < argv.length ? argv.slice(idx) : null;
+}
+
+export function unwrapKnownDispatchWrapperInvocation(argv: string[]): string[] | null | undefined {
+  const token0 = argv[0]?.trim();
+  if (!token0) {
+    return undefined;
+  }
+  const base = basenameLower(token0);
+  const normalizedBase = base.endsWith(".exe") ? base.slice(0, -4) : base;
+  switch (normalizedBase) {
+    case "env":
+      return unwrapEnvInvocation(argv);
+    case "nice":
+      return unwrapNiceInvocation(argv);
+    case "nohup":
+      return unwrapNohupInvocation(argv);
+    case "stdbuf":
+      return unwrapStdbufInvocation(argv);
+    case "timeout":
+      return unwrapTimeoutInvocation(argv);
+    case "chrt":
+    case "doas":
+    case "ionice":
+    case "setsid":
+    case "sudo":
+    case "taskset":
+      return null;
+    default:
+      return undefined;
+  }
+}
+
 export function unwrapDispatchWrappersForResolution(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
 ): string[] {
   let current = argv;
   for (let depth = 0; depth < maxDepth; depth += 1) {
-    const token0 = current[0]?.trim();
-    if (!token0) {
+    const unwrapped = unwrapKnownDispatchWrapperInvocation(current);
+    if (unwrapped === undefined) {
       break;
     }
-    if (basenameLower(token0) !== "env") {
-      break;
-    }
-    const unwrapped = unwrapEnvInvocation(current);
     if (!unwrapped || unwrapped.length === 0) {
       break;
     }
@@ -213,8 +419,8 @@ function extractShellWrapperCommandInternal(
   }
 
   const base0 = basenameLower(token0);
-  if (base0 === "env") {
-    const unwrapped = unwrapEnvInvocation(argv);
+  if (DISPATCH_WRAPPER_EXECUTABLES.has(base0)) {
+    const unwrapped = unwrapKnownDispatchWrapperInvocation(argv);
     if (!unwrapped) {
       return { isWrapper: false, command: null };
     }
