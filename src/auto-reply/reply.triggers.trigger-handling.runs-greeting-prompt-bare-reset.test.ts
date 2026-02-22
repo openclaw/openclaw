@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
+  makeCfg,
   runGreetingPromptForBareNewOrReset,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
@@ -21,6 +22,16 @@ async function expectResetBlockedForNonOwner(params: {
   getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<void> {
   const { home, commandAuthorized, getReplyFromConfig } = params;
+  const cfg = makeCfg(home);
+  cfg.channels ??= {};
+  cfg.channels.whatsapp = {
+    ...cfg.channels.whatsapp,
+    allowFrom: ["+1999"],
+  };
+  cfg.session = {
+    ...cfg.session,
+    store: join(tmpdir(), `openclaw-session-test-${Date.now()}.json`),
+  };
   const res = await getReplyFromConfig(
     {
       Body: "/reset",
@@ -29,22 +40,7 @@ async function expectResetBlockedForNonOwner(params: {
       CommandAuthorized: commandAuthorized,
     },
     {},
-    {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
-          workspace: join(home, "openclaw"),
-        },
-      },
-      channels: {
-        whatsapp: {
-          allowFrom: ["+1999"],
-        },
-      },
-      session: {
-        store: join(tmpdir(), `openclaw-session-test-${Date.now()}.json`),
-      },
-    },
+    cfg,
   );
   expect(res).toBeUndefined();
   expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
