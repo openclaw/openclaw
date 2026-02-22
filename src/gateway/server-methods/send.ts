@@ -4,6 +4,7 @@ import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -199,15 +200,18 @@ export const sendHandlers: GatewayRequestHandlers = {
             route: derivedRoute,
           });
         }
+        const sendAgentId = providedSessionKey
+          ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          : derivedAgentId;
+        const identity = resolveAgentOutboundIdentity(cfg, sendAgentId);
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
           to: resolved.to,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
-          agentId: providedSessionKey
-            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
-            : derivedAgentId,
+          agentId: sendAgentId,
+          identity,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,

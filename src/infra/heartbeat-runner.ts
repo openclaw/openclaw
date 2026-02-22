@@ -59,6 +59,7 @@ import {
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
@@ -696,6 +697,7 @@ export async function runHeartbeatOnce(opts: {
         return false;
       }
     }
+    const identity = resolveAgentOutboundIdentity(cfg, agentId);
     await deliverOutboundPayloads({
       cfg,
       channel: delivery.channel,
@@ -704,6 +706,7 @@ export async function runHeartbeatOnce(opts: {
       threadId: delivery.threadId,
       payloads: [{ text: heartbeatOkText }],
       agentId,
+      identity,
       deps: opts.deps,
     });
     return true;
@@ -891,12 +894,14 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
+    const heartbeatIdentity = resolveAgentOutboundIdentity(cfg, agentId);
     await deliverOutboundPayloads({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
       accountId: deliveryAccountId,
       agentId,
+      identity: heartbeatIdentity,
       threadId: delivery.threadId,
       payloads: [
         ...reasoningPayloads,
