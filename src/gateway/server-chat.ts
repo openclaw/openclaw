@@ -3,6 +3,7 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import { defaultRuntime } from "../runtime.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -447,47 +448,64 @@ export function createAgentEventHandler({
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
+    // Always populate the chat buffer for assistant text so emitChatFinal
+    // has content even if sessionKey was temporarily unresolved during deltas.
+    if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+      if (!isSilentReplyText(evt.data.text, SILENT_REPLY_TOKEN)) {
+        chatRunState.buffers.set(clientRunId, evt.data.text);
+      }
+      if (sessionKey) {
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
+      }
+    }
     if (sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
-      } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
-        if (chatLink) {
-          const finished = chatRunState.registry.shift(evt.runId);
-          if (!finished) {
-            clearAgentRunContext(evt.runId);
-            return;
-          }
-          emitChatFinal(
-            finished.sessionKey,
-            finished.clientRunId,
-            evt.runId,
-            evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
-            evt.data?.error,
-          );
-        } else {
-          emitChatFinal(
-            sessionKey,
-            eventRunId,
-            evt.runId,
-            evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
-            evt.data?.error,
-          );
+    }
+
+    // Handle lifecycle end/error regardless of sessionKey presence
+    if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+      if (chatLink) {
+        const finished = chatRunState.registry.shift(evt.runId);
+        if (!finished) {
+          clearAgentRunContext(evt.runId);
+          return;
         }
-      } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
-        chatRunState.abortedRuns.delete(clientRunId);
-        chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
-        chatRunState.deltaSentAt.delete(clientRunId);
-        if (chatLink) {
-          chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
-        }
+        emitChatFinal(
+          finished.sessionKey,
+          finished.clientRunId,
+          evt.runId,
+          evt.seq,
+          lifecyclePhase === "error" ? "error" : "done",
+          evt.data?.error,
+        );
+      } else if (sessionKey) {
+        emitChatFinal(
+          sessionKey,
+          eventRunId,
+          evt.runId,
+          evt.seq,
+          lifecyclePhase === "error" ? "error" : "done",
+          evt.data?.error,
+        );
+      } else {
+        // sessionKey is undefined - resolveSessionKeyForRun already returned undefined
+        // at the top of this handler (createAgentEventHandler). Log a warning so this failure is visible.
+        defaultRuntime.error(
+          `[gateway] chat:final not delivered: sessionKey unresolved for ` +
+            `lifecycle:${lifecyclePhase} runId=${evt.runId} clientRunId=${clientRunId}`,
+        );
+      }
+    } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+      chatRunState.abortedRuns.delete(clientRunId);
+      chatRunState.abortedRuns.delete(evt.runId);
+      chatRunState.buffers.delete(clientRunId);
+      chatRunState.deltaSentAt.delete(clientRunId);
+      if (chatLink) {
+        chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
       }
     }
 
