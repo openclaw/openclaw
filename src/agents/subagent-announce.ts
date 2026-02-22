@@ -39,6 +39,8 @@ import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
+const FAST_TEST_RETRY_INTERVAL_MS = 10;
+const FAST_TEST_REPLY_CHANGE_WAIT_MS = 30;
 
 type ToolResultMessage = {
   role?: unknown;
@@ -219,7 +221,7 @@ async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
 }): Promise<string | undefined> {
-  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? 25 : 100;
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
   let result: string | undefined;
   while (Date.now() < deadline) {
@@ -241,7 +243,7 @@ async function waitForSubagentOutputChange(params: {
   if (!baseline) {
     return params.baselineReply;
   }
-  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? 25 : 100;
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 5_000));
   let latest = params.baselineReply;
   while (Date.now() < deadline) {
@@ -1042,7 +1044,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (requesterDepth >= 1 && reply?.trim()) {
-      const minReplyChangeWaitMs = FAST_TEST_MODE ? 70 : 250;
+      const minReplyChangeWaitMs = FAST_TEST_MODE ? FAST_TEST_REPLY_CHANGE_WAIT_MS : 250;
       reply = await waitForSubagentOutputChange({
         sessionKey: params.childSessionKey,
         baselineReply: reply,
