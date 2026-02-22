@@ -67,8 +67,6 @@ async function expectSpawnUsesConfiguredModel(params: {
   callId: string;
   expectedModel: string;
 }) {
-  resetSubagentRegistryForTests();
-  callGatewayMock.mockReset();
   if (params.config) {
     setSessionsSpawnConfigOverride(params.config);
   } else {
@@ -101,11 +99,11 @@ async function expectSpawnUsesConfiguredModel(params: {
 describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
   });
 
   it("sessions_spawn applies a model to the child session", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({ calls, acceptedAtBase: 3000 });
 
@@ -141,8 +139,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn forwards thinking overrides to the agent run", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -174,8 +170,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn rejects invalid thinking levels", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: Array<{ method?: string }> = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -252,8 +246,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn fails when model patch is rejected", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const calls: GatewayCall[] = [];
     mockLongRunningSpawnFlow({
       calls,
@@ -285,8 +277,6 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   });
 
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     let spawnedTimeout: number | undefined;
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
