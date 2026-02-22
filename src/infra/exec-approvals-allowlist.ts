@@ -11,7 +11,6 @@ import {
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
-  SAFE_BIN_GENERIC_PROFILE,
   SAFE_BIN_PROFILES,
   type SafeBinProfile,
   validateSafeBinArgv,
@@ -41,7 +40,6 @@ export function isSafeBinUsage(params: {
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
-  safeBinGenericProfile?: SafeBinProfile;
   isTrustedSafeBinPathFn?: typeof isTrustedSafeBinPath;
 }): boolean {
   // Windows host exec uses PowerShell, which has different parsing/expansion rules.
@@ -75,8 +73,10 @@ export function isSafeBinUsage(params: {
   }
   const argv = params.argv.slice(1);
   const safeBinProfiles = params.safeBinProfiles ?? SAFE_BIN_PROFILES;
-  const genericSafeBinProfile = params.safeBinGenericProfile ?? SAFE_BIN_GENERIC_PROFILE;
-  const profile = safeBinProfiles[execName] ?? genericSafeBinProfile;
+  const profile = safeBinProfiles[execName];
+  if (!profile) {
+    return false;
+  }
   return validateSafeBinArgv(argv, profile);
 }
 
@@ -93,6 +93,7 @@ function evaluateSegments(
   params: {
     allowlist: ExecAllowlistEntry[];
     safeBins: Set<string>;
+    safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
     cwd?: string;
     platform?: string | null;
     trustedSafeBinDirs?: ReadonlySet<string>;
@@ -122,6 +123,7 @@ function evaluateSegments(
       argv: segment.argv,
       resolution: segment.resolution,
       safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
     });
@@ -147,6 +149,7 @@ export function evaluateExecAllowlist(params: {
   analysis: ExecCommandAnalysis;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
@@ -165,6 +168,7 @@ export function evaluateExecAllowlist(params: {
       const result = evaluateSegments(chainSegments, {
         allowlist: params.allowlist,
         safeBins: params.safeBins,
+        safeBinProfiles: params.safeBinProfiles,
         cwd: params.cwd,
         platform: params.platform,
         trustedSafeBinDirs: params.trustedSafeBinDirs,
@@ -184,6 +188,7 @@ export function evaluateExecAllowlist(params: {
   const result = evaluateSegments(params.analysis.segments, {
     allowlist: params.allowlist,
     safeBins: params.safeBins,
+    safeBinProfiles: params.safeBinProfiles,
     cwd: params.cwd,
     platform: params.platform,
     trustedSafeBinDirs: params.trustedSafeBinDirs,
@@ -354,6 +359,7 @@ export function evaluateShellAllowlist(params: {
   command: string;
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   trustedSafeBinDirs?: ReadonlySet<string>;
@@ -384,6 +390,7 @@ export function evaluateShellAllowlist(params: {
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
       cwd: params.cwd,
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
@@ -419,6 +426,7 @@ export function evaluateShellAllowlist(params: {
       analysis,
       allowlist: params.allowlist,
       safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
       cwd: params.cwd,
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
