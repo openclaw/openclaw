@@ -1,8 +1,5 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listRuntimeSourceFiles, shouldSkipRuntimeSourcePath } from "../test-utils/repo-scan.js";
 
 const SCAN_ROOTS = ["src", "extensions"] as const;
 const RUNTIME_TS_GLOBS = [
@@ -17,6 +14,21 @@ const RUNTIME_TS_GLOBS = [
   "!**/*test-helpers*.ts",
   "!**/*test-utils*.ts",
 ] as const;
+
+const SKIP_RUNTIME_SOURCE_PATH_PATTERNS = [
+  /\.test\.tsx?$/,
+  /\.test-helpers\.tsx?$/,
+  /\.test-utils\.tsx?$/,
+  /\.e2e\.tsx?$/,
+  /\.d\.ts$/,
+  /[\\/](?:__tests__|tests)[\\/]/,
+  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
+];
+
+function shouldSkipRuntimeSourcePath(relativePath: string): boolean {
+  return SKIP_RUNTIME_SOURCE_PATH_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
 
 async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]> {
   const rgResult = spawnSync(
@@ -56,6 +68,12 @@ async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]>
     return matches;
   }
 
+  const [{ default: fs }, pathModule, { listRuntimeSourceFiles }] = await Promise.all([
+    import("node:fs/promises"),
+    import("node:path"),
+    import("../test-utils/repo-scan.js"),
+  ]);
+
   const matches: string[] = [];
   const files = await listRuntimeSourceFiles(repoRoot, {
     roots: SCAN_ROOTS,
@@ -68,7 +86,7 @@ async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]>
       if (!line.includes("Date.now") || !line.includes("Math.random")) {
         continue;
       }
-      matches.push(`${path.relative(repoRoot, filePath)}:${idx + 1}`);
+      matches.push(`${pathModule.relative(repoRoot, filePath)}:${idx + 1}`);
     }
   }
   return matches;
@@ -76,7 +94,7 @@ async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]>
 
 describe("weak random pattern guardrail", () => {
   it("rejects Date.now + Math.random token/id patterns in runtime code", async () => {
-    const repoRoot = path.resolve(process.cwd());
+    const repoRoot = process.cwd();
     const matches = await findWeakRandomPatternMatches(repoRoot);
     expect(matches).toEqual([]);
   });
