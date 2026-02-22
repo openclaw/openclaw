@@ -1,4 +1,4 @@
-export type ThemeMode = "dark" | "light" | "openknot" | "fieldmanual" | "openai" | "clawdash";
+export type ThemeMode = "dark" | "light" | "openknot" | "fieldmanual" | "clawdash";
 export type ResolvedTheme = ThemeMode;
 
 export const VALID_THEMES = new Set<ThemeMode>([
@@ -6,7 +6,6 @@ export const VALID_THEMES = new Set<ThemeMode>([
   "light",
   "openknot",
   "fieldmanual",
-  "openai",
   "clawdash",
 ]);
 
