@@ -1108,8 +1108,7 @@ export async function runSubagentAnnounceFlow(params: {
     let triggerMessage = "";
 
     requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-    let requesterIsSubagent =
-      forceParentAnnounce || (!expectsCompletionMessage && requesterDepth >= 1);
+    let requesterIsSubagent = forceParentAnnounce || requesterDepth >= 1;
     // If the requester subagent has already finished, bubble the announce to its
     // requester (typically main) so descendant completion is not silently lost.
     // BUT: only fallback if the parent SESSION is deleted, not just if the current

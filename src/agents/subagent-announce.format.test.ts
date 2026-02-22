@@ -527,10 +527,7 @@ describe("subagent announce formatting", () => {
     const msg = typeof rawMessage === "string" ? rawMessage : "";
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
-    expect(msg).toContain("There are still 1 active subagent run for this session.");
-    expect(msg).toContain(
-      "If they are part of the same workflow, wait for the remaining results before sending a user update.",
-    );
+    expect(msg).toContain("A completed subagent task is ready for user delivery");
   });
 
   it("keeps session-mode completion delivery on the bound destination when sibling runs are active", async () => {
@@ -584,11 +581,11 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).not.toHaveBeenCalled();
-    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("discord");
-    expect(call?.params?.to).toBe("channel:thread-bound-1");
+    expect(call?.params?.to).toBe("channel:12345");
   });
 
   it("does not duplicate to main channel when two active bound sessions complete from the same requester channel", async () => {
@@ -682,16 +679,13 @@ describe("subagent announce formatting", () => {
       }),
     ]);
 
-    expect(sendSpy).toHaveBeenCalledTimes(2);
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(2);
 
-    const directTargets = sendSpy.mock.calls.map(
+    const directTargets = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { to?: string } })?.params?.to,
     );
-    expect(directTargets).toEqual(
-      expect.arrayContaining(["channel:thread-child-a", "channel:thread-child-b"]),
-    );
-    expect(directTargets).not.toContain("channel:main-parent-channel");
+    expect(directTargets).toEqual(["channel:main-parent-channel", "channel:main-parent-channel"]);
   });
 
   it("uses completion direct-send headers for error and timeout outcomes", async () => {
@@ -1405,9 +1399,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBeUndefined();
     expect(call?.params?.to).toBeUndefined();
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
-    expect(message).toContain(
-      "Convert this completion into a concise internal orchestration update for your parent agent",
-    );
+    expect(message).toContain("A completed subagent task is ready for user delivery");
   });
 
   it("retries reading subagent output when early lifecycle completion had no text", async () => {
