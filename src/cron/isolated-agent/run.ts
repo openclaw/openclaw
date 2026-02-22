@@ -75,9 +75,9 @@ import {
 
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
-  delivery: { channel: string; to?: string; accountId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string },
 ): boolean {
-  if (!delivery.to || !target.to) {
+  if (!delivery.channel || !delivery.to || !target.to) {
     return false;
   }
   const channel = delivery.channel.trim().toLowerCase();
@@ -609,6 +609,20 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
+      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+    }
+    if (!resolvedDelivery.channel) {
+      const message = "cron delivery channel is missing";
+      if (!deliveryBestEffort) {
+        return withRunSession({
+          status: "error",
+          error: message,
+          summary,
+          outputText,
+          ...telemetry,
+        });
+      }
+      logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     if (!resolvedDelivery.to) {
