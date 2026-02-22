@@ -13,6 +13,7 @@ import {
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
+import { formatExecCommand } from "../../infra/system-run-command.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -251,7 +252,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
               opts,
               {
                 id: approvalId,
-                command: rawCommand ?? argv.join(" "),
+                command: rawCommand ?? formatExecCommand(argv),
                 cwd: opts.cwd,
                 host: "node",
                 security: hostSecurity,
