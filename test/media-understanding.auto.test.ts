@@ -73,7 +73,7 @@ describe("media understanding auto-detect (e2e)", () => {
     tempPaths = [];
   });
 
-  it("uses sherpa-onnx-offline when available", async () => {
+  it.skipIf(process.platform === "win32")("uses sherpa-onnx-offline when available", async () => {
     await withEnvSnapshot(async () => {
       const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-sherpa-");
       const modelDir = await createTrackedTempDir(tempPaths, "openclaw-sherpa-model-");
@@ -107,7 +107,7 @@ describe("media understanding auto-detect (e2e)", () => {
     });
   });
 
-  it("uses whisper-cli when sherpa is missing", async () => {
+  it.skipIf(process.platform === "win32")("uses whisper-cli when sherpa is missing", async () => {
     await withEnvSnapshot(async () => {
       const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-whispercpp-");
       const modelDir = await createTrackedTempDir(tempPaths, "openclaw-whispercpp-model-");
@@ -146,7 +146,7 @@ describe("media understanding auto-detect (e2e)", () => {
     });
   });
 
-  it("uses gemini CLI for images when available", async () => {
+  it.skipIf(process.platform === "win32")("uses gemini CLI for images when available", async () => {
     await withEnvSnapshot(async () => {
       const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-gemini-");
 
