@@ -36,7 +36,7 @@ export function listSkillCommandsForWorkspace(params: {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     skillFilter: params.skillFilter,
-    eligibility: { remote: getRemoteSkillEligibility() },
+    eligibility: { remote: getRemoteSkillEligibility(params.cfg) },
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -64,7 +64,7 @@ export function listSkillCommandsForAgents(params: {
     visitedDirs.add(canonicalDir);
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: { remote: getRemoteSkillEligibility(params.cfg) },
       reservedNames: used,
     });
     for (const command of commands) {

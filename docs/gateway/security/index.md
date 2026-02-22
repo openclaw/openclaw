@@ -220,7 +220,7 @@ If a macOS node is paired, the Gateway can invoke `system.run` on that node. Thi
 OpenClaw can refresh the skills list mid-session:
 
 - **Skills watcher**: changes to `SKILL.md` can update the skills snapshot on the next agent turn.
-- **Remote nodes**: connecting a macOS node can make macOS-only skills eligible (based on bin probing).
+- **Remote nodes**: when `skills.allowRemoteEligibilityExpansion=true`, connecting a macOS node can make macOS-only skills eligible (based on bin probing).
 
 Treat skill folders as **trusted code** and restrict who can modify them.
 

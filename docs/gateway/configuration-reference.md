@@ -1928,6 +1928,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 {
   skills: {
     allowBundled: ["gemini", "peekaboo"],
+    allowRemoteEligibilityExpansion: false,
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
     },
@@ -1948,6 +1949,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 ```
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
+- `allowRemoteEligibilityExpansion`: opt-in to let remote nodes expand skill eligibility (default: `false`).
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var.
 

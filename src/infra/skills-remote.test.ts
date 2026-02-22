@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
@@ -8,7 +9,11 @@ import {
 } from "./skills-remote.js";
 
 describe("skills-remote", () => {
-  it("removes disconnected nodes from remote skill eligibility", () => {
+  const remoteEligibilityEnabledConfig: OpenClawConfig = {
+    skills: { allowRemoteEligibilityExpansion: true },
+  };
+
+  it("requires explicit config opt-in for remote skill eligibility expansion", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     recordRemoteNodeInfo({
@@ -19,11 +24,14 @@ describe("skills-remote", () => {
     });
     recordRemoteNodeBins(nodeId, [bin]);
 
-    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+    expect(getRemoteSkillEligibility()).toBeUndefined();
+    expect(getRemoteSkillEligibility(remoteEligibilityEnabledConfig)?.hasBin(bin)).toBe(true);
 
     removeRemoteNodeInfo(nodeId);
 
-    expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+    expect(getRemoteSkillEligibility(remoteEligibilityEnabledConfig)?.hasBin(bin) ?? false).toBe(
+      false,
+    );
   });
 
   it("supports idempotent remote node removal", () => {

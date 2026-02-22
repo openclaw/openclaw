@@ -308,7 +308,12 @@ export async function refreshRemoteNodeBins(params: {
   }
 }
 
-export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] | undefined {
+export function getRemoteSkillEligibility(
+  cfg?: OpenClawConfig,
+): SkillEligibilityContext["remote"] | undefined {
+  if (!isRemoteSkillEligibilityExpansionEnabled(cfg)) {
+    return undefined;
+  }
   const macNodes = [...remoteNodes.values()].filter(
     (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
   );
@@ -348,4 +353,8 @@ export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
       cfg,
     });
   }
+}
+
+export function isRemoteSkillEligibilityExpansionEnabled(cfg: OpenClawConfig | undefined): boolean {
+  return cfg?.skills?.allowRemoteEligibilityExpansion === true;
 }

@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("skills entries config schema", () => {
+  it("accepts skills.allowRemoteEligibilityExpansion as a boolean", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        allowRemoteEligibilityExpansion: true,
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects non-boolean skills.allowRemoteEligibilityExpansion", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        allowRemoteEligibilityExpansion: "yes",
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
   it("accepts custom fields under config", () => {
     const res = OpenClawSchema.safeParse({
       skills: {

@@ -38,7 +38,7 @@ export async function resolveCommandsSystemPromptBundle(
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
-        eligibility: { remote: getRemoteSkillEligibility() },
+        eligibility: { remote: getRemoteSkillEligibility(params.cfg) },
         snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
       });
     } catch {

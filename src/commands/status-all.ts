@@ -214,7 +214,7 @@ export async function statusAllCommand(
             try {
               return buildWorkspaceSkillStatus(defaultWorkspace, {
                 config: cfg,
-                eligibility: { remote: getRemoteSkillEligibility() },
+                eligibility: { remote: getRemoteSkillEligibility(cfg) },
               });
             } catch {
               return null;

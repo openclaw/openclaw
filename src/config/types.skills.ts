@@ -38,6 +38,12 @@ export type SkillsLimitsConfig = {
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /**
+   * Allow remote nodes to expand skill eligibility (for example, macOS-only skills
+   * becoming eligible when a paired macOS node advertises required binaries).
+   * Default: false.
+   */
+  allowRemoteEligibilityExpansion?: boolean;
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;

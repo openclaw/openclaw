@@ -125,6 +125,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
+  "skills.allowRemoteEligibilityExpansion": "Allow Remote Skill Eligibility Expansion",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.workspace": "Workspace",

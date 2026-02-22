@@ -151,7 +151,7 @@ export async function ensureSkillSnapshot(params: {
 
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
-  const remoteEligibility = getRemoteSkillEligibility();
+  const remoteEligibility = getRemoteSkillEligibility(cfg);
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
