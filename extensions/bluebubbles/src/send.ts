@@ -379,6 +379,17 @@ export async function sendMessageBlueBubbles(
       "BlueBubbles send failed: reply/effect requires Private API, but it is disabled on the BlueBubbles server.",
     );
   }
+  if (needsPrivateApi && privateApiStatus === null) {
+    const requested = [
+      wantsReplyThread ? "reply threading" : null,
+      wantsEffect ? "message effects" : null,
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    console.warn(
+      `[bluebubbles] Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
+    );
+  }
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
