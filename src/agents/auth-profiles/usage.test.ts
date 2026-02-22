@@ -4,6 +4,7 @@ import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
+  markAuthProfileFailure,
   resolveProfileUnusableUntil,
 } from "./usage.js";
 
@@ -345,5 +346,101 @@ describe("clearAuthProfileCooldown", () => {
     const store = makeStore(undefined);
     await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
     expect(store.usageStats).toBeUndefined();
+  });
+});
+
+describe("markAuthProfileFailure — cooldown is never reset to an earlier deadline", () => {
+  // Regression for https://github.com/openclaw/openclaw/issues/23516
+  // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
+  // each retry was resetting cooldownUntil to now+60m, preventing recovery.
+
+  it("does not shorten an existing cooldown when a retry fires mid-window", async () => {
+    const now = 1_000_000;
+    // Profile already has 50 min remaining on its cooldown
+    const existingCooldownUntil = now + 50 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: existingCooldownUntil,
+        errorCount: 3, // already at saturation (60-min backoff)
+        lastFailureAt: now - 10 * 60 * 1000,
+      },
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const stats = store.usageStats?.["anthropic:default"];
+    // cooldownUntil must NOT have been reset to now+60m (= now+3_600_000 < existingCooldownUntil)
+    // It should remain at the original deadline or be extended, never shortened.
+    expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(existingCooldownUntil);
+  });
+
+  it("does extend cooldownUntil when the new backoff would end later", async () => {
+    const now = 1_000_000;
+    // Profile has only 5 min remaining but the next backoff level gives 60 min
+    const existingCooldownUntil = now + 5 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: existingCooldownUntil,
+        errorCount: 2, // next step: 60-min backoff
+        lastFailureAt: now - 60_000,
+      },
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const stats = store.usageStats?.["anthropic:default"];
+    // now+60min > existingCooldownUntil (now+5min), so it should be extended
+    expect(stats?.cooldownUntil).toBeGreaterThan(existingCooldownUntil);
+  });
+
+  it("does not shorten an existing disabledUntil on a billing retry", async () => {
+    const now = 1_000_000;
+    // Profile already has 20 hours remaining on a billing disable
+    const existingDisabledUntil = now + 20 * 60 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: existingDisabledUntil,
+        disabledReason: "billing",
+        errorCount: 5,
+        failureCounts: { billing: 5 },
+        lastFailureAt: now - 60_000,
+      },
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "billing",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const stats = store.usageStats?.["anthropic:default"];
+    // disabledUntil must not have been shortened
+    expect(stats?.disabledUntil).toBeGreaterThanOrEqual(existingDisabledUntil);
   });
 });
