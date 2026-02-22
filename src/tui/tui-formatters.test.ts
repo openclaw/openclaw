@@ -251,4 +251,25 @@ describe("sanitizeRenderableText", () => {
 
     expect(sanitized).toBe(input);
   });
+
+  it("wraps rtl lines with directional isolation marks", () => {
+    const input = "مرحبا بالعالم";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe("\u2067مرحبا بالعالم\u2069");
+  });
+
+  it("only wraps lines that contain rtl script", () => {
+    const input = "hello\nمرحبا";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe("hello\n\u2067مرحبا\u2069");
+  });
+
+  it("does not double-wrap lines that already include bidi controls", () => {
+    const input = "\u2067مرحبا\u2069";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
 });

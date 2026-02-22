@@ -11,6 +11,10 @@ const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
+const RTL_ISOLATE_START = "\u2067";
+const RTL_ISOLATE_END = "\u2069";
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -91,6 +95,23 @@ function redactBinaryLikeLine(line: string): string {
   return line;
 }
 
+function isolateRtlLine(line: string): string {
+  if (!RTL_SCRIPT_RE.test(line) || BIDI_CONTROL_RE.test(line)) {
+    return line;
+  }
+  return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
+}
+
+function applyRtlIsolation(text: string): string {
+  if (!RTL_SCRIPT_RE.test(text)) {
+    return text;
+  }
+  return text
+    .split("\n")
+    .map((line) => isolateRtlLine(line))
+    .join("\n");
+}
+
 export function sanitizeRenderableText(text: string): string {
   if (!text) {
     return text;
@@ -101,7 +122,7 @@ export function sanitizeRenderableText(text: string): string {
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);
   if (!hasAnsi && !hasReplacementChars && !hasLongTokens && !hasControls) {
-    return text;
+    return applyRtlIsolation(text);
   }
 
   const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
@@ -112,9 +133,10 @@ export function sanitizeRenderableText(text: string): string {
         .map((line) => redactBinaryLikeLine(line))
         .join("\n")
     : withoutControlChars;
-  return LONG_TOKEN_TEST_RE.test(redacted)
+  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
     ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
     : redacted;
+  return applyRtlIsolation(tokenSafe);
 }
 
 export function resolveFinalAssistantText(params: {
