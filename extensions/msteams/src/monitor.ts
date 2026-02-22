@@ -242,6 +242,13 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
+
+  // Health check endpoint (before JWT auth so it's publicly accessible for monitoring)
+  const startedAt = new Date().toISOString();
+  expressApp.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", channel: "msteams", port, startedAt });
+  });
+
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {
@@ -273,17 +280,29 @@ export async function monitorMSTeamsProvider(
     fallback: "/api/messages",
   });
 
-  // Start listening and capture the HTTP server handle
-  const httpServer = expressApp.listen(port, () => {
-    log.info(`msteams provider started on port ${port}`);
-  });
-
-  httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
-  });
+  // Start listening. The returned promise resolves only after the server
+  // is actually bound so the channel manager doesn't interpret a premature
+  // resolve as "provider exited" and trigger an auto-restart loop that
+  // causes EADDRINUSE (see openclaw#22169).
+  const httpServer = await new Promise<ReturnType<typeof expressApp.listen>>(
+    (resolveServer, rejectServer) => {
+      const server = expressApp.listen(port, () => {
+        log.info(`msteams provider started on port ${port}`);
+        resolveServer(server);
+      });
+      server.on("error", (err) => {
+        const code = (err as NodeJS.ErrnoException).code;
+        log.error(`msteams server error: ${err.message}${code ? ` [code=${code}]` : ""}`);
+        if (code === "EADDRINUSE" || code === "EACCES") {
+          rejectServer(err);
+        }
+      });
+    },
+  );
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
+    httpServer.closeAllConnections();
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
@@ -294,10 +313,25 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
+  // Keep the provider running until the abort signal fires.
+  // The channel manager interprets a resolved/rejected promise as "provider exited"
+  // and triggers auto-restart with exponential backoff — which causes EADDRINUSE
+  // because the previous server is still bound to the port (openclaw#22169).
+  //
+  // Webhook-based providers must hold the promise pending until shutdown, matching
+  // the contract used by other webhook providers (e.g. BlueBubbles).
   if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        void shutdown().then(resolve);
+      };
+
+      if (opts.abortSignal!.aborted) {
+        stop();
+        return;
+      }
+
+      opts.abortSignal!.addEventListener("abort", stop, { once: true });
     });
   }
 

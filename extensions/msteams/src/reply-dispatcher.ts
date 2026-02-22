@@ -15,13 +15,34 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import {
+  buildConversationReference,
   type MSTeamsAdapter,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
+
+/**
+ * Drain any pending adaptive cards from the global queue.
+ * Plugins share state via globalThis within the same Node.js process,
+ * allowing any plugin to enqueue cards for delivery through Teams.
+ */
+type PendingCardEntry = {
+  cards: Array<{ contentType: string; content: unknown; name?: string }>;
+  conversationId: string;
+  text?: string;
+  timestamp: number;
+};
+
+function drainPendingAdaptiveCards(): PendingCardEntry[] {
+  const GLOBAL_KEY = "__openclaw_pending_adaptive_cards";
+  const g = globalThis as unknown as Record<string, PendingCardEntry[] | undefined>;
+  const store = g[GLOBAL_KEY];
+  if (!store || store.length === 0) return [];
+  const entries = store.splice(0, store.length);
+  return entries;
+}
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
@@ -32,7 +53,6 @@ export function createMSTeamsReplyDispatcher(params: {
   adapter: MSTeamsAdapter;
   appId: string;
   conversationRef: StoredConversationReference;
-  context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
   textLimit: number;
   onSentMessageIds?: (ids: string[]) => void;
@@ -42,8 +62,11 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
+  const typingRef = buildConversationReference(params.conversationRef);
   const sendTypingIndicator = async () => {
-    await params.context.sendActivity({ type: "typing" });
+    await params.adapter.continueConversation(params.appId, typingRef, async (ctx) => {
+      await ctx.sendActivity({ type: "typing" });
+    });
   };
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
@@ -69,6 +92,40 @@ export function createMSTeamsReplyDispatcher(params: {
       ...prefixOptions,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
       deliver: async (payload) => {
+        // Send any pending adaptive cards as native Teams attachments.
+        // These are enqueued by plugins (e.g. consent prompts, interactive forms).
+        // Use proactive messaging to avoid depending on the short-lived webhook
+        // TurnContext which Bot Framework revokes after the HTTP request completes.
+        const pendingCards = drainPendingAdaptiveCards();
+        if (pendingCards.length > 0) {
+          const cardRef = buildConversationReference(params.conversationRef);
+          for (const entry of pendingCards) {
+            const attachments = entry.cards.map((card) => ({
+              contentType: card.contentType,
+              content: card.content,
+              ...(card.name ? { name: card.name } : {}),
+            }));
+            try {
+              await params.adapter.continueConversation(params.appId, cardRef, async (ctx) => {
+                await ctx.sendActivity({
+                  type: "message",
+                  attachments,
+                  ...(entry.text ? { text: entry.text } : {}),
+                });
+              });
+              params.log.info("sent adaptive card(s)", {
+                count: attachments.length,
+                conversationId: entry.conversationId,
+              });
+            } catch (err) {
+              params.log.error("failed to send adaptive card", {
+                error: formatUnknownError(err),
+                conversationId: entry.conversationId,
+              });
+            }
+          }
+        }
+
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg: params.cfg,
           channel: "msteams",
@@ -89,7 +146,6 @@ export function createMSTeamsReplyDispatcher(params: {
           adapter: params.adapter,
           appId: params.appId,
           conversationRef: params.conversationRef,
-          context: params.context,
           messages,
           // Enable default retry/backoff for throttling/transient failures.
           retry: {},

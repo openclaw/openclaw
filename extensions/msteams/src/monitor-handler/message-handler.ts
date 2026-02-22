@@ -2,10 +2,13 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  logAckFailure,
   logInboundDrop,
   recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
   resolveControlCommandGate,
   resolveMentionGating,
+  shouldAckReaction,
   formatAllowlistMatchMeta,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
@@ -511,7 +514,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       adapter,
       appId,
       conversationRef,
-      context,
       replyStyle,
       textLimit,
       onSentMessageIds: (ids) => {
@@ -523,16 +525,112 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sharePointSiteId,
     });
 
+    // Send typing indicator so the user sees the bot is working while
+    // the LLM generates a response (especially helpful with slower local models).
+    context.sendActivity({ type: "typing" }).catch(() => {
+      // Best effort — typing indicators are non-critical.
+    });
+
+    // Ack reaction: send the configured emoji as a brief status message so the
+    // user knows their message was received (Teams has no native bot reaction API,
+    // so we emulate it with a temporary message that gets deleted on reply start).
+    // Controlled by messages.ackReaction (emoji) and messages.ackReactionScope.
+    const statusEnabled = cfg.messages?.statusReactions?.enabled !== false;
+    let statusActivityId: string | null = null;
+
+    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+    const ackEmoji = resolveAckReaction(cfg, route.agentId, { channel: "msteams" });
+    const showAckReaction =
+      statusEnabled &&
+      Boolean(ackEmoji) &&
+      shouldAckReaction({
+        scope: ackReactionScope,
+        isDirect: isDirectMessage,
+        isGroup: isGroupChat || isChannel,
+        isMentionableGroup: isChannel || isGroupChat,
+        requireMention: Boolean(requireMention),
+        canDetectMention: true,
+        effectiveWasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      });
+
+    if (showAckReaction) {
+      try {
+        const response = (await context.sendActivity(ackEmoji)) as { id?: string } | undefined;
+        if (response?.id) {
+          statusActivityId = response.id;
+        }
+      } catch (err) {
+        logAckFailure({
+          log: (msg) => log.debug?.(msg),
+          channel: "msteams",
+          target: conversationId,
+          error: err,
+        });
+      }
+    }
+    const TOOL_LABELS: Record<string, string> = {
+      email: "Checking email",
+      web_search: "Searching the web",
+      calendar: "Checking calendar",
+      read: "Reading file",
+      write: "Writing file",
+      exec: "Running command",
+      grep: "Searching files",
+      find: "Finding files",
+    };
+    const deleteStatusMessage = async () => {
+      if (statusActivityId && context.deleteActivity) {
+        const id = statusActivityId;
+        statusActivityId = null;
+        try {
+          await context.deleteActivity(id);
+        } catch {
+          // Best effort — status message cleanup is non-critical.
+        }
+      }
+    };
+    const onToolStart = statusEnabled
+      ? async (payload: { name?: string; phase?: string }) => {
+          const toolName = payload.name ?? "tool";
+          const label = TOOL_LABELS[toolName] ?? `Using ${toolName}`;
+          try {
+            // Delete previous status message if any
+            await deleteStatusMessage();
+            const response = (await context.sendActivity(`_${label}..._`)) as
+              | { id?: string }
+              | undefined;
+            if (response?.id) {
+              statusActivityId = response.id;
+            }
+            // Also refresh typing indicator
+            context.sendActivity({ type: "typing" }).catch(() => {});
+          } catch {
+            // Best effort.
+          }
+        }
+      : undefined;
+    const onAssistantMessageStart = statusEnabled
+      ? async () => {
+          // Reply is starting to stream — remove any status message.
+          await deleteStatusMessage();
+        }
+      : undefined;
+
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions,
+        replyOptions: {
+          ...replyOptions,
+          ...(onToolStart ? { onToolStart } : {}),
+          ...(onAssistantMessageStart ? { onAssistantMessageStart } : {}),
+        },
       });
 
       markDispatchIdle();
+      await deleteStatusMessage();
       log.info("dispatch complete", { queuedFinal, counts });
 
       if (!queuedFinal) {
