@@ -10,6 +10,13 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
+  it("buildFtsQuery tokenizes CJK and non-Latin scripts", () => {
+    expect(buildFtsQuery("金银价格")).toBe('"金银价格"');
+    expect(buildFtsQuery("hello 世界")).toBe('"hello" AND "世界"');
+    expect(buildFtsQuery("テスト データ")).toBe('"テスト" AND "データ"');
+    expect(buildFtsQuery("한국어 검색")).toBe('"한국어" AND "검색"');
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);

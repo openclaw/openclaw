@@ -19,6 +19,7 @@ import {
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
+import { SafeContainer } from "./components/safe-container.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -439,7 +440,7 @@ export async function runTui(opts: TuiOptions) {
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(tui, editorTheme);
-  const root = new Container();
+  const root = new SafeContainer();
   root.addChild(header);
   root.addChild(chatLog);
   root.addChild(statusContainer);
