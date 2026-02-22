@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
-import type { APIChannel } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
@@ -25,6 +24,7 @@ import {
   normalizeStickerIds,
   parseAndResolveRecipient,
   resolveChannelId,
+  resolveDiscordChannelType,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
@@ -148,13 +148,7 @@ export async function sendMessageDiscord(
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  let channelType: number | undefined;
-  try {
-    const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | undefined;
-    channelType = channel?.type;
-  } catch {
-    // If we can't fetch the channel, fall through to the normal send path.
-  }
+  const channelType = await resolveDiscordChannelType(rest, channelId);
 
   if (isForumLikeType(channelType)) {
     const threadName = deriveForumThreadName(textWithTables);
