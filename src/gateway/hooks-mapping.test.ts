@@ -240,6 +240,92 @@ describe("hooks mapping", () => {
     const result = await applyNullTransformFromTempConfig({ configDir, transformsDir: "subdir" });
     expectSkippedTransformResult(result);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects transform module symlink escape outside transformsDir",
+    () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-module-"));
+      const transformsRoot = path.join(configDir, "hooks", "transforms");
+      fs.mkdirSync(transformsRoot, { recursive: true });
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-module-"));
+      const outsideModule = path.join(outsideDir, "evil.mjs");
+      fs.writeFileSync(outsideModule, 'export default () => ({ kind: "wake", text: "owned" });');
+      fs.symlinkSync(outsideModule, path.join(transformsRoot, "linked.mjs"));
+      expect(() =>
+        resolveHookMappings(
+          {
+            mappings: [
+              {
+                match: { path: "custom" },
+                action: "agent",
+                transform: { module: "linked.mjs" },
+              },
+            ],
+          },
+          { configDir },
+        ),
+      ).toThrow(/must be within/);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects transformsDir symlink escape outside transforms root",
+    () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-dir-"));
+      const transformsRoot = path.join(configDir, "hooks", "transforms");
+      fs.mkdirSync(transformsRoot, { recursive: true });
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-dir-"));
+      fs.writeFileSync(path.join(outsideDir, "transform.mjs"), "export default () => null;");
+      fs.symlinkSync(outsideDir, path.join(transformsRoot, "escape"), "dir");
+      expect(() =>
+        resolveHookMappings(
+          {
+            transformsDir: "escape",
+            mappings: [
+              {
+                match: { path: "custom" },
+                action: "agent",
+                transform: { module: "transform.mjs" },
+              },
+            ],
+          },
+          { configDir },
+        ),
+      ).toThrow(/Hook transformsDir/);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("accepts in-root transform module symlink", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-ok-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    const nestedDir = path.join(transformsRoot, "nested");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(path.join(nestedDir, "transform.mjs"), "export default () => null;");
+    fs.symlinkSync(path.join(nestedDir, "transform.mjs"), path.join(transformsRoot, "linked.mjs"));
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "skip" },
+            action: "agent",
+            transform: { module: "linked.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/skip"),
+      path: "skip",
+    });
+
+    expectSkippedTransformResult(result);
+  });
+
   it("treats null transform as a handled skip", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-skip-"));
     const result = await applyNullTransformFromTempConfig({ configDir });
