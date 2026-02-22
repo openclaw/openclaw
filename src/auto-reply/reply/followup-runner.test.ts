@@ -9,6 +9,7 @@ import { createMockTypingController } from "./test-helpers.js";
 const runEmbeddedPiAgentMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
+  createModelFallbackLogger: vi.fn().mockReturnValue(vi.fn()),
   runWithModelFallback: async ({
     provider,
     model,

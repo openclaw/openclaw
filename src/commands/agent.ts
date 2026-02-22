@@ -14,7 +14,7 @@ import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runWithModelFallback } from "../agents/model-fallback.js";
+import { createModelFallbackLogger, runWithModelFallback } from "../agents/model-fallback.js";
 import {
   buildAllowedModelSet,
   isCliProvider,
@@ -561,6 +561,7 @@ export async function agentCommand(
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
       const fallbackResult = await runWithModelFallback({
+        onError: createModelFallbackLogger("agent-command"),
         cfg,
         provider,
         model,

@@ -16,6 +16,7 @@ const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
+  createModelFallbackLogger: vi.fn().mockReturnValue(vi.fn()),
   runWithModelFallback: (params: {
     provider: string;
     model: string;

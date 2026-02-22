@@ -11,7 +11,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { createModelFallbackLogger, runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   getModelRefStatus,
   isCliProvider,
@@ -448,6 +448,7 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     const messageChannel = resolvedDelivery.channel;
     const fallbackResult = await runWithModelFallback({
+      onError: createModelFallbackLogger("cron-isolated-agent"),
       cfg: cfgWithAgentDefaults,
       provider,
       model,

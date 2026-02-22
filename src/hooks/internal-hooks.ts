@@ -10,7 +10,13 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "model";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -91,6 +97,28 @@ export type MessageSentHookEvent = InternalHookEvent & {
   type: "message";
   action: "sent";
   context: MessageSentHookContext;
+};
+
+export type ModelFallbackHookContext = {
+  /** The primary model that was attempted */
+  primaryModel: string;
+  /** The fallback model that will be tried next */
+  fallbackModel: string;
+  /** The reason for the fallback (e.g. rate_limit, timeout) */
+  reason: string;
+  /** Which attempt number this is */
+  attempt: number;
+  /** Total number of candidates */
+  total: number;
+  /** The error message from the failed attempt */
+  error: string;
+  /** Label identifying which runner triggered the fallback */
+  label: string;
+};
+export type ModelFallbackHookEvent = InternalHookEvent & {
+  type: "model";
+  action: "fallback";
+  context: ModelFallbackHookContext;
 };
 
 export interface InternalHookEvent {
