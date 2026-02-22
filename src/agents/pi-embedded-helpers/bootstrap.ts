@@ -199,21 +199,22 @@ export function buildBootstrapContextFiles(
     if (remainingTotalChars <= 0) {
       break;
     }
-    if (!file.path) {
+    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    if (!pathValue) {
       opts?.warn?.(
-        `skipping bootstrap file "${file.name}" — missing required "path" field (hook may have used "filePath" instead)`,
+        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
       );
       continue;
     }
     if (file.missing) {
-      const missingText = `[MISSING] Expected at: ${file.path}`;
+      const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
       remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
       result.push({
-        path: file.path,
+        path: pathValue,
         content: cappedMissingText,
       });
       continue;
@@ -237,7 +238,7 @@ export function buildBootstrapContextFiles(
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
     result.push({
-      path: file.path,
+      path: pathValue,
       content: contentWithinBudget,
     });
   }
