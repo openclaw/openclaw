@@ -592,7 +592,54 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+
+  // Wrap to return current file content on match failure (optimistic concurrency improvement)
+  // See https://github.com/openclaw/openclaw/issues/18132
+  return {
+    ...normalized,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      try {
+        return await normalized.execute(toolCallId, args, signal, onUpdate);
+      } catch (error) {
+        // If the edit failed due to text mismatch, return the current file content
+        // so the agent can retry without a separate Read call
+        if (error instanceof Error && error.message.includes("Could not find the exact text in")) {
+          const normalizedArgs = normalizeToolParams(args);
+          const record =
+            normalizedArgs ??
+            (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+          const filePath = record?.path;
+
+          if (typeof filePath === "string" && filePath.trim()) {
+            try {
+              const content = await params.bridge.readFile({
+                filePath,
+                cwd: params.root,
+              });
+              const contentStr = content.toString("utf-8");
+
+              // Return error with current file content
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text",
+                    text: `${error.message}\n\nCurrent file content:\n${contentStr}`,
+                  },
+                ],
+              };
+            } catch {
+              // If we can't read the file, just throw the original error
+              throw error;
+            }
+          }
+        }
+        // For all other errors, rethrow
+        throw error;
+      }
+    },
+  };
 }
 
 export function createOpenClawReadTool(
