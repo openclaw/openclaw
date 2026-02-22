@@ -8,6 +8,17 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
+type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
+
+const EXPLICIT_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
+  "id",
+  "from",
+  "e164",
+  "name",
+  "username",
+  "tag",
+]);
+
 function normalizeAllowToken(value?: string) {
   if (!value) {
     return "";
@@ -48,7 +59,120 @@ function resolveElevatedAllowList(
   return Array.isArray(value) ? value : fallbackAllowFrom;
 }
 
+function parseExplicitElevatedAllowEntry(
+  entry: string,
+): { field: ExplicitElevatedAllowField; value: string } | null {
+  const separatorIndex = entry.indexOf(":");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  const fieldRaw = entry.slice(0, separatorIndex).trim().toLowerCase();
+  if (!EXPLICIT_ELEVATED_ALLOW_FIELDS.has(fieldRaw as ExplicitElevatedAllowField)) {
+    return null;
+  }
+  const value = entry.slice(separatorIndex + 1).trim();
+  if (!value) {
+    return null;
+  }
+  return {
+    field: fieldRaw as ExplicitElevatedAllowField,
+    value,
+  };
+}
+
+function addTokenVariants(tokens: Set<string>, value: string) {
+  if (!value) {
+    return;
+  }
+  tokens.add(value);
+  const normalized = normalizeAllowToken(value);
+  if (normalized) {
+    tokens.add(normalized);
+  }
+}
+
+function addProviderFormattedTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  accountId?: string;
+  values: string[];
+  tokens: Set<string>;
+}) {
+  const normalizedProvider = normalizeChannelId(params.provider);
+  const dock = normalizedProvider ? getChannelDock(normalizedProvider) : undefined;
+  const formatted = dock?.config?.formatAllowFrom
+    ? dock.config.formatAllowFrom({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        allowFrom: params.values,
+      })
+    : params.values.map((entry) => String(entry).trim()).filter(Boolean);
+  for (const entry of formatted) {
+    addTokenVariants(params.tokens, entry);
+  }
+}
+
+function matchesProviderFormattedTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  accountId?: string;
+  value: string;
+  includeStripped?: boolean;
+  tokens: Set<string>;
+}): boolean {
+  const probeTokens = new Set<string>();
+  const values = params.includeStripped
+    ? [params.value, stripSenderPrefix(params.value)].filter(Boolean)
+    : [params.value];
+  addProviderFormattedTokens({
+    cfg: params.cfg,
+    provider: params.provider,
+    accountId: params.accountId,
+    values,
+    tokens: probeTokens,
+  });
+  for (const token of probeTokens) {
+    if (params.tokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildMutableTokens(value?: string): Set<string> {
+  const tokens = new Set<string>();
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return tokens;
+  }
+  addTokenVariants(tokens, trimmed);
+  const slugged = slugAllowToken(trimmed);
+  if (slugged) {
+    addTokenVariants(tokens, slugged);
+  }
+  return tokens;
+}
+
+function matchesMutableTokens(value: string, tokens: Set<string>): boolean {
+  if (!value || tokens.size === 0) {
+    return false;
+  }
+  const probes = new Set<string>();
+  addTokenVariants(probes, value);
+  const slugged = slugAllowToken(value);
+  if (slugged) {
+    addTokenVariants(probes, slugged);
+  }
+  for (const probe of probes) {
+    if (tokens.has(probe)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isApprovedElevatedSender(params: {
+  cfg: OpenClawConfig;
   provider: string;
   ctx: MsgContext;
   allowFrom?: AgentElevatedAllowFromConfig;
@@ -71,48 +195,124 @@ function isApprovedElevatedSender(params: {
     return true;
   }
 
-  const tokens = new Set<string>();
-  const addToken = (value?: string) => {
-    if (!value) {
-      return;
-    }
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return;
-    }
-    tokens.add(trimmed);
-    const normalized = normalizeAllowToken(trimmed);
-    if (normalized) {
-      tokens.add(normalized);
-    }
-    const slugged = slugAllowToken(trimmed);
-    if (slugged) {
-      tokens.add(slugged);
-    }
-  };
+  const senderIdTokens = new Set<string>();
+  const senderFromTokens = new Set<string>();
+  const senderE164Tokens = new Set<string>();
 
-  addToken(params.ctx.SenderName);
-  addToken(params.ctx.SenderUsername);
-  addToken(params.ctx.SenderTag);
-  addToken(params.ctx.SenderE164);
-  addToken(params.ctx.From);
-  addToken(stripSenderPrefix(params.ctx.From));
+  if (params.ctx.SenderId?.trim()) {
+    addProviderFormattedTokens({
+      cfg: params.cfg,
+      provider: params.provider,
+      accountId: params.ctx.AccountId,
+      values: [params.ctx.SenderId, stripSenderPrefix(params.ctx.SenderId)].filter(Boolean),
+      tokens: senderIdTokens,
+    });
+  }
+  if (params.ctx.From?.trim()) {
+    addProviderFormattedTokens({
+      cfg: params.cfg,
+      provider: params.provider,
+      accountId: params.ctx.AccountId,
+      values: [params.ctx.From, stripSenderPrefix(params.ctx.From)].filter(Boolean),
+      tokens: senderFromTokens,
+    });
+  }
+  if (params.ctx.SenderE164?.trim()) {
+    addProviderFormattedTokens({
+      cfg: params.cfg,
+      provider: params.provider,
+      accountId: params.ctx.AccountId,
+      values: [params.ctx.SenderE164],
+      tokens: senderE164Tokens,
+    });
+  }
+  const senderIdentityTokens = new Set<string>([
+    ...senderIdTokens,
+    ...senderFromTokens,
+    ...senderE164Tokens,
+  ]);
 
-  for (const rawEntry of allowTokens) {
-    const entry = rawEntry.trim();
-    if (!entry) {
+  const senderNameTokens = buildMutableTokens(params.ctx.SenderName);
+  const senderUsernameTokens = buildMutableTokens(params.ctx.SenderUsername);
+  const senderTagTokens = buildMutableTokens(params.ctx.SenderTag);
+
+  for (const entry of allowTokens) {
+    const explicitEntry = parseExplicitElevatedAllowEntry(entry);
+    if (!explicitEntry) {
+      if (
+        matchesProviderFormattedTokens({
+          cfg: params.cfg,
+          provider: params.provider,
+          accountId: params.ctx.AccountId,
+          value: entry,
+          includeStripped: true,
+          tokens: senderIdentityTokens,
+        })
+      ) {
+        return true;
+      }
       continue;
     }
-    const stripped = stripSenderPrefix(entry);
-    if (tokens.has(entry) || tokens.has(stripped)) {
-      return true;
+    if (explicitEntry.field === "id") {
+      if (
+        matchesProviderFormattedTokens({
+          cfg: params.cfg,
+          provider: params.provider,
+          accountId: params.ctx.AccountId,
+          value: explicitEntry.value,
+          includeStripped: true,
+          tokens: senderIdTokens,
+        })
+      ) {
+        return true;
+      }
+      continue;
     }
-    const normalized = normalizeAllowToken(stripped);
-    if (normalized && tokens.has(normalized)) {
-      return true;
+    if (explicitEntry.field === "from") {
+      if (
+        matchesProviderFormattedTokens({
+          cfg: params.cfg,
+          provider: params.provider,
+          accountId: params.ctx.AccountId,
+          value: explicitEntry.value,
+          includeStripped: true,
+          tokens: senderFromTokens,
+        })
+      ) {
+        return true;
+      }
+      continue;
     }
-    const slugged = slugAllowToken(stripped);
-    if (slugged && tokens.has(slugged)) {
+    if (explicitEntry.field === "e164") {
+      if (
+        matchesProviderFormattedTokens({
+          cfg: params.cfg,
+          provider: params.provider,
+          accountId: params.ctx.AccountId,
+          value: explicitEntry.value,
+          tokens: senderE164Tokens,
+        })
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (explicitEntry.field === "name") {
+      if (matchesMutableTokens(explicitEntry.value, senderNameTokens)) {
+        return true;
+      }
+      continue;
+    }
+    if (explicitEntry.field === "username") {
+      if (matchesMutableTokens(explicitEntry.value, senderUsernameTokens)) {
+        return true;
+      }
+      continue;
+    }
+    if (
+      explicitEntry.field === "tag" &&
+      matchesMutableTokens(explicitEntry.value, senderTagTokens)
+    ) {
       return true;
     }
   }
@@ -162,6 +362,7 @@ export function resolveElevatedPermissions(params: {
     : undefined;
   const fallbackAllowFrom = dockFallbackAllowFrom;
   const globalAllowed = isApprovedElevatedSender({
+    cfg: params.cfg,
     provider: params.provider,
     ctx: params.ctx,
     allowFrom: globalConfig?.allowFrom,
@@ -177,6 +378,7 @@ export function resolveElevatedPermissions(params: {
 
   const agentAllowed = agentConfig?.allowFrom
     ? isApprovedElevatedSender({
+        cfg: params.cfg,
         provider: params.provider,
         ctx: params.ctx,
         allowFrom: agentConfig.allowFrom,

@@ -19,6 +19,7 @@ function buildContext(overrides?: Partial<MsgContext>): MsgContext {
   return {
     Provider: "whatsapp",
     Surface: "whatsapp",
+    SenderId: "+15550001111",
     From: "whatsapp:+15550001111",
     SenderE164: "+15550001111",
     To: "+15559990000",
@@ -54,5 +55,40 @@ describe("resolveElevatedPermissions", () => {
       gate: "allowFrom",
       key: "tools.elevated.allowFrom.whatsapp",
     });
+  });
+
+  it("does not authorize untyped mutable sender fields", () => {
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["owner-display-name"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext({
+        SenderName: "owner-display-name",
+        SenderUsername: "owner-display-name",
+        SenderTag: "owner-display-name",
+      }),
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(false);
+    expect(result.failures).toContainEqual({
+      gate: "allowFrom",
+      key: "tools.elevated.allowFrom.whatsapp",
+    });
+  });
+
+  it("authorizes mutable sender fields only with explicit prefix", () => {
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["username:owner_username"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext({
+        SenderUsername: "owner_username",
+      }),
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(true);
+    expect(result.failures).toHaveLength(0);
   });
 });
