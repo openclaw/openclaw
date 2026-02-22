@@ -133,6 +133,9 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
+    // Clean up all event listeners from the mock socket to prevent open handles
+    // This ensures tests fail fast instead of hanging when errors occur
+    sock.ev.removeAllListeners();
     if (authDir) {
       fsSync.rmSync(authDir, { recursive: true, force: true });
       authDir = undefined;

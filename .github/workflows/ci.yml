@@ -481,7 +481,7 @@ jobs:
       # --- Run all checks sequentially (fast gates first) ---
       - name: TS tests (macOS)
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=4096 --dns-result-order=ipv4first
         run: pnpm test
 
       # --- Xcode/Swift setup ---
