@@ -1,6 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { sanitizeEnv } from "./invoke.js";
+import { sanitizeEnv, validateWorkingDirectory } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
@@ -43,6 +44,24 @@ describe("node-host sanitizeEnv", () => {
       expect(env.PATH).toBe("/usr/bin:/bin");
       expect(env.BASH_ENV).toBeUndefined();
     });
+  });
+});
+
+describe("validateWorkingDirectory", () => {
+  it("returns null when cwd is undefined", () => {
+    expect(validateWorkingDirectory(undefined)).toBeNull();
+  });
+
+  it("returns a clear error when cwd does not exist", () => {
+    const missing = "/tmp/openclaw-test-missing-cwd-should-not-exist";
+    expect(validateWorkingDirectory(missing)).toBe(`working directory not found: ${missing}`);
+  });
+
+  it("returns a clear error when cwd points to a file", () => {
+    const filePath = fileURLToPath(import.meta.url);
+    expect(validateWorkingDirectory(filePath)).toBe(
+      `working directory is not a directory: ${filePath}`,
+    );
   });
 });
 
