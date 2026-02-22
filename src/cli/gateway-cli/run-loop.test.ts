@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
-const acquireGatewayLock = vi.fn(async () => ({
+const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
 }));
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
@@ -22,7 +22,7 @@ const gatewayLog = {
 };
 
 vi.mock("../../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: () => acquireGatewayLock(),
+  acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -109,12 +109,17 @@ function createSignaledStart(close: GatewayCloseFn) {
   return { start, started };
 }
 
-async function runLoopWithStart(params: { start: ReturnType<typeof vi.fn>; runtime: LoopRuntime }) {
+async function runLoopWithStart(params: {
+  start: ReturnType<typeof vi.fn>;
+  runtime: LoopRuntime;
+  lockPort?: number;
+}) {
   vi.resetModules();
   const { runGatewayLoop } = await import("./run-loop.js");
   const loopPromise = runGatewayLoop({
     start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
     runtime: params.runtime,
+    lockPort: params.lockPort,
   });
   return { loopPromise };
 }
@@ -273,6 +278,39 @@ describe("runGatewayLoop", () => {
       expect(lockRelease).toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+    });
+  });
+
+  it("forwards lockPort to initial and restart lock acquisitions", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const closeFirst = vi.fn(async () => {});
+      const closeSecond = vi.fn(async () => {});
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "disabled" });
+
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce({ close: closeFirst })
+        .mockResolvedValueOnce({ close: closeSecond })
+        .mockRejectedValueOnce(new Error("stop-loop"));
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const loopPromise = runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        lockPort: 18789,
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      process.emit("SIGUSR1");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      process.emit("SIGUSR1");
+
+      await expect(loopPromise).rejects.toThrow("stop-loop");
+      expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
+      expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
+      expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
     });
   });
 
