@@ -273,6 +273,59 @@ function isUsefulKoreanStem(stem: string): boolean {
   return /^[a-z0-9_]+$/i.test(stem);
 }
 
+const STOP_WORDS_JA = new Set([
+  // Pronouns and references
+  "これ",
+  "それ",
+  "あれ",
+  "この",
+  "その",
+  "あの",
+  "ここ",
+  "そこ",
+  "あそこ",
+  // Common auxiliaries / vague verbs
+  "する",
+  "した",
+  "して",
+  "です",
+  "ます",
+  "いる",
+  "ある",
+  "なる",
+  "できる",
+  // Particles / connectors
+  "の",
+  "こと",
+  "もの",
+  "ため",
+  "そして",
+  "しかし",
+  "また",
+  "でも",
+  "から",
+  "まで",
+  "より",
+  "だけ",
+  // Question words
+  "なぜ",
+  "どう",
+  "何",
+  "いつ",
+  "どこ",
+  "誰",
+  "どれ",
+  // Time (vague)
+  "昨日",
+  "今日",
+  "明日",
+  "最近",
+  "今",
+  "さっき",
+  "前",
+  "後",
+]);
+
 const STOP_WORDS_ZH = new Set([
   // Pronouns
   "我",
@@ -395,7 +448,7 @@ function isValidKeyword(token: string): boolean {
 }
 
 /**
- * Simple tokenizer that handles English, Chinese, and Korean text.
+ * Simple tokenizer that handles English, Chinese, Korean, and Japanese text.
  * For Chinese, we do character-based splitting since we don't have a proper segmenter.
  * For English, we split on whitespace and punctuation.
  */
@@ -407,8 +460,23 @@ function tokenize(text: string): string[] {
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
 
   for (const segment of segments) {
-    // Check if segment contains CJK characters (Chinese)
-    if (/[\u4e00-\u9fff]/.test(segment)) {
+    // Japanese text often mixes scripts (kanji/kana/ASCII) without spaces.
+    // Extract script-specific chunks so technical terms like "API" / "バグ" are retained.
+    if (/[\u3040-\u30ff]/.test(segment)) {
+      const jpParts =
+        segment.match(/[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g) ?? [];
+      for (const part of jpParts) {
+        if (/^[\u4e00-\u9fff]+$/.test(part)) {
+          tokens.push(part);
+          for (let i = 0; i < part.length - 1; i++) {
+            tokens.push(part[i] + part[i + 1]);
+          }
+        } else {
+          tokens.push(part);
+        }
+      }
+    } else if (/[\u4e00-\u9fff]/.test(segment)) {
+      // Check if segment contains CJK characters (Chinese)
       // For Chinese, extract character n-grams (unigrams and bigrams)
       const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
       // Add individual characters
@@ -453,7 +521,12 @@ export function extractKeywords(query: string): string[] {
 
   for (const token of tokens) {
     // Skip stop words
-    if (STOP_WORDS_EN.has(token) || STOP_WORDS_ZH.has(token) || STOP_WORDS_KO.has(token)) {
+    if (
+      STOP_WORDS_EN.has(token) ||
+      STOP_WORDS_ZH.has(token) ||
+      STOP_WORDS_KO.has(token) ||
+      STOP_WORDS_JA.has(token)
+    ) {
       continue;
     }
     // Skip invalid keywords
