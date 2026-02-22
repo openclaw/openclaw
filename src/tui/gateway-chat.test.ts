@@ -36,10 +36,10 @@ describe("resolveGatewayConnection", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
+    loadConfig.mockClear();
+    resolveGatewayPort.mockClear();
+    pickPrimaryTailnetIPv4.mockClear();
+    pickPrimaryLanIPv4.mockClear();
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     pickPrimaryLanIPv4.mockReturnValue(undefined);
