@@ -277,4 +277,42 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBeUndefined();
     expect(result.mode).toBe("implicit");
   });
+
+  it("surfaces error when multi-channel config has no session history and no explicit channel", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "last",
+      to: undefined,
+    });
+
+    // Still returns a channel (graceful fallback), but includes the error
+    expect(result.channel).toBeDefined();
+    expect(result.error).toBeDefined();
+    expect(result.error?.message).toContain("Channel is required");
+  });
+
+  it("does not surface error when session lastChannel covers the fallback", async () => {
+    setMainSessionEntry({
+      sessionId: "sess-1",
+      updatedAt: 1000,
+      lastChannel: "telegram",
+      lastTo: "123456",
+    });
+    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "last",
+      to: undefined,
+    });
+
+    // Used the session's lastChannel, no error
+    expect(result.channel).toBe("telegram");
+    expect(result.error).toBeUndefined();
+  });
 });

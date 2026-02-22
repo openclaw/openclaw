@@ -57,12 +57,18 @@ export async function resolveDeliveryTarget(
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
+  let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     try {
       const selection = await resolveMessageChannelSelection({ cfg });
       fallbackChannel = selection.channel;
-    } catch {
+    } catch (err) {
       fallbackChannel = preliminary.lastChannel ?? DEFAULT_CHAT_CHANNEL;
+      // Only surface as an error when there was no session lastChannel to fall
+      // back to. If lastChannel existed we used the right channel; no error needed.
+      if (!preliminary.lastChannel) {
+        channelResolutionError = err instanceof Error ? err : new Error(String(err));
+      }
     }
   }
 
@@ -112,6 +118,7 @@ export async function resolveDeliveryTarget(
       accountId,
       threadId,
       mode,
+      error: channelResolutionError,
     };
   }
 
@@ -150,6 +157,6 @@ export async function resolveDeliveryTarget(
     accountId,
     threadId,
     mode,
-    error: docked.ok ? undefined : docked.error,
+    error: docked.ok ? channelResolutionError : docked.error,
   };
 }
