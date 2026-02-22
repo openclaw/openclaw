@@ -685,7 +685,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   const lines = ["ℹ️ Help", ""];
 
   lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
+  lines.push("  /new  |  /reset  |  /save  |  /compact [instructions]  |  /stop");
   lines.push("");
 
   const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
