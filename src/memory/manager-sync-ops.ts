@@ -16,7 +16,9 @@ import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
 import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
   createEmbeddingProvider,
+  type BedrockEmbeddingClient,
   type EmbeddingProvider,
+  type EmbeddingProviderId,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
@@ -88,10 +90,11 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  protected fallbackFrom?: EmbeddingProviderId;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
+  protected bedrock?: BedrockEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -951,7 +954,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage";
+    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage" | "bedrock";
 
     const fallbackModel =
       fallback === "gemini"
@@ -978,6 +981,7 @@ export abstract class MemoryManagerSyncOps {
     this.openAi = fallbackResult.openAi;
     this.gemini = fallbackResult.gemini;
     this.voyage = fallbackResult.voyage;
+    this.bedrock = fallbackResult.bedrock;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
