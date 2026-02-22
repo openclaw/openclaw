@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
+  ProviderUsageSummary,
+} from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
 export type UsageState = {
@@ -8,6 +13,7 @@ export type UsageState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: ProviderUsageSummary | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
@@ -233,19 +239,31 @@ export async function loadUsage(
     };
 
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
+    let providerRes: unknown;
     try {
-      const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation);
+      const [sessionsRes, costRes, provider] = await Promise.all([
+        runUsageRequests(includeDateInterpretation).then(([sessions, cost]) => [sessions, cost] as const),
+        state.client.request("usage.status", {}),
+      ]).then(([usageTuple, provider]) => [usageTuple[0], usageTuple[1], provider] as const);
+      providerRes = provider;
       applyUsageResults(sessionsRes, costRes);
     } catch (err) {
       if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
         // Older gateways reject `mode`/`utcOffset` in `sessions.usage`.
         // Remember this per gateway and retry once without those fields.
         rememberLegacyDateInterpretation(state);
-        const [sessionsRes, costRes] = await runUsageRequests(false);
+        const [sessionsRes, costRes, provider] = await Promise.all([
+          runUsageRequests(false).then(([sessions, cost]) => [sessions, cost] as const),
+          state.client.request("usage.status", {}),
+        ]).then(([usageTuple, provider]) => [usageTuple[0], usageTuple[1], provider] as const);
+        providerRes = provider;
         applyUsageResults(sessionsRes, costRes);
       } else {
         throw err;
       }
+    }
+    if (providerRes) {
+      state.usageProviderSummary = providerRes as ProviderUsageSummary;
     }
   } catch (err) {
     state.usageError = toErrorMessage(err);

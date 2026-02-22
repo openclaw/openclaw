@@ -173,6 +173,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "quota",
+      nativeName: "quota",
+      description: "Show provider quota and usage windows.",
+      textAlias: "/quota",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",

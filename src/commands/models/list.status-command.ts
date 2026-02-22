@@ -26,6 +26,7 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { CONFIG_PATH, loadConfig } from "../../config/config.js";
+import { collectConfigEnvVars } from "../../config/env-vars.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -567,6 +568,7 @@ export async function modelsStatusCommand(
           providers: usageProviders,
           agentDir,
           timeoutMs: 3500,
+          claudeWebSessionKey: collectConfigEnvVars(cfg).CLAUDE_AI_SESSION_KEY,
         });
         for (const snapshot of usageSummary.providers) {
           const formatted = formatUsageWindowSummary(snapshot, {

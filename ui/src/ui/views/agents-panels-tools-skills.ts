@@ -1,9 +1,9 @@
 import { html, nothing } from "lit";
-import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import {
   isAllowedByPolicy,
   matchesList,
+  normalizeToolName,
   PROFILE_OPTIONS,
   resolveAgentConfig,
   resolveToolProfile,

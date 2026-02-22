@@ -434,6 +434,9 @@ export type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
+  ProviderUsageWindow,
+  ProviderUsageSnapshot,
+  ProviderUsageSummary,
 } from "./usage-types.ts";
 
 export type CronSchedule =

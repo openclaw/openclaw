@@ -28,6 +28,7 @@ import type {
   PresenceEntry,
   SessionsUsageResult,
   CostUsageSummary,
+  ProviderUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
@@ -157,6 +158,7 @@ export type AppViewState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: ProviderUsageSummary | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
@@ -189,6 +191,7 @@ export type AppViewState = {
   usageLogFilterTools: string[];
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
+  usageQuotaRefreshed: boolean;
   cronLoading: boolean;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;

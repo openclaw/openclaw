@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import type { ProviderUsageSummary } from "../usage-types.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -361,6 +362,144 @@ function renderPeakErrorList(
             `
       }
     </div>
+  `;
+}
+
+function renderUsageOverviewQuotaPanel(providerUsage: ProviderUsageSummary | null) {
+  const rows = [
+    { label: "GPT", aliases: ["openai-codex", "codex", "chatgpt", "gpt"] },
+    { label: "Claude", aliases: ["anthropic", "claude"] },
+    { label: "Kimi", aliases: ["moonshot", "kimi"] },
+    { label: "z.ai", aliases: ["zai", "z.ai"] },
+    { label: "MiniMax", aliases: ["minimax"] },
+    { label: "Xiaomi", aliases: ["xiaomi"] },
+    { label: "Copilot", aliases: ["github-copilot", "copilot"] },
+  ] as const; // ordered display priority; only configured providers are rendered.
+
+  const resolveRow = (aliases: readonly string[]) => {
+    const snapshots = providerUsage?.providers ?? [];
+    return snapshots.find((entry) => {
+      const provider = entry.provider.toLowerCase();
+      const name = entry.displayName.toLowerCase();
+      return aliases.some((alias) => provider.includes(alias) || name.includes(alias));
+    });
+  };
+
+  /** Map known HTTP error patterns to user-friendly copy with actionable hints. */
+  const friendlyErrorHint = (error: string): { message: string; hint: string } => {
+    const low = error.toLowerCase();
+    if (low.includes("403") && low.includes("user:profile")) {
+      return {
+        message: "Auth scope missing",
+        hint: 'Your Claude OAuth token is missing the "user:profile" scope. Re-authenticate via Settings → Providers → Claude to resolve this.',
+      };
+    }
+    if (low.includes("401") || low.includes("unauthorized")) {
+      return {
+        message: "Unauthorized",
+        hint: "Invalid or expired credentials. Check your API key / token in Settings → Providers.",
+      };
+    }
+    if (low.includes("403")) {
+      return {
+        message: "Access denied (403)",
+        hint: "Your token does not have permission to read quota data. Re-authenticate in Settings → Providers.",
+      };
+    }
+    if (low.includes("429") || low.includes("rate limit")) {
+      return {
+        message: "Rate limited",
+        hint: "Too many requests. The quota panel will retry shortly.",
+      };
+    }
+    // Generic fallback — still surface the raw message but in a muted sub-line.
+    return { message: "Unavailable", hint: error };
+  };
+
+  /** Render a single provider row with optional progress bars. */
+  const renderProviderRow = (label: string, snapshot: ReturnType<typeof resolveRow>) => {
+    if (!snapshot) {
+      return html`
+        <div class="quota-provider-row">
+          <div class="quota-provider-header">
+            <span class="quota-provider-label">${label}</span>
+            <span class="quota-status-badge quota-status-unconfigured">Not configured</span>
+          </div>
+          <div class="quota-provider-hint muted">Provider auth not set up for this slot.</div>
+        </div>
+      `;
+    }
+
+    if (snapshot.error) {
+      const { message, hint } = friendlyErrorHint(snapshot.error);
+      return html`
+        <div class="quota-provider-row">
+          <div class="quota-provider-header">
+            <span class="quota-provider-label">${label}</span>
+            <span class="quota-status-badge quota-status-error">${message}</span>
+          </div>
+          <div class="quota-provider-hint muted">${hint}</div>
+        </div>
+      `;
+    }
+
+    const windows = snapshot.windows ?? [];
+    if (windows.length === 0) {
+      return html`
+        <div class="quota-provider-row">
+          <div class="quota-provider-header">
+            <span class="quota-provider-label">${label}</span>
+            <span class="quota-status-badge quota-status-warn">No quota data</span>
+          </div>
+          <div class="quota-provider-hint muted">Connected, but no usage windows returned.</div>
+        </div>
+      `;
+    }
+
+    // Sort windows by usedPercent descending so highest-pressure window is shown first.
+    const sortedWindows = windows.toSorted((a, b) => b.usedPercent - a.usedPercent);
+
+    return html`
+      <div class="quota-provider-row">
+        <div class="quota-provider-header">
+          <span class="quota-provider-label">${label}</span>
+          ${snapshot.plan ? html`<span class="quota-plan-badge">${snapshot.plan}</span>` : nothing}
+        </div>
+        <div class="quota-windows">
+          ${sortedWindows.map((win) => {
+            const pct = Math.min(100, Math.max(0, win.usedPercent));
+            const barClass =
+              pct >= 90 ? "quota-bar-critical" : pct >= 70 ? "quota-bar-warn" : "quota-bar-ok";
+            const pctClass = pct >= 90 ? "bad" : pct >= 70 ? "warn" : "good";
+            const reset = win.resetAt ? new Date(win.resetAt).toLocaleString() : null;
+            return html`
+              <div class="quota-window-entry">
+                <div class="quota-window-header">
+                  <span class="quota-window-label">${win.label}</span>
+                  <span class="quota-window-pct ${pctClass}">${Math.round(pct)}%</span>
+                </div>
+                <div class="quota-bar-track" title="${win.label}: ${Math.round(pct)}% used">
+                  <div class="quota-bar-fill ${barClass}" style="width: ${pct.toFixed(1)}%"></div>
+                </div>
+                ${reset ? html`<div class="quota-window-reset muted">Resets ${reset}</div>` : nothing}
+              </div>
+            `;
+          })}
+        </div>
+      </div>
+    `;
+  };
+
+  return html`
+    <section class="card" style="margin-top: 16px;">
+      <div class="card-title">Provider Quota</div>
+      <div class="quota-providers">
+        ${rows
+          .map((row) => ({ row, snapshot: resolveRow(row.aliases) }))
+          .filter((item) => Boolean(item.snapshot))
+          .map((item) => renderProviderRow(item.row.label, item.snapshot))}
+      </div>
+    </section>
   `;
 }
 
@@ -793,4 +932,5 @@ export {
   renderPeakErrorList,
   renderSessionsCard,
   renderUsageInsights,
+  renderUsageOverviewQuotaPanel,
 };
