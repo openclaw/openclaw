@@ -1,108 +1,114 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
-  /* Background - Warmer dark with depth */
-  --bg: #12141a;
-  --bg-accent: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --bg-muted: #262a35;
+  /* Dark foundation */
+  --bg: #050507;
+  --bg-accent: #08080b;
+  --bg-elevated: #10121a;
+  --bg-hover: #181c26;
+  --bg-muted: #08080b;
+  --bg-content: #050507;
 
-  /* Card / Surface - More contrast between levels */
-  --card: #181b22;
-  --card-foreground: #f4f4f5;
-  --card-highlight: rgba(255, 255, 255, 0.05);
-  --popover: #181b22;
-  --popover-foreground: #f4f4f5;
+  /* Surface stack */
+  --card: #10121a;
+  --card-foreground: #e8ecf0;
+  --card-highlight: rgba(255, 255, 255, 0.04);
+  --popover: #10121a;
+  --popover-foreground: #e8ecf0;
 
-  /* Panel */
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --panel-hover: #262a35;
-  --chrome: rgba(18, 20, 26, 0.95);
-  --chrome-strong: rgba(18, 20, 26, 0.98);
+  --panel: #08080b;
+  --panel-strong: #10121a;
+  --panel-hover: #1c2030;
+  --chrome: rgba(5, 5, 7, 0.92);
+  --chrome-strong: rgba(5, 5, 7, 0.96);
 
-  /* Text - Slightly warmer */
-  --text: #e4e4e7;
-  --text-strong: #fafafa;
-  --chat-text: #e4e4e7;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
+  /* Typography */
+  --text: #e0e4ea;
+  --text-strong: #f0f2f6;
+  --chat-text: #e0e4ea;
+  --muted: #7d8590;
+  --muted-strong: #6e7681;
+  --muted-foreground: #7d8590;
 
-  /* Border - Subtle but defined */
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --border-hover: #52525b;
-  --input: #27272a;
-  --ring: #ff5c5c;
+  /* Borders + controls */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-hover: rgba(255, 255, 255, 0.2);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: #ca3a29;
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.15);
+  /* Accent */
+  --accent: #ca3a29;
+  --accent-strong: #a83020;
+  --accent-hover: #d95240;
+  --accent-muted: #ca3a29;
+  --accent-subtle: rgba(202, 58, 41, 0.16);
   --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.25);
-  --primary: #ff5c5c;
+  --accent-glow: rgba(202, 58, 41, 0.24);
+  --primary: #ca3a29;
   --primary-foreground: #ffffff;
 
-  /* Secondary - Teal accent for variety */
-  --secondary: #1e2028;
-  --secondary-foreground: #f4f4f5;
+  /* Secondary */
+  --secondary: #08080b;
+  --secondary-foreground: #e8ecf0;
   --accent-2: #14b8a6;
   --accent-2-muted: rgba(20, 184, 166, 0.7);
   --accent-2-subtle: rgba(20, 184, 166, 0.15);
 
-  /* Semantic - More saturated */
+  /* Semantic */
   --ok: #22c55e;
   --ok-muted: rgba(34, 197, 94, 0.75);
-  --ok-subtle: rgba(34, 197, 94, 0.12);
-  --destructive: #ef4444;
+  --ok-subtle: rgba(34, 197, 94, 0.14);
+  --destructive: #ca3a29;
   --destructive-foreground: #fafafa;
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
-  --warn-subtle: rgba(245, 158, 11, 0.12);
+  --warn-subtle: rgba(245, 158, 11, 0.14);
   --danger: #ef4444;
   --danger-muted: rgba(239, 68, 68, 0.75);
-  --danger-subtle: rgba(239, 68, 68, 0.12);
+  --danger-subtle: rgba(239, 68, 68, 0.14);
   --info: #3b82f6;
 
-  /* Focus - With glow */
-  --focus: rgba(255, 92, 92, 0.25);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 20px var(--accent-glow);
+  /* Focus */
+  --focus: rgba(202, 58, 41, 0.24);
+  --focus-offset-color: var(--bg);
+  --focus-ring-width: 2px;
+  --focus-ring-offset-width: 2px;
+  --focus-ring-color: rgba(202, 58, 41, 0.65);
+  --focus-ring:
+    0 0 0 var(--focus-ring-offset-width) var(--focus-offset-color),
+    0 0 0 calc(var(--focus-ring-offset-width) + var(--focus-ring-width)) var(--focus-ring-color);
+  --focus-glow:
+    0 0 0 var(--focus-ring-offset-width) var(--focus-offset-color),
+    0 0 0 calc(var(--focus-ring-offset-width) + var(--focus-ring-width)) var(--focus-ring-color),
+    0 0 18px var(--accent-glow);
 
-  /* Grid */
   --grid-line: rgba(255, 255, 255, 0.04);
 
-  /* Theme transition */
   --theme-switch-x: 50%;
   --theme-switch-y: 50%;
 
-  /* Typography - Space Grotesk for personality */
+  /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-display:
-    "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
-  /* Shadows - Richer with subtle color */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-lg: 0 14px 34px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-xl: 0 28px 56px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shadow-glow: 0 0 30px var(--accent-glow);
 
-  /* Radii - Slightly larger for friendlier feel */
+  /* Radii */
   --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
   --radius-full: 9999px;
-  --radius: 8px;
+  --radius: 10px;
 
-  /* Transitions - Snappy but smooth */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -116,11 +122,11 @@
 /* Light theme - Clean with subtle warmth */
 :root[data-theme="light"] {
   --bg: #fafafa;
-  --bg-accent: #f5f5f5;
+  --bg-accent: #f4f4f5;
   --bg-elevated: #ffffff;
-  --bg-hover: #f0f0f0;
-  --bg-muted: #f0f0f0;
-  --bg-content: #f5f5f5;
+  --bg-hover: #f4f4f5;
+  --bg-muted: #f4f4f5;
+  --bg-content: #fafafa;
 
   --card: #ffffff;
   --card-foreground: #18181b;
@@ -129,10 +135,10 @@
   --popover-foreground: #18181b;
 
   --panel: #fafafa;
-  --panel-strong: #f5f5f5;
-  --panel-hover: #ebebeb;
-  --chrome: rgba(250, 250, 250, 0.95);
-  --chrome-strong: rgba(250, 250, 250, 0.98);
+  --panel-strong: #f4f4f5;
+  --panel-hover: #e4e4e7;
+  --chrome: rgba(250, 250, 250, 0.92);
+  --chrome-strong: rgba(250, 250, 250, 0.97);
 
   --text: #3f3f46;
   --text-strong: #18181b;
@@ -146,13 +152,14 @@
   --border-hover: #a1a1aa;
   --input: #e4e4e7;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.12);
+  --accent: #d4633f;
+  --accent-strong: #b8522f;
+  --accent-hover: #e87a5a;
+  --accent-muted: #d4633f;
+  --accent-subtle: rgba(212, 99, 63, 0.12);
   --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.15);
-  --primary: #dc2626;
+  --accent-glow: rgba(212, 99, 63, 0.16);
+  --primary: #d4633f;
   --primary-foreground: #ffffff;
 
   --secondary: #f4f4f5;
@@ -164,7 +171,7 @@
   --ok: #16a34a;
   --ok-muted: rgba(22, 163, 74, 0.75);
   --ok-subtle: rgba(22, 163, 74, 0.1);
-  --destructive: #dc2626;
+  --destructive: #d4633f;
   --destructive-foreground: #fafafa;
   --warn: #d97706;
   --warn-muted: rgba(217, 119, 6, 0.75);
@@ -174,16 +181,25 @@
   --danger-subtle: rgba(220, 38, 38, 0.1);
   --info: #2563eb;
 
-  --focus: rgba(220, 38, 38, 0.2);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 16px var(--accent-glow);
+  --focus: rgba(212, 99, 63, 0.2);
+  --focus-offset-color: #fff;
+  --focus-ring-width: 2px;
+  --focus-ring-offset-width: 2px;
+  --focus-ring-color: rgba(212, 99, 63, 0.55);
+  --focus-ring:
+    0 0 0 var(--focus-ring-offset-width) var(--focus-offset-color),
+    0 0 0 calc(var(--focus-ring-offset-width) + var(--focus-ring-width)) var(--focus-ring-color);
+  --focus-glow:
+    0 0 0 var(--focus-ring-offset-width) var(--focus-offset-color),
+    0 0 0 calc(var(--focus-ring-offset-width) + var(--focus-ring-width)) var(--focus-ring-color),
+    0 0 14px var(--accent-glow);
 
   --grid-line: rgba(0, 0, 0, 0.05);
 
-  /* Light shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 6px 14px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 16px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 26px 52px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
   color-scheme: light;
@@ -200,8 +216,8 @@ body {
 
 body {
   margin: 0;
-  font: 400 14px/1.55 var(--font-body);
-  letter-spacing: -0.02em;
+  font: 400 15px/1.55 var(--font-body);
+  letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
