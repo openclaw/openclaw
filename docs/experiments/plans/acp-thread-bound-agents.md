@@ -199,6 +199,7 @@ Safety controls:
 Core keys:
 
 - `acp.enabled`
+- `acp.dispatch.enabled` (independent ACP routing kill switch)
 - `acp.backend` (default `acpx`)
 - `acp.defaultAgent`
 - `acp.allowedAgents[]`
@@ -213,6 +214,156 @@ Plugin/backend keys (acpx plugin section):
 - backend command/path overrides
 - backend env allowlist
 - backend per-agent presets
+
+## Implementation specification
+
+### Core touchpoints
+
+Core files to change for Phase 1:
+
+- `src/auto-reply/reply/dispatch-from-config.ts`
+  - add ACP session branch before normal `getReplyFromConfig` path
+  - call a new ACP dispatcher (`dispatchAcpTurn`) when ACP session routing is active
+- `src/auto-reply/reply/inbound-context.ts` (or nearest normalized context boundary)
+  - expose normalized fields needed by ACP dispatch path without Discord-specific assumptions
+- `src/config/sessions/types.ts`
+  - add typed ACP metadata field to `SessionEntry`
+- `src/gateway/server-methods/sessions.ts`
+  - preserve existing unbind behavior and add ACP runtime detach call on reset/delete
+- `src/infra/outbound/bound-delivery-router.ts`
+  - enforce fail-closed destination behavior for ACP bound session turns
+
+Core files explicitly not replaced:
+
+- `src/discord/monitor/message-handler.preflight.ts`
+  - keep thread binding override behavior as the canonical session-key resolver
+
+### ACP runtime registry API
+
+Add a core registry module:
+
+- `src/acp/runtime/registry.ts`
+
+Required API:
+
+```ts
+export type AcpRuntimeBackend = {
+  id: string;
+  runtime: AcpRuntime;
+  healthy?: () => boolean;
+};
+
+export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void;
+export function unregisterAcpRuntimeBackend(id: string): void;
+export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null;
+export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend;
+```
+
+Behavior:
+
+- `requireAcpRuntimeBackend` throws a typed ACP backend missing error when unavailable
+- plugin service registers backend on `start` and unregisters on `stop`
+- runtime lookups are read-only and process-local
+
+### Session schema patch
+
+Patch `SessionEntry` in `src/config/sessions/types.ts`:
+
+```ts
+type SessionAcpMeta = {
+  backend: string;
+  agent: string;
+  runtimeSessionName: string;
+  mode: "persistent" | "oneshot";
+  cwd?: string;
+  state: "idle" | "running" | "error";
+  lastActivityAt: number;
+  lastError?: string;
+};
+```
+
+Persisted field:
+
+- `SessionEntry.acp?: SessionAcpMeta`
+
+Migration rules:
+
+- no backfill required
+- missing `acp` is treated as non-ACP session
+- legacy fields (`cliSessionIds`, `claudeCliSessionId`) remain untouched
+
+### Error contract
+
+Add stable ACP error codes and user-facing messages:
+
+- `ACP_BACKEND_MISSING`
+  - message: `ACP runtime backend is not configured. Install and enable the acpx runtime plugin.`
+- `ACP_BACKEND_UNAVAILABLE`
+  - message: `ACP runtime backend is currently unavailable. Try again in a moment.`
+- `ACP_SESSION_INIT_FAILED`
+  - message: `Could not initialize ACP session runtime.`
+- `ACP_TURN_FAILED`
+  - message: `ACP turn failed before completion.`
+
+Rules:
+
+- return actionable user-safe message in-thread
+- log detailed backend/system error only in runtime logs
+- never silently fall back to normal LLM path when ACP routing was explicitly selected
+
+### Duplicate delivery arbitration
+
+Single routing rule for ACP bound turns:
+
+- if an active thread binding exists for the target ACP session and requester context, deliver only to that bound thread
+- do not also send to parent channel for the same turn
+- if bound destination selection is ambiguous, fail closed with explicit error (no implicit parent fallback)
+- if no active binding exists, use normal session destination behavior
+
+### Config precedence and effective values
+
+ACP enablement precedence:
+
+- account override: `channels.discord.accounts.<id>.threadBindings.spawnAcpSessions`
+- channel override: `channels.discord.threadBindings.spawnAcpSessions`
+- global ACP gate: `acp.enabled`
+- dispatch gate: `acp.dispatch.enabled`
+- backend availability: registered backend for `acp.backend`
+
+TTL effective value:
+
+- `min(session ttl, discord thread binding ttl, acp runtime ttl)`
+
+### Test map
+
+Unit tests:
+
+- `src/acp/runtime/registry.test.ts` (new)
+- `src/auto-reply/reply/dispatch-from-config.acp.test.ts` (new)
+- `src/infra/outbound/bound-delivery-router.test.ts` (extend ACP fail-closed cases)
+- `src/config/sessions/types.test.ts` or nearest session-store tests (ACP metadata persistence)
+
+Integration tests:
+
+- `src/discord/monitor/reply-delivery.test.ts` (bound ACP delivery target behavior)
+- `src/discord/monitor/message-handler.preflight*.test.ts` (bound ACP session-key routing continuity)
+- acpx plugin runtime tests in backend package (service register/start/stop + event normalization)
+
+Gateway e2e tests:
+
+- `src/gateway/server.sessions.gateway-server-sessions-a.e2e.test.ts` (extend ACP reset/delete lifecycle coverage)
+- ACP thread turn roundtrip e2e for spawn, message, stream, cancel, unfocus, restart recovery
+
+### Rollout guard
+
+Add independent ACP dispatch kill switch:
+
+- `acp.dispatch.enabled` default `false` for first release
+- when disabled:
+  - ACP spawn/focus control commands may still bind sessions
+  - ACP dispatch path does not activate
+  - user receives explicit message that ACP dispatch is disabled by policy
+- after canary validation, default can be flipped to `true` in a later release
 
 ## Command and UX plan
 
