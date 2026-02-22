@@ -63,7 +63,9 @@ function makeMockHandler(): MSTeamsActivityHandler & {
 function makeTurnContext(activity: Record<string, unknown>) {
   return {
     activity: {
-      type: "message",
+      type: "message" as string,
+      name: undefined as string | undefined,
+      text: undefined as string | undefined,
       from: { id: "user1", name: "User One" },
       conversation: { id: "conv1" },
       ...activity,
@@ -109,10 +111,15 @@ describe("registerMSTeamsHandlers", () => {
       expect(invokes[0].timestamp).toBeGreaterThan(0);
     });
 
-    it("generates synthetic text from action verb and routes to message handler", async () => {
+    it("generates fixed synthetic text and routes to message handler", async () => {
       const handler = makeMockHandler();
       const deps = makeMockDeps();
       registerMSTeamsHandlers(handler, deps);
+
+      let capturedText: string | undefined;
+      mockHandleTeamsMessage.mockImplementationOnce(async (ctx: unknown) => {
+        capturedText = (ctx as { activity: { text: string } }).activity.text;
+      });
 
       const ctx = makeTurnContext({
         type: "invoke",
@@ -122,11 +129,13 @@ describe("registerMSTeamsHandlers", () => {
       await handler.run!(ctx);
 
       expect(mockHandleTeamsMessage).toHaveBeenCalledOnce();
-      // At call time, activity.text should have been set to synthetic text
-      const callCtx = mockHandleTeamsMessage.mock.calls[0][0] as typeof ctx;
+      // Synthetic text should be fixed regardless of action data
+      expect(capturedText).toBe(
+        "I approved the permission request. Please proceed with the action.",
+      );
       // After the call, activity should be restored
-      expect(callCtx.activity.type).toBe("invoke");
-      expect(callCtx.activity.name).toBe("adaptiveCard/action");
+      expect(ctx.activity.type).toBe("invoke");
+      expect(ctx.activity.name).toBe("adaptiveCard/action");
     });
 
     it("restores activity properties even if message handler throws", async () => {
@@ -149,7 +158,7 @@ describe("registerMSTeamsHandlers", () => {
       expect(ctx.activity.text).toBe("original");
     });
 
-    it("falls back to 'approved' when action data has no verb or action", async () => {
+    it("uses fixed synthetic text regardless of action data fields", async () => {
       const handler = makeMockHandler();
       const deps = makeMockDeps();
       registerMSTeamsHandlers(handler, deps);

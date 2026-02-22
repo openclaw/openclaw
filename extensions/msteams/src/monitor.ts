@@ -320,18 +320,20 @@ export async function monitorMSTeamsProvider(
   //
   // Webhook-based providers must hold the promise pending until shutdown, matching
   // the contract used by other webhook providers (e.g. BlueBubbles).
-  await new Promise<void>((resolve) => {
-    const stop = () => {
-      void shutdown().then(resolve);
-    };
+  if (opts.abortSignal) {
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        void shutdown().then(resolve);
+      };
 
-    if (opts.abortSignal?.aborted) {
-      stop();
-      return;
-    }
+      if (opts.abortSignal!.aborted) {
+        stop();
+        return;
+      }
 
-    opts.abortSignal?.addEventListener("abort", stop, { once: true });
-  });
+      opts.abortSignal!.addEventListener("abort", stop, { once: true });
+    });
+  }
 
   return { app: expressApp, shutdown };
 }

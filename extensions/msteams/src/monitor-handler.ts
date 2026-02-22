@@ -36,6 +36,37 @@ export type MSTeamsMessageHandlerDeps = {
   log: MSTeamsMonitorLogger;
 };
 
+// ---- Shared helpers for adaptive card action handling ----
+
+const INVOKES_KEY = "__openclaw_pending_card_invokes";
+const MAX_PENDING_INVOKES = 50;
+
+type PendingCardInvoke = { actionData: unknown; timestamp: number };
+
+/**
+ * Push an adaptive card action into the global invoke queue so any interested
+ * plugin (e.g. copilot-studio) can drain it.  Caps the queue size to prevent
+ * unbounded growth if invokes are never consumed.
+ */
+function pushPendingCardInvoke(actionData: unknown): void {
+  const g = globalThis as unknown as Record<string, PendingCardInvoke[] | undefined>;
+  if (!g[INVOKES_KEY]) g[INVOKES_KEY] = [];
+  const queue = g[INVOKES_KEY];
+  // Drop oldest entries if the queue is full.
+  while (queue.length >= MAX_PENDING_INVOKES) {
+    queue.shift();
+  }
+  queue.push({ actionData, timestamp: Date.now() });
+}
+
+/**
+ * Build a synthetic user message from adaptive card action data.
+ * Uses a fixed message to avoid interpolating untrusted input.
+ */
+function buildSyntheticActionText(): string {
+  return "I approved the permission request. Please proceed with the action.";
+}
+
 /**
  * Handle fileConsent/invoke activities for large file uploads.
  */
@@ -138,14 +169,7 @@ function handleAdaptiveCardInvoke(
     from: activity.from?.id,
   });
 
-  // Store invoke data in a global queue so any interested plugin can drain it.
-  const INVOKES_KEY = "__openclaw_pending_card_invokes";
-  const g = globalThis as unknown as Record<
-    string,
-    Array<{ actionData: unknown; timestamp: number }> | undefined
-  >;
-  if (!g[INVOKES_KEY]) g[INVOKES_KEY] = [];
-  g[INVOKES_KEY].push({ actionData, timestamp: Date.now() });
+  pushPendingCardInvoke(actionData);
 
   return true;
 }
@@ -182,16 +206,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
               value: { status: 200, body: {} },
             });
             // Route the invoke as a user message so the agent can follow up.
-            // The LLM will see this and re-invoke the tool, which will find
-            // the pending conversation and continue it.
-            const actionData = ctx.activity.value;
-            const actionVerb =
-              typeof actionData === "object" && actionData !== null
-                ? ((actionData as Record<string, unknown>).verb ??
-                  (actionData as Record<string, unknown>).action ??
-                  "approved")
-                : "approved";
-            const syntheticText = `I ${String(actionVerb)} the permission request. Please proceed with the action.`;
+            const syntheticText = buildSyntheticActionText();
             // Mutate activity properties directly — same approach as onMessage.
             const savedType = ctx.activity.type;
             const savedName = ctx.activity.name;
@@ -231,19 +246,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
           valueKeys: Object.keys(activity.value as Record<string, unknown>),
         });
 
-        // Store invoke data in a global queue so any interested plugin can drain it.
-        const INVOKES_KEY = "__openclaw_pending_card_invokes";
-        const g = globalThis as unknown as Record<
-          string,
-          Array<{ actionData: unknown; timestamp: number }> | undefined
-        >;
-        if (!g[INVOKES_KEY]) g[INVOKES_KEY] = [];
-        g[INVOKES_KEY].push({ actionData: activity.value, timestamp: Date.now() });
+        pushPendingCardInvoke(activity.value);
 
-        // Determine the action from the submit data for a human-readable synthetic message.
-        const actionData = activity.value as Record<string, unknown>;
-        const actionVerb = actionData.verb ?? actionData.action ?? "approved";
-        const syntheticText = `I ${String(actionVerb)} the permission request. Please proceed with the action.`;
+        const syntheticText = buildSyntheticActionText();
 
         // Mutate activity.text directly on the original context. We can't
         // replace ctx.activity (getter-only) and Proxy approaches break SDK

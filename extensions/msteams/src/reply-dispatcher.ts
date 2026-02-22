@@ -22,7 +22,6 @@ import {
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 /**
  * Drain any pending adaptive cards from the global queue.
@@ -54,7 +53,6 @@ export function createMSTeamsReplyDispatcher(params: {
   adapter: MSTeamsAdapter;
   appId: string;
   conversationRef: StoredConversationReference;
-  context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
   textLimit: number;
   onSentMessageIds?: (ids: string[]) => void;

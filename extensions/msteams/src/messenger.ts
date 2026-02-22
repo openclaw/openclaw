@@ -385,7 +385,6 @@ export async function sendMSTeamsMessages(params: {
   adapter: MSTeamsAdapter;
   appId: string;
   conversationRef: StoredConversationReference;
-  context?: SendContext;
   messages: MSTeamsRenderedMessage[];
   retry?: false | MSTeamsSendRetryOptions;
   onRetry?: (event: MSTeamsSendRetryEvent) => void;
