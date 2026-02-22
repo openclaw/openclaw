@@ -13,6 +13,7 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveSearXngBaseUrl,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -240,5 +241,27 @@ describe("web_search grok response parsing", () => {
     } as Parameters<typeof extractGrokContent>[0]);
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
+});
+
+describe("web_search searxng config resolution", () => {
+  it("uses default baseUrl when not specified", () => {
+    expect(resolveSearXngBaseUrl({})).toBe("http://127.0.0.1:8080");
+    expect(resolveSearXngBaseUrl(undefined)).toBe("http://127.0.0.1:8080");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveSearXngBaseUrl({ baseUrl: "http://localhost:9999" })).toBe(
+      "http://localhost:9999",
+    );
+    expect(resolveSearXngBaseUrl({ baseUrl: "https://search.example.com" })).toBe(
+      "https://search.example.com",
+    );
+  });
+
+  it("trims whitespace from baseUrl", () => {
+    expect(resolveSearXngBaseUrl({ baseUrl: "  http://localhost:8080  " })).toBe(
+      "http://localhost:8080",
+    );
   });
 });
