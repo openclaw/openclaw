@@ -3,7 +3,12 @@ import type { Request, Response, NextFunction } from "express";
 import { logVerbose, danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
-import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
+import {
+  buildLineWebhookReplayKey,
+  isLineWebhookVerificationRequest,
+  parseLineWebhookBody,
+  shouldDropReplayLineWebhookEvent,
+} from "./webhook-utils.js";
 
 export interface LineWebhookOptions {
   channelSecret: string;
@@ -35,6 +40,7 @@ export function createLineWebhookMiddleware(
   options: LineWebhookOptions,
 ): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
   const { channelSecret, onEvents, runtime } = options;
+  const recentReplayKeys = new Map<string, number>();
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
@@ -68,6 +74,13 @@ export function createLineWebhookMiddleware(
 
       if (!body) {
         res.status(400).json({ error: "Invalid webhook payload" });
+        return;
+      }
+
+      const replayKey = buildLineWebhookReplayKey({ signature, rawBody, body });
+      if (shouldDropReplayLineWebhookEvent(recentReplayKeys, replayKey, Date.now())) {
+        logVerbose("line: dropped replayed signed webhook payload");
+        res.status(200).json({ status: "ok" });
         return;
       }
 

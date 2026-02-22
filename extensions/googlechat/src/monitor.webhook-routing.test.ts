@@ -135,4 +135,55 @@ describe("Google Chat webhook routing", () => {
       unregister();
     }
   });
+
+  it("deduplicates replayed webhook events for the same account + message", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
+
+    const sink = vi.fn();
+    const unregister = registerGoogleChatWebhookTarget({
+      account: baseAccount("single"),
+      config: {} as OpenClawConfig,
+      runtime: {},
+      core: {} as PluginRuntime,
+      path: "/googlechat",
+      statusSink: sink,
+      mediaMaxMb: 5,
+    });
+
+    const payload = {
+      type: "MESSAGE",
+      eventTime: "2026-02-19T12:00:00.000Z",
+      space: { name: "spaces/AAA" },
+      user: { name: "users/123" },
+      message: { name: "spaces/AAA/messages/abc" },
+    };
+
+    try {
+      const firstRes = createMockServerResponse();
+      const secondRes = createMockServerResponse();
+
+      const firstHandled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          payload,
+        }),
+        firstRes,
+      );
+      const secondHandled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          payload,
+        }),
+        secondRes,
+      );
+
+      expect(firstHandled).toBe(true);
+      expect(secondHandled).toBe(true);
+      expect(firstRes.statusCode).toBe(200);
+      expect(secondRes.statusCode).toBe(200);
+      expect(sink).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
 });
