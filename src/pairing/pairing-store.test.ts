@@ -78,35 +78,114 @@ describe("pairing store", () => {
     });
   });
 
+  it("applies sender backoff for repeated new pairing attempts", async () => {
+    await withTempStateDir(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      try {
+        const first = await upsertChannelPairingRequest({
+          channel: "discord",
+          id: "u1",
+        });
+        expect(first.created).toBe(true);
+        expect(first.throttled ?? false).toBe(false);
+
+        const approved = await approveChannelPairingCode({
+          channel: "discord",
+          code: first.code,
+        });
+        expect(approved?.id).toBe("u1");
+
+        const throttled = await upsertChannelPairingRequest({
+          channel: "discord",
+          id: "u1",
+        });
+        expect(throttled.created).toBe(false);
+        expect(throttled.throttled).toBe(true);
+        expect(throttled.retryAfterMs ?? 0).toBeGreaterThan(0);
+
+        vi.advanceTimersByTime((throttled.retryAfterMs ?? 0) + 1);
+        const afterBackoff = await upsertChannelPairingRequest({
+          channel: "discord",
+          id: "u1",
+        });
+        expect(afterBackoff.created).toBe(true);
+        expect(afterBackoff.throttled ?? false).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("applies ip backoff across different senders when sourceIp matches", async () => {
+    await withTempStateDir(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      try {
+        const first = await upsertChannelPairingRequest({
+          channel: "line",
+          id: "sender-a",
+          sourceIp: "203.0.113.10",
+        });
+        expect(first.created).toBe(true);
+
+        const throttled = await upsertChannelPairingRequest({
+          channel: "line",
+          id: "sender-b",
+          sourceIp: "::ffff:203.0.113.10",
+        });
+        expect(throttled.created).toBe(false);
+        expect(throttled.throttled).toBe(true);
+        expect(throttled.retryAfterMs ?? 0).toBeGreaterThan(0);
+
+        const otherIp = await upsertChannelPairingRequest({
+          channel: "line",
+          id: "sender-c",
+          sourceIp: "203.0.113.11",
+        });
+        expect(otherIp.created).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("expires pending requests after TTL", async () => {
     await withTempStateDir(async (stateDir) => {
-      const created = await upsertChannelPairingRequest({
-        channel: "signal",
-        id: "+15550001111",
-      });
-      expect(created.created).toBe(true);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      try {
+        const created = await upsertChannelPairingRequest({
+          channel: "signal",
+          id: "+15550001111",
+        });
+        expect(created.created).toBe(true);
 
-      const filePath = resolvePairingFilePath(stateDir, "signal");
-      const raw = await fs.readFile(filePath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        requests?: Array<Record<string, unknown>>;
-      };
-      const expiredAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-      const requests = (parsed.requests ?? []).map((entry) => ({
-        ...entry,
-        createdAt: expiredAt,
-        lastSeenAt: expiredAt,
-      }));
-      await writeJsonFixture(filePath, { version: 1, requests });
+        const filePath = resolvePairingFilePath(stateDir, "signal");
+        const raw = await fs.readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          requests?: Array<Record<string, unknown>>;
+        };
+        const expiredAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const requests = (parsed.requests ?? []).map((entry) => ({
+          ...entry,
+          createdAt: expiredAt,
+          lastSeenAt: expiredAt,
+        }));
+        await writeJsonFixture(filePath, { version: 1, requests });
 
-      const list = await listChannelPairingRequests("signal");
-      expect(list).toHaveLength(0);
+        const list = await listChannelPairingRequests("signal");
+        expect(list).toHaveLength(0);
 
-      const next = await upsertChannelPairingRequest({
-        channel: "signal",
-        id: "+15550001111",
-      });
-      expect(next.created).toBe(true);
+        vi.advanceTimersByTime(2 * 60 * 60 * 1000);
+        const next = await upsertChannelPairingRequest({
+          channel: "signal",
+          id: "+15550001111",
+        });
+        expect(next.created).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
