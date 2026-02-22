@@ -140,8 +140,21 @@
     flex-shrink: 0;
   }
 
-  /* Content */
+  /* Content — compact header on chat, hide on other tabs */
   .content-header {
+    padding: 0;
+    max-height: 48px;
+  }
+
+  .content:not(.content--chat) .content-header {
+    display: none;
+  }
+
+  .content--chat .page-title {
+    font-size: 18px;
+  }
+
+  .content--chat .page-sub {
     display: none;
   }
 
@@ -212,10 +225,29 @@
   }
 
   /* Chat */
+  .chat-agent-bar {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+
+  .chat-agent-bar__name {
+    font-size: 11px;
+  }
+
+  .chat-agent-select {
+    font-size: 11px;
+    padding: 2px 16px 2px 4px;
+  }
+
+  .chat-sessions-summary {
+    padding: 2px 4px;
+    font-size: 10px;
+  }
+
   .chat-header {
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 6px;
   }
 
   .chat-header__left {
@@ -233,40 +265,60 @@
   }
 
   .chat-thread {
-    margin-top: 8px;
-    padding: 12px 8px;
+    margin-top: 6px;
+    padding: 10px 6px;
   }
 
   .chat-msg {
-    max-width: 90%;
+    max-width: 92%;
   }
 
   .chat-bubble {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: var(--radius-md);
   }
 
   .chat-compose {
-    gap: 8px;
+    gap: 6px;
   }
 
   .chat-compose__field textarea {
-    min-height: 60px;
-    padding: 8px 10px;
+    min-height: 52px;
+    padding: 6px 10px;
     border-radius: var(--radius-md);
     font-size: 14px;
+  }
+
+  .agent-chat__input {
+    margin: 0 8px 10px;
+  }
+
+  .agent-chat__toolbar {
+    padding: 4px 8px;
+  }
+
+  .agent-chat__input-btn,
+  .agent-chat__toolbar .btn-ghost {
+    width: 28px;
+    height: 28px;
+  }
+
+  .agent-chat__input-btn svg,
+  .agent-chat__toolbar .btn-ghost svg {
+    width: 14px;
+    height: 14px;
   }
 
   /* Log stream */
   .log-stream {
     border-radius: var(--radius-md);
-    max-height: 380px;
+    max-height: 320px;
   }
 
   .log-row {
     grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
+    gap: 2px;
+    padding: 6px;
   }
 
   .log-time {
@@ -282,7 +334,15 @@
   }
 
   .log-message {
-    font-size: 12px;
+    font-size: 11px;
+    word-break: break-word;
+  }
+
+  .ov-log-tail-content {
+    max-height: 200px;
+    font-size: 10px;
+    padding: 8px;
+    line-height: 1.5;
   }
 
   /* Lists */
