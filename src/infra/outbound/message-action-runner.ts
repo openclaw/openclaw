@@ -399,11 +399,16 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
+  // Accept "content" as fallback for "message" — OpenAI-convention models (xAI/Grok)
+  // stubbornly send "content" instead of "message" even when instructed otherwise.
+  // This mirrors the existing media/path/filePath fallback pattern.
   let message =
-    readStringParam(params, "message", {
+    readStringParam(params, "message", { required: false, allowEmpty: true }) ??
+    readStringParam(params, "content", {
       required: !mediaHint && !hasCard && !hasComponents,
       allowEmpty: true,
-    }) ?? "";
+    }) ??
+    "";
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
   }
