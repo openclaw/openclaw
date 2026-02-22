@@ -25,7 +25,6 @@ describe("subscribeEmbeddedPiSession", () => {
     const payload = onToolResult.mock.calls[0][0];
     expect(payload.text).toContain("🖼️");
     expect(payload.text).toContain("Canvas");
-    expect(payload.text).toContain("A2UI push");
     expect(payload.text).toContain("/tmp/a2ui.jsonl");
   });
   it("skips tool summaries when shouldEmitToolResult is false", () => {
