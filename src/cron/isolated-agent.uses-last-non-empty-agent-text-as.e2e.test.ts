@@ -298,7 +298,6 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-
   it("uses model override when provided", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
