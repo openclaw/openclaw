@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -10,21 +10,29 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const mockConfig = {
+  session: {
+    mainKey: "main",
+    scope: "per-sender",
+    agentToAgent: { maxPingPongTurns: 2 },
+  },
+  tools: {
+    // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+    sessions: { visibility: "all" },
+  },
+  agents: {
+    defaults: {
+      userTimezone: undefined as string | undefined,
+    },
+  },
+};
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => ({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        agentToAgent: { maxPingPongTurns: 2 },
-      },
-      tools: {
-        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-        sessions: { visibility: "all" },
-      },
-    }),
+    // Return a fresh config object per call to avoid shared mutable state between tests.
+    loadConfig: () => structuredClone(mockConfig),
     resolveGatewayPort: () => 18789,
   };
 });
@@ -46,6 +54,10 @@ let sessionsModule: typeof import("../config/sessions.js");
 describe("sessions tools", () => {
   beforeAll(async () => {
     sessionsModule = await import("../config/sessions.js");
+  });
+
+  beforeEach(() => {
+    mockConfig.agents.defaults.userTimezone = undefined;
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
@@ -274,6 +286,104 @@ describe("sessions tools", () => {
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
     const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
     expect(thinkingBlock?.thinkingSignature).toBeUndefined();
+  });
+
+  it("sessions_history formats timestamps using userTimezone when configured", async () => {
+    callGatewayMock.mockReset();
+    // Set a fixed timestamp: 2025-01-15 12:00:00 UTC (1736942400000 ms)
+    const testTimestamp = 1736942400000;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: testTimestamp,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "hi there" }],
+              timestamp: testTimestamp + 1000,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    // Test with Asia/Shanghai timezone (UTC+8)
+    mockConfig.agents.defaults.userTimezone = "Asia/Shanghai";
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call_tz", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(details.messages).toBeDefined();
+    expect(details.messages?.length).toBeGreaterThan(0);
+
+    const userMessage = details.messages?.find((msg) => (msg as { role?: string }).role === "user");
+    expect(userMessage).toBeDefined();
+    expect(userMessage?.timestamp).toBe(testTimestamp); // Original timestamp preserved
+    expect(typeof userMessage?.timestampFormatted).toBe("string");
+    // Asia/Shanghai is UTC+8, so 12:00 UTC should be 20:00 local time
+    expect(userMessage?.timestampFormatted).toMatch(/2025-01-15 20:00/);
+
+    const assistantMessage = details.messages?.find(
+      (msg) => (msg as { role?: string }).role === "assistant",
+    );
+    expect(assistantMessage).toBeDefined();
+    expect(assistantMessage?.timestamp).toBe(testTimestamp + 1000);
+    expect(typeof assistantMessage?.timestampFormatted).toBe("string");
+  });
+
+  it("sessions_history does not add timestampFormatted when userTimezone is not configured", async () => {
+    callGatewayMock.mockReset();
+    const testTimestamp = 1736942400000;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: testTimestamp,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    // Clear userTimezone
+    mockConfig.agents.defaults.userTimezone = undefined;
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call_no_tz", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(details.messages).toBeDefined();
+    const userMessage = details.messages?.[0];
+    expect(userMessage?.timestamp).toBe(testTimestamp);
+    // When userTimezone is not configured, timestampFormatted should not be added
+    // (it will use host timezone, but we don't test that here to avoid flakiness)
+    // The key point is that the original timestamp is preserved
+    expect(userMessage?.timestamp).toBeDefined();
+    expect(userMessage?.timestampFormatted).toBeUndefined();
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {

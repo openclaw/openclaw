@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -78,7 +79,10 @@ function sanitizeHistoryContentBlock(block: unknown): { block: unknown; truncate
   return { block: entry, truncated };
 }
 
-function sanitizeHistoryMessage(message: unknown): { message: unknown; truncated: boolean } {
+function sanitizeHistoryMessage(
+  message: unknown,
+  userTimezone?: string,
+): { message: unknown; truncated: boolean } {
   if (!message || typeof message !== "object") {
     return { message, truncated: false };
   }
@@ -112,6 +116,19 @@ function sanitizeHistoryMessage(message: unknown): { message: unknown; truncated
     entry.text = res.text;
     truncated ||= res.truncated;
   }
+
+  // Add formatted timestamp when the user has explicitly configured a timezone.
+  if (userTimezone && typeof entry.timestamp === "number") {
+    try {
+      const formatted = formatZonedTimestamp(new Date(entry.timestamp), { timeZone: userTimezone });
+      if (formatted) {
+        entry.timestampFormatted = formatted;
+      }
+    } catch {
+      // ignore formatting errors for invalid timezones
+    }
+  }
+
   return { message: entry, truncated };
 }
 
@@ -226,7 +243,12 @@ export function createSessionsHistoryTool(opts?: {
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
-      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      // Pass the raw configured userTimezone (not resolved) so timestampFormatted
+      // is only added when the user has explicitly set a timezone in config.
+      const userTimezone = cfg.agents?.defaults?.userTimezone?.trim() || undefined;
+      const sanitizedMessages = selectedMessages.map((message) =>
+        sanitizeHistoryMessage(message, userTimezone),
+      );
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const cappedMessages = capArrayByJsonBytes(
         sanitizedMessages.map((entry) => entry.message),
