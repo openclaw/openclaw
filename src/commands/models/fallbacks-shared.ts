@@ -87,6 +87,19 @@ export async function addFallbackCommand(
     if (!nextModels[targetKey]) {
       nextModels[targetKey] = {};
     }
+
+    const entry = cfg.agents?.defaults?.[params.key] as unknown as
+      | PrimaryFallbackConfig
+      | undefined;
+    const primaryRaw = entry?.primary?.trim();
+    if (primaryRaw) {
+      const primaryResolved = resolveModelTarget({ raw: primaryRaw, cfg });
+      const primaryKey = modelKey(primaryResolved.provider, primaryResolved.model);
+      if (!nextModels[primaryKey]) {
+        nextModels[primaryKey] = {};
+      }
+    }
+
     const existing = getFallbacks(cfg, params.key);
     const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
     if (existingKeys.includes(targetKey)) {
