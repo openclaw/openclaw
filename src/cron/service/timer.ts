@@ -221,6 +221,17 @@ export function armTimer(state: CronServiceState) {
   );
 }
 
+function armRunningRecheckTimer(state: CronServiceState) {
+  if (state.timer) {
+    clearTimeout(state.timer);
+  }
+  state.timer = setTimeout(() => {
+    void onTimer(state).catch((err) => {
+      state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+    });
+  }, MAX_TIMER_DELAY_MS);
+}
+
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
     // Re-arm the timer so the scheduler keeps ticking even when a job is
@@ -233,17 +244,13 @@ export async function onTimer(state: CronServiceState) {
     // zero-delay hot-loop when past-due jobs are waiting for the current
     // execution to finish.
     // See: https://github.com/openclaw/openclaw/issues/12025
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-    state.timer = setTimeout(() => {
-      void onTimer(state).catch((err) => {
-        state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-      });
-    }, MAX_TIMER_DELAY_MS);
+    armRunningRecheckTimer(state);
     return;
   }
   state.running = true;
+  // Keep a watchdog timer armed while a tick is executing. If execution hangs
+  // (for example in a provider call), the scheduler still wakes to re-check.
+  armRunningRecheckTimer(state);
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
