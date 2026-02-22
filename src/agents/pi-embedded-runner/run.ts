@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -51,13 +53,11 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -86,6 +86,8 @@ type UsageAccumulator = {
   lastCacheRead: number;
   lastCacheWrite: number;
   lastInput: number;
+  /** Total tokens from the most recent API call (not accumulated). */
+  lastTurnTotal: number;
 };
 
 const createUsageAccumulator = (): UsageAccumulator => ({
@@ -97,6 +99,7 @@ const createUsageAccumulator = (): UsageAccumulator => ({
   lastCacheRead: 0,
   lastCacheWrite: 0,
   lastInput: 0,
+  lastTurnTotal: 0,
 });
 
 function createCompactionDiagId(): string {
@@ -144,6 +147,10 @@ const mergeUsageIntoAccumulator = (
   target.lastCacheRead = usage.cacheRead ?? 0;
   target.lastCacheWrite = usage.cacheWrite ?? 0;
   target.lastInput = usage.input ?? 0;
+  // Track the most recent API call's total tokens (not accumulated) for accurate session_status.
+  target.lastTurnTotal =
+    usage.total ??
+    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
 };
 
 const toNormalizedUsage = (usage: UsageAccumulator) => {
@@ -163,14 +170,14 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   // See: https://github.com/openclaw/openclaw/issues/13698
   //
   // We use lastInput/lastCacheRead/lastCacheWrite (from the most recent API call) for
-  // cache-related fields, but keep accumulated output (total generated text this turn).
-  const lastPromptTokens = usage.lastInput + usage.lastCacheRead + usage.lastCacheWrite;
+  // cache-related fields, and lastTurnTotal (from the most recent API call) for total,
+  // giving an accurate snapshot of the last API call's usage, not accumulated usage.
   return {
     input: usage.lastInput || undefined,
     output: usage.output || undefined,
     cacheRead: usage.lastCacheRead || undefined,
     cacheWrite: usage.lastCacheWrite || undefined,
-    total: lastPromptTokens + usage.output || undefined,
+    total: usage.lastTurnTotal || undefined,
   };
 };
 
