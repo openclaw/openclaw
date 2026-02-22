@@ -12,6 +12,12 @@ vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
 }));
 
+vi.mock("./pi-embedded-runner/compact.js", () => ({
+  compactEmbeddedPiSessionDirect: vi.fn(async () => {
+    throw new Error("compact should not run in auth profile rotation tests");
+  }),
+}));
+
 vi.mock("./models-config.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./models-config.js")>();
   return {
