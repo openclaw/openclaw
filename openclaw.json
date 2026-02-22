@@ -1,0 +1,217 @@
+{
+  "mcpServers": {
+    "perplexity": {
+      "command": "npx",
+      "args": ["-y", "@perplexity-ai/mcp-server"],
+      "env": {
+        "PERPLEXITY_API_KEY": ""
+      }
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "duckduckgo": {
+      "command": "npx",
+      "args": ["-y", "@qwang07/duck-duck-mcp"]
+    },
+    "docs-fetcher": {
+      "command": "npx",
+      "args": ["-y", "@cdugo/docs-fetcher-mcp"]
+    },
+    "git": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-git"]
+    },
+    "time": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-time"]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"]
+    },
+    "mermaid": {
+      "command": "npx",
+      "args": ["-y", "@narasimhaponnada/mermaid-mcp-server"]
+    },
+    "arxiv": {
+      "command": "npx",
+      "args": ["-y", "arxiv-mcp-server"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/tg"]
+    },
+    "puppeteer": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "@berthojoris/mcp-sqlite-server"]
+    },
+    "kubernetes": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-kubernetes"]
+    },
+    "notifications": {
+      "command": "npx",
+      "args": ["-y", "mcp-notifications"]
+    },
+    "markitdown": {
+      "command": "npx",
+      "args": ["-y", "markitdown-mcp-npx"]
+    },
+    "excel": {
+      "command": "npx",
+      "args": ["-y", "@negokaz/excel-mcp-server"]
+    },
+    "apple-shortcuts": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-apple-shortcuts"]
+    },
+    "xcodebuild": {
+      "command": "npx",
+      "args": ["-y", "xcodebuildmcp"]
+    },
+    "npm-docs": {
+      "command": "npx",
+      "args": ["-y", "@bsmi021/mcp-npm_docs-server"]
+    },
+    "dns": {
+      "command": "npx",
+      "args": ["-y", "@cenemiljezweb/dns-mcp-server"]
+    },
+    "whois": {
+      "command": "npx",
+      "args": ["-y", "@domaindetails/whois-mcp"]
+    },
+    "screenshot": {
+      "command": "npx",
+      "args": ["-y", "universal-screenshot-mcp"]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/brave-search-mcp-server"],
+      "env": {
+        "BRAVE_API_KEY": ""
+      }
+    },
+    "exa": {
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "env": {
+        "EXA_API_KEY": ""
+      }
+    },
+    "tavily": {
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
+      "env": {
+        "TAVILY_API_KEY": ""
+      }
+    },
+    "firecrawl": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": {
+        "FIRECRAWL_API_KEY": ""
+      }
+    },
+    "jina": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/jina-reader-mcp"],
+      "env": {
+        "JINA_AI_API_KEY": ""
+      }
+    },
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/notion-mcp-server"],
+      "env": {
+        "NOTION_API_KEY": ""
+      }
+    },
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/slack-mcp-server"],
+      "env": {
+        "SLACK_BOT_TOKEN": ""
+      }
+    },
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/linear-mcp-server"],
+      "env": {
+        "LINEAR_API_KEY": ""
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/github-mcp-server"],
+      "env": {
+        "GITHUB_TOKEN": ""
+      }
+    },
+    "supabase": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/supabase-mcp-server"],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": ""
+      }
+    },
+    "aws": {
+      "command": "npx",
+      "args": ["-y", "aws-mcp"],
+      "env": {
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": ""
+      }
+    },
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/figma-mcp-server"],
+      "env": {
+        "FIGMA_API_TOKEN": ""
+      }
+    },
+    "omnisearch": {
+      "command": "npx",
+      "args": ["-y", "mcp-omnisearch"],
+      "env": {
+        "BRAVE_API_KEY": "",
+        "TAVILY_API_KEY": "",
+        "EXA_API_KEY": "",
+        "JINA_AI_API_KEY": "",
+        "FIRECRAWL_API_KEY": ""
+      }
+    },
+    "youtube-transcript": {
+      "command": "npx",
+      "args": ["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"]
+    },
+    "apify": {
+      "command": "npx",
+      "args": ["-y", "@apify/actors-mcp-server"],
+      "env": {
+        "APIFY_TOKEN": ""
+      }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/postgres"]
+    },
+    "e2b": {
+      "command": "npx",
+      "args": ["-y", "e2b-mcp-server"],
+      "env": {
+        "E2B_API_KEY": ""
+      }
+    }
+  }
+}

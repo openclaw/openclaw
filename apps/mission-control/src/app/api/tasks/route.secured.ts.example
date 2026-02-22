@@ -1,0 +1,237 @@
+/**
+ * EXAMPLE: Fully secured API route
+ * 
+ * This shows how to apply all security utilities to the tasks endpoint.
+ * Copy relevant patterns to your actual route files.
+ */
+
+import { NextRequest, NextResponse } from "next/server";
+import { v4 as uuidv4 } from "uuid";
+
+import { withAuth } from "@/lib/auth";
+import { checkRateLimit, RateLimitPresets } from "@/lib/rate-limit";
+import { handleApiError, UserError } from "@/lib/errors";
+import { validateString, validateEnum, FieldLimits, sanitizeInput } from "@/lib/validation";
+import { createLogger } from "@/lib/logger";
+import {
+  listTasks,
+  getTask,
+  createTask,
+  updateTask,
+  deleteTask,
+  logActivity,
+} from "@/lib/db";
+
+const log = createLogger("tasks");
+
+const VALID_STATUS = ["inbox", "assigned", "in_progress", "review", "done"] as const;
+const VALID_PRIORITY = ["low", "medium", "high", "urgent"] as const;
+
+// GET - List tasks (read-only, standard rate limit)
+export const GET = withAuth(async (request: NextRequest) => {
+  // Rate limit
+  const rateLimitError = checkRateLimit(request, RateLimitPresets.standard);
+  if (rateLimitError) return rateLimitError;
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const status = searchParams.get("status") ?? undefined;
+    const mission_id = searchParams.get("mission_id") ?? undefined;
+    const assigned_agent_id = searchParams.get("agent_id") ?? undefined;
+
+    // Validate filter params if provided
+    if (status) {
+      const validation = validateEnum(status, "status", VALID_STATUS, { required: false });
+      if (!validation.valid) {
+        throw new UserError(validation.error!, 400);
+      }
+    }
+
+    const tasks = listTasks({ status, mission_id, assigned_agent_id });
+    log.info("Listed tasks", { count: tasks.length, filters: { status, mission_id } });
+    
+    return NextResponse.json({ tasks });
+  } catch (error) {
+    return handleApiError(error, "Failed to list tasks");
+  }
+});
+
+// POST - Create task (write operation, stricter rate limit)
+export const POST = withAuth(async (request: NextRequest) => {
+  // Rate limit for write operations
+  const rateLimitError = checkRateLimit(request, RateLimitPresets.write);
+  if (rateLimitError) return rateLimitError;
+
+  try {
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      throw new UserError("Invalid JSON body", 400);
+    }
+
+    const { title, description, status, priority, mission_id, assigned_agent_id } = body;
+
+    // Validate required fields
+    const titleValidation = validateString(title, "title", {
+      required: true,
+      ...FieldLimits.title,
+    });
+    if (!titleValidation.valid) {
+      throw new UserError(titleValidation.error!, 400);
+    }
+
+    // Validate optional fields
+    const descValidation = validateString(description, "description", {
+      required: false,
+      ...FieldLimits.description,
+    });
+    if (!descValidation.valid) {
+      throw new UserError(descValidation.error!, 400);
+    }
+
+    if (status !== undefined) {
+      const statusValidation = validateEnum(status, "status", VALID_STATUS, { required: false });
+      if (!statusValidation.valid) {
+        throw new UserError(statusValidation.error!, 400);
+      }
+    }
+
+    if (priority !== undefined) {
+      const priorityValidation = validateEnum(priority, "priority", VALID_PRIORITY, { required: false });
+      if (!priorityValidation.valid) {
+        throw new UserError(priorityValidation.error!, 400);
+      }
+    }
+
+    // Sanitize inputs
+    const sanitizedTitle = sanitizeInput(title as string);
+    const sanitizedDescription = description ? sanitizeInput(description as string) : "";
+
+    const task = createTask({
+      id: uuidv4(),
+      title: sanitizedTitle,
+      description: sanitizedDescription,
+      status: status as typeof VALID_STATUS[number] | undefined,
+      priority: priority as typeof VALID_PRIORITY[number] | undefined,
+      mission_id: mission_id as string | undefined,
+      assigned_agent_id: assigned_agent_id as string | undefined,
+    });
+
+    logActivity({
+      id: uuidv4(),
+      type: "task_created",
+      task_id: task.id,
+      mission_id: task.mission_id ?? undefined,
+      message: `Task "${task.title}" created`,
+    });
+
+    log.info("Task created", { taskId: task.id, title: task.title });
+    return NextResponse.json({ task }, { status: 201 });
+  } catch (error) {
+    return handleApiError(error, "Failed to create task");
+  }
+});
+
+// PATCH - Update task
+export const PATCH = withAuth(async (request: NextRequest) => {
+  const rateLimitError = checkRateLimit(request, RateLimitPresets.write);
+  if (rateLimitError) return rateLimitError;
+
+  try {
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      throw new UserError("Invalid JSON body", 400);
+    }
+
+    const { id, ...patch } = body;
+
+    // Validate task ID
+    const idValidation = validateString(id, "id", { required: true, ...FieldLimits.id });
+    if (!idValidation.valid) {
+      throw new UserError(idValidation.error!, 400);
+    }
+
+    const existing = getTask(id as string);
+    if (!existing) {
+      throw new UserError("Task not found", 404);
+    }
+
+    // Validate patch fields
+    if (patch.status !== undefined) {
+      const validation = validateEnum(patch.status, "status", VALID_STATUS, { required: false });
+      if (!validation.valid) throw new UserError(validation.error!, 400);
+    }
+
+    if (patch.priority !== undefined) {
+      const validation = validateEnum(patch.priority, "priority", VALID_PRIORITY, { required: false });
+      if (!validation.valid) throw new UserError(validation.error!, 400);
+    }
+
+    if (patch.title !== undefined) {
+      const validation = validateString(patch.title, "title", { ...FieldLimits.title, required: false });
+      if (!validation.valid) throw new UserError(validation.error!, 400);
+      patch.title = sanitizeInput(patch.title as string);
+    }
+
+    if (patch.description !== undefined) {
+      const validation = validateString(patch.description, "description", { ...FieldLimits.description, required: false });
+      if (!validation.valid) throw new UserError(validation.error!, 400);
+      patch.description = sanitizeInput(patch.description as string);
+    }
+
+    const task = updateTask(id as string, patch as Parameters<typeof updateTask>[1]);
+
+    if (patch.status && patch.status !== existing.status) {
+      logActivity({
+        id: uuidv4(),
+        type: "task_status_changed",
+        task_id: id as string,
+        agent_id: (patch.assigned_agent_id ?? existing.assigned_agent_id ?? undefined) as string | undefined,
+        message: `Task "${existing.title}" moved from ${existing.status} to ${patch.status}`,
+        metadata: { from: existing.status, to: patch.status },
+      });
+    }
+
+    log.info("Task updated", { taskId: id, changes: Object.keys(patch) });
+    return NextResponse.json({ task });
+  } catch (error) {
+    return handleApiError(error, "Failed to update task");
+  }
+});
+
+// DELETE - Delete task
+export const DELETE = withAuth(async (request: NextRequest) => {
+  const rateLimitError = checkRateLimit(request, RateLimitPresets.write);
+  if (rateLimitError) return rateLimitError;
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+
+    if (!id) {
+      throw new UserError("Task ID is required", 400);
+    }
+
+    const existing = getTask(id);
+    if (!existing) {
+      throw new UserError("Task not found", 404);
+    }
+
+    deleteTask(id);
+
+    logActivity({
+      id: uuidv4(),
+      type: "task_deleted",
+      task_id: id,
+      message: `Task "${existing.title}" deleted`,
+    });
+
+    log.info("Task deleted", { taskId: id, title: existing.title });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return handleApiError(error, "Failed to delete task");
+  }
+});

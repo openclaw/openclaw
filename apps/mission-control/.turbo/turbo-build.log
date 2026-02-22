@@ -1,0 +1,97 @@
+
+> @openclaw/dashboard@0.1.0 build /Users/tg/Projects/OpenClaw/openclaw-fresh/openclaw-main/apps/mission-control
+> next build
+
+⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of /Users/tg/Projects/OpenClaw/openclaw-fresh/openclaw-main/pnpm-lock.yaml as the root directory.
+ To silence this warning, set `turbopack.root` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack#root-directory for more information.
+ Detected additional lockfiles: 
+   * /Users/tg/Projects/OpenClaw/openclaw-fresh/openclaw-main/apps/mission-control/package-lock.json
+
+▲ Next.js 16.1.6 (Turbopack)
+- Environments: .env.local
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 7.0s
+  Running TypeScript ...
+  Collecting page data using 13 workers ...
+  Generating static pages using 13 workers (0/65) ...
+  Generating static pages using 13 workers (16/65) 
+  Generating static pages using 13 workers (32/65) 
+  Generating static pages using 13 workers (48/65) 
+✓ Generating static pages using 13 workers (65/65) in 101.4ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/accounts
+├ ƒ /api/activity
+├ ƒ /api/agents
+├ ƒ /api/agents/files
+├ ƒ /api/agents/specialists
+├ ƒ /api/agents/specialists/feedback
+├ ƒ /api/agents/specialists/recommend
+├ ƒ /api/agents/specialists/suggestions
+├ ƒ /api/agents/teams
+├ ƒ /api/auth/session
+├ ƒ /api/chat
+├ ƒ /api/chat/analytics
+├ ƒ /api/chat/attachments
+├ ƒ /api/chat/council
+├ ƒ /api/chat/search
+├ ƒ /api/chat/sessions
+├ ƒ /api/chat/sessions/search
+├ ƒ /api/chat/tags
+├ ƒ /api/csrf-token
+├ ƒ /api/employees
+├ ƒ /api/employees/access
+├ ƒ /api/employees/hierarchy
+├ ƒ /api/employees/schedules
+├ ƒ /api/employees/schedules/run
+├ ƒ /api/employees/seed
+├ ƒ /api/employees/swarm-seed
+├ ƒ /api/gateway/start
+├ ƒ /api/health
+├ ƒ /api/integrations
+├ ƒ /api/learning-hub/lessons
+├ ƒ /api/missions
+├ ƒ /api/models
+├ ƒ /api/openclaw/approvals
+├ ƒ /api/openclaw/channels
+├ ƒ /api/openclaw/community-skills
+├ ƒ /api/openclaw/community-usecases
+├ ƒ /api/openclaw/config
+├ ƒ /api/openclaw/connectivity
+├ ƒ /api/openclaw/cron
+├ ƒ /api/openclaw/events
+├ ƒ /api/openclaw/logs
+├ ƒ /api/openclaw/nodes
+├ ƒ /api/openclaw/restart
+├ ƒ /api/openclaw/sessions
+├ ƒ /api/openclaw/skills
+├ ƒ /api/openclaw/status
+├ ƒ /api/openclaw/tools
+├ ƒ /api/openclaw/usage
+├ ƒ /api/orchestrator
+├ ƒ /api/plugins
+├ ƒ /api/profiles
+├ ƒ /api/profiles/workspaces
+├ ƒ /api/search
+├ ƒ /api/settings/api-keys
+├ ƒ /api/settings/api-keys/batch-status
+├ ƒ /api/settings/credits
+├ ƒ /api/settings/models
+├ ƒ /api/settings/risk-level
+├ ƒ /api/tasks
+├ ƒ /api/tasks/check-completion
+├ ƒ /api/tasks/comments
+├ ƒ /api/tasks/dispatch
+├ ƒ /api/tasks/rework
+└ ƒ /api/workspaces
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

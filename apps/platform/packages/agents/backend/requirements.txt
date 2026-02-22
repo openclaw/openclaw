@@ -1,0 +1,52 @@
+# FastAPI & Server
+fastapi~=0.115.0
+uvicorn[standard]~=0.34.0
+python-multipart~=0.0.20
+websockets~=14.2
+
+# Database
+sqlalchemy~=2.0.37
+psycopg2-binary~=2.9.10
+alembic~=1.14.1
+
+# Redis & Task Queue
+redis~=5.2.1
+celery~=5.4.0
+
+# Authentication & Security
+passlib[bcrypt]~=1.7.4
+pydantic~=2.10.6
+pydantic-settings~=2.7.1
+
+# Integrations
+google-api-python-client~=2.164.0
+google-auth-oauthlib~=1.2.1
+google-auth-httplib2~=0.2.0
+PyGithub~=2.6.0
+notion-client~=2.3.0
+stripe~=11.5.0
+python-telegram-bot~=21.10
+aiohttp~=3.11.14
+httpx~=0.28.1
+
+# OpenAI
+openai~=1.63.2
+
+# Utilities
+python-dotenv~=1.0.1
+structlog~=25.1.0
+tenacity~=9.0.0
+croniter~=6.0.0
+pytz~=2025.1
+aiofiles~=24.1.0
+
+# Testing (dev only)
+pytest~=8.3.4
+pytest-asyncio~=0.25.3
+pytest-cov~=6.0.0
+
+# Development (dev only)
+black~=25.1.0
+isort~=5.13.2
+mypy~=1.14.1
+pip-audit~=2.8.0

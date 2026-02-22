@@ -1,0 +1,134 @@
+# OpenClaw Agent Management System - Docker Compose
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: openclaw-agents-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openclaw_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-openclaw_agents}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openclaw}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and task queue
+  redis:
+    image: redis:7-alpine
+    container_name: openclaw-agents-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-openclaw_redis_dev}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-openclaw_redis_dev}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openclaw-agents-backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-openclaw_dev}@postgres:5432/${POSTGRES_DB:-openclaw_agents}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-openclaw_redis_dev}@redis:6379
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DEBUG: ${DEBUG:-false}
+      # API Keys (pass from host environment)
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NOTION_API_KEY: ${NOTION_API_KEY:-}
+      GMAIL_CREDENTIALS: ${GMAIL_CREDENTIALS:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker (for background tasks; add tasks to tasks/celery_app.py include=[])
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openclaw-agents-celery
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-openclaw_dev}@postgres:5432/${POSTGRES_DB:-openclaw_agents}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-openclaw_redis_dev}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-openclaw_redis_dev}@redis:6379/0
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NOTION_API_KEY: ${NOTION_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command: celery -A tasks.celery_app worker --loglevel=info
+
+  # Celery Beat (scheduler)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openclaw-agents-beat
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-openclaw_dev}@postgres:5432/${POSTGRES_DB:-openclaw_agents}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-openclaw_redis_dev}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-openclaw_redis_dev}@redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command: celery -A tasks.celery_app beat --loglevel=info
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: openclaw-agents-frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000/ws
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: openclaw-agents-network
