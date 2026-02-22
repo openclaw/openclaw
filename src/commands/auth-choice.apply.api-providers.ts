@@ -69,6 +69,7 @@ import {
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
+import { configureZaiMcpTools } from "./zai-mcp-tools-config.js";
 
 export async function applyAuthChoiceApiProviders(
   params: ApplyAuthChoiceParams,
@@ -541,7 +542,7 @@ export async function applyAuthChoiceApiProviders(
 
     // Input API key
     let hasCredential = false;
-    let apiKey = "";
+    let apiKey: string = "";
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zai") {
       apiKey = normalizeApiKeyInput(params.opts.token);
@@ -556,7 +557,7 @@ export async function applyAuthChoiceApiProviders(
         initialValue: true,
       });
       if (useExisting) {
-        apiKey = envKey.apiKey;
+        apiKey = envKey.apiKey ?? "";
         await setZaiApiKey(apiKey, params.agentDir);
         hasCredential = true;
       }
@@ -635,6 +636,20 @@ export async function applyAuthChoiceApiProviders(
     });
     nextConfig = applied.config;
     agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+
+    // Auto-configure Z.AI MCP tools (zread, vision, web-search)
+    try {
+      if (apiKey && params.agentDir) {
+        await configureZaiMcpTools(apiKey, params.agentDir);
+        await params.prompter.note(
+          "Z.AI MCP tools (zread, vision, web-search) auto-configured.",
+          "MCP Tools",
+        );
+      }
+    } catch (e) {
+      // Non-fatal, just log and continue
+      console.warn("Failed to auto-configure Z.AI MCP tools:", e);
+    }
 
     return { config: nextConfig, agentModelOverride };
   }
