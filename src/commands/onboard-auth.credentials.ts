@@ -242,6 +242,22 @@ export async function setKimiCodingApiKey(key: SecretInput, agentDir?: string) {
   });
 }
 
+export async function setVolcengineApiKey(key: SecretInput, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "volcengine:default",
+    credential: buildApiKeyCredential("volcengine", key),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setByteplusApiKey(key: SecretInput, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "byteplus:default",
+    credential: buildApiKeyCredential("byteplus", key),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setSyntheticApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({

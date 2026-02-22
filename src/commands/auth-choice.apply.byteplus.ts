@@ -1,5 +1,4 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
-import { upsertSharedEnvVar } from "../infra/env-file.js";
 import {
   formatApiKeyPreview,
   normalizeApiKeyInput,
@@ -7,6 +6,7 @@ import {
 } from "./auth-choice.api-key.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyPrimaryModel } from "./model-picker.js";
+import { applyAuthProfileConfig, setByteplusApiKey } from "./onboard-auth.js";
 
 /** Default model for BytePlus auth onboarding. */
 export const BYTEPLUS_DEFAULT_MODEL = "byteplus-plan/ark-code-latest";
@@ -25,18 +25,13 @@ export async function applyAuthChoiceBytePlus(
       initialValue: true,
     });
     if (useExisting) {
-      const result = upsertSharedEnvVar({
-        key: "BYTEPLUS_API_KEY",
-        value: envKey.apiKey,
+      await setByteplusApiKey(envKey.apiKey, params.agentDir);
+      const configWithAuth = applyAuthProfileConfig(params.config, {
+        profileId: "byteplus:default",
+        provider: "byteplus",
+        mode: "api_key",
       });
-      if (!process.env.BYTEPLUS_API_KEY) {
-        process.env.BYTEPLUS_API_KEY = envKey.apiKey;
-      }
-      await params.prompter.note(
-        `Copied BYTEPLUS_API_KEY to ${result.path} for launchd compatibility.`,
-        "BytePlus API key",
-      );
-      const configWithModel = applyPrimaryModel(params.config, BYTEPLUS_DEFAULT_MODEL);
+      const configWithModel = applyPrimaryModel(configWithAuth, BYTEPLUS_DEFAULT_MODEL);
       return {
         config: configWithModel,
         agentModelOverride: BYTEPLUS_DEFAULT_MODEL,
@@ -55,17 +50,13 @@ export async function applyAuthChoiceBytePlus(
   }
 
   const trimmed = normalizeApiKeyInput(String(key));
-  const result = upsertSharedEnvVar({
-    key: "BYTEPLUS_API_KEY",
-    value: trimmed,
+  await setByteplusApiKey(trimmed, params.agentDir);
+  const configWithAuth = applyAuthProfileConfig(params.config, {
+    profileId: "byteplus:default",
+    provider: "byteplus",
+    mode: "api_key",
   });
-  process.env.BYTEPLUS_API_KEY = trimmed;
-  await params.prompter.note(
-    `Saved BYTEPLUS_API_KEY to ${result.path} for launchd compatibility.`,
-    "BytePlus API key",
-  );
-
-  const configWithModel = applyPrimaryModel(params.config, BYTEPLUS_DEFAULT_MODEL);
+  const configWithModel = applyPrimaryModel(configWithAuth, BYTEPLUS_DEFAULT_MODEL);
   return {
     config: configWithModel,
     agentModelOverride: BYTEPLUS_DEFAULT_MODEL,
