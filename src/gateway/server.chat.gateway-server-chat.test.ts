@@ -12,6 +12,7 @@ import {
   onceMessage,
   rpcReq,
   testState,
+  trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommand } from "./test-helpers.mocks.js";
@@ -78,6 +79,7 @@ describe("gateway server chat", () => {
       webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
+      trackConnectChallengeNonce(webchatWs);
       await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
       await connectOk(webchatWs, {
         client: {
@@ -361,6 +363,7 @@ describe("gateway server chat", () => {
     const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
       headers: { origin: `http://127.0.0.1:${port}` },
     });
+    trackConnectChallengeNonce(webchatWs);
     await new Promise<void>((resolve) => webchatWs.once("open", resolve));
     await connectOk(webchatWs, {
       client: {

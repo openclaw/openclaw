@@ -585,6 +585,7 @@ export async function connectWebchatClient(params: {
   const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
     headers: { origin },
   });
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
     const onOpen = () => {
