@@ -11,15 +11,52 @@ title: "Thinking Levels"
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
 - Levels (aliases): `off | minimal | low | medium | high | xhigh` (GPT-5.2 + Codex models only)
-  - minimal → “think”
-  - low → “think hard”
-  - medium → “think harder”
-  - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
+  - minimal → "think"
+  - low → "think hard"
+  - medium → "think harder"
+  - high → "ultrathink" (max budget)
+  - xhigh → "ultrathink+" (GPT-5.2 + Codex models only)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
 - Provider notes:
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
+
+## Anthropic Adaptive Thinking (Opus 4.6+)
+
+Claude Opus 4.6 introduces **adaptive thinking** where Claude dynamically decides when and how much to think based on the problem complexity. OpenClaw automatically uses this mode for Opus 4.6+ models.
+
+### How it works
+
+- For Opus 4.6+: Uses `thinking: { type: "adaptive" }` with the `effort` parameter
+- For older models: Falls back to budget-based thinking (`thinking: { type: "enabled", budget_tokens: N }`)
+
+### Thinking level to effort mapping
+
+OpenClaw's thinking levels map to Anthropic's effort parameter:
+
+| OpenClaw Level | Anthropic Effort |
+| -------------- | ---------------- |
+| minimal        | low              |
+| low            | low              |
+| medium         | medium           |
+| high           | high             |
+| xhigh          | max              |
+
+### Effort behavior
+
+- At **high/max effort**: Claude almost always thinks deeply
+- At **low/medium effort**: Claude may skip thinking for simpler problems
+- Adaptive thinking automatically enables interleaved thinking between tool calls
+
+### Example
+
+```bash
+# Set thinking to high (maps to effort: high on Opus 4.6)
+openclaw agent --thinking high --message "Solve this complex math problem"
+
+# Or use inline directive
+/think:high What's the optimal solution for this scheduling problem?
+```
 
 ## Resolution order
 
