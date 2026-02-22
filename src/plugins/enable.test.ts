@@ -39,4 +39,16 @@ describe("enablePluginInConfig", () => {
     expect(result.config.channels?.telegram?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.telegram).toBeUndefined();
   });
+
+  it("adds built-in channel id to allowlist when allowlist is configured", () => {
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: ["memory-core"],
+      },
+    };
+    const result = enablePluginInConfig(cfg, "telegram");
+    expect(result.enabled).toBe(true);
+    expect(result.config.channels?.telegram?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "telegram"]);
+  });
 });
