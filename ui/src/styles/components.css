@@ -1214,6 +1214,11 @@
   border-color: rgba(59, 130, 246, 0.3);
 }
 
+.log-level.ok {
+  color: var(--ok);
+  border-color: var(--ok-subtle);
+}
+
 .log-level.warn {
   color: var(--warn);
   border-color: var(--warn-subtle);
@@ -3065,4 +3070,13 @@
   .bottom-tabs {
     display: flex;
   }
+}
+
+/* ===========================================
+   Status chip utility
+   =========================================== */
+
+.status-chip {
+  width: 54px;
+  text-align: center;
 }
