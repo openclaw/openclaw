@@ -100,6 +100,7 @@ import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
+  sanitizeToolNamesForBedrock,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -886,8 +887,11 @@ export async function runEmbeddedAttempt(
           disableMessageTool: params.disableMessageTool,
         });
     const toolsEnabled = supportsModelTools(params.model);
-    const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsRaw : [],
+    const tools = sanitizeToolNamesForBedrock({
+      tools: sanitizeToolsForGoogle({
+        tools: toolsEnabled ? toolsRaw : [],
+        provider: params.provider,
+      }),
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
