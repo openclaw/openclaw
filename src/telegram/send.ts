@@ -52,6 +52,8 @@ type TelegramSendOpts = {
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
+  /** Disable web page preview for messages with links. Defaults to false. */
+  disableWebPagePreview?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Quote text for Telegram reply_parameters. */
@@ -491,6 +493,9 @@ export async function sendMessageTelegram(
           parse_mode: "HTML" as const,
           ...baseParams,
           ...(opts.silent === true ? { disable_notification: true } : {}),
+          ...(opts.disableWebPagePreview === true
+            ? { link_preview_options: { is_disabled: true } }
+            : {}),
         };
         return await withTelegramHtmlParseFallback({
           label,
