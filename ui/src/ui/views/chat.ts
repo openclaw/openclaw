@@ -80,6 +80,10 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Input history (terminal-style)
+  inputHistory?: string[];
+  inputHistoryIndex?: number;
+  onHistoryNavigate?: (direction: "up" | "down") => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -431,6 +435,28 @@ export function renderChat(props: ChatProps) {
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
+                // Handle input history navigation (terminal-style)
+                if (e.key === "ArrowUp" && !e.shiftKey && props.onHistoryNavigate) {
+                  const textarea = e.target as HTMLTextAreaElement;
+                  const cursorAtStart =
+                    textarea.selectionStart === 0 && textarea.selectionEnd === 0;
+                  const isSingleLine = !props.draft.includes("\n");
+                  if (cursorAtStart || isSingleLine) {
+                    e.preventDefault();
+                    props.onHistoryNavigate("up");
+                    return;
+                  }
+                }
+                if (e.key === "ArrowDown" && !e.shiftKey && props.onHistoryNavigate) {
+                  const textarea = e.target as HTMLTextAreaElement;
+                  const cursorAtEnd = textarea.selectionStart === props.draft.length;
+                  const isSingleLine = !props.draft.includes("\n");
+                  if (cursorAtEnd || isSingleLine) {
+                    e.preventDefault();
+                    props.onHistoryNavigate("down");
+                    return;
+                  }
+                }
                 if (e.key !== "Enter") {
                   return;
                 }
