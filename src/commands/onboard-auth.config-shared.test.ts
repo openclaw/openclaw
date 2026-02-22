@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
@@ -25,7 +26,7 @@ describe("onboard auth provider config merges", () => {
   };
 
   it("appends missing default models to existing provider models", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
           custom: {
@@ -56,7 +57,7 @@ describe("onboard auth provider config merges", () => {
   });
 
   it("merges model catalogs without duplicating existing model ids", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
           custom: {
