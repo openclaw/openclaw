@@ -45,7 +45,7 @@ export const FAL_OPENROUTER_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "GPT-4.1",
     reasoning: false,
     input: ["text", "image"],
-    contextWindow: 1047576,
+    contextWindow: 1048576,
     maxTokens: 32768,
     cost: { input: 2.0, output: 8.0, cacheRead: 0.5, cacheWrite: 2.0 },
   },
