@@ -1,0 +1,57 @@
+name: Codex Dedupe Issues
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to check for duplicates"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  dedupe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine issue number
+        id: issue
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ inputs.issue_number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: openai/codex-action@v1
+        with:
+          prompt: |
+            Find up to 3 likely duplicate issues for GitHub issue openclaw/openclaw#${{ steps.issue.outputs.number }}.
+
+            1. Use `gh issue view ${{ steps.issue.outputs.number }} --repo openclaw/openclaw` to read the issue.
+               If it is closed, already has a "possible duplicate" comment, or is broad
+               feedback without a specific solution — stop.
+            2. Summarize the issue.
+            3. Thoroughly search for duplicates using `gh search issues` and `gh issue view`.
+               Use diverse query strategies. Inspect promising candidates to verify similarity.
+            4. Filter false positives — only keep issues genuinely about the same problem.
+            5. If duplicates remain, run:
+               ./scripts/comment-on-duplicates.sh --base-issue ${{ steps.issue.outputs.number }} --potential-duplicates <dup1> [dup2] [dup3]
+
+            Notes:
+            - Use only `gh` and the comment script. No other tools.
+            - The repo is openclaw/openclaw.
+          sandbox: workspace-write
+          codex-home: .codex
+          allow-users: "*"
+          effort: high
+          model: gpt-5.2-codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
