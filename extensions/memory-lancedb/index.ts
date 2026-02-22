@@ -15,8 +15,9 @@ import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
   type MemoryCategory,
+  type MemoryConfig,
   memoryConfigSchema,
-  vectorDimsForModel,
+  tryVectorDimsForModel,
 } from "./config.js";
 
 // ============================================================================
@@ -63,7 +64,7 @@ class MemoryDB {
 
   constructor(
     private readonly dbPath: string,
-    private readonly vectorDim: number,
+    private readonly getVectorDim: () => Promise<number>,
   ) {}
 
   private async ensureInitialized(): Promise<void> {
@@ -86,11 +87,12 @@ class MemoryDB {
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
     } else {
+      const vectorDim = await this.getVectorDim();
       this.table = await this.db.createTable(TABLE_NAME, [
         {
           id: "__schema__",
           text: "",
-          vector: Array.from({ length: this.vectorDim }).fill(0),
+          vector: Array.from({ length: vectorDim }).fill(0),
           importance: 0,
           category: "other",
           createdAt: 0,
@@ -157,25 +159,81 @@ class MemoryDB {
 }
 
 // ============================================================================
-// OpenAI Embeddings
+// Embeddings Providers (OpenAI-compatible + Ollama)
 // ============================================================================
 
 class Embeddings {
-  private client: OpenAI;
+  private readonly openaiClient: OpenAI | null;
+  private readonly model: string;
 
-  constructor(
-    apiKey: string,
-    private model: string,
-  ) {
-    this.client = new OpenAI({ apiKey });
+  constructor(private readonly config: MemoryConfig["embedding"]) {
+    this.model = config.model ?? "text-embedding-3-small";
+    this.openaiClient =
+      config.provider === "openai"
+        ? new OpenAI({
+            apiKey: config.apiKey,
+            baseURL: config.baseUrl || undefined,
+          })
+        : null;
   }
 
   async embed(text: string): Promise<number[]> {
-    const response = await this.client.embeddings.create({
-      model: this.model,
-      input: text,
+    if (this.config.provider === "openai") {
+      const response = await this.openaiClient!.embeddings.create({
+        model: this.model,
+        input: text,
+      });
+      return response.data[0].embedding;
+    }
+
+    const endpoint = new URL("/api/embeddings", this.config.baseUrl).toString();
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        prompt: text,
+      }),
     });
-    return response.data[0].embedding;
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Ollama embeddings request failed (${response.status}): ${body.slice(0, 200)}`,
+      );
+    }
+
+    const payload = (await response.json()) as { embedding?: unknown };
+    if (!Array.isArray(payload.embedding)) {
+      throw new Error("Ollama embeddings response missing 'embedding' array");
+    }
+
+    if (!payload.embedding.every((value) => typeof value === "number")) {
+      throw new Error("Ollama embeddings response contains non-numeric values");
+    }
+
+    return payload.embedding as number[];
+  }
+
+  async getDims(): Promise<number> {
+    if (typeof this.config.dims === "number") {
+      return this.config.dims;
+    }
+
+    if (this.config.provider === "openai") {
+      const knownDims = tryVectorDimsForModel(this.model);
+      if (typeof knownDims === "number") {
+        return knownDims;
+      }
+    }
+
+    const probeVector = await this.embed("openclaw-memory-dimension-probe");
+    if (probeVector.length === 0) {
+      throw new Error("Embedding provider returned an empty vector for dimension probe");
+    }
+    return probeVector.length;
   }
 }
 
@@ -293,11 +351,12 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
-    const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+    const embeddings = new Embeddings(cfg.embedding);
+    const db = new MemoryDB(resolvedDbPath, () => embeddings.getDims());
 
-    api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+    api.logger.info(
+      `memory-lancedb: plugin registered (db: ${resolvedDbPath}, provider: ${cfg.embedding.provider}, model: ${cfg.embedding.model}, lazy init)`,
+    );
 
     // ========================================================================
     // Tools
@@ -657,7 +716,7 @@ const memoryPlugin = {
       id: "memory-lancedb",
       start: () => {
         api.logger.info(
-          `memory-lancedb: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
+          `memory-lancedb: initialized (db: ${resolvedDbPath}, provider: ${cfg.embedding.provider}, model: ${cfg.embedding.model})`,
         );
       },
       stop: () => {

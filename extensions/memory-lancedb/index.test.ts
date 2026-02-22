@@ -45,13 +45,16 @@ describe("memory plugin e2e", () => {
     expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
-  test("config schema parses valid config", async () => {
+  test("config schema parses valid OpenAI-compatible config", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     const config = memoryPlugin.configSchema?.parse?.({
       embedding: {
+        provider: "openai",
         apiKey: OPENAI_API_KEY,
         model: "text-embedding-3-small",
+        baseUrl: "https://openrouter.ai/api/v1",
+        dims: 1536,
       },
       dbPath,
       autoCapture: true,
@@ -59,7 +62,10 @@ describe("memory plugin e2e", () => {
     });
 
     expect(config).toBeDefined();
+    expect(config?.embedding?.provider).toBe("openai");
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
+    expect(config?.embedding?.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(config?.embedding?.dims).toBe(1536);
     expect(config?.dbPath).toBe(dbPath);
     expect(config?.captureMaxChars).toBe(500);
   });
@@ -67,19 +73,23 @@ describe("memory plugin e2e", () => {
   test("config schema resolves env vars", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
-    // Set a test env var
+    // Set test env vars
     process.env.TEST_MEMORY_API_KEY = "test-key-123";
+    process.env.TEST_MEMORY_BASE_URL = "https://openrouter.ai/api/v1";
 
     const config = memoryPlugin.configSchema?.parse?.({
       embedding: {
         apiKey: "${TEST_MEMORY_API_KEY}",
+        baseUrl: "${TEST_MEMORY_BASE_URL}",
       },
       dbPath,
     });
 
     expect(config?.embedding?.apiKey).toBe("test-key-123");
+    expect(config?.embedding?.baseUrl).toBe("https://openrouter.ai/api/v1");
 
     delete process.env.TEST_MEMORY_API_KEY;
+    delete process.env.TEST_MEMORY_BASE_URL;
   });
 
   test("config schema rejects missing apiKey", async () => {
@@ -91,6 +101,66 @@ describe("memory plugin e2e", () => {
         dbPath,
       });
     }).toThrow("embedding.apiKey is required");
+  });
+
+  test("config schema parses valid ollama config", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        provider: "ollama",
+        model: "nomic-embed-text",
+        baseUrl: "http://localhost:11434",
+        dims: 768,
+      },
+      dbPath,
+    });
+
+    expect(config?.embedding?.provider).toBe("ollama");
+    expect(config?.embedding?.model).toBe("nomic-embed-text");
+    expect(config?.embedding?.baseUrl).toBe("http://localhost:11434");
+    expect(config?.embedding?.dims).toBe(768);
+  });
+
+  test("config schema requires model for ollama", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          provider: "ollama",
+        },
+      });
+    }).toThrow("embedding.model is required when embedding.provider is 'ollama'");
+  });
+
+  test("config schema supports unknown OpenAI-compatible models with explicit dims", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        provider: "openai",
+        apiKey: OPENAI_API_KEY,
+        model: "qwen/qwen3-embedding-8b",
+        baseUrl: "https://openrouter.ai/api/v1",
+        dims: 4096,
+      },
+    });
+
+    expect(config?.embedding?.model).toBe("qwen/qwen3-embedding-8b");
+    expect(config?.embedding?.dims).toBe(4096);
+  });
+
+  test("config schema rejects unsupported provider", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          provider: "custom",
+        },
+      });
+    }).toThrow("Unsupported embedding.provider: custom");
   });
 
   test("config schema validates captureMaxChars range", async () => {
