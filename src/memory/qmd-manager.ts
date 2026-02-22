@@ -46,6 +46,25 @@ const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
 
+function resolveWindowsCommandShim(command: string): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return command;
+  }
+  const ext = path.extname(trimmed).toLowerCase();
+  if (ext === ".cmd" || ext === ".exe" || ext === ".bat") {
+    return command;
+  }
+  const base = path.basename(trimmed).toLowerCase();
+  if (base === "qmd" || base === "mcporter") {
+    return `${trimmed}.cmd`;
+  }
+  return command;
+}
+
 function hasHanScript(value: string): boolean {
   return HAN_SCRIPT_RE.test(value);
 }
@@ -943,7 +962,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const child = spawn(this.qmd.command, args, {
+      const child = spawn(resolveWindowsCommandShim(this.qmd.command), args, {
         env: this.env,
         cwd: this.workspaceDir,
       });
@@ -1034,7 +1053,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const child = spawn("mcporter", args, {
+      const child = spawn(resolveWindowsCommandShim("mcporter"), args, {
         // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
         env: this.env,
         cwd: this.workspaceDir,
