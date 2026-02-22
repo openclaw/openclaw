@@ -36,10 +36,10 @@ function createInvokeParams(params: Record<string, unknown>) {
 
 describe("push.test handler", () => {
   beforeEach(() => {
-    vi.mocked(loadApnsRegistration).mockReset();
-    vi.mocked(normalizeApnsEnvironment).mockReset();
-    vi.mocked(resolveApnsAuthConfigFromEnv).mockReset();
-    vi.mocked(sendApnsAlert).mockReset();
+    vi.mocked(loadApnsRegistration).mockClear();
+    vi.mocked(normalizeApnsEnvironment).mockClear();
+    vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
+    vi.mocked(sendApnsAlert).mockClear();
   });
 
   it("rejects invalid params", async () => {
