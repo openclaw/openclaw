@@ -8,6 +8,8 @@ export type SessionsProps = {
   loading: boolean;
   result: SessionsListResult | null;
   error: string | null;
+  canDeleteSessions: boolean;
+  deleteUnavailableReason?: string;
   activeMinutes: string;
   limit: string;
   includeGlobal: boolean;
@@ -109,6 +111,10 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
 
 export function renderSessions(props: SessionsProps) {
   const rows = props.result?.sessions ?? [];
+  const showDeleteUnavailableNotice = !props.canDeleteSessions;
+  const deleteUnavailableReason =
+    props.deleteUnavailableReason ??
+    "Session delete is unavailable in Dashboard sessions for webchat clients.";
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
@@ -183,6 +189,11 @@ export function renderSessions(props: SessionsProps) {
           ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
           : nothing
       }
+      ${
+        showDeleteUnavailableNotice
+          ? html`<div class="callout info" style="margin-top: 12px;">${deleteUnavailableReason}</div>`
+          : nothing
+      }
 
       <div class="muted" style="margin-top: 12px;">
         ${props.result ? `Store: ${props.result.path}` : ""}
@@ -206,7 +217,15 @@ export function renderSessions(props: SessionsProps) {
                 <div class="muted">No sessions found.</div>
               `
             : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                renderRow(
+                  row,
+                  props.basePath,
+                  props.onPatch,
+                  props.onDelete,
+                  props.loading,
+                  props.canDeleteSessions,
+                  deleteUnavailableReason,
+                ),
               )
         }
       </div>
@@ -220,6 +239,8 @@ function renderRow(
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
   disabled: boolean,
+  canDeleteSessions: boolean,
+  deleteUnavailableReason: string,
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
@@ -312,7 +333,16 @@ function renderRow(
         </select>
       </div>
       <div>
-        <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
+        <button
+          class="btn danger"
+          ?disabled=${disabled || !canDeleteSessions}
+          title=${canDeleteSessions ? "" : deleteUnavailableReason}
+          @click=${() => {
+            if (canDeleteSessions) {
+              onDelete(row.key);
+            }
+          }}
+        >
           Delete
         </button>
       </div>

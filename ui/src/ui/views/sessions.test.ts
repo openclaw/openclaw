@@ -18,6 +18,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     loading: false,
     result,
     error: null,
+    canDeleteSessions: true,
+    deleteUnavailableReason: undefined,
     activeMinutes: "",
     limit: "120",
     includeGlobal: false,
@@ -77,5 +79,30 @@ describe("sessions view", () => {
     expect(
       Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
     ).toBe(true);
+  });
+
+  it("shows delete-unavailable notice and disables delete buttons when deletes are blocked", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        canDeleteSessions: false,
+        deleteUnavailableReason: "Delete is unavailable in dashboard webchat mode.",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Delete is unavailable in dashboard webchat mode.");
+    const deleteButton = container.querySelector<HTMLButtonElement>("button.btn.danger");
+    expect(deleteButton).toBeTruthy();
+    expect(deleteButton?.disabled).toBe(true);
+    expect(deleteButton?.title).toBe("Delete is unavailable in dashboard webchat mode.");
   });
 });
