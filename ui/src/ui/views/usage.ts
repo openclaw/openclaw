@@ -447,6 +447,11 @@ export function renderUsage(props: UsageProps) {
   return html`
     <style>${usageStylesString}</style>
 
+    <section class="usage-page-header">
+      <div class="usage-page-title">Usage</div>
+      <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
+    </section>
+
     <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
       <div class="usage-header-row">
         <div class="usage-header-title">
