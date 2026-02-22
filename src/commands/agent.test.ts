@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -12,9 +10,8 @@ import * as configModule from "../config/config.js";
 import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand } from "./agent.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -32,6 +29,26 @@ vi.mock("../agents/model-selection.js", async (importOriginal) => {
     isCliProvider: vi.fn(() => false),
   };
 });
+
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  };
+});
+
+vi.mock("../agents/workspace.js", () => ({
+  ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
+}));
+
+vi.mock("../agents/skills.js", () => ({
+  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
+}));
+
+vi.mock("../agents/skills/refresh.js", () => ({
+  getSkillsSnapshotVersion: vi.fn(() => 0),
+}));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -78,6 +95,38 @@ function writeSessionStoreSeed(
 ) {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+}
+
+function createTelegramOutboundPlugin() {
+  return createOutboundTestPlugin({
+    id: "telegram",
+    outbound: {
+      deliveryMode: "direct",
+      sendText: async (ctx) => {
+        const sendTelegram = ctx.deps?.sendTelegram;
+        if (!sendTelegram) {
+          throw new Error("sendTelegram dependency missing");
+        }
+        const result = await sendTelegram(ctx.to, ctx.text, {
+          accountId: ctx.accountId ?? undefined,
+          verbose: false,
+        });
+        return { channel: "telegram", messageId: result.messageId, chatId: result.chatId };
+      },
+      sendMedia: async (ctx) => {
+        const sendTelegram = ctx.deps?.sendTelegram;
+        if (!sendTelegram) {
+          throw new Error("sendTelegram dependency missing");
+        }
+        const result = await sendTelegram(ctx.to, ctx.text, {
+          accountId: ctx.accountId ?? undefined,
+          mediaUrl: ctx.mediaUrl,
+          verbose: false,
+        });
+        return { channel: "telegram", messageId: result.messageId, chatId: result.chatId };
+      },
+    },
+  });
 }
 
 beforeEach(() => {
@@ -475,9 +524,10 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, undefined, { botToken: "t-1" });
-      setTelegramRuntime(createPluginRuntime());
       setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+        createTestRegistry([
+          { pluginId: "telegram", plugin: createTelegramOutboundPlugin(), source: "test" },
+        ]),
       );
       const deps = {
         sendMessageWhatsApp: vi.fn(),
