@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
 import module from "node:module";
+import { ProxyAgent, setGlobalDispatcher } from "undici";
+
+// Set up proxy support if env vars are present
+const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+if (proxy) {
+  setGlobalDispatcher(new ProxyAgent(proxy));
+}
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {

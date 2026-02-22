@@ -18,7 +18,7 @@ import { getToolResult, runMessageAction } from "../../infra/outbound/message-ac
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
@@ -438,7 +438,7 @@ function resolveMessageToolSchemaActions(params: {
   currentChannelId?: string;
 }): string[] {
   const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
+  if (currentChannel && currentChannel !== INTERNAL_MESSAGE_CHANNEL) {
     const scopedActions = filterActionsForContext({
       actions: listChannelSupportedActions({
         cfg: params.cfg,
