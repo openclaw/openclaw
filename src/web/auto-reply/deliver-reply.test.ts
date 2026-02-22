@@ -98,6 +98,28 @@ describe("deliverWebReply", () => {
     expect(sleep).toHaveBeenCalledWith(500);
   });
 
+  it("retries text send when error contains timed out", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("operation timed out"),
+    );
+    (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+      undefined,
+    );
+
+    await deliverWebReply({
+      replyResult: { text: "hi" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(500);
+  });
+
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];
