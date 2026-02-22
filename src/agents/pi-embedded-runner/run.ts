@@ -492,6 +492,7 @@ export async function runEmbeddedPiAgent(
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      let thinkingImmutabilityResetAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
@@ -838,12 +839,27 @@ export async function runEmbeddedPiAgent(
             // Handle thinking block immutability errors. The Anthropic API rejects requests
             // when thinking/redacted_thinking blocks in the latest assistant message have
             // been modified (e.g. thinkingSignature stripped by session sanitizers).
-            // This causes a total session failure with no automatic recovery path.
+            // Auto-reset the session file and retry so unattended channel sessions
+            // (Telegram, Discord, etc.) recover without manual intervention.
             if (isThinkingImmutabilityError(errorText)) {
               log.warn(
                 `[thinking-immutability] Thinking block immutability error detected for session=${params.sessionKey ?? params.sessionId}. ` +
                   `Session history contains modified thinking blocks rejected by the API.`,
               );
+              if (!thinkingImmutabilityResetAttempted && params.sessionFile) {
+                thinkingImmutabilityResetAttempted = true;
+                try {
+                  await fs.writeFile(params.sessionFile, "");
+                  log.info(
+                    `[thinking-immutability] Session file cleared; retrying with fresh session for session=${params.sessionKey ?? params.sessionId}.`,
+                  );
+                  continue;
+                } catch (clearErr) {
+                  log.warn(
+                    `[thinking-immutability] Failed to clear session file: ${describeUnknownError(clearErr)}. Falling back to error response.`,
+                  );
+                }
+              }
               return {
                 payloads: [
                   {

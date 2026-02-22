@@ -5,6 +5,13 @@ import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
+vi.mock("node:fs/promises", () => ({
+  default: {
+    mkdir: vi.fn(async () => {}),
+    writeFile: vi.fn(async () => {}),
+  },
+}));
+
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
 const mockedIsThinkingImmutabilityError = vi.mocked(helpers.isThinkingImmutabilityError);
 
@@ -16,18 +23,43 @@ describe("runEmbeddedPiAgent thinking immutability recovery", () => {
     vi.clearAllMocks();
   });
 
-  it("returns thinking_immutability error kind when immutability error is detected", async () => {
+  it("auto-resets the session file and retries when the error is detected", async () => {
+    const { default: fs } = await import("node:fs/promises");
+    const mockedWriteFile = vi.mocked(fs.writeFile);
+
     mockedIsThinkingImmutabilityError.mockReturnValue(true);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        promptError: new Error(THINKING_IMMUTABILITY_ERROR),
-      }),
-    );
+    // First attempt: immutability error. Second attempt: success after reset.
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({ promptError: new Error(THINKING_IMMUTABILITY_ERROR) }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     const result = await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-1",
+    });
+
+    expect(mockedWriteFile).toHaveBeenCalledWith("/tmp/session.json", "");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("falls back to error payload when sessionFile is empty", async () => {
+    mockedIsThinkingImmutabilityError.mockReturnValue(true);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: new Error(THINKING_IMMUTABILITY_ERROR) }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -35,16 +67,23 @@ describe("runEmbeddedPiAgent thinking immutability recovery", () => {
     });
 
     expect(result.meta.error?.kind).toBe("thinking_immutability");
-    expect(result.meta.error?.message).toBe(THINKING_IMMUTABILITY_ERROR);
+    const payload = result.payloads?.[0];
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toMatch(/\/new|\/reset/i);
   });
 
-  it("includes a user-friendly error payload for immutability errors", async () => {
+  it("does not retry auto-reset a second time if the error persists", async () => {
+    const { default: fs } = await import("node:fs/promises");
+    const mockedWriteFile = vi.mocked(fs.writeFile);
+
     mockedIsThinkingImmutabilityError.mockReturnValue(true);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        promptError: new Error(THINKING_IMMUTABILITY_ERROR),
-      }),
-    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({ promptError: new Error(THINKING_IMMUTABILITY_ERROR) }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({ promptError: new Error(THINKING_IMMUTABILITY_ERROR) }),
+      );
 
     const result = await runEmbeddedPiAgent({
       sessionId: "test-session",
@@ -56,9 +95,8 @@ describe("runEmbeddedPiAgent thinking immutability recovery", () => {
       runId: "run-1",
     });
 
-    const payload = result.payloads?.[0];
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).toMatch(/\/new|\/reset/i);
+    expect(mockedWriteFile).toHaveBeenCalledTimes(1);
+    expect(result.meta.error?.kind).toBe("thinking_immutability");
   });
 
   it("does not trigger for unrelated prompt errors", async () => {
