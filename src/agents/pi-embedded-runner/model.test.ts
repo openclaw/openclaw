@@ -262,7 +262,7 @@ describe("resolveModel", () => {
       expectedModel: {
         provider: "google-antigravity",
         id: "claude-opus-4-6-thinking",
-        api: "google-gemini-cli",
+        api: "google-antigravity",
         baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
         reasoning: true,
         contextWindow: 200000,
@@ -290,7 +290,7 @@ describe("resolveModel", () => {
       expectedModel: {
         provider: "google-antigravity",
         id: "claude-opus-4-6",
-        api: "google-gemini-cli",
+        api: "google-antigravity",
         baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
         reasoning: true,
         contextWindow: 200000,

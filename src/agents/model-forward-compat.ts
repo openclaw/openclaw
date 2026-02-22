@@ -275,6 +275,8 @@ function resolveAntigravityOpus46ForwardCompatModel(
     trimmedModelId,
     templateIds,
     modelRegistry,
+    // pi-ai templates may incorrectly carry "google-gemini-cli" for Antigravity models.
+    patch: { api: "google-antigravity" as Api },
   });
 }
 

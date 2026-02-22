@@ -357,6 +357,49 @@ export function normalizeGoogleModelId(id: string): string {
   return id;
 }
 
+const ANTIGRAVITY_PROVIDER_KEY = "google-antigravity";
+const ANTIGRAVITY_API_KEY = "google-antigravity";
+const ANTIGRAVITY_INCORRECT_API_KEY = "google-gemini-cli";
+const ANTIGRAVITY_PROVIDER_KEY_ALIASES = new Set([ANTIGRAVITY_PROVIDER_KEY]);
+const ANTIGRAVITY_API_KEY_ALIASES = new Set([ANTIGRAVITY_API_KEY, ANTIGRAVITY_INCORRECT_API_KEY]);
+
+function normalizeAntigravityAliasKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function isAntigravityProviderKey(providerKey: string): boolean {
+  return ANTIGRAVITY_PROVIDER_KEY_ALIASES.has(normalizeAntigravityAliasKey(providerKey));
+}
+
+/**
+ * Normalize the `api` field for a provider based on provider identity.
+ * The pi-ai library incorrectly assigns `api: "google-gemini-cli"` to
+ * google-antigravity models; this corrects that mismatch.
+ *
+ * Note: The "google-antigravity" value is valid for pi-ai's Api type
+ * but not in OpenClaw's narrower ModelApi type, hence string return.
+ */
+export function normalizeProviderApi(
+  providerKey: string,
+  api: string | undefined,
+): string | undefined {
+  if (!api) {
+    return api;
+  }
+  if (!isAntigravityProviderKey(providerKey)) {
+    return api;
+  }
+  if (ANTIGRAVITY_API_KEY_ALIASES.has(normalizeAntigravityAliasKey(api))) {
+    return ANTIGRAVITY_API_KEY;
+  }
+  // Pass through unknown keys so existing validation/error behavior remains unchanged.
+  return api;
+}
+
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
@@ -383,10 +426,15 @@ export function normalizeProviders(params: {
   });
   let mutated = false;
   const next: Record<string, ProviderConfig> = {};
+  const keyWasCanonical: Record<string, boolean> = {};
 
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
+    const isCanonicalKey = normalizedKey === key;
     let normalizedProvider = provider;
+    if (normalizedKey !== key) {
+      mutated = true;
+    }
 
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
@@ -433,7 +481,29 @@ export function normalizeProviders(params: {
       normalizedProvider = googleNormalized;
     }
 
-    next[key] = normalizedProvider;
+    // Normalize api field based on provider identity (fixes pi-ai library mismatch).
+    // Cast needed because "google-antigravity" is valid for pi-ai but not in OpenClaw's ModelApi type.
+    const normalizedApi = normalizeProviderApi(normalizedKey, normalizedProvider.api as string);
+    if (normalizedApi !== normalizedProvider.api) {
+      mutated = true;
+      normalizedProvider = {
+        ...normalizedProvider,
+        api: normalizedApi as typeof normalizedProvider.api,
+      };
+    }
+
+    // If both canonical and whitespace-padded aliases normalize to the same key,
+    // prefer the canonical key's payload regardless of insertion order.
+    if (normalizedKey in next) {
+      const existingWasCanonical = keyWasCanonical[normalizedKey];
+      if (existingWasCanonical && !isCanonicalKey) {
+        continue;
+      }
+      mutated = true;
+    }
+
+    next[normalizedKey] = normalizedProvider;
+    keyWasCanonical[normalizedKey] = isCanonicalKey;
   }
 
   return mutated ? next : providers;
