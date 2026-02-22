@@ -103,6 +103,7 @@ Example:
 Notes:
 
 - `allowlist` entries are glob patterns for resolved binary paths.
+- Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
 - Choosing “Always Allow” in the prompt adds that command to the allowlist.
 - `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`) and then merged with the app’s environment.
 
@@ -130,6 +131,7 @@ Query parameters:
 Safety:
 
 - Without `key`, the app prompts for confirmation.
+- Without `key`, the app enforces a short message limit for the confirmation prompt and ignores `deliver` / `to` / `channel`.
 - With a valid `key`, the run is unattended (intended for personal automations).
 
 ## Onboarding flow (typical)

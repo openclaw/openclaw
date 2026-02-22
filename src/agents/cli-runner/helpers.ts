@@ -1,162 +1,34 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { runExec } from "../../process/exec.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
-import { escapeRegExp, isRecord } from "../../utils.js";
+import { isRecord } from "../../utils.js";
+import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
+import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
-
-export async function cleanupResumeProcesses(
-  backend: CliBackendConfig,
-  sessionId: string,
-): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const resumeArgs = backend.resumeArgs ?? [];
-  if (resumeArgs.length === 0) {
-    return;
-  }
-  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
-    return;
-  }
-  const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) {
-    return;
-  }
-
-  const resumeTokens = resumeArgs.map((arg) => arg.replaceAll("{sessionId}", sessionId));
-  const pattern = [commandToken, ...resumeTokens]
-    .filter(Boolean)
-    .map((token) => escapeRegExp(token))
-    .join(".*");
-  if (!pattern) {
-    return;
-  }
-
-  try {
-    await runExec("pkill", ["-f", pattern]);
-  } catch {
-    // ignore missing pkill or no matches
-  }
-}
-
-function buildSessionMatchers(backend: CliBackendConfig): RegExp[] {
-  const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) {
-    return [];
-  }
-  const matchers: RegExp[] = [];
-  const sessionArg = backend.sessionArg?.trim();
-  const sessionArgs = backend.sessionArgs ?? [];
-  const resumeArgs = backend.resumeArgs ?? [];
-
-  const addMatcher = (args: string[]) => {
-    if (args.length === 0) {
-      return;
-    }
-    const tokens = [commandToken, ...args];
-    const pattern = tokens
-      .map((token, index) => {
-        const tokenPattern = tokenToRegex(token);
-        return index === 0 ? `(?:^|\\s)${tokenPattern}` : `\\s+${tokenPattern}`;
-      })
-      .join("");
-    matchers.push(new RegExp(pattern));
-  };
-
-  if (sessionArgs.some((arg) => arg.includes("{sessionId}"))) {
-    addMatcher(sessionArgs);
-  } else if (sessionArg) {
-    addMatcher([sessionArg, "{sessionId}"]);
-  }
-
-  if (resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
-    addMatcher(resumeArgs);
-  }
-
-  return matchers;
-}
-
-function tokenToRegex(token: string): string {
-  if (!token.includes("{sessionId}")) {
-    return escapeRegExp(token);
-  }
-  const parts = token.split("{sessionId}").map((part) => escapeRegExp(part));
-  return parts.join("\\S+");
-}
-
-/**
- * Cleanup suspended OpenClaw CLI processes that have accumulated.
- * Only cleans up if there are more than the threshold (default: 10).
- */
-export async function cleanupSuspendedCliProcesses(
-  backend: CliBackendConfig,
-  threshold = 10,
-): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const matchers = buildSessionMatchers(backend);
-  if (matchers.length === 0) {
-    return;
-  }
-
-  try {
-    const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,command="]);
-    const suspended: number[] = [];
-    for (const line of stdout.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      const match = /^(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
-      if (!match) {
-        continue;
-      }
-      const pid = Number(match[1]);
-      const stat = match[2] ?? "";
-      const command = match[3] ?? "";
-      if (!Number.isFinite(pid)) {
-        continue;
-      }
-      if (!stat.includes("T")) {
-        continue;
-      }
-      if (!matchers.some((matcher) => matcher.test(command))) {
-        continue;
-      }
-      suspended.push(pid);
-    }
-
-    if (suspended.length > threshold) {
-      // Verified locally: stopped (T) processes ignore SIGTERM, so use SIGKILL.
-      await runExec("kill", ["-9", ...suspended.map((pid) => String(pid))]);
-    }
-  } catch {
-    // ignore errors - best effort cleanup
-  }
-}
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
-  const tracked = chained.finally(() => {
-    if (CLI_RUN_QUEUE.get(key) === tracked) {
-      CLI_RUN_QUEUE.delete(key);
-    }
-  });
+  // Keep queue continuity even when a run rejects, without emitting unhandled rejections.
+  const tracked = chained
+    .catch(() => undefined)
+    .finally(() => {
+      if (CLI_RUN_QUEUE.get(key) === tracked) {
+        CLI_RUN_QUEUE.delete(key);
+      }
+    });
   CLI_RUN_QUEUE.set(key, tracked);
   return chained;
 }
@@ -174,25 +46,6 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
 };
-
-function buildModelAliasLines(cfg?: OpenClawConfig) {
-  const models = cfg?.agents?.defaults?.models ?? {};
-  const entries: Array<{ alias: string; model: string }> = [];
-  for (const [keyRaw, entryRaw] of Object.entries(models)) {
-    const model = String(keyRaw ?? "").trim();
-    if (!model) {
-      continue;
-    }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
-      continue;
-    }
-    entries.push({ alias, model });
-  }
-  return entries
-    .toSorted((a, b) => a.alias.localeCompare(b.alias))
-    .map((entry) => `- ${entry.alias}: ${entry.model}`);
-}
 
 export function buildSystemPrompt(params: {
   workspaceDir: string;
@@ -233,6 +86,11 @@ export function buildSystemPrompt(params: {
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
+    ownerDisplay: params.config?.commands?.ownerDisplay,
+    ownerDisplaySecret:
+      params.config?.commands?.ownerDisplaySecret ??
+      params.config?.gateway?.auth?.token ??
+      params.config?.gateway?.remote?.token,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,

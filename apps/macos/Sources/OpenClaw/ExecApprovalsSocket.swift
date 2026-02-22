@@ -1,8 +1,8 @@
 import AppKit
-import OpenClawKit
 import CryptoKit
 import Darwin
 import Foundation
+import OpenClawKit
 import OSLog
 
 struct ExecApprovalPromptRequest: Codable, Sendable {
@@ -76,7 +76,9 @@ private struct ExecHostResponse: Codable {
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
-        var errorDescription: String? { self.message }
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     static func requestDecision(
@@ -242,6 +244,8 @@ enum ExecApprovalsPromptPresenter {
         stack.orientation = .vertical
         stack.spacing = 8
         stack.alignment = .leading
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
         commandTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -258,16 +262,19 @@ enum ExecApprovalsPromptPresenter {
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
         commandText.isHorizontallyResizable = false
-        commandText.isVerticallyResizable = false
+        commandText.isVerticallyResizable = true
 
         let commandScroll = NSScrollView()
         commandScroll.borderType = .lineBorder
-        commandScroll.hasVerticalScroller = false
+        commandScroll.hasVerticalScroller = true
         commandScroll.hasHorizontalScroller = false
+        commandScroll.autohidesScrollers = true
         commandScroll.documentView = commandText
         commandScroll.translatesAutoresizingMaskIntoConstraints = false
+        commandScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
         commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
         commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+        commandScroll.heightAnchor.constraint(lessThanOrEqualToConstant: 120).isActive = true
         stack.addArrangedSubview(commandScroll)
 
         let contextTitle = NSTextField(labelWithString: "Context")
@@ -343,34 +350,7 @@ enum ExecApprovalsPromptPresenter {
 
 @MainActor
 private enum ExecHostExecutor {
-    private struct ExecApprovalContext {
-        let command: [String]
-        let displayCommand: String
-        let trimmedAgent: String?
-        let approvals: ExecApprovalsResolved
-        let security: ExecSecurity
-        let ask: ExecAsk
-        let autoAllowSkills: Bool
-        let env: [String: String]?
-        let resolution: ExecCommandResolution?
-        let allowlistMatch: ExecAllowlistEntry?
-        let skillAllow: Bool
-    }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
+    private typealias ExecApprovalContext = ExecApprovalEvaluation
 
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
         let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -412,7 +392,7 @@ private enum ExecHostExecutor {
                     host: "node",
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
-                    agentId: context.trimmedAgent,
+                    agentId: context.agentId,
                     resolvedPath: context.resolution?.resolvedPath,
                     sessionKey: request.sessionKey))
 
@@ -433,7 +413,7 @@ private enum ExecHostExecutor {
         self.persistAllowlistEntry(decision: approvalDecision, context: context)
 
         if context.security == .allowlist,
-           context.allowlistMatch == nil,
+           !context.allowlistSatisfied,
            !context.skillAllow,
            !approvedByAsk
         {
@@ -443,12 +423,21 @@ private enum ExecHostExecutor {
                 reason: "allowlist-miss")
         }
 
-        if let match = context.allowlistMatch {
-            ExecApprovalsStore.recordAllowlistUse(
-                agentId: context.trimmedAgent,
-                pattern: match.pattern,
-                command: context.displayCommand,
-                resolvedPath: context.resolution?.resolvedPath)
+        if context.allowlistSatisfied {
+            var seenPatterns = Set<String>()
+            for (idx, match) in context.allowlistMatches.enumerated() {
+                if !seenPatterns.insert(match.pattern).inserted {
+                    continue
+                }
+                let resolvedPath = idx < context.allowlistResolutions.count
+                    ? context.allowlistResolutions[idx].resolvedPath
+                    : nil
+                ExecApprovalsStore.recordAllowlistUse(
+                    agentId: context.agentId,
+                    pattern: match.pattern,
+                    command: context.displayCommand,
+                    resolvedPath: resolvedPath)
+            }
         }
 
         if let errorResponse = await self.ensureScreenRecordingAccess(request.needsScreenRecording) {
@@ -463,43 +452,12 @@ private enum ExecHostExecutor {
     }
 
     private static func buildContext(request: ExecHostRequest, command: [String]) async -> ExecApprovalContext {
-        let displayCommand = ExecCommandFormatter.displayString(
-            for: command,
-            rawCommand: request.rawCommand)
-        let agentId = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAgent = (agentId?.isEmpty == false) ? agentId : nil
-        let approvals = ExecApprovalsStore.resolve(agentId: trimmedAgent)
-        let security = approvals.agent.security
-        let ask = approvals.agent.ask
-        let autoAllowSkills = approvals.agent.autoAllowSkills
-        let env = self.sanitizedEnv(request.env)
-        let resolution = ExecCommandResolution.resolve(
+        await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: request.rawCommand,
             cwd: request.cwd,
-            env: env)
-        let allowlistMatch = security == .allowlist
-            ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
-            : nil
-        let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
-            let bins = await SkillBinsCache.shared.currentBins()
-            skillAllow = bins.contains(name)
-        } else {
-            skillAllow = false
-        }
-        return ExecApprovalContext(
-            command: command,
-            displayCommand: displayCommand,
-            trimmedAgent: trimmedAgent,
-            approvals: approvals,
-            security: security,
-            ask: ask,
-            autoAllowSkills: autoAllowSkills,
-            env: env,
-            resolution: resolution,
-            allowlistMatch: allowlistMatch,
-            skillAllow: skillAllow)
+            envOverrides: request.env,
+            agentId: request.agentId)
     }
 
     private static func persistAllowlistEntry(
@@ -507,13 +465,18 @@ private enum ExecHostExecutor {
         context: ExecApprovalContext)
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
-        guard let pattern = ExecApprovalHelpers.allowlistPattern(
-            command: context.command,
-            resolution: context.resolution)
-        else {
-            return
+        var seenPatterns = Set<String>()
+        for candidate in context.allowlistResolutions {
+            guard let pattern = ExecApprovalHelpers.allowlistPattern(
+                command: context.command,
+                resolution: candidate)
+            else {
+                continue
+            }
+            if seenPatterns.insert(pattern).inserted {
+                ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
+            }
         }
-        ExecApprovalsStore.addAllowlistEntry(agentId: context.trimmedAgent, pattern: pattern)
     }
 
     private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {
@@ -571,20 +534,6 @@ private enum ExecHostExecutor {
             ok: true,
             payload: payload,
             error: nil)
-    }
-
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
     }
 }
 
