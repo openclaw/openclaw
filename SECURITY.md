@@ -86,6 +86,10 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
   - CLI: `openclaw gateway run --bind loopback`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth` is intended for localhost-only break-glass use.
+  - OpenClaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
+  - Non-local and other risky configurations are surfaced by `openclaw security audit` as dangerous findings.
+  - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.
 - Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
   - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
   - Expected routes: `/__openclaw__/canvas/`, `/__openclaw__/a2ui/`.
