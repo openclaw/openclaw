@@ -49,6 +49,7 @@ vi.mock("../pi-embedded-helpers.js", () => ({
   }),
   isFailoverAssistantError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),
+  isThinkingImmutabilityError: vi.fn(() => false),
   parseImageSizeError: vi.fn(() => null),
   parseImageDimensionError: vi.fn(() => null),
   isRateLimitAssistantError: vi.fn(() => false),

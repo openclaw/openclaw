@@ -36,6 +36,7 @@ import {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isThinkingImmutabilityError,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -491,6 +492,7 @@ export async function runEmbeddedPiAgent(
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      let thinkingImmutabilityResetAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
@@ -831,6 +833,51 @@ export async function runEmbeddedPiAgent(
                   },
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
+                },
+              };
+            }
+            // Handle thinking block immutability errors. The Anthropic API rejects requests
+            // when thinking/redacted_thinking blocks in the latest assistant message have
+            // been modified (e.g. thinkingSignature stripped by session sanitizers).
+            // Auto-reset the session file and retry so unattended channel sessions
+            // (Telegram, Discord, etc.) recover without manual intervention.
+            if (isThinkingImmutabilityError(errorText)) {
+              log.warn(
+                `[thinking-immutability] Thinking block immutability error detected for session=${params.sessionKey ?? params.sessionId}. ` +
+                  `Session history contains modified thinking blocks rejected by the API.`,
+              );
+              if (!thinkingImmutabilityResetAttempted && params.sessionFile) {
+                thinkingImmutabilityResetAttempted = true;
+                try {
+                  await fs.writeFile(params.sessionFile, "");
+                  log.info(
+                    `[thinking-immutability] Session file cleared; retrying with fresh session for session=${params.sessionKey ?? params.sessionId}.`,
+                  );
+                  continue;
+                } catch (clearErr) {
+                  log.warn(
+                    `[thinking-immutability] Failed to clear session file: ${describeUnknownError(clearErr)}. Falling back to error response.`,
+                  );
+                }
+              }
+              return {
+                payloads: [
+                  {
+                    text:
+                      "Session history contains modified thinking blocks that the API rejected. " +
+                      "Use /new or /reset to start a fresh session.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "thinking_immutability", message: errorText },
                 },
               };
             }

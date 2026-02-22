@@ -28,6 +28,7 @@ export {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isThinkingImmutabilityError,
   isImageDimensionErrorMessage,
   isImageSizeError,
   isOverloadedErrorMessage,
