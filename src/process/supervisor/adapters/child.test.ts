@@ -17,6 +17,7 @@ vi.mock("../../kill-tree.js", () => ({
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
+let shouldUseDetached: typeof import("./child.js").shouldUseDetached;
 
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
@@ -50,12 +51,18 @@ async function createAdapterHarness(params?: {
 
 describe("createChildAdapter", () => {
   beforeAll(async () => {
-    ({ createChildAdapter } = await import("./child.js"));
+    ({ createChildAdapter, shouldUseDetached } = await import("./child.js"));
   });
 
   beforeEach(() => {
     spawnWithFallbackMock.mockReset();
     killProcessTreeMock.mockReset();
+  });
+
+  it("disables detached mode on win32 and darwin", () => {
+    expect(shouldUseDetached("win32")).toBe(false);
+    expect(shouldUseDetached("darwin")).toBe(false);
+    expect(shouldUseDetached("linux")).toBe(true);
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
@@ -65,9 +72,8 @@ describe("createChildAdapter", () => {
       options?: { detached?: boolean };
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
-    // On Windows, detached defaults to false (headless Scheduled Task compat);
-    // on POSIX, detached is true with a no-detach fallback.
-    if (process.platform === "win32") {
+    // Detached is disabled on win32 + darwin (headless scheduler/launchagent compatibility).
+    if (process.platform === "win32" || process.platform === "darwin") {
       expect(spawnArgs.options?.detached).toBe(false);
       expect(spawnArgs.fallbacks).toEqual([]);
     } else {

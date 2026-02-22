@@ -29,6 +29,10 @@ export type ChildAdapter = {
   dispose: () => void;
 };
 
+export function shouldUseDetached(platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== "win32" && platform !== "darwin";
+}
+
 export async function createChildAdapter(params: {
   argv: string[];
   cwd?: string;
@@ -44,9 +48,14 @@ export async function createChildAdapter(params: {
 
   // On Windows, `detached: true` creates a new process group and can prevent
   // stdout/stderr pipes from connecting when running under a Scheduled Task
-  // (headless, no console). Default to `detached: false` on Windows; on
-  // POSIX systems keep `detached: true` so the child survives parent exit.
-  const useDetached = process.platform !== "win32";
+  // (headless, no console).
+  //
+  // On macOS LaunchAgent sessions we observed the same symptom (commands exit
+  // immediately with no captured output) when detached children are used.
+  // Keep detached mode disabled on both win32 and darwin for reliable pipe
+  // capture; Linux/other POSIX keeps detached=true so child runs can outlive
+  // the parent when needed.
+  const useDetached = shouldUseDetached();
 
   const options: SpawnOptions = {
     cwd: params.cwd,
