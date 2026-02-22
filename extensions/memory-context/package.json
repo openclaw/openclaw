@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/memory-context",
+  "version": "2026.2.20",
+  "private": true,
+  "description": "OpenClaw memory-context: compaction-aware conversation memory with hybrid search and knowledge extraction",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

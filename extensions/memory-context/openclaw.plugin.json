@@ -1,0 +1,141 @@
+{
+  "id": "memory-context",
+  "kind": "memory",
+  "name": "Memory (Context)",
+  "description": "Compaction-aware conversation memory with hybrid search and recall injection",
+  "uiHints": {
+    "storagePath": {
+      "label": "Storage Path",
+      "placeholder": "~/.openclaw/memory/context",
+      "advanced": true
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant conversation history into context"
+    },
+    "redaction": {
+      "label": "Redaction",
+      "help": "Mask potential secrets before persisting compacted content",
+      "advanced": true
+    },
+    "knowledgeExtraction": {
+      "label": "Knowledge Extraction",
+      "help": "Extract durable technical facts from compacted messages",
+      "advanced": true
+    },
+    "embeddingModel": {
+      "label": "Embedding Model",
+      "help": "Use 'transformer' for semantic search (recommended) or 'hash' for fast local fallback"
+    },
+    "embeddingModelName": {
+      "label": "Embedding Model Name",
+      "placeholder": "EmbeddingGemma-300M",
+      "advanced": true
+    },
+    "indexType": {
+      "label": "Index Type",
+      "help": "Use 'hnsw' for fast approximate search or 'brute' for exact search"
+    },
+    "search": {
+      "label": "Search Settings",
+      "help": "Configure hybrid search weights and time decay",
+      "advanced": true
+    },
+    "budget": {
+      "label": "Budget Settings",
+      "help": "Configure context budget for auto-recall",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embeddingDim": {
+        "type": "number",
+        "minimum": 8
+      },
+      "storagePath": {
+        "type": "string"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "redaction": {
+        "type": "boolean"
+      },
+      "knowledgeExtraction": {
+        "type": "boolean"
+      },
+      "autoRecallMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "autoRecallMaxTokens": {
+        "type": "number",
+        "minimum": 0
+      },
+      "maxSegments": {
+        "type": "number",
+        "minimum": 1
+      },
+      "embeddingModel": {
+        "type": "string",
+        "enum": ["auto", "gemini", "hash", "transformer"]
+      },
+      "embeddingModelName": {
+        "type": "string"
+      },
+      "indexType": {
+        "type": "string",
+        "enum": ["brute", "hnsw"]
+      },
+      "search": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "vectorWeight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "bm25Weight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "timeDecay": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      },
+      "budget": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "tokenEstimateRatio": {
+            "type": "number",
+            "minimum": 1
+          }
+        }
+      },
+      "crossSession": {
+        "type": "boolean"
+      },
+      "evictionDays": {
+        "type": "number",
+        "minimum": 0
+      },
+      "vectorPersist": {
+        "type": "boolean"
+      }
+    }
+  }
+}
