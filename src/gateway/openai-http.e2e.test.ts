@@ -335,6 +335,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
+        const res = await postChatCompletions(port, {
+          stream: false,
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(200);
+        const json = (await res.json()) as Record<string, unknown>;
+        const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
+        const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
+        expect(msg.content).toBe("No response from OpenClaw.");
+      }
+
+      {
         const res = await postChatCompletions(port, {
           model: "openclaw",
           messages: [{ role: "system", content: "yo" }],
@@ -474,6 +489,31 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const fallbackText = await fallbackRes.text();
         expect(fallbackText).toContain("[DONE]");
         expect(fallbackText).toContain("hello");
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockRejectedValueOnce(new Error("boom"));
+
+        const errorRes = await postChatCompletions(port, {
+          stream: true,
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(errorRes.status).toBe(200);
+        const errorText = await errorRes.text();
+        const errorData = parseSseDataLines(errorText);
+        expect(errorData[errorData.length - 1]).toBe("[DONE]");
+
+        const errorChunks = errorData
+          .filter((d) => d !== "[DONE]")
+          .map((d) => JSON.parse(d) as Record<string, unknown>);
+        const stopChoice = errorChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .find((choice) => choice.finish_reason === "stop");
+        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
+          "Error: internal error",
+        );
       }
     } finally {
       // shared server
