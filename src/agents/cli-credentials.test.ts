@@ -63,8 +63,8 @@ describe("cli credentials", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    execSyncMock.mockReset();
-    execFileSyncMock.mockReset();
+    execSyncMock.mockClear().mockImplementation(() => undefined);
+    execFileSyncMock.mockClear().mockImplementation(() => undefined);
     delete process.env.CODEX_HOME;
     resetCliCredentialCachesForTest();
   });
