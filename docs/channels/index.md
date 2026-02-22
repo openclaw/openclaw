@@ -34,6 +34,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
+- [Synology Chat](/channels/synology-chat) — Synology NAS Chat via webhooks; DMs and channels (plugin, installed separately).
 
 ## Notes
 

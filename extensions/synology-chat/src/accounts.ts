@@ -21,6 +21,39 @@ function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
 }
 
 /**
+ * Parse channel webhook URLs from env vars (SYNOLOGY_CHANNEL_WEBHOOK_<id>=<url>)
+ * and merge with any config-defined webhooks.
+ */
+function parseChannelWebhooksFromEnv(): Record<string, string> {
+  const result: Record<string, string> = {};
+  const prefix = "SYNOLOGY_CHANNEL_WEBHOOK_";
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith(prefix) && value) {
+      const channelId = key.slice(prefix.length);
+      if (channelId) result[channelId] = value;
+    }
+  }
+  return result;
+}
+
+/**
+ * Parse channel outgoing webhook tokens from env vars (SYNOLOGY_CHANNEL_TOKEN_<id>=<token>).
+ * These tokens identify which channel sent the message to our webhook endpoint.
+ * Returns a map of channel_id → outgoing webhook token.
+ */
+function parseChannelTokensFromEnv(): Record<string, string> {
+  const result: Record<string, string> = {};
+  const prefix = "SYNOLOGY_CHANNEL_TOKEN_";
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith(prefix) && value) {
+      const channelId = key.slice(prefix.length);
+      if (channelId) result[channelId] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * List all configured account IDs for this channel.
  * Returns ["default"] if there's a base config, plus any named accounts.
  */
@@ -83,5 +116,19 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
       (envRateLimit ? parseInt(envRateLimit, 10) || 30 : 30),
     botName: accountOverride.botName ?? channelCfg.botName ?? envBotName,
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
+    groupPolicy: accountOverride.groupPolicy ?? channelCfg.groupPolicy ?? "disabled",
+    groupAllowFrom: parseAllowedUserIds(
+      accountOverride.groupAllowFrom ?? channelCfg.groupAllowFrom ?? "",
+    ),
+    channelWebhooks: {
+      ...parseChannelWebhooksFromEnv(),
+      ...(channelCfg.channelWebhooks ?? {}),
+      ...(accountOverride.channelWebhooks ?? {}),
+    },
+    channelTokens: {
+      ...parseChannelTokensFromEnv(),
+      ...(channelCfg.channelTokens ?? {}),
+      ...(accountOverride.channelTokens ?? {}),
+    },
   };
 }
