@@ -207,7 +207,7 @@ export async function sendBlueBubblesAttachment(params: {
   addField("chatGuid", chatGuid);
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  if (privateApiStatus !== false) {
+  if (privateApiStatus === true) {
     addField("method", "private-api");
   }
 
@@ -217,7 +217,7 @@ export async function sendBlueBubblesAttachment(params: {
   }
 
   const trimmedReplyTo = replyToMessageGuid?.trim();
-  if (trimmedReplyTo && privateApiStatus !== false) {
+  if (trimmedReplyTo && privateApiStatus === true) {
     addField("selectedMessageGuid", trimmedReplyTo);
     addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");
   }
