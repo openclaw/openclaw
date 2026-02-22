@@ -1,9 +1,5 @@
-import type { ExecApprovalManager, ExecApprovalRecord } from "./exec-approval-manager.js";
-import type { GatewayClient } from "./server-methods/types.js";
-import {
-  formatExecCommand,
-  validateSystemRunCommandConsistency,
-} from "../infra/system-run-command.js";
+import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -17,6 +13,18 @@ type SystemRunParamsLike = {
   approved?: unknown;
   approvalDecision?: unknown;
   runId?: unknown;
+};
+
+type ApprovalLookup = {
+  getSnapshot: (recordId: string) => ExecApprovalRecord | null;
+};
+
+type ApprovalClient = {
+  connId?: string | null;
+  connect?: {
+    scopes?: unknown;
+    device?: { id?: string | null } | null;
+  } | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -39,31 +47,20 @@ function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always
   return s === "allow-once" || s === "allow-always" ? s : null;
 }
 
-function clientHasApprovals(client: GatewayClient | null): boolean {
+function clientHasApprovals(client: ApprovalClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
   return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
 }
 
-function getCmdText(params: SystemRunParamsLike): string {
-  const raw = normalizeString(params.rawCommand);
-  if (raw) {
-    return raw;
-  }
-  if (Array.isArray(params.command)) {
-    const parts = params.command.map((v) => String(v));
-    if (parts.length > 0) {
-      return formatExecCommand(parts);
-    }
-  }
-  return "";
-}
-
-function approvalMatchesRequest(params: SystemRunParamsLike, record: ExecApprovalRecord): boolean {
+function approvalMatchesRequest(
+  cmdText: string,
+  params: SystemRunParamsLike,
+  record: ExecApprovalRecord,
+): boolean {
   if (record.request.host !== "node") {
     return false;
   }
 
-  const cmdText = getCmdText(params);
   if (!cmdText || record.request.command !== cmdText) {
     return false;
   }
@@ -118,8 +115,8 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
  */
 export function sanitizeSystemRunParamsForForwarding(opts: {
   rawParams: unknown;
-  client: GatewayClient | null;
-  execApprovalManager?: ExecApprovalManager;
+  client: ApprovalClient | null;
+  execApprovalManager?: ApprovalLookup;
   nowMs?: number;
 }):
   | { ok: true; params: unknown }
@@ -130,25 +127,18 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   const p = obj as SystemRunParamsLike;
-  const argv = Array.isArray(p.command) ? p.command.map((v) => String(v)) : [];
-  const raw = normalizeString(p.rawCommand);
-  if (raw) {
-    if (!Array.isArray(p.command) || argv.length === 0) {
-      return {
-        ok: false,
-        message: "rawCommand requires params.command",
-        details: { code: "MISSING_COMMAND" },
-      };
-    }
-    const validation = validateSystemRunCommandConsistency({ argv, rawCommand: raw });
-    if (!validation.ok) {
-      return {
-        ok: false,
-        message: validation.message,
-        details: validation.details ?? { code: "RAW_COMMAND_MISMATCH" },
-      };
-    }
+  const cmdTextResolution = resolveSystemRunCommand({
+    command: p.command,
+    rawCommand: p.rawCommand,
+  });
+  if (!cmdTextResolution.ok) {
+    return {
+      ok: false,
+      message: cmdTextResolution.message,
+      details: cmdTextResolution.details,
+    };
   }
+  const cmdText = cmdTextResolution.cmdText;
 
   const approved = p.approved === true;
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
@@ -221,7 +211,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
-  if (!approvalMatchesRequest(p, snapshot)) {
+  if (!approvalMatchesRequest(cmdText, p, snapshot)) {
     return {
       ok: false,
       message: "approval id does not match request",

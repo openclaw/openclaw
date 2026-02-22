@@ -40,6 +40,14 @@ function makeUnauthorizedWhatsAppCfg(home: string) {
   };
 }
 
+function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
 async function runInlineUnauthorizedCommand(params: {
   home: string;
   command: "/status" | "/help";
@@ -143,7 +151,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Send policy set to off");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { sendPolicy?: string }>;
       expect(store[MAIN_SESSION_KEY]?.sendPolicy).toBe("deny");
     });

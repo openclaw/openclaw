@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging.js";
 import { monitorWebInbox } from "./inbound.js";
 import {
+  DEFAULT_ACCOUNT_ID,
+  getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
@@ -15,9 +17,18 @@ import {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
+  async function openMonitor(onMessage = vi.fn()) {
+    return await monitorWebInbox({
+      verbose: false,
+      accountId: DEFAULT_ACCOUNT_ID,
+      authDir: getAuthDir(),
+      onMessage,
+    });
+  }
+
   it("captures media path for image messages", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const upsert = {
       type: "notify",
@@ -52,7 +63,7 @@ describe("web monitor inbox", () => {
 
   it("sets gifPlayback on outbound video payloads when requested", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const buf = Buffer.from("gifvid");
 
@@ -71,10 +82,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves onClose when the socket closes", async () => {
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage: vi.fn(),
-    });
+    const listener = await openMonitor(vi.fn());
     const sock = getSock();
     const reasonPromise = listener.onClose;
     sock.ev.emit("connection.update", {
@@ -92,7 +100,7 @@ describe("web monitor inbox", () => {
     setLoggerOverride({ level: "trace", file: logPath });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const upsert = {
       type: "notify",
@@ -109,6 +117,12 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
     const content = fsSync.readFileSync(logPath, "utf-8");
     expect(content).toMatch(/web-inbound/);
     expect(content).toMatch(/ping/);
@@ -117,7 +131,7 @@ describe("web monitor inbox", () => {
 
   it("includes participant when marking group messages read", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const upsert = {
       type: "notify",
@@ -150,7 +164,7 @@ describe("web monitor inbox", () => {
 
   it("passes through group messages with participant metadata", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const upsert = {
       type: "notify",
@@ -190,7 +204,7 @@ describe("web monitor inbox", () => {
 
   it("unwraps ephemeral messages, preserves mentions, and still delivers group pings", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const upsert = {
       type: "notify",
@@ -249,7 +263,7 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await openMonitor(onMessage);
     const sock = getSock();
     const upsert = {
       type: "notify",

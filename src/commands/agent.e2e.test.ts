@@ -12,16 +12,16 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
 
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand } from "./agent.js";
 
@@ -43,7 +43,7 @@ function mockConfig(
   home: string,
   storePath: string,
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
-  telegramOverrides?: Partial<NonNullable<OpenClawConfig["telegram"]>>,
+  telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
   agentsList?: Array<{ id: string; default?: boolean }>,
 ) {
   configSpy.mockReturnValue({
@@ -57,7 +57,9 @@ function mockConfig(
       list: agentsList,
     },
     session: { store: storePath, mainKey: "main" },
-    telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
+    channels: {
+      telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
+    },
   });
 }
 
@@ -284,6 +286,72 @@ describe("agentCommand", () => {
     });
   });
 
+  it("persists resolved sessionFile for existing session keys", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:abc": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:abc",
+        },
+        runtime,
+      );
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { sessionId?: string; sessionFile?: string }
+      >;
+      const entry = saved["agent:main:subagent:abc"];
+      expect(entry?.sessionId).toBe("sess-main");
+      expect(entry?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}sess-main.jsonl`,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionFile).toBe(entry?.sessionFile);
+    });
+  });
+
+  it("preserves topic transcript suffix when persisting missing sessionFile", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:telegram:group:123:topic:456": {
+          sessionId: "sess-topic",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:telegram:group:123:topic:456",
+        },
+        runtime,
+      );
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { sessionId?: string; sessionFile?: string }
+      >;
+      const entry = saved["agent:main:telegram:group:123:topic:456"];
+      expect(entry?.sessionId).toBe("sess-topic");
+      expect(entry?.sessionFile).toContain("sess-topic-topic-456.jsonl");
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionFile).toBe(entry?.sessionFile);
+    });
+  });
+
   it("derives session key from --agent when no routing target is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -342,7 +410,7 @@ describe("agentCommand", () => {
 
       await agentCommand({ message: "hi", to: "+1999", json: true }, runtime);
 
-      const logged = (runtime.log as MockInstance).mock.calls.at(-1)?.[0] as string;
+      const logged = (runtime.log as unknown as MockInstance).mock.calls.at(-1)?.[0] as string;
       const parsed = JSON.parse(logged) as {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
@@ -376,6 +444,7 @@ describe("agentCommand", () => {
       const deps = {
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn().mockResolvedValue({ messageId: "t1", chatId: "123" }),
+        sendMessageSlack: vi.fn(),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
         sendMessageIMessage: vi.fn(),

@@ -34,9 +34,17 @@ function mockEmbeddedOkPayload() {
   return runEmbeddedPiAgentMock;
 }
 
+function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
   await fs.writeFile(
-    cfg.session.store,
+    requireSessionStorePath(cfg),
     JSON.stringify({
       [MAIN_SESSION_KEY]: {
         sessionId: "main",
@@ -154,7 +162,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Group activation set to always");
-      const store = JSON.parse(await fs.readFile(cfg.session.store, "utf-8")) as Record<
+      const store = JSON.parse(await fs.readFile(requireSessionStorePath(cfg), "utf-8")) as Record<
         string,
         { groupActivation?: string }
       >;

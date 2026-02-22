@@ -119,7 +119,7 @@ describe("computeAdaptiveChunkRatio", () => {
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
         timestamp: Date.now(),
-      },
+      } as unknown as AgentMessage,
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -134,7 +134,7 @@ describe("computeAdaptiveChunkRatio", () => {
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
         timestamp: Date.now(),
-      },
+      } as unknown as AgentMessage,
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);

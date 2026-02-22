@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
@@ -16,6 +14,7 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -27,6 +26,7 @@ import {
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
+import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
   id?: string;
@@ -138,7 +138,8 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
-  const effectiveDmAllowFrom = Array.from(new Set([...params.allowFrom, ...params.storeAllowFrom]))
+  const storeAllowFrom = params.dmPolicy === "allowlist" ? [] : params.storeAllowFrom;
+  const effectiveDmAllowFrom = Array.from(new Set([...params.allowFrom, ...storeAllowFrom]))
     .map((v) => String(v).trim())
     .filter(Boolean);
   // Keep DM pairing-store authorization scoped to DMs; group access must come from explicit group allowlist config.

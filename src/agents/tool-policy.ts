@@ -1,5 +1,18 @@
 import type { AnyAgentTool } from "./tools/common.js";
 
+// Keep tool-policy browser-safe: do not import tools/common at runtime.
+function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
+  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error("Tool restricted to owner senders.");
+    },
+  };
+}
+
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
@@ -60,7 +73,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   ],
 };
 
-const OWNER_ONLY_TOOL_NAMES = new Set<string>(["whatsapp_login"]);
+const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>(["whatsapp_login", "cron", "gateway"]);
 
 const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
@@ -87,28 +100,24 @@ export function normalizeToolName(name: string) {
 }
 
 export function isOwnerOnlyToolName(name: string) {
-  return OWNER_ONLY_TOOL_NAMES.has(normalizeToolName(name));
+  return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));
+}
+
+function isOwnerOnlyTool(tool: AnyAgentTool) {
+  return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
 export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
   const withGuard = tools.map((tool) => {
-    if (!isOwnerOnlyToolName(tool.name)) {
+    if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
-    if (senderIsOwner || !tool.execute) {
-      return tool;
-    }
-    return {
-      ...tool,
-      execute: async () => {
-        throw new Error("Tool restricted to owner senders.");
-      },
-    };
+    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
   });
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyToolName(tool.name));
+  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
 }
 
 export function normalizeToolList(list?: string[]) {

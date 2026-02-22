@@ -1,6 +1,7 @@
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import { enqueueSystemEvent } from "./system-events.js";
@@ -13,6 +14,7 @@ type WarningParams = {
 };
 
 const warnedContexts = new Map<string, string>();
+const log = createSubsystemLogger("session-maintenance-warning");
 
 function shouldSendWarning(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
@@ -104,7 +106,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
     });
   } catch (err) {
-    console.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
+    log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
 }

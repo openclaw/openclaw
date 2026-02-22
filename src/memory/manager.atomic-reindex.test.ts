@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
 let shouldFail = false;
@@ -68,7 +69,7 @@ describe("memory manager atomic reindex", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    } as OpenClawConfig;
 
     manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
 

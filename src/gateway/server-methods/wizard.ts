@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
@@ -11,6 +10,7 @@ import {
   validateWizardStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function readWizardStatus(session: WizardSession) {

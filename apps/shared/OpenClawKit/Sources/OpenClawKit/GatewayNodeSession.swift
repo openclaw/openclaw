@@ -26,6 +26,7 @@ public actor GatewayNodeSession {
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
     private var onInvoke: (@Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)?
+    private var hasEverConnected = false
     private var hasNotifiedConnected = false
     private var snapshotReceived = false
     private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
@@ -214,6 +215,7 @@ public actor GatewayNodeSession {
         self.activeToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
+        self.hasEverConnected = false
         self.resetConnectionState()
     }
 
@@ -274,6 +276,11 @@ public actor GatewayNodeSession {
         case let .snapshot(ok):
             let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
             self.canvasHostUrl = (raw?.isEmpty == false) ? raw : nil
+            if self.hasEverConnected {
+                self.broadcastServerEvent(
+                    EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
+            }
+            self.hasEverConnected = true
             self.markSnapshotReceived()
             await self.notifyConnectedIfNeeded()
         case let .event(evt):

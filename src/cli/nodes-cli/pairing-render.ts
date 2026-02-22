@@ -1,6 +1,6 @@
-import type { PendingRequest } from "./types.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { renderTable } from "../../terminal/table.js";
+import type { PendingRequest } from "./types.js";
 
 export function renderPendingPairingRequestsTable(params: {
   pending: PendingRequest[];

@@ -1,15 +1,12 @@
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
-
-type ReplyOpts =
-  | {
-      onReplyStart?: () => void | Promise<void>;
-    }
-  | undefined;
 
 const { sessionStorePath } = vi.hoisted(() => ({
   sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
@@ -185,12 +182,16 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-export const replySpy: MockFn<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
-  async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  },
-);
+export const replySpy: MockFn<
+  (
+    ctx: MsgContext,
+    opts?: GetReplyOptions,
+    configOverride?: OpenClawConfig,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+> = vi.fn(async (_ctx, opts) => {
+  await opts?.onReplyStart?.();
+  return undefined;
+});
 
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: replySpy,

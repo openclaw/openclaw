@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { listRunningSessions, resetProcessRegistryForTests } from "./bash-process-registry";
-import { createExecTool } from "./bash-tools.exec";
+import { listRunningSessions, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { createExecTool } from "./bash-tools.exec.js";
 
 const { supervisorSpawnMock } = vi.hoisted(() => ({
   supervisorSpawnMock: vi.fn(),

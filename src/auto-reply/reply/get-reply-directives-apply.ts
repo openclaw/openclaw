@@ -3,8 +3,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import type { createModelSelectionState } from "./model-selection.js";
-import type { TypingController } from "./typing.js";
 import { buildStatusReply } from "./commands.js";
 import {
   applyInlineDirectivesFastLane,
@@ -15,6 +13,8 @@ import {
 } from "./directive-handling.js";
 import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import type { createModelSelectionState } from "./model-selection.js";
+import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
@@ -168,6 +168,7 @@ export async function applyInlineDirectiveOverrides(params: {
         command,
         sessionEntry,
         sessionKey,
+        parentSessionKey: ctx.ParentSessionKey,
         sessionScope,
         provider,
         model,

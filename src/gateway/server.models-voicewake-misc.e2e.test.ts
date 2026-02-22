@@ -1,16 +1,17 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import { clearConfigCache } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -52,13 +53,16 @@ const whatsappOutbound: ChannelOutboundAdapter = {
     if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
-    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, {})) };
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { verbose: false })) };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
     if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
-    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { mediaUrl })) };
+    return {
+      channel: "whatsapp",
+      ...(await deps.sendWhatsApp(to, text, { verbose: false, mediaUrl })),
+    };
   },
 };
 
@@ -78,141 +82,99 @@ const whatsappRegistry = createRegistry([
 const emptyRegistry = createRegistry([]);
 
 describe("gateway server models + voicewake", () => {
-  const setTempHome = (homeDir: string) => {
-    const prevHome = process.env.HOME;
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const prevUserProfile = process.env.USERPROFILE;
-    const prevHomeDrive = process.env.HOMEDRIVE;
-    const prevHomePath = process.env.HOMEPATH;
-    process.env.HOME = homeDir;
-    process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
-    process.env.USERPROFILE = homeDir;
-    if (process.platform === "win32") {
-      const parsed = path.parse(homeDir);
-      process.env.HOMEDRIVE = parsed.root.replace(/\\$/, "");
-      process.env.HOMEPATH = homeDir.slice(Math.max(parsed.root.length - 1, 0));
+  const withTempHome = async <T>(fn: (homeDir: string) => Promise<T>): Promise<T> => {
+    const tempHome = await createTempHomeEnv("openclaw-home-");
+    try {
+      return await fn(tempHome.home);
+    } finally {
+      await tempHome.restore();
     }
-    return () => {
-      if (prevHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = prevHome;
-      }
-      if (prevStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-      if (prevUserProfile === undefined) {
-        delete process.env.USERPROFILE;
-      } else {
-        process.env.USERPROFILE = prevUserProfile;
-      }
-      if (process.platform === "win32") {
-        if (prevHomeDrive === undefined) {
-          delete process.env.HOMEDRIVE;
-        } else {
-          process.env.HOMEDRIVE = prevHomeDrive;
-        }
-        if (prevHomePath === undefined) {
-          delete process.env.HOMEPATH;
-        } else {
-          process.env.HOMEPATH = prevHomePath;
-        }
-      }
-    };
   };
 
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 60_000 },
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
-      const restoreHome = setTempHome(homeDir);
+      await withTempHome(async (homeDir) => {
+        const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
+        expect(initial.ok).toBe(true);
+        expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
 
-      const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
-      expect(initial.ok).toBe(true);
-      expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
+        const changedP = onceMessage(
+          ws,
+          (o) => o.type === "event" && o.event === "voicewake.changed",
+        );
 
-      const changedP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: unknown;
-      }>(ws, (o) => o.type === "event" && o.event === "voicewake.changed");
+        const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+          triggers: ["  hi  ", "", "there"],
+        });
+        expect(setRes.ok).toBe(true);
+        expect(setRes.payload?.triggers).toEqual(["hi", "there"]);
 
-      const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
-        triggers: ["  hi  ", "", "there"],
+        const changed = (await changedP) as { event?: string; payload?: unknown };
+        expect(changed.event).toBe("voicewake.changed");
+        expect((changed.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
+          "hi",
+          "there",
+        ]);
+
+        const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
+        expect(after.ok).toBe(true);
+        expect(after.payload?.triggers).toEqual(["hi", "there"]);
+
+        const onDisk = JSON.parse(
+          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+        ) as { triggers?: unknown; updatedAtMs?: unknown };
+        expect(onDisk.triggers).toEqual(["hi", "there"]);
+        expect(typeof onDisk.updatedAtMs).toBe("number");
       });
-      expect(setRes.ok).toBe(true);
-      expect(setRes.payload?.triggers).toEqual(["hi", "there"]);
-
-      const changed = await changedP;
-      expect(changed.event).toBe("voicewake.changed");
-      expect((changed.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-        "hi",
-        "there",
-      ]);
-
-      const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
-      expect(after.ok).toBe(true);
-      expect(after.payload?.triggers).toEqual(["hi", "there"]);
-
-      const onDisk = JSON.parse(
-        await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
-      ) as { triggers?: unknown; updatedAtMs?: unknown };
-      expect(onDisk.triggers).toEqual(["hi", "there"]);
-      expect(typeof onDisk.updatedAtMs).toBe("number");
-
-      restoreHome();
     },
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
-    const restoreHome = setTempHome(homeDir);
+    await withTempHome(async () => {
+      const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+      const firstEventP = onceMessage(
+        nodeWs,
+        (o) => o.type === "event" && o.event === "voicewake.changed",
+      );
+      await connectOk(nodeWs, {
+        role: "node",
+        client: {
+          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          version: "1.0.0",
+          platform: "ios",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+      });
 
-    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-    const firstEventP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
-      nodeWs,
-      (o) => o.type === "event" && o.event === "voicewake.changed",
-    );
-    await connectOk(nodeWs, {
-      role: "node",
-      client: {
-        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        version: "1.0.0",
-        platform: "ios",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
+      const first = (await firstEventP) as { event?: string; payload?: unknown };
+      expect(first.event).toBe("voicewake.changed");
+      expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
+        "openclaw",
+        "claude",
+        "computer",
+      ]);
+
+      const broadcastP = onceMessage(
+        nodeWs,
+        (o) => o.type === "event" && o.event === "voicewake.changed",
+      );
+      const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+        triggers: ["openclaw", "computer"],
+      });
+      expect(setRes.ok).toBe(true);
+
+      const broadcast = (await broadcastP) as { event?: string; payload?: unknown };
+      expect(broadcast.event).toBe("voicewake.changed");
+      expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
+        "openclaw",
+        "computer",
+      ]);
+
+      nodeWs.close();
     });
-
-    const first = await firstEventP;
-    expect(first.event).toBe("voicewake.changed");
-    expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-      "openclaw",
-      "claude",
-      "computer",
-    ]);
-
-    const broadcastP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
-      nodeWs,
-      (o) => o.type === "event" && o.event === "voicewake.changed",
-    );
-    const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
-      triggers: ["openclaw", "computer"],
-    });
-    expect(setRes.ok).toBe(true);
-
-    const broadcast = await broadcastP;
-    expect(broadcast.event).toBe("voicewake.changed");
-    expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-      "openclaw",
-      "computer",
-    ]);
-
-    nodeWs.close();
-    restoreHome();
   });
 
   test("models.list returns model catalog", async () => {
@@ -290,6 +252,99 @@ describe("gateway server models + voicewake", () => {
     expect(piSdkMock.discoverCalls).toBe(1);
   });
 
+  test("models.list filters to allowlisted configured models by default", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    }
+    let previousConfig: string | undefined;
+    try {
+      previousConfig = await fs.readFile(configPath, "utf-8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw err;
+      }
+    }
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-test-z" },
+                models: {
+                  "openai/gpt-test-z": {},
+                  "anthropic/claude-test-a": {},
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      clearConfigCache();
+
+      piSdkMock.enabled = true;
+      piSdkMock.models = [
+        { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+        {
+          id: "gpt-test-a",
+          name: "A-Model",
+          provider: "openai",
+          contextWindow: 8000,
+        },
+        {
+          id: "claude-test-b",
+          name: "B-Model",
+          provider: "anthropic",
+          contextWindow: 1000,
+        },
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+      ];
+
+      const res = await rpcReq<{
+        models: Array<{
+          id: string;
+          name: string;
+          provider: string;
+          contextWindow?: number;
+        }>;
+      }>(ws, "models.list");
+
+      expect(res.ok).toBe(true);
+      expect(res.payload?.models).toEqual([
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+        {
+          id: "gpt-test-z",
+          name: "gpt-test-z",
+          provider: "openai",
+        },
+      ]);
+    } finally {
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      clearConfigCache();
+    }
+  });
+
   test("models.list rejects unknown params", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
@@ -302,25 +357,21 @@ describe("gateway server models + voicewake", () => {
 
 describe("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
-    const envSnapshot = captureEnv(["OPENCLAW_CANVAS_HOST_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
-    try {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "secret" }, async () => {
       testTailnetIPv4.value = "100.64.0.1";
       testState.gatewayBind = "lan";
       const canvasPort = await getFreePort();
       testState.canvasHostPort = canvasPort;
-      process.env.OPENCLAW_CANVAS_HOST_PORT = String(canvasPort);
-
-      const testPort = await getFreePort();
-      const canvasHostUrl = resolveCanvasHostUrl({
-        canvasPort,
-        requestHost: `100.64.0.1:${testPort}`,
-        localAddress: "127.0.0.1",
+      await withEnvAsync({ OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) }, async () => {
+        const testPort = await getFreePort();
+        const canvasHostUrl = resolveCanvasHostUrl({
+          canvasPort,
+          requestHost: `100.64.0.1:${testPort}`,
+          localAddress: "127.0.0.1",
+        });
+        expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
       });
-      expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 
   test("send dedupes by idempotencyKey", { timeout: 60_000 }, async () => {

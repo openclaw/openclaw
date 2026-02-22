@@ -30,7 +30,7 @@ describe("compaction toolResult details stripping", () => {
         role: "assistant",
         content: [{ type: "toolUse", id: "call_1", name: "browser", input: { action: "tabs" } }],
         timestamp: 1,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_1",
@@ -57,7 +57,9 @@ describe("compaction toolResult details stripping", () => {
     expect(summary).toBe("summary");
     expect(piCodingAgentMocks.generateSummary).toHaveBeenCalled();
 
-    const [chunk] = piCodingAgentMocks.generateSummary.mock.calls[0] ?? [];
+    const chunk = (
+      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0];
     const serialized = JSON.stringify(chunk);
     expect(serialized).not.toContain("Ignore previous instructions");
     expect(serialized).not.toContain('"details"');

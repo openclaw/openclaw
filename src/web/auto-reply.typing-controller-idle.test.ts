@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { monitorWebChannel } from "./auto-reply.js";
 import {
+  createMockWebListener,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -53,11 +54,12 @@ describe("typing controller idle", () => {
           timestamp: Date.now(),
           chatType: "direct",
           chatId: "direct:+1000",
+          accountId: "default",
           sendComposing,
           reply,
           sendMedia,
         });
-        return { close: vi.fn().mockResolvedValue(undefined) };
+        return createMockWebListener();
       },
       false,
       replyResolver,

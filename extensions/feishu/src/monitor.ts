@@ -1,16 +1,16 @@
-import * as Lark from "@larksuiteoapi/node-sdk";
 import * as http from "http";
+import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   type ClawdbotConfig,
   type RuntimeEnv,
   type HistoryEntry,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk";
-import type { ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -25,6 +25,52 @@ const httpServers = new Map<string, http.Server>();
 const botOpenIds = new Map<string, string>();
 const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
+const FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
+const FEISHU_WEBHOOK_COUNTER_LOG_EVERY = 25;
+const feishuWebhookRateLimits = new Map<string, { count: number; windowStartMs: number }>();
+const feishuWebhookStatusCounters = new Map<string, number>();
+
+function isJsonContentType(value: string | string[] | undefined): boolean {
+  const first = Array.isArray(value) ? value[0] : value;
+  if (!first) {
+    return false;
+  }
+  const mediaType = first.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
+}
+
+function isWebhookRateLimited(key: string, nowMs: number): boolean {
+  const state = feishuWebhookRateLimits.get(key);
+  if (!state || nowMs - state.windowStartMs >= FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
+    feishuWebhookRateLimits.set(key, { count: 1, windowStartMs: nowMs });
+    return false;
+  }
+
+  state.count += 1;
+  if (state.count > FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS) {
+    return true;
+  }
+  return false;
+}
+
+function recordWebhookStatus(
+  runtime: RuntimeEnv | undefined,
+  accountId: string,
+  path: string,
+  statusCode: number,
+): void {
+  if (![400, 401, 408, 413, 415, 429].includes(statusCode)) {
+    return;
+  }
+  const key = `${accountId}:${path}:${statusCode}`;
+  const next = (feishuWebhookStatusCounters.get(key) ?? 0) + 1;
+  feishuWebhookStatusCounters.set(key, next);
+  if (next === 1 || next % FEISHU_WEBHOOK_COUNTER_LOG_EVERY === 0) {
+    const log = runtime?.log ?? console.log;
+    log(`feishu[${accountId}]: webhook anomaly path=${path} status=${statusCode} count=${next}`);
+  }
+}
 
 async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
@@ -120,6 +166,9 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
   const connectionMode = account.config.connectionMode ?? "websocket";
+  if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
+    throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
+  }
   const eventDispatcher = createEventDispatcher(account);
   const chatHistories = new Map<string, HistoryEntry[]>();
 
@@ -200,12 +249,30 @@ async function monitorWebhook({
 
   const port = account.config.webhookPort ?? 3000;
   const path = account.config.webhookPath ?? "/feishu/events";
+  const host = account.config.webhookHost ?? "127.0.0.1";
 
-  log(`feishu[${accountId}]: starting Webhook server on port ${port}, path ${path}...`);
+  log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
 
   const server = http.createServer();
   const webhookHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
   server.on("request", (req, res) => {
+    res.on("finish", () => {
+      recordWebhookStatus(runtime, accountId, path, res.statusCode);
+    });
+
+    const rateLimitKey = `${accountId}:${path}:${req.socket.remoteAddress ?? "unknown"}`;
+    if (isWebhookRateLimited(rateLimitKey, Date.now())) {
+      res.statusCode = 429;
+      res.end("Too Many Requests");
+      return;
+    }
+
+    if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {
+      res.statusCode = 415;
+      res.end("Unsupported Media Type");
+      return;
+    }
+
     const guard = installRequestBodyLimitGuard(req, res, {
       maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
       timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
@@ -247,8 +314,8 @@ async function monitorWebhook({
 
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
-    server.listen(port, () => {
-      log(`feishu[${accountId}]: Webhook server listening on port ${port}`);
+    server.listen(port, host, () => {
+      log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
     });
 
     server.on("error", (err) => {

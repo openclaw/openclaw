@@ -3,10 +3,10 @@ import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import type { EmbeddedSandboxInfo } from "./types.js";
-import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
 import { buildToolSummaryMap } from "../tool-summaries.js";
+import type { EmbeddedSandboxInfo } from "./types.js";
+import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
 export function buildEmbeddedSystemPrompt(params: {
   workspaceDir: string;
@@ -14,6 +14,8 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: "raw" | "hash";
+  ownerDisplaySecret?: string;
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
@@ -55,6 +57,8 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
+    ownerDisplay: params.ownerDisplay,
+    ownerDisplaySecret: params.ownerDisplaySecret,
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,

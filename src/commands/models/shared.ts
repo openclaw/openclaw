@@ -59,15 +59,20 @@ export const isLocalBaseUrl = (baseUrl: string) => {
   }
 };
 
-export async function updateConfig(
-  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
-): Promise<OpenClawConfig> {
+export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  const next = mutator(snapshot.config);
+  return snapshot.config;
+}
+
+export async function updateConfig(
+  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const config = await loadValidConfigOrThrow();
+  const next = mutator(config);
   await writeConfigFile(next);
   return next;
 }

@@ -1,7 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import SlackBolt from "@slack/bolt";
-import type { SessionScope } from "../../config/sessions.js";
-import type { MonitorSlackOpts } from "./types.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import {
@@ -12,6 +10,7 @@ import {
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
+import type { SessionScope } from "../../config/sessions.js";
 import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -28,6 +27,7 @@ import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
+import type { MonitorSlackOpts } from "./types.js";
 
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
   default?: typeof import("@slack/bolt");

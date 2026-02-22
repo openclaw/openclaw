@@ -1,5 +1,5 @@
-import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -9,16 +9,20 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
+import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.run": async ({ params, respond }) => {
+  "update.run": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
+    const actor = resolveControlPlaneActor(client);
     const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
@@ -56,6 +60,8 @@ export const updateHandlers: GatewayRequestHandlers = {
       status: result.status,
       ts: Date.now(),
       sessionKey,
+      deliveryContext,
+      threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
@@ -86,15 +92,35 @@ export const updateHandlers: GatewayRequestHandlers = {
       sentinelPath = null;
     }
 
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "update.run",
-    });
+    // Only restart the gateway when the update actually succeeded.
+    // Restarting after a failed update leaves the process in a broken state
+    // (corrupted node_modules, partial builds) and causes a crash loop.
+    const restart =
+      result.status === "ok"
+        ? scheduleGatewaySigusr1Restart({
+            delayMs: restartDelayMs,
+            reason: "update.run",
+            audit: {
+              actor: actor.actor,
+              deviceId: actor.deviceId,
+              clientIp: actor.clientIp,
+              changedPaths: [],
+            },
+          })
+        : null;
+    context?.logGateway?.info(
+      `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
+    );
+    if (restart?.coalesced) {
+      context?.logGateway?.warn(
+        `update.run restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+      );
+    }
 
     respond(
       true,
       {
-        ok: true,
+        ok: result.status !== "error",
         result,
         restart,
         sentinel: {

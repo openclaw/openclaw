@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   Button,
   ChannelSelectMenu,
@@ -24,7 +25,6 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
-import crypto from "node:crypto";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
@@ -52,6 +52,8 @@ export type DiscordComponentButtonSpec = {
     animated?: boolean;
   };
   disabled?: boolean;
+  /** Optional allowlist of users who can interact with this button (ids or names). */
+  allowedUsers?: string[];
 };
 
 export type DiscordComponentSelectOption = {
@@ -141,6 +143,7 @@ export type DiscordModalSpec = {
 
 export type DiscordComponentMessageSpec = {
   text?: string;
+  reusable?: boolean;
   container?: {
     accentColor?: string | number;
     spoiler?: boolean;
@@ -159,6 +162,8 @@ export type DiscordComponentEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  reusable?: boolean;
+  allowedUsers?: string[];
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
@@ -187,6 +192,7 @@ export type DiscordModalEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  reusable?: boolean;
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
@@ -231,6 +237,19 @@ function readOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function readOptionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  if (value.length === 0) {
+    return undefined;
+  }
+  return value.map((entry, index) => readString(entry, `${label}[${index}]`));
 }
 
 function readOptionalNumber(value: unknown): number | undefined {
@@ -357,6 +376,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
           }
         : undefined,
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
+    allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
 }
 
@@ -542,6 +562,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
     : undefined;
   const modalRaw = obj.modal;
+  const reusable = typeof obj.reusable === "boolean" ? obj.reusable : undefined;
   let modal: DiscordModalSpec | undefined;
   if (modalRaw !== undefined) {
     const modalObj = requireObject(modalRaw, "components.modal");
@@ -564,6 +585,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   }
   return {
     text: readOptionalString(obj.text),
+    reusable,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
         ? {
@@ -693,6 +715,7 @@ function createButtonComponent(params: {
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
       modalId: params.modalId,
+      allowedUsers: params.spec.allowedUsers,
     },
   };
 }
@@ -926,6 +949,7 @@ export function buildDiscordComponentMessage(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
+      reusable: entry.reusable ?? params.spec.reusable,
     });
   };
 
@@ -1023,6 +1047,7 @@ export function buildDiscordComponentMessage(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
+      reusable: params.spec.reusable,
     });
 
     const triggerSpec: DiscordComponentButtonSpec = {

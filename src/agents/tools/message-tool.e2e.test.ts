@@ -25,7 +25,7 @@ function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
     kind: "send",
     action: "send",
     channel: overrides.channel ?? "telegram",
-    ...(overrides.to ? { to: overrides.to } : {}),
+    to: overrides.to ?? "telegram:123",
     handledBy: "plugin",
     payload: {},
     dryRun: true,
@@ -328,5 +328,23 @@ describe("message tool sandbox passthrough", () => {
 
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
     expect(call?.sandboxRoot).toBeUndefined();
+  });
+
+  it("forwards trusted requesterSenderId to runMessageAction", async () => {
+    mockSendResult({ to: "discord:123" });
+
+    const tool = createMessageTool({
+      config: {} as never,
+      requesterSenderId: "1234567890",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "discord:123",
+      message: "hi",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.requesterSenderId).toBe("1234567890");
   });
 });

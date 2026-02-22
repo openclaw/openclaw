@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating } from "./monitor/group-gating.js";
+import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
 
 let sessionDir: string | undefined;
@@ -41,7 +41,7 @@ function runGroupGating(params: {
   conversationId?: string;
   agentId?: string;
 }) {
-  const groupHistories = new Map<string, unknown[]>();
+  const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const conversationId = params.conversationId ?? "123@g.us";
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:whatsapp:group:${conversationId}`;
@@ -81,6 +81,13 @@ function createGroupMessage(overrides: Record<string, unknown> = {}) {
     sendMedia: async () => {},
     ...overrides,
   };
+}
+
+function makeInboundCfg(messagePrefix = "") {
+  return {
+    agents: { defaults: { workspace: "/tmp/openclaw" } },
+    channels: { whatsapp: { messagePrefix } },
+  } as never;
 }
 
 describe("applyGroupGating", () => {
@@ -286,10 +293,7 @@ describe("applyGroupGating", () => {
 describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
-      cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
-        channels: { whatsapp: { messagePrefix: "" } },
-      } as never,
+      cfg: makeInboundCfg(""),
       agentId: "main",
       msg: createGroupMessage({
         to: "+15550009999",
@@ -308,10 +312,7 @@ describe("buildInboundLine", () => {
 
   it("includes reply-to context blocks when replyToBody is present", () => {
     const line = buildInboundLine({
-      cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
-        channels: { whatsapp: { messagePrefix: "" } },
-      } as never,
+      cfg: makeInboundCfg(""),
       agentId: "main",
       msg: {
         from: "+1555",
@@ -332,10 +333,7 @@ describe("buildInboundLine", () => {
 
   it("applies the WhatsApp messagePrefix when configured", () => {
     const line = buildInboundLine({
-      cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
-        channels: { whatsapp: { messagePrefix: "[PFX]" } },
-      } as never,
+      cfg: makeInboundCfg("[PFX]"),
       agentId: "main",
       msg: {
         from: "+1555",
@@ -348,10 +346,35 @@ describe("buildInboundLine", () => {
 
     expect(line).toContain("[PFX] ping");
   });
+
+  it("normalizes direct from labels by stripping whatsapp: prefix", () => {
+    const line = buildInboundLine({
+      cfg: makeInboundCfg(""),
+      agentId: "main",
+      msg: {
+        from: "whatsapp:+15550001111",
+        to: "+2666",
+        body: "ping",
+        chatType: "direct",
+      } as never,
+      envelope: { includeTimestamp: false },
+    });
+
+    expect(line).toContain("+15550001111");
+    expect(line).not.toContain("whatsapp:+15550001111");
+  });
 });
 
 describe("formatReplyContext", () => {
   it("returns null when replyToBody is missing", () => {
     expect(formatReplyContext({} as never)).toBeNull();
+  });
+
+  it("uses unknown sender label when reply sender is absent", () => {
+    expect(
+      formatReplyContext({
+        replyToBody: "original",
+      } as never),
+    ).toBe("[Replying to unknown sender]\noriginal\n[/Replying]");
   });
 });

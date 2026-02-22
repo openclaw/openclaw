@@ -31,6 +31,18 @@ vi.mock("./routes/dispatcher.js", () => ({
 
 import { fetchBrowserJson } from "./client-fetch.js";
 
+function stubJsonFetchOk() {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+    async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 describe("fetchBrowserJson loopback auth", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -49,49 +61,28 @@ describe("fetchBrowserJson loopback auth", () => {
   });
 
   it("adds bearer auth for loopback absolute HTTP URLs", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubJsonFetchOk();
 
     const res = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/");
     expect(res.ok).toBe(true);
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
   it("does not inject auth for non-loopback absolute URLs", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubJsonFetchOk();
 
     await fetchBrowserJson<{ ok: boolean }>("http://example.com/");
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
   });
 
   it("keeps caller-supplied auth header", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubJsonFetchOk();
 
     await fetchBrowserJson<{ ok: boolean }>("http://localhost:18888/", {
       headers: {
@@ -99,8 +90,18 @@ describe("fetchBrowserJson loopback auth", () => {
       },
     });
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer caller-token");
+  });
+
+  it("injects auth for IPv6 loopback absolute URLs", async () => {
+    const fetchMock = stubJsonFetchOk();
+
+    await fetchBrowserJson<{ ok: boolean }>("http://[::1]:18888/");
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 });

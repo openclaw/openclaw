@@ -1,7 +1,7 @@
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -35,6 +35,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
+      provider: lastAssistant.provider,
+      model: lastAssistant.model,
     });
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -67,15 +69,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  if (ctx.params.onBlockReply) {
-    if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
-    } else if (ctx.state.blockBuffer.length > 0) {
-      ctx.emitBlockChunk(ctx.state.blockBuffer);
-      ctx.state.blockBuffer = "";
-    }
-  }
+  ctx.flushBlockReplyBuffer();
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;

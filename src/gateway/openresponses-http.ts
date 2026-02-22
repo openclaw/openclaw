@@ -6,31 +6,24 @@
  * @see https://www.open-responses.com/
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import type { ImageContent } from "../commands/agent/types.js";
-import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import type { ImageContent } from "../commands/agent/types.js";
+import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import {
-  DEFAULT_INPUT_FILE_MAX_BYTES,
-  DEFAULT_INPUT_FILE_MAX_CHARS,
-  DEFAULT_INPUT_FILE_MIMES,
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
   DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_PDF_MAX_PAGES,
-  DEFAULT_INPUT_PDF_MAX_PIXELS,
-  DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
   DEFAULT_INPUT_TIMEOUT_MS,
   extractFileContentFromSource,
   extractImageContentFromSource,
   normalizeMimeList,
+  resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
   type InputImageSource,
@@ -41,6 +34,8 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
@@ -60,6 +55,7 @@ type OpenResponsesHttpOptions = {
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
   trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 };
 
@@ -109,6 +105,7 @@ function resolveResponsesLimits(
 ): ResolvedResponsesLimits {
   const files = config?.files;
   const images = config?.images;
+  const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     maxUrlParts:
@@ -116,18 +113,8 @@ function resolveResponsesLimits(
         ? Math.max(0, Math.floor(config.maxUrlParts))
         : DEFAULT_MAX_URL_PARTS,
     files: {
-      allowUrl: files?.allowUrl ?? true,
+      ...fileLimits,
       urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
-      allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
-      maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
-      maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
-      maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-      timeoutMs: files?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-      pdf: {
-        maxPages: files?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
-        maxPixels: files?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
-        minTextChars: files?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-      },
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
@@ -357,6 +344,7 @@ export async function handleOpenResponsesHttpRequest(
     pathname: "/v1/responses",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
     maxBodyBytes,
   });

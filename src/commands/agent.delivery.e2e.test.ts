@@ -40,7 +40,7 @@ describe("deliverAgentCommandResult", () => {
   function createResult(text = "hi") {
     return {
       payloads: [{ text }],
-      meta: {},
+      meta: { durationMs: 1 },
     };
   }
 
@@ -207,7 +207,7 @@ describe("deliverAgentCommandResult", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const line = String(runtime.log.mock.calls[0]?.[0]);
+    const line = String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
     expect(line).toContain("[agent:nested]");
     expect(line).toContain("session=agent:main:main");
     expect(line).toContain("run=run-announce");

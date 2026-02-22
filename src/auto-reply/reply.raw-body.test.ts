@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
 const agentMocks = vi.hoisted(() => ({
@@ -70,7 +71,11 @@ describe("RawBody directive parsing", () => {
         CommandAuthorized: true,
       };
 
-      const res = await getReplyFromConfig(groupMessageCtx, {}, makeReplyConfig(home));
+      const res = await getReplyFromConfig(
+        groupMessageCtx,
+        {},
+        makeReplyConfig(home) as OpenClawConfig,
+      );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");

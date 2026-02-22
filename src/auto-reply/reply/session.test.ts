@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -560,210 +561,102 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     } as OpenClawConfig;
   }
 
-  it("Reset trigger /new works for authorized sender in WhatsApp group", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-");
+  it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
+    const cases = [
+      {
+        name: "authorized sender",
+        storePrefix: "openclaw-group-reset-",
+        allowFrom: ["+41796666864"],
+        body: `[Chat messages since your last reply - for context]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Someone: hello\\n\\n[Current message - respond to this]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Peschiño: /new\\n[from: Peschiño (+41796666864)]`,
+        senderName: "Peschiño",
+        senderE164: "+41796666864",
+        senderId: "41796666864:0@s.whatsapp.net",
+        expectedIsNewSession: true,
+      },
+      {
+        name: "unauthorized sender",
+        storePrefix: "openclaw-group-reset-unauth-",
+        allowFrom: ["+41796666864"],
+        body: `[Context]\\n[WhatsApp ...] OtherPerson: /new\\n[from: OtherPerson (+1555123456)]`,
+        senderName: "OtherPerson",
+        senderE164: "+1555123456",
+        senderId: "1555123456:0@s.whatsapp.net",
+        expectedIsNewSession: false,
+      },
+      {
+        name: "raw body clean while body wrapped",
+        storePrefix: "openclaw-group-rawbody-",
+        allowFrom: ["*"],
+        body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Jake: /new\n[from: Jake (+1222)]`,
+        senderName: undefined,
+        senderE164: "+1222",
+        senderId: undefined,
+        expectedIsNewSession: true,
+      },
+      {
+        name: "LID sender with authorized E164",
+        storePrefix: "openclaw-group-reset-lid-",
+        allowFrom: ["+41796666864"],
+        body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Owner: /new\n[from: Owner (+41796666864)]`,
+        senderName: "Owner",
+        senderE164: "+41796666864",
+        senderId: "123@lid",
+        expectedIsNewSession: true,
+      },
+      {
+        name: "LID sender with unauthorized E164",
+        storePrefix: "openclaw-group-reset-lid-unauth-",
+        allowFrom: ["+41796666864"],
+        body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Other: /new\n[from: Other (+1555123456)]`,
+        senderName: "Other",
+        senderE164: "+1555123456",
+        senderId: "123@lid",
+        expectedIsNewSession: false,
+      },
+    ] as const;
 
-    const cfg = makeCfg({
-      storePath,
-      allowFrom: ["+41796666864"],
-    });
+    for (const testCase of cases) {
+      const storePath = await createStorePath(testCase.storePrefix);
+      await seedSessionStore({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+      });
+      const cfg = makeCfg({
+        storePath,
+        allowFrom: [...testCase.allowFrom],
+      });
 
-    const groupMessageCtx = {
-      Body: `[Chat messages since your last reply - for context]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Someone: hello\\n\\n[Current message - respond to this]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Peschiño: /new\\n[from: Peschiño (+41796666864)]`,
-      RawBody: "/new",
-      CommandBody: "/new",
-      From: "120363406150318674@g.us",
-      To: "+41779241027",
-      ChatType: "group",
-      SessionKey: sessionKey,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      SenderName: "Peschiño",
-      SenderE164: "+41796666864",
-      SenderId: "41796666864:0@s.whatsapp.net",
-    };
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: "/new",
+          CommandBody: "/new",
+          From: "120363406150318674@g.us",
+          To: "+41779241027",
+          ChatType: "group",
+          SessionKey: sessionKey,
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          SenderName: testCase.senderName,
+          SenderE164: testCase.senderE164,
+          SenderId: testCase.senderId,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
 
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.triggerBodyNormalized).toBe("/new");
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.bodyStripped).toBe("");
-  });
-
-  it("Reset trigger /new blocked for unauthorized sender in existing session", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-unauth-");
-    const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
-    const existingSessionId = "existing-session-123";
-
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
-
-    const cfg = makeCfg({
-      storePath,
-      allowFrom: ["+41796666864"],
-    });
-
-    const groupMessageCtx = {
-      Body: `[Context]\\n[WhatsApp ...] OtherPerson: /new\\n[from: OtherPerson (+1555123456)]`,
-      RawBody: "/new",
-      CommandBody: "/new",
-      From: "120363406150318674@g.us",
-      To: "+41779241027",
-      ChatType: "group",
-      SessionKey: sessionKey,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      SenderName: "OtherPerson",
-      SenderE164: "+1555123456",
-      SenderId: "1555123456:0@s.whatsapp.net",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.triggerBodyNormalized).toBe("/new");
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.isNewSession).toBe(false);
-  });
-
-  it("Reset trigger works when RawBody is clean but Body has wrapped context", async () => {
-    const storePath = await createStorePath("openclaw-group-rawbody-");
-    const sessionKey = "agent:main:whatsapp:group:g1";
-    const existingSessionId = "existing-session-123";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
-
-    const cfg = makeCfg({
-      storePath,
-      allowFrom: ["*"],
-    });
-
-    const groupMessageCtx = {
-      Body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Jake: /new\n[from: Jake (+1222)]`,
-      RawBody: "/new",
-      CommandBody: "/new",
-      From: "120363406150318674@g.us",
-      To: "+1111",
-      ChatType: "group",
-      SessionKey: sessionKey,
-      Provider: "whatsapp",
-      SenderE164: "+1222",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.triggerBodyNormalized).toBe("/new");
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.bodyStripped).toBe("");
-  });
-
-  it("Reset trigger /new works when SenderId is LID but SenderE164 is authorized", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-lid-");
-    const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
-    const existingSessionId = "existing-session-123";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
-
-    const cfg = makeCfg({
-      storePath,
-      allowFrom: ["+41796666864"],
-    });
-
-    const groupMessageCtx = {
-      Body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Owner: /new\n[from: Owner (+41796666864)]`,
-      RawBody: "/new",
-      CommandBody: "/new",
-      From: "120363406150318674@g.us",
-      To: "+41779241027",
-      ChatType: "group",
-      SessionKey: sessionKey,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      SenderName: "Owner",
-      SenderE164: "+41796666864",
-      SenderId: "123@lid",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.triggerBodyNormalized).toBe("/new");
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.bodyStripped).toBe("");
-  });
-
-  it("Reset trigger /new blocked when SenderId is LID but SenderE164 is unauthorized", async () => {
-    const storePath = await createStorePath("openclaw-group-reset-lid-unauth-");
-    const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
-    const existingSessionId = "existing-session-123";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
-
-    const cfg = makeCfg({
-      storePath,
-      allowFrom: ["+41796666864"],
-    });
-
-    const groupMessageCtx = {
-      Body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Other: /new\n[from: Other (+1555123456)]`,
-      RawBody: "/new",
-      CommandBody: "/new",
-      From: "120363406150318674@g.us",
-      To: "+41779241027",
-      ChatType: "group",
-      SessionKey: sessionKey,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      SenderName: "Other",
-      SenderE164: "+1555123456",
-      SenderId: "123@lid",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.triggerBodyNormalized).toBe("/new");
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.isNewSession).toBe(false);
+      expect(result.triggerBodyNormalized, testCase.name).toBe("/new");
+      expect(result.isNewSession, testCase.name).toBe(testCase.expectedIsNewSession);
+      if (testCase.expectedIsNewSession) {
+        expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+        expect(result.bodyStripped, testCase.name).toBe("");
+      } else {
+        expect(result.sessionId, testCase.name).toBe(existingSessionId);
+      }
+    }
   });
 });
 
@@ -781,84 +674,59 @@ describe("initSessionState reset triggers in Slack channels", () => {
     });
   }
 
-  it("Reset trigger /reset works when Slack message has a leading <@...> mention token", async () => {
-    const storePath = await createStorePath("openclaw-slack-channel-reset-");
-    const sessionKey = "agent:main:slack:channel:c1";
+  it("supports mention-prefixed Slack reset commands and preserves args", async () => {
     const existingSessionId = "existing-session-123";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
+    const cases = [
+      {
+        name: "reset command",
+        storePrefix: "openclaw-slack-channel-reset-",
+        sessionKey: "agent:main:slack:channel:c1",
+        body: "<@U123> /reset",
+        expectedBodyStripped: "",
+      },
+      {
+        name: "new command with args",
+        storePrefix: "openclaw-slack-channel-new-",
+        sessionKey: "agent:main:slack:channel:c2",
+        body: "<@U123> /new take notes",
+        expectedBodyStripped: "take notes",
+      },
+    ] as const;
 
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
+    for (const testCase of cases) {
+      const storePath = await createStorePath(testCase.storePrefix);
+      await seedSessionStore({
+        storePath,
+        sessionKey: testCase.sessionKey,
+        sessionId: existingSessionId,
+      });
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
 
-    const channelMessageCtx = {
-      Body: "<@U123> /reset",
-      RawBody: "<@U123> /reset",
-      CommandBody: "<@U123> /reset",
-      From: "slack:channel:C1",
-      To: "channel:C1",
-      ChatType: "channel",
-      SessionKey: sessionKey,
-      Provider: "slack",
-      Surface: "slack",
-      SenderId: "U123",
-      SenderName: "Owner",
-    };
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "slack:channel:C1",
+          To: "channel:C1",
+          ChatType: "channel",
+          SessionKey: testCase.sessionKey,
+          Provider: "slack",
+          Surface: "slack",
+          SenderId: "U123",
+          SenderName: "Owner",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
 
-    const result = await initSessionState({
-      ctx: channelMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.bodyStripped).toBe("");
-  });
-
-  it("Reset trigger /new preserves args when Slack message has a leading <@...> mention token", async () => {
-    const storePath = await createStorePath("openclaw-slack-channel-new-");
-    const sessionKey = "agent:main:slack:channel:c2";
-    const existingSessionId = "existing-session-123";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-    });
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
-
-    const channelMessageCtx = {
-      Body: "<@U123> /new take notes",
-      RawBody: "<@U123> /new take notes",
-      CommandBody: "<@U123> /new take notes",
-      From: "slack:channel:C2",
-      To: "channel:C2",
-      ChatType: "channel",
-      SessionKey: sessionKey,
-      Provider: "slack",
-      Surface: "slack",
-      SenderId: "U123",
-      SenderName: "Owner",
-    };
-
-    const result = await initSessionState({
-      ctx: channelMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.bodyStripped).toBe("take notes");
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.bodyStripped, testCase.name).toBe(testCase.expectedBodyStripped);
+    }
   });
 });
 
@@ -866,11 +734,11 @@ describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -896,14 +764,14 @@ describe("applyResetModelOverride", () => {
   it("clears auth profile overrides when reset applies a model", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       authProfileOverride: "anthropic:default",
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -929,11 +797,11 @@ describe("applyResetModelOverride", () => {
   it("skips when resetTriggered is false", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -1290,5 +1158,112 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(250_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+});
+
+describe("initSessionState stale threadId fallback", () => {
+  async function seedSessionStore(params: {
+    storePath: string;
+    sessionKey: string;
+    entry: Record<string, unknown>;
+  }) {
+    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+      "utf-8",
+    );
+  }
+
+  it("ignores persisted lastThreadId on main sessions for non-thread messages", async () => {
+    const storePath = await createStorePath("stale-main-thread-");
+    const sessionKey = "agent:main:main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:123",
+          threadId: 42,
+        },
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello from DM",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastThreadId).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext?.threadId).toBeUndefined();
+  });
+
+  it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
+    const storePath = await createStorePath("stale-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    // First interaction: inside a DM topic (thread session)
+    const threadResult = await initSessionState({
+      ctx: {
+        Body: "hello from topic",
+        SessionKey: "agent:main:main:thread:42",
+        MessageThreadId: 42,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(threadResult.sessionEntry.lastThreadId).toBe(42);
+
+    // Second interaction: plain DM (non-thread session), same store
+    // The main session should NOT inherit threadId=42
+    const mainResult = await initSessionState({
+      ctx: {
+        Body: "hello from DM",
+        SessionKey: "agent:main:main",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
+  });
+
+  it("preserves lastThreadId within the same thread session", async () => {
+    const storePath = await createStorePath("preserve-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    // First message in thread
+    await initSessionState({
+      ctx: {
+        Body: "first",
+        SessionKey: "agent:main:main:thread:99",
+        MessageThreadId: 99,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Second message in same thread (MessageThreadId still present)
+    const result = await initSessionState({
+      ctx: {
+        Body: "second",
+        SessionKey: "agent:main:main:thread:99",
+        MessageThreadId: 99,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(result.sessionEntry.lastThreadId).toBe(99);
   });
 });

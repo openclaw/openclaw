@@ -1,15 +1,18 @@
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
-  createActionGate,
   readNumberParam,
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
+import type { TelegramActionConfig } from "../../../config/types.telegram.js";
 import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
-import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
+import {
+  createTelegramActionGate,
+  listEnabledTelegramAccounts,
+} from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
 
@@ -46,7 +49,12 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const gate = createActionGate(cfg.channels?.telegram?.actions);
+    // Union of all accounts' action gates (any account enabling an action makes it available)
+    const gates = accounts.map((account) =>
+      createTelegramActionGate({ cfg, accountId: account.accountId }),
+    );
+    const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
+      gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
     if (gate("reactions")) {
       actions.add("react");
@@ -60,6 +68,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
+    }
+    if (gate("createForumTopic")) {
+      actions.add("topic-create");
     }
     return Array.from(actions);
   },
@@ -185,6 +196,27 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-create") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "to", { required: true });
+      const name = readStringParam(params, "name", { required: true });
+      const iconColor = readNumberParam(params, "iconColor", { integer: true });
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      return await handleTelegramAction(
+        {
+          action: "createForumTopic",
+          chatId,
+          name,
+          iconColor: iconColor ?? undefined,
+          iconCustomEmojiId: iconCustomEmojiId ?? undefined,
           accountId: accountId ?? undefined,
         },
         cfg,

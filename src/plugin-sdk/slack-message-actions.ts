@@ -1,12 +1,17 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import { readNumberParam, readStringParam } from "../agents/tools/common.js";
+import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
+import { parseSlackBlocksInput } from "../slack/blocks-input.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
+
+function readSlackBlocksParam(actionParams: Record<string, unknown>) {
+  return parseSlackBlocksInput(actionParams.blocks) as Record<string, unknown>[] | undefined;
+}
 
 export async function handleSlackMessageAction(params: {
   providerId: string;
@@ -28,18 +33,26 @@ export async function handleSlackMessageAction(params: {
   if (action === "send") {
     const to = readStringParam(actionParams, "to", { required: true });
     const content = readStringParam(actionParams, "message", {
-      required: true,
+      required: false,
       allowEmpty: true,
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
+    const blocks = readSlackBlocksParam(actionParams);
+    if (!content && !mediaUrl && !blocks) {
+      throw new Error("Slack send requires message, blocks, or media.");
+    }
+    if (mediaUrl && blocks) {
+      throw new Error("Slack send does not support blocks with media.");
+    }
     const threadId = readStringParam(actionParams, "threadId");
     const replyTo = readStringParam(actionParams, "replyTo");
     return await invoke(
       {
         action: "sendMessage",
         to,
-        content,
+        content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
+        blocks,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
       },
@@ -104,13 +117,18 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const content = readStringParam(actionParams, "message", { required: true });
+    const content = readStringParam(actionParams, "message", { allowEmpty: true });
+    const blocks = readSlackBlocksParam(actionParams);
+    if (!content && !blocks) {
+      throw new Error("Slack edit requires message or blocks.");
+    }
     return await invoke(
       {
         action: "editMessage",
         channelId: resolveChannelId(),
         messageId,
-        content,
+        content: content ?? "",
+        blocks,
         accountId,
       },
       cfg,

@@ -1,5 +1,5 @@
-import type { ProcessSupervisor } from "./types.js";
 import { createProcessSupervisor } from "./supervisor.js";
+import type { ProcessSupervisor } from "./types.js";
 
 let singleton: ProcessSupervisor | null = null;
 

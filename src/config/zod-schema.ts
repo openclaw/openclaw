@@ -4,6 +4,7 @@ import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zo
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import { InstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -71,9 +72,18 @@ const MemoryQmdLimitsSchema = z
   })
   .strict();
 
+const MemoryQmdMcporterSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    serverName: z.string().optional(),
+    startDaemon: z.boolean().optional(),
+  })
+  .strict();
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
+    mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -220,6 +230,14 @@ export const OpenClawSchema = z
         attachOnly: z.boolean().optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
+        ssrfPolicy: z
+          .object({
+            allowPrivateNetwork: z.boolean().optional(),
+            allowedHostnames: z.array(z.string()).optional(),
+            hostnameAllowlist: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         profiles: z
           .record(
             z
@@ -395,6 +413,7 @@ export const OpenClawSchema = z
             z.literal("tailnet"),
           ])
           .optional(),
+        customBindHost: z.string().optional(),
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
@@ -409,7 +428,12 @@ export const OpenClawSchema = z
         auth: z
           .object({
             mode: z
-              .union([z.literal("token"), z.literal("password"), z.literal("trusted-proxy")])
+              .union([
+                z.literal("none"),
+                z.literal("token"),
+                z.literal("password"),
+                z.literal("trusted-proxy"),
+              ])
               .optional(),
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),
@@ -435,6 +459,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        allowRealIpFallback: z.boolean().optional(),
         tools: z
           .object({
             deny: z.array(z.string()).optional(),
@@ -442,6 +467,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        channelHealthCheckMinutes: z.number().int().min(0).optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -579,6 +605,16 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        limits: z
+          .object({
+            maxCandidatesPerRoot: z.number().int().min(1).optional(),
+            maxSkillsLoadedPerSource: z.number().int().min(1).optional(),
+            maxSkillsInPrompt: z.number().int().min(0).optional(),
+            maxSkillsPromptChars: z.number().int().min(0).optional(),
+            maxSkillFileBytes: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
         entries: z
           .record(
             z.string(),
@@ -628,12 +664,7 @@ export const OpenClawSchema = z
             z.string(),
             z
               .object({
-                source: z.union([z.literal("npm"), z.literal("archive"), z.literal("path")]),
-                spec: z.string().optional(),
-                sourcePath: z.string().optional(),
-                installPath: z.string().optional(),
-                version: z.string().optional(),
-                installedAt: z.string().optional(),
+                ...InstallRecordShape,
               })
               .strict(),
           )

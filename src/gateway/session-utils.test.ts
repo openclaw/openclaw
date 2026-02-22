@@ -12,6 +12,7 @@ import {
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
@@ -218,6 +219,47 @@ describe("gateway session utils", () => {
   });
 });
 
+describe("resolveSessionModelRef", () => {
+  test("prefers runtime model/provider from session entry", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.3-codex",
+      modelOverride: "claude-opus-4-6",
+      providerOverride: "anthropic",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+  });
+
+  test("falls back to override when runtime model is not recorded yet", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s2",
+      updatedAt: Date.now(),
+      modelOverride: "openai-codex/gpt-5.3-codex",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+  });
+});
+
 describe("deriveSessionTitle", () => {
   test("returns undefined for undefined entry", () => {
     expect(deriveSessionTitle(undefined)).toBeUndefined();
@@ -340,120 +382,45 @@ describe("listSessionsFromStore search", () => {
     } as SessionEntry,
   });
 
-  test("returns all sessions when search is empty", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "" },
-    });
-    expect(result.sessions.length).toBe(3);
+  test("returns all sessions when search is empty or missing", () => {
+    const cases = [{ opts: { search: "" } }, { opts: {} }] as const;
+    for (const testCase of cases) {
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath: "/tmp/sessions.json",
+        store: makeStore(),
+        opts: testCase.opts,
+      });
+      expect(result.sessions).toHaveLength(3);
+    }
   });
 
-  test("returns all sessions when search is undefined", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
-    expect(result.sessions.length).toBe(3);
-  });
+  test("filters sessions across display metadata and key fields", () => {
+    const cases = [
+      { search: "WORK PROJECT", expectedKey: "agent:main:work-project" },
+      { search: "reunion", expectedKey: "agent:main:personal-chat" },
+      { search: "discord", expectedKey: "agent:main:discord:group:dev-team" },
+      { search: "sess-personal", expectedKey: "agent:main:personal-chat" },
+      { search: "dev-team", expectedKey: "agent:main:discord:group:dev-team" },
+      { search: "alpha", expectedKey: "agent:main:work-project" },
+      { search: "  personal  ", expectedKey: "agent:main:personal-chat" },
+      { search: "nonexistent-term", expectedKey: undefined },
+    ] as const;
 
-  test("filters by displayName case-insensitively", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "WORK PROJECT" },
-    });
-    expect(result.sessions.length).toBe(1);
-    expect(result.sessions[0].displayName).toBe("Work Project Alpha");
-  });
-
-  test("filters by subject", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "reunion" },
-    });
-    expect(result.sessions.length).toBe(1);
-    expect(result.sessions[0].subject).toBe("Family Reunion Planning");
-  });
-
-  test("filters by label", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "discord" },
-    });
-    expect(result.sessions.length).toBe(1);
-    expect(result.sessions[0].label).toBe("discord");
-  });
-
-  test("filters by sessionId", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "sess-personal" },
-    });
-    expect(result.sessions.length).toBe(1);
-    expect(result.sessions[0].sessionId).toBe("sess-personal-1");
-  });
-
-  test("filters by key", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "dev-team" },
-    });
-    expect(result.sessions.length).toBe(1);
-    expect(result.sessions[0].key).toBe("agent:main:discord:group:dev-team");
-  });
-
-  test("returns empty array when no matches", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "nonexistent-term" },
-    });
-    expect(result.sessions.length).toBe(0);
-  });
-
-  test("matches partial strings", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "alpha" },
-    });
-    expect(result.sessions.length).toBe(1);
-    expect(result.sessions[0].displayName).toBe("Work Project Alpha");
-  });
-
-  test("trims whitespace from search query", () => {
-    const store = makeStore();
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: { search: "  personal  " },
-    });
-    expect(result.sessions.length).toBe(1);
+    for (const testCase of cases) {
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath: "/tmp/sessions.json",
+        store: makeStore(),
+        opts: { search: testCase.search },
+      });
+      if (!testCase.expectedKey) {
+        expect(result.sessions).toHaveLength(0);
+        continue;
+      }
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0].key).toBe(testCase.expectedKey);
+    }
   });
 
   test("hides cron run alias session keys from sessions list", () => {

@@ -1,13 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionFileEntry } from "./session-files.js";
-import type { SyncProgressState } from "./sync-progress.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "./session-files.js";
 import { indexFileEntryIfChanged } from "./sync-index.js";
+import type { SyncProgressState } from "./sync-progress.js";
 import { bumpSyncProgressCompleted, bumpSyncProgressTotal } from "./sync-progress.js";
 import { deleteStaleIndexedPaths } from "./sync-stale.js";
 

@@ -1,11 +1,4 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
-import type {
-  OpenClawSkillMetadata,
-  ParsedSkillFrontmatter,
-  SkillEntry,
-  SkillInstallSpec,
-  SkillInvocationPolicy,
-} from "./types.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import {
   getFrontmatterString,
@@ -17,6 +10,13 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../../shared/frontmatter.js";
+import type {
+  OpenClawSkillMetadata,
+  ParsedSkillFrontmatter,
+  SkillEntry,
+  SkillInstallSpec,
+  SkillInvocationPolicy,
+} from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
   return parseFrontmatterBlock(content);
@@ -45,8 +45,13 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (osList.length > 0) {
     spec.os = osList;
   }
-  if (typeof raw.formula === "string") {
-    spec.formula = raw.formula;
+  const formula = typeof raw.formula === "string" ? raw.formula.trim() : "";
+  if (formula) {
+    spec.formula = formula;
+  }
+  const cask = typeof raw.cask === "string" ? raw.cask.trim() : "";
+  if (!spec.formula && cask) {
+    spec.formula = cask;
   }
   if (typeof raw.package === "string") {
     spec.package = raw.package;

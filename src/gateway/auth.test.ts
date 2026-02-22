@@ -1,16 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeGatewayConnect, resolveGatewayAuth } from "./auth.js";
+import {
+  authorizeGatewayConnect,
+  authorizeHttpGatewayConnect,
+  authorizeWsControlUiGatewayConnect,
+  resolveGatewayAuth,
+} from "./auth.js";
 
 function createLimiterSpy(): AuthRateLimiter & {
   check: ReturnType<typeof vi.fn>;
   recordFailure: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
 } {
+  const check = vi.fn<AuthRateLimiter["check"]>(
+    (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
+  );
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
+  const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
   return {
-    check: vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 })),
-    recordFailure: vi.fn(),
-    reset: vi.fn(),
+    check,
+    recordFailure,
+    reset,
     size: () => 0,
     prune: () => {},
     dispose: () => {},
@@ -29,6 +39,7 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       mode: "password",
+      modeSource: "password",
       token: "env-token",
       password: "env-password",
     });
@@ -44,9 +55,39 @@ describe("gateway auth", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toMatchObject({
-      mode: "none",
+      mode: "token",
+      modeSource: "default",
       token: undefined,
       password: undefined,
+    });
+  });
+
+  it("resolves explicit auth mode none from config", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: { mode: "none" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      mode: "none",
+      modeSource: "config",
+      token: undefined,
+      password: undefined,
+    });
+  });
+
+  it("marks mode source as override when runtime mode override is provided", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: { mode: "password", password: "config-password" },
+        authOverride: { mode: "token" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      mode: "token",
+      modeSource: "override",
+      token: undefined,
+      password: "config-password",
     });
   });
 
@@ -83,6 +124,34 @@ describe("gateway auth", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.reason).toBe("token_missing_config");
+  });
+
+  it("allows explicit auth mode none", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("keeps none mode authoritative even when token is present", async () => {
+    const auth = resolveGatewayAuth({
+      authConfig: { mode: "none", token: "configured-token" },
+      env: {} as NodeJS.ProcessEnv,
+    });
+    expect(auth).toMatchObject({
+      mode: "none",
+      modeSource: "config",
+      token: "configured-token",
+    });
+
+    const res = await authorizeGatewayConnect({
+      auth,
+      connectAuth: null,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
   });
 
   it("reports missing and mismatched password reasons", async () => {
@@ -124,7 +193,7 @@ describe("gateway auth", () => {
     expect(res.method).toBe("token");
   });
 
-  it("allows tailscale identity to satisfy token mode auth", async () => {
+  it("does not allow tailscale identity to satisfy token mode auth by default", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
@@ -142,6 +211,72 @@ describe("gateway auth", () => {
       } as never,
     });
 
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+  });
+
+  it("allows tailscale identity when header auth is explicitly enabled", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
+      authSurface: "ws-control-ui",
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+          "tailscale-user-login": "peter",
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("tailscale");
+    expect(res.user).toBe("peter");
+  });
+
+  it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+          "tailscale-user-login": "peter",
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+  });
+
+  it("enables tailscale header auth on ws control-ui auth wrapper", async () => {
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+          "tailscale-user-login": "peter",
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
@@ -164,6 +299,45 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("token_mismatch");
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
+  });
+
+  it("ignores X-Real-IP fallback by default for rate-limit checks", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-real-ip": "203.0.113.77" },
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+  });
+
+  it("uses X-Real-IP when fallback is explicitly enabled", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-real-ip": "203.0.113.77" },
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.check).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
+    expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
   });
 
   it("passes custom rate-limit scope to limiter operations", async () => {

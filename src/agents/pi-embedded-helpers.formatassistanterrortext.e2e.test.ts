@@ -6,32 +6,14 @@ import {
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
 } from "./pi-embedded-helpers.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
-  const makeAssistantError = (errorMessage: string): AssistantMessage => ({
-    role: "assistant",
-    api: "openai-responses",
-    provider: "openai",
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    stopReason: "error",
-    errorMessage,
-    content: [{ type: "text", text: errorMessage }],
-    timestamp: 0,
-  });
+  const makeAssistantError = (errorMessage: string): AssistantMessage =>
+    makeAssistantMessageFixture({
+      errorMessage,
+      content: [{ type: "text", text: errorMessage }],
+    });
 
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
@@ -92,12 +74,18 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
-  it("includes provider name in billing message when provider is given", () => {
+  it("includes provider and assistant model in billing message when provider is given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
-    expect(result).toBe(formatBillingErrorMessage("Anthropic"));
+    expect(result).toBe(formatBillingErrorMessage("Anthropic", "test-model"));
     expect(result).toContain("Anthropic");
     expect(result).not.toContain("API provider");
+  });
+  it("uses the active assistant model for billing message context", () => {
+    const msg = makeAssistantError("insufficient credits");
+    msg.model = "claude-3-5-sonnet";
+    const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
+    expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
   });
   it("returns generic billing message when provider is not given", () => {
     const msg = makeAssistantError("insufficient credits");

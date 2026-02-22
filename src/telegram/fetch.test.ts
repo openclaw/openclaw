@@ -62,7 +62,7 @@ describe("resolveTelegramFetch", () => {
       aborted: false,
       addEventListener,
       removeEventListener,
-    } as AbortSignal;
+    } as unknown as AbortSignal;
 
     if (!resolved) {
       throw new Error("expected resolved proxy fetch");

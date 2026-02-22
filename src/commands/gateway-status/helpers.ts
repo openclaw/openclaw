@@ -1,6 +1,6 @@
+import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
-import { resolveGatewayPort } from "../../config/config.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";

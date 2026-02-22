@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -16,13 +16,15 @@ vi.mock("../../kill-tree.js", () => ({
   killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
 }));
 
+let createChildAdapter: typeof import("./child.js").createChildAdapter;
+
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
-  child.pid = pid;
-  child.killed = false;
+  Object.defineProperty(child, "pid", { value: pid, configurable: true });
+  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   const killMock = vi.fn(() => true);
   child.kill = killMock as ChildProcess["kill"];
   return { child, killMock };
@@ -33,7 +35,6 @@ async function createAdapterHarness(params?: {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const { createChildAdapter } = await import("./child.js");
   const { child, killMock } = createStubChild(params?.pid);
   spawnWithFallbackMock.mockResolvedValue({
     child,
@@ -48,6 +49,10 @@ async function createAdapterHarness(params?: {
 }
 
 describe("createChildAdapter", () => {
+  beforeAll(async () => {
+    ({ createChildAdapter } = await import("./child.js"));
+  });
+
   beforeEach(() => {
     spawnWithFallbackMock.mockReset();
     killProcessTreeMock.mockReset();
@@ -60,8 +65,15 @@ describe("createChildAdapter", () => {
       options?: { detached?: boolean };
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
-    expect(spawnArgs.options?.detached).toBe(true);
-    expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    // On Windows, detached defaults to false (headless Scheduled Task compat);
+    // on POSIX, detached is true with a no-detach fallback.
+    if (process.platform === "win32") {
+      expect(spawnArgs.options?.detached).toBe(false);
+      expect(spawnArgs.fallbacks).toEqual([]);
+    } else {
+      expect(spawnArgs.options?.detached).toBe(true);
+      expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    }
 
     adapter.kill();
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
-import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
 
 describe("issue #13992 regression - cron jobs skip execution", () => {
   function createMockState(jobs: CronJob[]): CronServiceState {
@@ -10,10 +10,16 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       running: false,
       timer: null,
       storeLoadedAtMs: Date.now(),
+      storeFileMtimeMs: null,
+      op: Promise.resolve(),
+      warnedDisabled: false,
       deps: {
         storePath: "/mock/path",
         cronEnabled: true,
         nowMs: () => Date.now(),
+        enqueueSystemEvent: () => {},
+        requestHeartbeatNow: () => {},
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
         log: {
           debug: () => {},
           info: () => {},
@@ -35,6 +41,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
@@ -59,6 +66,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now,
       updatedAtMs: now,
       state: {
@@ -85,6 +93,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now,
       updatedAtMs: now,
       state: {
@@ -111,6 +120,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now,
       updatedAtMs: now,
       state: {
@@ -139,6 +149,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "due" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
@@ -153,6 +164,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
       payload: { kind: "systemEvent", text: "bad" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
