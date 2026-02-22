@@ -90,15 +90,31 @@ const isGrammyHttpError = (err: unknown): boolean => {
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
+  let activeRunner: ReturnType<typeof run> | undefined;
+  let forceRestarted = false;
 
   // Register handler for Grammy HttpError unhandled rejections.
   // This catches network errors that escape the polling loop's try-catch
   // (e.g., from setMyCommands during bot setup).
   // We gate on isGrammyHttpError to avoid suppressing non-Telegram errors.
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
-    if (isGrammyHttpError(err) && isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+    // If the runner's underlying fetch fails with a TypeError (undici/fetch)
+    // it often bypasses the runner's error handler but leaves the runner in a zombie state.
+    // We catch it here and force the runner to stop, triggering a restart in the main loop.
+    const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
+    if (isGrammyHttpError(err) && isNetworkError) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true; // handled - don't crash
+    }
+    // Handle fetch failures (TypeError) that kill the polling loop
+    if (isNetworkError && activeRunner && activeRunner.isRunning()) {
+      log(
+        `[telegram] Critical network error detected in unhandled rejection: ${formatErrorMessage(err)}. Restarting polling runner...`,
+      );
+      // Set flag so the main loop knows to restart instead of exiting when task() resolves.
+      forceRestarted = true;
+      activeRunner.stop().catch(() => {});
+      return true; // handled
     }
     return false;
   });
@@ -173,6 +189,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
+      activeRunner = runner;
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
           void runner.stop();
@@ -182,8 +199,26 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
-        return;
+        if (!forceRestarted) {
+          return;
+        }
+        // Forced stop from the rejection handler — restart with backoff.
+        forceRestarted = false;
+        restartAttempts += 1;
+        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+        log(
+          `[telegram] Restarting polling after forced stop (attempt ${restartAttempts}, backoff ${formatDurationPrecise(delayMs)})`,
+        );
+        try {
+          await sleepWithAbort(delayMs, opts.abortSignal);
+        } catch {
+          if (opts.abortSignal?.aborted) {
+            return;
+          }
+        }
       } catch (err) {
+        // Reset flag so a stale forceRestarted doesn't cause a spurious restart next iteration.
+        forceRestarted = false;
         if (opts.abortSignal?.aborted) {
           throw err;
         }
