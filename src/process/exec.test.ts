@@ -2,7 +2,7 @@ import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 import {
   PROCESS_TEST_NO_OUTPUT_TIMEOUT_MS,
