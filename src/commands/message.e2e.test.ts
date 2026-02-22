@@ -65,11 +65,11 @@ beforeEach(async () => {
   testConfig = {};
   await setRegistry(createTestRegistry([]));
   callGatewayMock.mockReset();
-  webAuthExists.mockReset().mockResolvedValue(false);
-  handleDiscordAction.mockReset();
-  handleSlackAction.mockReset();
-  handleTelegramAction.mockReset();
-  handleWhatsAppAction.mockReset();
+  webAuthExists.mockClear().mockResolvedValue(false);
+  handleDiscordAction.mockClear();
+  handleSlackAction.mockClear();
+  handleTelegramAction.mockClear();
+  handleWhatsAppAction.mockClear();
 });
 
 afterEach(() => {
