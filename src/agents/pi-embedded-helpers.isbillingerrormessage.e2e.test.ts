@@ -50,6 +50,16 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches Anthropic insufficient_quota errors", () => {
+    const samples = [
+      "insufficient_quota",
+      '{"type":"error","error":{"type":"insufficient_quota","message":"Your credit balance is too low to access the Anthropic API."}}',
+      '400 {"type":"error","error":{"type":"insufficient_quota","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
   it("does not false-positive on issue IDs or text containing 402", () => {
     const falsePositives = [
       "Fixed issue CHE-402 in the latest release",
@@ -376,6 +386,13 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies Anthropic insufficient_quota as billing", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"insufficient_quota","message":"Your credit balance is too low to access the Anthropic API."}}',
+      ),
+    ).toBe("billing");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(

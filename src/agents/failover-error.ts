@@ -167,6 +167,13 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "timeout";
   }
   if (status === 400) {
+    const msg = getErrorMessage(err);
+    if (msg) {
+      const msgReason = classifyFailoverReason(msg);
+      if (msgReason) {
+        return msgReason;
+      }
+    }
     return "format";
   }
 
