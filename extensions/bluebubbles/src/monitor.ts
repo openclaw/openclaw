@@ -154,23 +154,6 @@ function getOrCreateDebouncer(target: WebhookTarget) {
     debounceMs: resolveBlueBubblesDebounceMs(config, core),
     buildKey: (entry) => {
       const msg = entry.message;
-      // Prefer stable, shared identifiers to coalesce rapid-fire webhook events for the
-      // same message (e.g., text-only then text+attachment).
-      //
-      // For balloons (URL previews, stickers, etc), BlueBubbles often uses a different
-      // messageId than the originating text. When present, key by associatedMessageGuid
-      // to keep text + balloon coalescing working.
-      const balloonBundleId = msg.balloonBundleId?.trim();
-      const associatedMessageGuid = msg.associatedMessageGuid?.trim();
-      if (balloonBundleId && associatedMessageGuid) {
-        return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
-      }
-
-      const messageId = msg.messageId?.trim();
-      if (messageId) {
-        return `bluebubbles:${account.accountId}:msg:${messageId}`;
-      }
-
       const chatKey =
         msg.chatGuid?.trim() ??
         msg.chatIdentifier?.trim() ??
