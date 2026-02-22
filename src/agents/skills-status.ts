@@ -119,9 +119,17 @@ function normalizeInstallOptions(
   }
 
   const platform = process.platform;
+  const brewAvailable = hasBinary("brew");
   const filtered = install.filter((spec) => {
     const osList = spec.os ?? [];
-    return osList.length === 0 || osList.includes(platform);
+    if (osList.length > 0 && !osList.includes(platform)) {
+      return false;
+    }
+    // Filter out brew-based install options when brew is not available.
+    if (spec.kind === "brew" && !brewAvailable) {
+      return false;
+    }
+    return true;
   });
   if (filtered.length === 0) {
     return [];
