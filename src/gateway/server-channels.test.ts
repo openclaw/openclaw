@@ -115,7 +115,9 @@ describe("server-channels auto restart", () => {
   });
 
   it("caps crash-loop restarts after max attempts", async () => {
-    const startAccount = vi.fn(async () => {});
+    const startAccount = vi.fn(async () => {
+      throw new Error("connection lost");
+    });
     installTestRegistry(
       createTestPlugin({
         startAccount,
@@ -137,7 +139,9 @@ describe("server-channels auto restart", () => {
   });
 
   it("does not auto-restart after manual stop during backoff", async () => {
-    const startAccount = vi.fn(async () => {});
+    const startAccount = vi.fn(async () => {
+      throw new Error("connection lost");
+    });
     installTestRegistry(
       createTestPlugin({
         startAccount,
@@ -151,6 +155,28 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-restart webhook channels that resolve immediately", async () => {
+    const startAccount = vi.fn(async () => {
+      // Webhook channels (e.g. Google Chat) register an HTTP route and resolve.
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Should only be called once — no restart loop.
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.reconnectAttempts).toBeUndefined();
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {
