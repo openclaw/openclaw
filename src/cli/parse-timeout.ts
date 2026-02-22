@@ -1,3 +1,7 @@
+import { parseDurationMs } from "./parse-duration.js";
+
+const durationSuffix = /[a-z]/i;
+
 export function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -12,7 +16,15 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
     if (!trimmed) {
       return undefined;
     }
-    value = Number.parseInt(trimmed, 10);
+    if (durationSuffix.test(trimmed)) {
+      try {
+        value = parseDurationMs(trimmed, { defaultUnit: "ms" });
+      } catch {
+        return undefined;
+      }
+    } else {
+      value = Number.parseInt(trimmed, 10);
+    }
   }
   return Number.isFinite(value) ? value : undefined;
 }
