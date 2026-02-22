@@ -111,9 +111,10 @@ export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   constructor() {
     super();
-    if (isSupportedLocale(this.settings.locale)) {
-      void i18n.setLocale(this.settings.locale);
-    }
+    const locale = isSupportedLocale(this.settings.locale)
+      ? this.settings.locale
+      : i18n.getLocale();
+    void i18n.setLocale(locale);
   }
   @state() password = "";
   @state() tab: Tab = "chat";

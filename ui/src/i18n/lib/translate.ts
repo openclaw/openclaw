@@ -40,11 +40,9 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    if (this.locale === locale) {
-      return;
-    }
-
-    // Lazy load translations if needed
+    // Lazy-load translations before checking locale equality so that
+    // auto-detected locales (set by loadLocale but never loaded) get
+    // their translation map populated on the first setLocale call.
     if (!this.translations[locale]) {
       try {
         let module: Record<string, TranslationMap>;
@@ -62,6 +60,10 @@ class I18nManager {
         console.error(`Failed to load locale: ${locale}`, e);
         return;
       }
+    }
+
+    if (this.locale === locale) {
+      return;
     }
 
     this.locale = locale;
