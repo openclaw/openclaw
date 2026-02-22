@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -46,10 +49,27 @@ vi.mock("../../memory/index.js", () => {
   };
 });
 
-import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+  createMemoryUpsertTool,
+  createMemoryWriteTool,
+} from "./memory-tool.js";
 
 function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
   return config as OpenClawConfig;
+}
+
+function configWithWorkspace(workspace: string): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        workspace,
+        memorySearch: { enabled: true },
+      },
+      list: [{ id: "main", default: true }],
+    },
+  } as unknown as OpenClawConfig;
 }
 
 beforeEach(() => {
@@ -215,5 +235,86 @@ describe("memory tools", () => {
       text: "",
       path: "memory/2026-02-19.md",
     });
+  });
+});
+
+describe("memory write tools", () => {
+  it("memory_write appends to daily memory file", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-"));
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryWriteTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_write", {
+      text: "remember this",
+      date: "2026-02-18",
+      kind: "preference",
+    });
+    const details = result.details as { path: string; target: string };
+    expect(details.path).toBe("memory/2026-02-18.md");
+    expect(details.target).toBe("daily");
+
+    const content = await fs.readFile(path.join(workspace, "memory", "2026-02-18.md"), "utf-8");
+    expect(content).toContain("remember this");
+    expect(content).toContain("kind:preference");
+  });
+
+  it("memory_upsert updates existing keyed entries", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-upsert-"));
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await tool.execute("call_upsert_1", {
+      key: "favorite-food",
+      text: "pizza",
+      target: "longterm",
+    });
+    await tool.execute("call_upsert_2", {
+      key: "favorite-food",
+      text: "sushi",
+      target: "longterm",
+    });
+
+    const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
+    expect(content).toContain("[key:favorite-food]");
+    expect(content).toContain("sushi");
+    expect(content).not.toContain("pizza");
+    expect(content.match(/\[key:favorite-food\]/g)?.length).toBe(1);
+  });
+
+  it("memory_upsert preserves all concurrent keyed writes to the same file", async () => {
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-upsert-concurrent-"),
+    );
+    const cfg = configWithWorkspace(workspace);
+    const tool = createMemoryUpsertTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const count = 20;
+    await Promise.all(
+      Array.from({ length: count }, (_, index) =>
+        tool.execute(`call_upsert_concurrent_${index}`, {
+          key: `pref-${index}`,
+          text: `value-${index}`,
+          target: "longterm",
+        }),
+      ),
+    );
+
+    const content = await fs.readFile(path.join(workspace, "MEMORY.md"), "utf-8");
+    for (let index = 0; index < count; index += 1) {
+      expect(content).toContain(`[key:pref-${index}]`);
+      expect(content).toContain(`value-${index}`);
+    }
   });
 });
