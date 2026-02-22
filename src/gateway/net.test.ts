@@ -1,6 +1,7 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isLocalishHost,
   isPrivateOrLoopbackAddress,
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
@@ -20,6 +21,28 @@ describe("resolveHostName", () => {
     ] as const;
     for (const testCase of cases) {
       expect(resolveHostName(testCase.input), testCase.input).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("isLocalishHost", () => {
+  it("accepts loopback and tailscale serve/funnel host headers", () => {
+    const accepted = [
+      "localhost",
+      "127.0.0.1:18789",
+      "[::1]:18789",
+      "[::ffff:127.0.0.1]:18789",
+      "gateway.tailnet.ts.net",
+    ];
+    for (const host of accepted) {
+      expect(isLocalishHost(host), host).toBe(true);
+    }
+  });
+
+  it("rejects non-local hosts", () => {
+    const rejected = ["example.com", "192.168.1.10", "203.0.113.5:18789"];
+    for (const host of rejected) {
+      expect(isLocalishHost(host), host).toBe(false);
     }
   });
 });

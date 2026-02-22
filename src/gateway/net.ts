@@ -335,6 +335,19 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 /**
+ * Local-facing host check for inbound requests:
+ * - loopback hosts (localhost/127.x/::1 and mapped forms)
+ * - Tailscale Serve/Funnel hostnames (*.ts.net)
+ */
+export function isLocalishHost(hostHeader?: string): boolean {
+  const host = resolveHostName(hostHeader);
+  if (!host) {
+    return false;
+  }
+  return isLoopbackHost(host) || host.endsWith(".ts.net");
+}
+
+/**
  * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
  *
  * Returns true if the URL is secure for transmitting data:
