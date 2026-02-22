@@ -1091,6 +1091,7 @@
 
 .table {
   display: grid;
+  container-type: inline-size;
   gap: 8px;
 }
 
@@ -1129,6 +1130,20 @@
 .table-row:focus-within {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 1100px) {
+  .table-head,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 1100px) {
+  .table-head,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .session-link {
