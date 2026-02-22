@@ -18,6 +18,36 @@ vi.mock("../send.js", () => ({
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
+  const createBoundThreadBindings = async (
+    overrides: Partial<{
+      threadId: string;
+      channelId: string;
+      targetSessionKey: string;
+      agentId: string;
+      label: string;
+      webhookId: string;
+      webhookToken: string;
+      introText: string;
+    }> = {},
+  ) => {
+    const threadBindings = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await threadBindings.bindTarget({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+      introText: "",
+      ...overrides,
+    });
+    return threadBindings;
+  };
 
   beforeEach(() => {
     sendMessageDiscordMock.mockClear().mockResolvedValue({
@@ -136,22 +166,7 @@ describe("deliverDiscordReply", () => {
   });
 
   it("sends bound-session text replies through webhook delivery", async () => {
-    const threadBindings = createThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-    await threadBindings.bindTarget({
-      threadId: "thread-1",
-      channelId: "parent-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child",
-      agentId: "main",
-      label: "codex-refactor",
-      webhookId: "wh_1",
-      webhookToken: "tok_1",
-      introText: "",
-    });
+    const threadBindings = await createBoundThreadBindings({ label: "codex-refactor" });
 
     await deliverDiscordReply({
       replies: [{ text: "Hello from subagent" }],
@@ -179,21 +194,7 @@ describe("deliverDiscordReply", () => {
   });
 
   it("falls back to bot send when webhook delivery fails", async () => {
-    const threadBindings = createThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-    await threadBindings.bindTarget({
-      threadId: "thread-1",
-      channelId: "parent-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child",
-      agentId: "main",
-      webhookId: "wh_1",
-      webhookToken: "tok_1",
-      introText: "",
-    });
+    const threadBindings = await createBoundThreadBindings();
     sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
 
     await deliverDiscordReply({
@@ -217,21 +218,7 @@ describe("deliverDiscordReply", () => {
   });
 
   it("does not use thread webhook when outbound target is not a bound thread", async () => {
-    const threadBindings = createThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-    await threadBindings.bindTarget({
-      threadId: "thread-1",
-      channelId: "parent-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child",
-      agentId: "main",
-      webhookId: "wh_1",
-      webhookToken: "tok_1",
-      introText: "",
-    });
+    const threadBindings = await createBoundThreadBindings();
 
     await deliverDiscordReply({
       replies: [{ text: "Parent channel delivery" }],

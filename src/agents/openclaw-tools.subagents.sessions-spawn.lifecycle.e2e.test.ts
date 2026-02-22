@@ -32,6 +32,20 @@ async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
 type GatewayRequest = { method?: string; params?: unknown };
 type AgentWaitCall = { runId?: string; timeoutMs?: number };
 
+function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
+  return {
+    onAgentSubagentSpawn: (params: unknown) => {
+      const rec = params as { channel?: string; timeout?: number } | undefined;
+      expect(rec?.channel).toBe("discord");
+      expect(rec?.timeout).toBe(1);
+    },
+    onSessionsDelete: (params: unknown) => {
+      const rec = params as { key?: string } | undefined;
+      onDelete(rec?.key);
+    },
+  };
+}
+
 function setupSessionsSpawnGatewayMock(opts: {
   includeSessionsList?: boolean;
   includeChatHistory?: boolean;
@@ -216,15 +230,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     callGatewayMock.mockReset();
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
-      onAgentSubagentSpawn: (params) => {
-        const rec = params as { channel?: string; timeout?: number } | undefined;
-        expect(rec?.channel).toBe("discord");
-        expect(rec?.timeout).toBe(1);
-      },
-      onSessionsDelete: (params) => {
-        const rec = params as { key?: string } | undefined;
-        deletedKey = rec?.key;
-      },
+      ...buildDiscordCleanupHooks((key) => {
+        deletedKey = key;
+      }),
     });
 
     const tool = await getSessionsSpawnTool({
@@ -309,15 +317,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
-      onAgentSubagentSpawn: (params) => {
-        const rec = params as { channel?: string; timeout?: number } | undefined;
-        expect(rec?.channel).toBe("discord");
-        expect(rec?.timeout).toBe(1);
-      },
-      onSessionsDelete: (params) => {
-        const rec = params as { key?: string } | undefined;
-        deletedKey = rec?.key;
-      },
+      ...buildDiscordCleanupHooks((key) => {
+        deletedKey = key;
+      }),
       agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
     });
 

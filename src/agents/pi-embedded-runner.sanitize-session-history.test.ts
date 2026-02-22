@@ -33,6 +33,31 @@ vi.mock("./pi-embedded-helpers.js", async () => {
 describe("sanitizeSessionHistory", () => {
   const mockSessionManager = makeMockSessionManager();
   const mockMessages = makeSimpleUserMessages();
+  const setNonGoogleModelApi = () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+  };
+
+  const sanitizeGithubCopilotHistory = async (params: {
+    messages: AgentMessage[];
+    modelApi?: string;
+    modelId?: string;
+  }) =>
+    sanitizeSessionHistory({
+      messages: params.messages,
+      modelApi: params.modelApi ?? "openai-completions",
+      provider: "github-copilot",
+      modelId: params.modelId ?? "claude-opus-4.6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+  const getAssistantMessage = (messages: AgentMessage[]) => {
+    expect(messages[1]?.role).toBe("assistant");
+    return messages[1] as Extract<AgentMessage, { role: "assistant" }>;
+  };
+
+  const getAssistantContentTypes = (messages: AgentMessage[]) =>
+    getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
 
   beforeEach(async () => {
     sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
@@ -47,7 +72,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("sanitizes tool call ids with strict9 for Mistral models", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     await sanitizeSessionHistory({
       messages: mockMessages,
@@ -70,7 +95,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("sanitizes tool call ids for Anthropic APIs", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     await sanitizeSessionHistory({
       messages: mockMessages,
@@ -88,7 +113,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("does not sanitize tool call ids for openai-responses", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
@@ -104,7 +129,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("annotates inter-session user messages before context sanitization", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
       {
@@ -134,7 +159,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages = [
       { role: "user", content: "hello" },
@@ -334,7 +359,7 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("drops assistant thinking blocks for github-copilot models", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages = [
       { role: "user", content: "hello" },
@@ -351,22 +376,13 @@ describe("sanitizeSessionHistory", () => {
       },
     ] as unknown as AgentMessage[];
 
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-completions",
-      provider: "github-copilot",
-      modelId: "claude-opus-4.6",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result[1]?.role).toBe("assistant");
-    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const result = await sanitizeGithubCopilotHistory({ messages });
+    const assistant = getAssistantMessage(result);
     expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
   });
 
   it("preserves assistant turn when all content is thinking blocks (github-copilot)", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages = [
       { role: "user", content: "hello" },
@@ -383,24 +399,16 @@ describe("sanitizeSessionHistory", () => {
       { role: "user", content: "follow up" },
     ] as unknown as AgentMessage[];
 
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-completions",
-      provider: "github-copilot",
-      modelId: "claude-opus-4.6",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
-    });
+    const result = await sanitizeGithubCopilotHistory({ messages });
 
     // Assistant turn should be preserved (not dropped) to maintain turn alternation
     expect(result).toHaveLength(3);
-    expect(result[1]?.role).toBe("assistant");
-    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const assistant = getAssistantMessage(result);
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
 
   it("preserves tool_use blocks when dropping thinking blocks (github-copilot)", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages = [
       { role: "user", content: "read a file" },
@@ -418,25 +426,15 @@ describe("sanitizeSessionHistory", () => {
       },
     ] as unknown as AgentMessage[];
 
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-completions",
-      provider: "github-copilot",
-      modelId: "claude-opus-4.6",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result[1]?.role).toBe("assistant");
-    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
-    const types = assistant.content.map((b: { type: string }) => b.type);
+    const result = await sanitizeGithubCopilotHistory({ messages });
+    const types = getAssistantContentTypes(result);
     expect(types).toContain("toolCall");
     expect(types).toContain("text");
     expect(types).not.toContain("thinking");
   });
 
   it("does not drop thinking blocks for non-copilot providers", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages = [
       { role: "user", content: "hello" },
@@ -462,14 +460,12 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result[1]?.role).toBe("assistant");
-    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
-    const types = assistant.content.map((b: { type: string }) => b.type);
+    const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+    setNonGoogleModelApi();
 
     const messages = [
       { role: "user", content: "hello" },
@@ -486,18 +482,8 @@ describe("sanitizeSessionHistory", () => {
       },
     ] as unknown as AgentMessage[];
 
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-completions",
-      provider: "github-copilot",
-      modelId: "gpt-5.2",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result[1]?.role).toBe("assistant");
-    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
-    const types = assistant.content.map((b: { type: string }) => b.type);
+    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
+    const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });
 });

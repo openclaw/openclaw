@@ -1115,5 +1115,35 @@ describe("registerSlackInteractionEvents", () => {
     );
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
   });
+
+  it("defaults modal close isCleared to false when Slack omits the flag", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewClosedHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewClosedHandler = getViewClosedHandler();
+    expect(viewClosedHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewClosedHandler!({
+      ack,
+      body: {
+        user: { id: "U901" },
+        view: {
+          id: "V901",
+          callback_id: "openclaw:deploy_form",
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      interactionType: string;
+      isCleared?: boolean;
+    };
+    expect(payload.interactionType).toBe("view_closed");
+    expect(payload.isCleared).toBe(false);
+  });
 });
 const selectedDateTimeEpoch = 1_771_632_300;

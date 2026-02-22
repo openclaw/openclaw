@@ -51,7 +51,7 @@ export const FIELD_HELP: Record<string, string> = {
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.allowCommands":
-    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
+    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",

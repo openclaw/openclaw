@@ -37,6 +37,15 @@ function makeEvent(overrides?: Partial<InternalHookEvent>): InternalHookEvent {
 }
 
 describe("boot-md handler", () => {
+  function setupTwoAgentBootConfig() {
+    const cfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
+    listAgentIds.mockReturnValue(["main", "ops"]);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, id: string) =>
+      id === "main" ? MAIN_WORKSPACE_DIR : OPS_WORKSPACE_DIR,
+    );
+    return cfg;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     logWarn.mockReset();
@@ -59,11 +68,7 @@ describe("boot-md handler", () => {
   });
 
   it("runs boot for each agent", async () => {
-    const cfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
-    listAgentIds.mockReturnValue(["main", "ops"]);
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, id: string) =>
-      id === "main" ? MAIN_WORKSPACE_DIR : OPS_WORKSPACE_DIR,
-    );
+    const cfg = setupTwoAgentBootConfig();
     runBootOnce.mockResolvedValue({ status: "ran" });
 
     await runBootChecklist(makeEvent({ context: { cfg } }));
@@ -93,11 +98,7 @@ describe("boot-md handler", () => {
   });
 
   it("logs warning details when a per-agent boot run fails", async () => {
-    const cfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
-    listAgentIds.mockReturnValue(["main", "ops"]);
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, id: string) =>
-      id === "main" ? MAIN_WORKSPACE_DIR : OPS_WORKSPACE_DIR,
-    );
+    const cfg = setupTwoAgentBootConfig();
     runBootOnce
       .mockResolvedValueOnce({ status: "ran" })
       .mockResolvedValueOnce({ status: "failed", reason: "agent failed" });
