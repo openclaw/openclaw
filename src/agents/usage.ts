@@ -104,6 +104,27 @@ export function derivePromptTokens(usage?: {
   return sum > 0 ? sum : undefined;
 }
 
+/**
+ * CLI-specific context token calculation.
+ * For CLI, we use the latest turn's values directly (not accumulated across turns)
+ * since cache_read_input_tokens already represents the full cached context.
+ * Formula: cacheRead + cacheWrite + input = total context for this turn
+ */
+export function deriveCliContextTokens(usage?: {
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}): number | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const input = usage.input ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const sum = input + cacheRead + cacheWrite;
+  return sum > 0 ? sum : undefined;
+}
+
 export function deriveSessionTotalTokens(params: {
   usage?: {
     input?: number;

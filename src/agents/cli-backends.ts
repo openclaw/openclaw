@@ -35,25 +35,26 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
 
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   command: "claude",
-  args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
+  args: ["-p", "--output-format", "stream-json", "--dangerously-skip-permissions", "--verbose"],
   resumeArgs: [
     "-p",
     "--output-format",
-    "json",
+    "stream-json",
     "--dangerously-skip-permissions",
+    "--verbose",
     "--resume",
     "{sessionId}",
   ],
-  output: "json",
+  output: "jsonl",
   input: "arg",
   modelArg: "--model",
   modelAliases: CLAUDE_MODEL_ALIASES,
   sessionArg: "--session-id",
   sessionMode: "always",
   sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
-  systemPromptArg: "--append-system-prompt",
+  systemPromptArg: "--system-prompt",
   systemPromptMode: "append",
-  systemPromptWhen: "first",
+  systemPromptWhen: "always",
   clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
   reliability: {
     watchdog: {
@@ -62,6 +63,39 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
     },
   },
   serialize: true,
+  usageFields: {
+    input: ["input_tokens", "inputTokens"],
+    output: ["output_tokens", "outputTokens"],
+    cacheRead: ["cache_read_input_tokens", "cached_input_tokens", "cacheRead"],
+    cacheWrite: ["cache_creation_input_tokens", "cache_write_input_tokens", "cacheWrite"],
+    total: ["total_tokens", "total"],
+  },
+  streaming: true,
+  streamingEventTypes: ["tool_use", "tool_result", "text", "result"],
+  streamingFormat: {
+    text: {
+      eventTypes: ["assistant"],
+      contentPath: "message.content",
+      matchType: "text",
+      textField: "text",
+    },
+    toolUse: {
+      eventTypes: ["assistant"],
+      contentPath: "message.content",
+      matchType: "tool_use",
+      idField: "id",
+      nameField: "name",
+      inputField: "input",
+    },
+    toolResult: {
+      eventTypes: ["user"],
+      contentPath: "message.content",
+      matchType: "tool_result",
+      idField: "tool_use_id",
+      outputField: "content",
+      isErrorField: "is_error",
+    },
+  },
 };
 
 const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
@@ -92,6 +126,36 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
     },
   },
   serialize: true,
+  usageFields: {
+    input: ["prompt_tokens", "input_tokens"],
+    output: ["completion_tokens", "output_tokens"],
+    total: ["total_tokens"],
+  },
+  streaming: true,
+  streamingEventTypes: ["item", "turn.completed"],
+  streamingFormat: {
+    text: {
+      eventTypes: ["item.completed"],
+      contentPath: "item",
+      matchType: "message",
+      textField: "text",
+    },
+    toolUse: {
+      eventTypes: ["item.created", "item.started"],
+      contentPath: "item",
+      matchType: "function_call",
+      idField: "id",
+      nameField: "name",
+      inputField: "arguments",
+    },
+    toolResult: {
+      eventTypes: ["item.completed"],
+      contentPath: "item",
+      matchType: "function_call_output",
+      idField: "call_id",
+      outputField: "output",
+    },
+  },
 };
 
 function normalizeBackendKey(key: string): string {
@@ -128,6 +192,18 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
     sessionArgs: override.sessionArgs ?? base.sessionArgs,
     resumeArgs: override.resumeArgs ?? base.resumeArgs,
+    streaming: override.streaming ?? base.streaming,
+    streamingEventTypes: override.streamingEventTypes ?? base.streamingEventTypes,
+    streamingFormat: override.streamingFormat
+      ? {
+          text: { ...base.streamingFormat?.text, ...override.streamingFormat.text },
+          toolUse: { ...base.streamingFormat?.toolUse, ...override.streamingFormat.toolUse },
+          toolResult: {
+            ...base.streamingFormat?.toolResult,
+            ...override.streamingFormat.toolResult,
+          },
+        }
+      : base.streamingFormat,
     reliability: {
       ...base.reliability,
       ...override.reliability,

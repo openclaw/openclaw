@@ -123,15 +123,36 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
   return trimmed;
 }
 
-function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
+function toUsage(raw: Record<string, unknown>, backend?: CliBackendConfig): CliUsage | undefined {
   const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const input = pick("input_tokens") ?? pick("inputTokens");
-  const output = pick("output_tokens") ?? pick("outputTokens");
-  const cacheRead =
-    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
-  const total = pick("total_tokens") ?? pick("total");
+    typeof raw[key] === "number" && raw[key] > 0 ? (raw[key] as number) : undefined;
+
+  const pickFirst = (keys: string[] | undefined, fallback: string[]): number | undefined => {
+    const ordered = keys && keys.length > 0 ? keys : fallback;
+    for (const key of ordered) {
+      const value = pick(key);
+      if (value !== undefined) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+
+  const fields = backend?.usageFields;
+  const input = pickFirst(fields?.input, ["input_tokens", "inputTokens"]);
+  const output = pickFirst(fields?.output, ["output_tokens", "outputTokens"]);
+  const cacheRead = pickFirst(fields?.cacheRead, [
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cacheRead",
+  ]);
+  const cacheWrite = pickFirst(fields?.cacheWrite, [
+    "cache_creation_input_tokens",
+    "cache_write_input_tokens",
+    "cacheWrite",
+  ]);
+  const total = pickFirst(fields?.total, ["total_tokens", "total"]);
+
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
   }
@@ -200,7 +221,7 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
     return null;
   }
   const sessionId = pickSessionId(parsed, backend);
-  const usage = isRecord(parsed.usage) ? toUsage(parsed.usage) : undefined;
+  const usage = isRecord(parsed.usage) ? toUsage(parsed.usage, backend) : undefined;
   const text =
     collectText(parsed.message) ||
     collectText(parsed.content) ||
@@ -237,7 +258,7 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
       sessionId = parsed.thread_id.trim();
     }
     if (isRecord(parsed.usage)) {
-      usage = toUsage(parsed.usage) ?? usage;
+      usage = toUsage(parsed.usage, backend) ?? usage;
     }
     const item = isRecord(parsed.item) ? parsed.item : null;
     if (item && typeof item.text === "string") {
@@ -367,7 +388,7 @@ export function buildCliArgs(params: {
   if (!params.useResume && params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  if (params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
   }
   if (!params.useResume && params.sessionId) {

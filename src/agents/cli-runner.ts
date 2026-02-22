@@ -3,6 +3,7 @@ import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -24,6 +25,7 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import { mapCliStreamEvent, runCliWithStreaming } from "./cli-runner/streaming.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
@@ -78,12 +80,7 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
-  const extraSystemPrompt = [
-    params.extraSystemPrompt?.trim(),
-    "Tools are disabled in this session. Do not call tools.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const extraSystemPrompt = params.extraSystemPrompt?.trim();
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { contextFiles } = await resolveBootstrapContextForRun({
@@ -226,6 +223,74 @@ export async function runCliAgent(params: {
         }
         return next;
       })();
+
+      // Use streaming execution when enabled
+      const useStreaming = backend.streaming ?? false;
+      log.info(
+        `cli runner: useStreaming=${useStreaming} streamingEventTypes=${JSON.stringify(backend.streamingEventTypes)}`,
+      );
+      if (useStreaming) {
+        try {
+          const streamResult = await runCliWithStreaming({
+            command: backend.command,
+            args,
+            cwd: workspaceDir,
+            env,
+            input: stdinPayload,
+            timeoutMs: params.timeoutMs,
+            eventTypes: backend.streamingEventTypes,
+            backend,
+            onEvent: (event) => {
+              log.info(`cli runner: onEvent received type="${event.type}"`);
+              const mapped = mapCliStreamEvent(event, backendResolved.id);
+              if (mapped) {
+                log.info(
+                  `cli runner: emitting agentEvent stream="${mapped.stream}" runId="${params.runId}"`,
+                );
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: mapped.stream,
+                  data: mapped.data,
+                });
+                log.info(`cli runner: emitAgentEvent completed`);
+              } else {
+                log.info(`cli runner: mapped is null, not emitting agentEvent`);
+              }
+            },
+          });
+
+          if (logOutputText || shouldLogVerbose()) {
+            log.info(
+              `cli streaming: text=${streamResult.text.length} chars, events=${streamResult.events.length}`,
+            );
+          }
+
+          log.info(
+            `[cli-runner] streaming result usage: input=${streamResult.usage?.input} ` +
+              `output=${streamResult.usage?.output} cacheRead=${streamResult.usage?.cacheRead} ` +
+              `cacheWrite=${streamResult.usage?.cacheWrite} total=${streamResult.usage?.total} ` +
+              `sessionId=${streamResult.sessionId}`,
+          );
+
+          return {
+            text: streamResult.text,
+            sessionId: streamResult.sessionId,
+            usage: streamResult.usage,
+          };
+        } catch (streamErr) {
+          const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+          const reason = classifyFailoverReason(errMsg) ?? "unknown";
+          const status = resolveFailoverStatus(reason);
+          throw new FailoverError(errMsg, {
+            reason,
+            provider: params.provider,
+            model: modelId,
+            status,
+          });
+        }
+      }
+
+      // Non-streaming path: collect all output via process supervisor
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
         backend,
         timeoutMs: params.timeoutMs,
@@ -321,6 +386,12 @@ export async function runCliAgent(params: {
 
     const text = output.text?.trim();
     const payloads = text ? [{ text }] : undefined;
+
+    log.info(
+      `[cli-runner] FINAL agentMeta.usage: input=${output.usage?.input} ` +
+        `output=${output.usage?.output} cacheRead=${output.usage?.cacheRead} ` +
+        `cacheWrite=${output.usage?.cacheWrite} total=${output.usage?.total}`,
+    );
 
     return {
       payloads,

@@ -15,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -474,6 +475,12 @@ export async function runReplyAgent(params: {
       lookupContextTokens(modelUsed) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
+
+    logVerbose(
+      `[agent-runner] usage from runResult: input=${usage?.input} output=${usage?.output} ` +
+        `cacheRead=${usage?.cacheRead} cacheWrite=${usage?.cacheWrite} total=${usage?.total} ` +
+        `provider=${providerUsed} model=${modelUsed} cliSessionId=${cliSessionId}`,
+    );
 
     await persistRunSessionUsage({
       storePath,

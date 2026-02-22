@@ -57,7 +57,8 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  if (hasNonzeroUsage(params.usage)) {
+  const hasUsage = hasNonzeroUsage(params.usage);
+  if (hasUsage) {
     try {
       await updateSessionStoreEntry({
         storePath,

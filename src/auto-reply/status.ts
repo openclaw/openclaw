@@ -20,6 +20,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { logVerbose } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
@@ -224,6 +225,7 @@ const readUsageFromSessionLog = (
   | undefined => {
   // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
   if (!sessionId) {
+    logVerbose(`[status/readUsageFromSessionLog] no sessionId, returning undefined`);
     return undefined;
   }
   let logPath: string;
@@ -238,17 +240,21 @@ const readUsageFromSessionLog = (
   } catch {
     return undefined;
   }
+  logVerbose(`[status/readUsageFromSessionLog] reading transcript: ${logPath}`);
   if (!fs.existsSync(logPath)) {
+    logVerbose(`[status/readUsageFromSessionLog] transcript file not found`);
     return undefined;
   }
 
   try {
     const lines = fs.readFileSync(logPath, "utf-8").split(/\n+/);
+    logVerbose(`[status/readUsageFromSessionLog] transcript has ${lines.length} lines`);
     let input = 0;
     let output = 0;
     let promptTokens = 0;
     let model: string | undefined;
     let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
+    let usageEntriesFound = 0;
 
     for (const line of lines) {
       if (!line.trim()) {
@@ -266,6 +272,12 @@ const readUsageFromSessionLog = (
         const usageRaw = parsed.message?.usage ?? parsed.usage;
         const usage = normalizeUsage(usageRaw);
         if (usage) {
+          usageEntriesFound++;
+          logVerbose(
+            `[status/readUsageFromSessionLog] entry #${usageEntriesFound}: ` +
+              `input=${usage.input} output=${usage.output} cacheRead=${usage.cacheRead} ` +
+              `cacheWrite=${usage.cacheWrite} total=${usage.total}`,
+          );
           lastUsage = usage;
         }
         model = parsed.message?.model ?? parsed.model ?? model;
@@ -274,13 +286,18 @@ const readUsageFromSessionLog = (
       }
     }
 
+    logVerbose(`[status/readUsageFromSessionLog] found ${usageEntriesFound} usage entries`);
     if (!lastUsage) {
+      logVerbose(`[status/readUsageFromSessionLog] no lastUsage found, returning undefined`);
       return undefined;
     }
     input = lastUsage.input ?? 0;
     output = lastUsage.output ?? 0;
     promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
     const total = lastUsage.total ?? promptTokens + output;
+    logVerbose(
+      `[status/readUsageFromSessionLog] lastUsage: input=${lastUsage.input} output=${lastUsage.output} cacheRead=${lastUsage.cacheRead} cacheWrite=${lastUsage.cacheWrite} total=${lastUsage.total} → derived promptTokens=${promptTokens} total=${total}`,
+    );
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
@@ -440,6 +457,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
+      logVerbose(
+        `[status] transcript: promptTokens=${logUsage.promptTokens} total=${logUsage.total} candidate=${candidate} currentTotal=${totalTokens} willReplace=${!totalTokens || totalTokens === 0 || candidate > totalTokens}`,
+      );
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
         totalTokens = candidate;
       }

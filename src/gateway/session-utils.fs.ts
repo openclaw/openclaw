@@ -1,6 +1,10 @@
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isCliProvider } from "../agents/model-selection.js";
+import { deriveCliContextTokens, type NormalizedUsage } from "../agents/usage.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
@@ -65,6 +69,277 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
     }
     sessionTitleFieldsCache.delete(oldestKey);
   }
+}
+
+export type TranscriptAppendResult = {
+  ok: boolean;
+  messageId?: string;
+  error?: string;
+};
+
+/**
+ * In-process lock for session transcript writes.
+ * Ensures atomic user+assistant message pairs within the same Node process.
+ * Similar protection to what SessionManager provides for Pi agents.
+ */
+const sessionWriteLocks = new Map<string, Promise<void>>();
+
+async function withSessionLock<T>(sessionId: string, fn: () => T | Promise<T>): Promise<T> {
+  // Wait for any pending write to this session
+  const pending = sessionWriteLocks.get(sessionId);
+  if (pending) {
+    await pending.catch(() => {}); // Ignore errors from previous writes
+  }
+
+  // Create a new lock for this write
+  let resolve: () => void;
+  const lock = new Promise<void>((r) => {
+    resolve = r;
+  });
+  sessionWriteLocks.set(sessionId, lock);
+
+  try {
+    return await fn();
+  } finally {
+    resolve!();
+    // Clean up if this is still our lock
+    if (sessionWriteLocks.get(sessionId) === lock) {
+      sessionWriteLocks.delete(sessionId);
+    }
+  }
+}
+
+/**
+ * Ensures a transcript file exists with a valid session header.
+ * Creates the file and parent directories if needed.
+ * Uses atomic file creation (flag: 'wx') to prevent TOCTOU race conditions.
+ * Exported for reuse by other modules (e.g., server-methods/chat.ts).
+ */
+export function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
+  ok: boolean;
+  error?: string;
+} {
+  try {
+    fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: params.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    // Use 'wx' flag for atomic creation - fails if file exists (prevents TOCTOU race)
+    fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+    return { ok: true };
+  } catch (err) {
+    // EEXIST means file was created by another process - that's fine
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      return { ok: true };
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Resolves transcript path from params.
+ * @param params.sessionFile - Direct path to transcript file (preferred)
+ * @param params.storePath - Fallback: derives transcript path from store location
+ * @returns Transcript path or null if neither sessionFile nor storePath provided
+ */
+function resolveTranscriptPathFromParams(params: {
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+}): string | null {
+  if (params.sessionFile) {
+    return params.sessionFile;
+  }
+  if (params.storePath) {
+    return path.join(path.dirname(params.storePath), `${params.sessionId}.jsonl`);
+  }
+  return null;
+}
+
+/**
+ * Internal implementation of message append (no locking).
+ */
+function appendMessageToTranscriptImpl(
+  params: {
+    message: string;
+    role: "user" | "assistant";
+    sessionId: string;
+    sessionFile?: string;
+    storePath?: string;
+    createIfMissing?: boolean;
+    stopReason?: string;
+    provider?: string;
+    model?: string;
+    /** Token usage for assistant messages (CLI backends). */
+    usage?: NormalizedUsage;
+  },
+  transcriptPath: string,
+): TranscriptAppendResult {
+  if (!fs.existsSync(transcriptPath)) {
+    if (!params.createIfMissing) {
+      return { ok: false, error: "transcript file not found" };
+    }
+    const ensured = ensureTranscriptFile({
+      transcriptPath,
+      sessionId: params.sessionId,
+    });
+    if (!ensured.ok) {
+      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+    }
+  }
+
+  const now = Date.now();
+  const messageId = crypto.randomUUID().slice(0, 8);
+  const messageBody: Record<string, unknown> = {
+    role: params.role,
+    content: [{ type: "text", text: params.message }],
+    timestamp: now,
+  };
+  if (params.role === "assistant") {
+    messageBody.stopReason = params.stopReason ?? "cli_backend";
+    const u = params.usage;
+    // For CLI providers, use CLI-specific calculation (cacheRead + cacheWrite + input)
+    // representing the full context for this turn
+    const isCli = isCliProvider(params.provider ?? "", undefined);
+    const derivedTotal = isCli
+      ? (deriveCliContextTokens(u) ?? 0)
+      : (u?.input ?? 0) + (u?.cacheRead ?? 0) + (u?.cacheWrite ?? 0);
+    const usageToWrite = {
+      input: u?.input ?? 0,
+      output: u?.output ?? 0,
+      cacheRead: u?.cacheRead,
+      cacheWrite: u?.cacheWrite,
+      totalTokens:
+        u?.total ?? (derivedTotal > 0 ? derivedTotal : (u?.input ?? 0) + (u?.output ?? 0)),
+    };
+    messageBody.usage = usageToWrite;
+    if (params.provider) {
+      messageBody.provider = params.provider;
+    }
+    if (params.model) {
+      messageBody.model = params.model;
+    }
+  }
+  const transcriptEntry = {
+    type: "message",
+    id: messageId,
+    timestamp: new Date(now).toISOString(),
+    message: messageBody,
+  };
+
+  try {
+    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return { ok: true, messageId };
+}
+
+/**
+ * Appends a message to a session transcript file.
+ * Used for CLI backend responses which bypass SessionManager.
+ *
+ * Note: This is a synchronous function. For concurrent-safe writes
+ * (e.g., multiple CLI runs on same session), use appendMessageToTranscriptAsync().
+ */
+export function appendMessageToTranscript(params: {
+  message: string;
+  role: "user" | "assistant";
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+  createIfMissing?: boolean;
+  stopReason?: string;
+  /** Provider that generated the response (for assistant messages). */
+  provider?: string;
+  /** Model that generated the response (for assistant messages). */
+  model?: string;
+  /** Token usage for assistant messages (CLI backends). */
+  usage?: NormalizedUsage;
+}): TranscriptAppendResult {
+  const transcriptPath = resolveTranscriptPathFromParams(params);
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+  return appendMessageToTranscriptImpl(params, transcriptPath);
+}
+
+/**
+ * Async version of appendMessageToTranscript with session-level locking.
+ * Ensures atomic writes when multiple concurrent writes target the same session.
+ * Provides similar protection to what SessionManager offers for Pi agents.
+ */
+export async function appendMessageToTranscriptAsync(params: {
+  message: string;
+  role: "user" | "assistant";
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+  createIfMissing?: boolean;
+  stopReason?: string;
+  provider?: string;
+  model?: string;
+  /** Token usage for assistant messages (CLI backends). */
+  usage?: NormalizedUsage;
+}): Promise<TranscriptAppendResult> {
+  const transcriptPath = resolveTranscriptPathFromParams(params);
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+  return withSessionLock(params.sessionId, () =>
+    appendMessageToTranscriptImpl(params, transcriptPath),
+  );
+}
+
+/**
+ * Appends an assistant message to a session transcript file.
+ * Used for CLI backend responses which bypass SessionManager.
+ */
+export function appendAssistantMessageToTranscript(params: {
+  message: string;
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+  createIfMissing?: boolean;
+  /** Provider that generated the response. */
+  provider?: string;
+  /** Model that generated the response. */
+  model?: string;
+  /** Token usage for assistant messages (CLI backends). */
+  usage?: NormalizedUsage;
+}): TranscriptAppendResult {
+  return appendMessageToTranscript({
+    ...params,
+    role: "assistant",
+  });
+}
+
+/**
+ * Async version with session-level locking for concurrent-safe writes.
+ */
+export async function appendAssistantMessageToTranscriptAsync(params: {
+  message: string;
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+  createIfMissing?: boolean;
+  provider?: string;
+  model?: string;
+  /** Token usage for assistant messages (CLI backends). */
+  usage?: NormalizedUsage;
+}): Promise<TranscriptAppendResult> {
+  return appendMessageToTranscriptAsync({
+    ...params,
+    role: "assistant",
+  });
 }
 
 export function readSessionMessages(

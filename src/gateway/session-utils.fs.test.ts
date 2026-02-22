@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
+  appendMessageToTranscript,
   archiveSessionTranscripts,
+  ensureTranscriptFile,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
@@ -635,6 +637,293 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.text).toBe("A  B");
+  });
+});
+
+describe("appendMessageToTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-append-msg-test-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("appends user message to existing transcript", () => {
+    const sessionId = "test-append-user";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(transcriptPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Hello from user",
+      role: "user",
+      sessionId,
+      storePath,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.messageId).toBeDefined();
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const msg = JSON.parse(lines[1]);
+    expect(msg.message.role).toBe("user");
+    expect(msg.message.content[0].text).toBe("Hello from user");
+    expect(msg.message.stopReason).toBeUndefined();
+  });
+
+  test("appends assistant message with stopReason", () => {
+    const sessionId = "test-append-assistant";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(transcriptPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Hello from assistant",
+      role: "assistant",
+      sessionId,
+      storePath,
+    });
+
+    expect(result.ok).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    const msg = JSON.parse(lines[1]);
+    expect(msg.message.role).toBe("assistant");
+    expect(msg.message.stopReason).toBe("cli_backend");
+    expect(msg.message.usage).toBeDefined();
+  });
+
+  test("creates transcript file when createIfMissing is true", () => {
+    const sessionId = "test-append-create";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    expect(fs.existsSync(transcriptPath)).toBe(false);
+
+    const result = appendMessageToTranscript({
+      message: "First message",
+      role: "user",
+      sessionId,
+      storePath,
+      createIfMissing: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(transcriptPath)).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const header = JSON.parse(lines[0]);
+    expect(header.type).toBe("session");
+    expect(header.id).toBe(sessionId);
+  });
+
+  test("fails when transcript does not exist and createIfMissing is false", () => {
+    const sessionId = "test-append-no-create";
+
+    const result = appendMessageToTranscript({
+      message: "Message",
+      role: "user",
+      sessionId,
+      storePath,
+      createIfMissing: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("not found");
+  });
+
+  test("prefers sessionFile over storePath", () => {
+    const sessionId = "test-append-sessionfile";
+    const customPath = path.join(tmpDir, "custom-transcript.jsonl");
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(customPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Custom file message",
+      role: "user",
+      sessionId,
+      sessionFile: customPath,
+      storePath,
+    });
+
+    expect(result.ok).toBe(true);
+
+    const content = fs.readFileSync(customPath, "utf-8");
+    expect(content).toContain("Custom file message");
+  });
+
+  test("includes provider and model in assistant message metadata", () => {
+    const sessionId = "test-append-metadata";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(transcriptPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Response with metadata",
+      role: "assistant",
+      sessionId,
+      storePath,
+      provider: "claude-cli",
+      model: "claude-3-opus",
+    });
+
+    expect(result.ok).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    const msg = JSON.parse(lines[1]);
+    expect(msg.message.provider).toBe("claude-cli");
+    expect(msg.message.model).toBe("claude-3-opus");
+  });
+
+  test("omits provider/model when not provided", () => {
+    const sessionId = "test-append-no-metadata";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(transcriptPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Response without metadata",
+      role: "assistant",
+      sessionId,
+      storePath,
+    });
+
+    expect(result.ok).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    const msg = JSON.parse(lines[1]);
+    expect(msg.message.provider).toBeUndefined();
+    expect(msg.message.model).toBeUndefined();
+  });
+
+  test("includes usage data when provided for assistant message", () => {
+    const sessionId = "test-append-usage";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(transcriptPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Response with usage",
+      role: "assistant",
+      sessionId,
+      storePath,
+      usage: {
+        input: 100,
+        output: 50,
+        cacheRead: 10,
+        cacheWrite: 5,
+        total: 165,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    const msg = JSON.parse(lines[1]);
+    expect(msg.message.usage).toEqual({
+      input: 100,
+      output: 50,
+      cacheRead: 10,
+      cacheWrite: 5,
+      totalTokens: 165,
+    });
+  });
+
+  test("defaults usage to zeros when not provided for assistant message", () => {
+    const sessionId = "test-append-no-usage";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
+    fs.writeFileSync(transcriptPath, header + "\n", "utf-8");
+
+    const result = appendMessageToTranscript({
+      message: "Response without usage",
+      role: "assistant",
+      sessionId,
+      storePath,
+    });
+
+    expect(result.ok).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    const msg = JSON.parse(lines[1]);
+    expect(msg.message.usage.input).toBe(0);
+    expect(msg.message.usage.output).toBe(0);
+    expect(msg.message.usage.totalTokens).toBe(0);
+  });
+});
+
+describe("ensureTranscriptFile", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-ensure-transcript-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("creates transcript file with valid header", () => {
+    const sessionId = "test-ensure-create";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    const result = ensureTranscriptFile({ transcriptPath, sessionId });
+
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(transcriptPath)).toBe(true);
+
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const header = JSON.parse(content.trim());
+    expect(header.type).toBe("session");
+    expect(header.id).toBe(sessionId);
+    expect(header.timestamp).toBeDefined();
+  });
+
+  test("returns ok when file already exists", () => {
+    const sessionId = "test-ensure-exists";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, "existing content\n", "utf-8");
+
+    const result = ensureTranscriptFile({ transcriptPath, sessionId });
+
+    expect(result.ok).toBe(true);
+    // Content should not be modified
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    expect(content).toBe("existing content\n");
+  });
+
+  test("creates nested directories if needed", () => {
+    const sessionId = "test-ensure-nested";
+    const transcriptPath = path.join(tmpDir, "nested", "deeply", `${sessionId}.jsonl`);
+
+    const result = ensureTranscriptFile({ transcriptPath, sessionId });
+
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(transcriptPath)).toBe(true);
+  });
+
+  test("returns error for invalid path", () => {
+    const sessionId = "test-ensure-invalid";
+    // Path that cannot be created (null byte in path)
+    const transcriptPath = "/dev/null/\0/invalid.jsonl";
+
+    const result = ensureTranscriptFile({ transcriptPath, sessionId });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
   });
 });
 
