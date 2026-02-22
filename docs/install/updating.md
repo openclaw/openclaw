@@ -71,6 +71,32 @@ See [Development channels](/install/development-channels) for channel semantics 
 
 Note: on npm installs, the gateway logs an update hint on startup (checks the current channel tag). Disable via `update.checkOnStart: false`.
 
+### Core auto-updater (optional)
+
+Auto-updater is **off by default** and is a core Gateway feature (not a plugin).
+
+```json
+{
+  "update": {
+    "channel": "stable",
+    "auto": {
+      "enabled": true,
+      "stableDelayHours": 6,
+      "stableJitterHours": 12,
+      "betaCheckIntervalHours": 1
+    }
+  }
+}
+```
+
+Behavior:
+
+- `stable`: when a new version is seen, OpenClaw waits `stableDelayHours` and then applies a deterministic per-install jitter in `stableJitterHours` (spread rollout).
+- `beta`: checks on `betaCheckIntervalHours` cadence (default: hourly) and applies when an update is available.
+- `dev`: no automatic apply; use manual `openclaw update`.
+
+Use `openclaw update --dry-run` to preview update actions before enabling automation.
+
 Then:
 
 ```bash

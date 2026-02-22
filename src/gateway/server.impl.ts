@@ -632,17 +632,17 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
-  if (!minimalTestGateway) {
-    scheduleGatewayUpdateCheck({
-      cfg: cfgAtStart,
-      log,
-      isNixMode,
-      onUpdateAvailableChange: (updateAvailable) => {
-        const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-        broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
-      },
-    });
-  }
+  const stopGatewayUpdateCheck = minimalTestGateway
+    ? () => {}
+    : scheduleGatewayUpdateCheck({
+        cfg: cfgAtStart,
+        log,
+        isNixMode,
+        onUpdateAvailableChange: (updateAvailable) => {
+          const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+          broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+        },
+      });
   const tailscaleCleanup = minimalTestGateway
     ? null
     : await startGatewayTailscaleExposure({
@@ -730,6 +730,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,
     broadcast,
     tickInterval,

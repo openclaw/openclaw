@@ -213,6 +213,15 @@ export const OpenClawSchema = z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
         checkOnStart: z.boolean().optional(),
+        auto: z
+          .object({
+            enabled: z.boolean().optional(),
+            stableDelayHours: z.number().nonnegative().max(168).optional(),
+            stableJitterHours: z.number().nonnegative().max(168).optional(),
+            betaCheckIntervalHours: z.number().positive().max(24).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

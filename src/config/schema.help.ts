@@ -5,6 +5,12 @@ export const FIELD_HELP: Record<string, string> = {
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
+  "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
+  "update.auto.stableDelayHours":
+    "Minimum delay before stable-channel auto-apply starts (default: 6).",
+  "update.auto.stableJitterHours":
+    "Extra stable-channel rollout spread window in hours (default: 12).",
+  "update.auto.betaCheckIntervalHours": "How often beta-channel checks run in hours (default: 1).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.tlsFingerprint":
     "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",
