@@ -19,11 +19,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import {
-  isCronSessionKey,
-  isSubagentSessionKey,
-  normalizeAgentId,
-} from "../../../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -356,11 +352,17 @@ export async function runEmbeddedAttempt(
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
+    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+      agentId: params.agentId,
+    });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
+          agentId: sessionAgentId,
           exec: {
             ...params.execOverrides,
             elevated: params.bashElevated,
@@ -451,10 +453,6 @@ export async function runEmbeddedAttempt(
             return undefined;
           })()
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
@@ -1009,13 +1007,7 @@ export async function runEmbeddedAttempt(
       }
 
       // Hook runner was already obtained earlier before tool creation
-      const hookAgentId =
-        typeof params.agentId === "string" && params.agentId.trim()
-          ? normalizeAgentId(params.agentId)
-          : resolveSessionAgentIds({
-              sessionKey: params.sessionKey,
-              config: params.config,
-            }).sessionAgentId;
+      const hookAgentId = sessionAgentId;
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
