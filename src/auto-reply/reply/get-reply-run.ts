@@ -39,7 +39,11 @@ import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+  type InboundTimeParams,
+} from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
@@ -185,10 +189,46 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
-  const inboundMetaPrompt = buildInboundMetaSystemPrompt(
-    isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+  const inboundTimeParams: InboundTimeParams = {
+    agentDefaults: agentCfg,
+    isFirstMessage: isFirstTurnInSession,
+    lastTimeSentAt: sessionEntry?.lastInboundTimeSentAt,
+    lastDateSentAt: sessionEntry?.lastInboundTimeDateSentAt,
+  };
+  // Pin the timestamp once so the prompt and session tracking use the same value,
+  // even when sessionCtx.Timestamp is undefined and we fall back to Date.now().
+  const currentTimestamp = sessionCtx.Timestamp ?? Date.now();
+  const inboundMetaCtx = isNewSession
+    ? sessionCtx
+    : { ...sessionCtx, ThreadStarterBody: undefined };
+  const inboundMetaResult = buildInboundMetaSystemPrompt(
+    { ...inboundMetaCtx, Timestamp: currentTimestamp },
+    inboundTimeParams,
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+
+  // Update session entry with inbound time tracking
+  // Reuse the timeResult from buildInboundMetaSystemPrompt to avoid a second resolveInboundTime call.
+  const inboundTimeResult = inboundMetaResult.timeResult;
+  if (inboundTimeResult?.value && sessionEntry && sessionStore && sessionKey) {
+    sessionEntry.lastInboundTimeSentAt = currentTimestamp;
+    if (inboundTimeResult.isFullDate) {
+      sessionEntry.lastInboundTimeDateSentAt = currentTimestamp;
+    }
+    sessionEntry.updatedAt = Date.now();
+    sessionStore[sessionKey] = sessionEntry;
+    if (storePath) {
+      const updatedEntry = sessionEntry;
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = updatedEntry;
+      });
+    }
+  }
+  const extraSystemPrompt = [
+    inboundMetaResult.prompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";

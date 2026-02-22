@@ -110,6 +110,10 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /** Timestamp (ms) when the last inbound_meta `t` field was sent. */
+  lastInboundTimeSentAt?: number;
+  /** Timestamp (ms) when the last full-date inbound_meta `t` field was sent. */
+  lastInboundTimeDateSentAt?: number;
 };
 
 export function mergeSessionEntry(

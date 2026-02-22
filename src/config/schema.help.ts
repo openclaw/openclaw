@@ -178,6 +178,14 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.envelopeTimestamp":
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
+  "agents.defaults.envelopeInboundTime":
+    'Include readable timestamps in inbound_meta.v1 payload ("on" or "off", default: "on").',
+  "agents.defaults.envelopeInboundTimeSkipMs":
+    "Minimum gap (ms) before including a time-only timestamp (default: 90000). Messages faster than this omit the timestamp.",
+  "agents.defaults.envelopeInboundTimeMaxGapMs":
+    "Maximum gap (ms) without any timestamp before ensuring time-only inclusion (default: 900000 = 15min).",
+  "agents.defaults.envelopeInboundTimeDateMs":
+    "Gap (ms) before including full date+time instead of time-only (default: 7200000 = 2hrs).",
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",

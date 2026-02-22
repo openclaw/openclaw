@@ -20,7 +20,7 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
 
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes session-stable routing fields", () => {
-    const prompt = buildInboundMetaSystemPrompt({
+    const { prompt } = buildInboundMetaSystemPrompt({
       MessageSid: "123",
       MessageSidFull: "123",
       ReplyToId: "99",
@@ -38,7 +38,7 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("does not include per-turn message identifiers (cache stability)", () => {
-    const prompt = buildInboundMetaSystemPrompt({
+    const { prompt } = buildInboundMetaSystemPrompt({
       MessageSid: "123",
       MessageSidFull: "123",
       ReplyToId: "99",
@@ -58,7 +58,7 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("omits sender_id when blank", () => {
-    const prompt = buildInboundMetaSystemPrompt({
+    const { prompt } = buildInboundMetaSystemPrompt({
       MessageSid: "458",
       SenderId: "   ",
       OriginatingTo: "telegram:-1001249586642",
