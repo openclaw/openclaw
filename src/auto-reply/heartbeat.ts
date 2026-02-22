@@ -1,12 +1,23 @@
 import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-// Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
-// Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 export const HEARTBEAT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
+
+const REPETITIVE_HEARTBEAT_PATTERN = new RegExp(`^(\\s*${HEARTBEAT_TOKEN}\\s*)+$`, "i");
+
+function isRepetitiveHeartbeatOk(text: string): boolean {
+  if (!text.includes(HEARTBEAT_TOKEN)) {
+    return false;
+  }
+  const normalized = text
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return REPETITIVE_HEARTBEAT_PATTERN.test(normalized);
+}
 
 /**
  * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
@@ -117,6 +128,10 @@ export function stripHeartbeatToken(
   const trimmed = raw.trim();
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
+  }
+
+  if (isRepetitiveHeartbeatOk(trimmed)) {
+    return { shouldSkip: true, text: "", didStrip: true };
   }
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
