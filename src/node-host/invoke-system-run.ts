@@ -9,6 +9,7 @@ import {
   evaluateShellAllowlist,
   recordAllowlistUse,
   requiresExecApproval,
+  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   resolveSafeBins,
   type ExecAllowlistEntry,
@@ -314,8 +315,13 @@ export async function handleSystemRunInvoke(opts: {
   }
   if (approvalDecision === "allow-always" && security === "allowlist") {
     if (analysisOk) {
-      for (const segment of segments) {
-        const pattern = segment.resolution?.resolvedPath ?? "";
+      const patterns = resolveAllowAlwaysPatterns({
+        segments,
+        cwd: opts.params.cwd ?? undefined,
+        env,
+        platform: process.platform,
+      });
+      for (const pattern of patterns) {
         if (pattern) {
           addAllowlistEntry(approvals.file, agentId, pattern);
         }
