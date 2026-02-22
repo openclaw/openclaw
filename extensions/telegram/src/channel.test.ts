@@ -122,4 +122,44 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(probeTelegram).not.toHaveBeenCalled();
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
   });
+
+  it("passes webhookPort through to monitor startup options", async () => {
+    const monitorTelegramProvider = vi.fn(async () => undefined);
+    const probeTelegram = vi.fn(async () => ({ ok: true, bot: { username: "opsbot" } }));
+    const runtime = {
+      channel: {
+        telegram: {
+          monitorTelegramProvider,
+          probeTelegram,
+        },
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime;
+    setTelegramRuntime(runtime);
+
+    const cfg = createCfg();
+    cfg.channels!.telegram!.accounts!.ops = {
+      ...cfg.channels!.telegram!.accounts!.ops,
+      webhookUrl: "https://example.test/telegram-webhook",
+      webhookSecret: "secret",
+      webhookPort: 9876,
+    };
+
+    await telegramPlugin.gateway!.startAccount!(
+      createStartAccountCtx({
+        cfg,
+        accountId: "ops",
+        runtime: createRuntimeEnv(),
+      }),
+    );
+
+    expect(monitorTelegramProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        useWebhook: true,
+        webhookPort: 9876,
+      }),
+    );
+  });
 });
