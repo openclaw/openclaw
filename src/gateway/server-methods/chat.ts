@@ -926,11 +926,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(() => {
           if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
+            const rawCombinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
+            const combinedReply = stripInlineDirectiveTagsForDisplay(rawCombinedReply).text;
             let message: Record<string, unknown> | undefined;
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } =
