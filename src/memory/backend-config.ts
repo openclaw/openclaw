@@ -10,14 +10,27 @@ import type {
   MemoryQmdIndexPath,
   MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
+  MemoryRemoteConfig,
 } from "../config/types.memory.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+
+export type ResolvedRemoteConfig = {
+  baseUrl: string;
+  apiKey?: string;
+  headers: Record<string, string>;
+  vectorStoreId?: string;
+  vectorStoreName: string;
+  syncIntervalMs: number;
+  searchMaxResults: number;
+  searchScoreThreshold: number;
+};
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  remote?: ResolvedRemoteConfig;
 };
 
 export type ResolvedQmdCollection = {
@@ -294,12 +307,56 @@ function resolveDefaultCollections(
   }));
 }
 
+const DEFAULT_REMOTE_SYNC_INTERVAL_MS = 300_000;
+const DEFAULT_REMOTE_SEARCH_MAX_RESULTS = 10;
+const DEFAULT_REMOTE_SEARCH_SCORE_THRESHOLD = 0.3;
+
+function resolveRemoteConfig(
+  raw: MemoryRemoteConfig | undefined,
+  agentId: string,
+): ResolvedRemoteConfig | null {
+  const baseUrl = raw?.baseUrl?.trim();
+  if (!baseUrl) {
+    return null;
+  }
+  return {
+    baseUrl: baseUrl.replace(/\/+$/, ""),
+    apiKey: raw?.apiKey?.trim() || undefined,
+    headers: raw?.headers ?? {},
+    vectorStoreId: raw?.vectorStoreId?.trim() || undefined,
+    vectorStoreName: raw?.vectorStoreName?.trim() || `openclaw-memory-${agentId}`,
+    syncIntervalMs:
+      typeof raw?.syncIntervalMs === "number" && raw.syncIntervalMs > 0
+        ? Math.floor(raw.syncIntervalMs)
+        : DEFAULT_REMOTE_SYNC_INTERVAL_MS,
+    searchMaxResults:
+      typeof raw?.searchMaxResults === "number" && raw.searchMaxResults > 0
+        ? Math.floor(raw.searchMaxResults)
+        : DEFAULT_REMOTE_SEARCH_MAX_RESULTS,
+    searchScoreThreshold:
+      typeof raw?.searchScoreThreshold === "number" &&
+      raw.searchScoreThreshold >= 0 &&
+      raw.searchScoreThreshold <= 1
+        ? raw.searchScoreThreshold
+        : DEFAULT_REMOTE_SEARCH_SCORE_THRESHOLD,
+  };
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+
+  if (backend === "remote") {
+    const remote = resolveRemoteConfig(params.cfg.memory?.remote, params.agentId);
+    if (remote) {
+      return { backend: "remote", citations, remote };
+    }
+    return { backend: "builtin", citations };
+  }
+
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
