@@ -590,6 +590,17 @@ export function renderApp(state: AppViewState) {
                     void loadAgentIdentities(state, agentIds);
                   }
                 },
+                onStartNewSession: (agentId) => {
+                  const mainKey = state.agentsList?.mainKey;
+                  const sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+                  resetChatStateForSessionSwitch(state, sessionKey, {
+                    clearAttachments: true,
+                    clearQueue: true,
+                  });
+                  void state.loadAssistantIdentity();
+                  state.setTab("chat");
+                  void state.handleSendChat("/new", { restoreDraft: true });
+                },
                 onSelectAgent: (agentId) => {
                   if (state.agentsSelectedId === agentId) {
                     return;
@@ -1008,19 +1019,9 @@ export function renderApp(state: AppViewState) {
             ? renderChat({
                 sessionKey: state.sessionKey,
                 onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.chatAttachments = [];
-                  state.chatStream = null;
-                  state.chatStreamStartedAt = null;
-                  state.chatRunId = null;
-                  state.chatQueue = [];
-                  state.resetToolStream();
-                  state.resetChatScroll();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
+                  resetChatStateForSessionSwitch(state, next, {
+                    clearAttachments: true,
+                    clearQueue: true,
                   });
                   void state.loadAssistantIdentity();
                   void loadChatHistory(state);

@@ -74,6 +74,7 @@ export type AgentsProps = {
   agentIdentityById: Record<string, AgentIdentityResult>;
   agentSkills: AgentSkillsState;
   onRefresh: () => void;
+  onStartNewSession: (agentId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
@@ -207,7 +208,13 @@ export function renderAgents(props: AgentsProps) {
                 </div>
               `
             : html`
-                ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel), tabCounts)}
+                ${renderAgentHeader(
+                  selectedAgent,
+                  defaultId,
+                  props.agentIdentityById[selectedAgent.id] ?? null,
+                  () => props.onStartNewSession(selectedAgent.id),
+                )}
+                ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel))}
                 ${
                   props.activePanel === "overview"
                     ? renderAgentOverview({
@@ -333,7 +340,33 @@ export function renderAgents(props: AgentsProps) {
   `;
 }
 
-let actionsMenuOpen = false;
+function renderAgentHeader(
+  agent: AgentsListResult["agents"][number],
+  defaultId: string | null,
+  agentIdentity: AgentIdentityResult | null,
+  onStartNewSession: () => void,
+) {
+  const badge = agentBadgeText(agent.id, defaultId);
+  const displayName = normalizeAgentLabel(agent);
+  const subtitle = agent.identity?.theme?.trim() || "Agent workspace and routing.";
+  const emoji = resolveAgentEmoji(agent, agentIdentity);
+  return html`
+    <section class="card agent-header">
+      <div class="agent-header-main">
+        <div class="agent-avatar agent-avatar--lg">${emoji || displayName.slice(0, 1)}</div>
+        <div>
+          <div class="card-title">${displayName}</div>
+          <div class="card-sub">${subtitle}</div>
+        </div>
+      </div>
+      <div class="agent-header-meta">
+        <div class="mono">${agent.id}</div>
+        ${badge ? html`<span class="agent-pill">${badge}</span>` : nothing}
+        <button class="btn btn--sm" @click=${onStartNewSession}>Start New Session</button>
+      </div>
+    </section>
+  `;
+}
 
 function renderAgentTabs(
   active: AgentsPanel,
