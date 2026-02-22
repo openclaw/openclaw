@@ -365,10 +365,17 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   }
 }
 
-function generateZshCompletion(program: Command): string {
+export function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
   const script = `
 #compdef ${rootCmd}
+
+# Ensure completion functions are available when this script is sourced
+# in shells that have not initialized compinit yet.
+if ! command -v compdef >/dev/null 2>&1; then
+  autoload -Uz compinit
+  compinit
+fi
 
 _${rootCmd}_root_completion() {
   local -a commands
