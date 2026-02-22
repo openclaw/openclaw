@@ -1,9 +1,18 @@
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import {
-  buildRelayWsUrl,
-  isRetryableReconnectError,
-  reconnectDelayMs,
-} from "../../assets/chrome-extension/background-utils.js";
+
+type BackgroundUtilsModule = {
+  buildRelayWsUrl: (port: number, gatewayToken: string) => string;
+  isRetryableReconnectError: (err: unknown) => boolean;
+  reconnectDelayMs: (
+    attempt: number,
+    opts?: { baseMs?: number; maxMs?: number; jitterMs?: number; random?: () => number },
+  ) => number;
+};
+
+const require = createRequire(import.meta.url);
+const { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } =
+  require("../../assets/chrome-extension/background-utils.js") as BackgroundUtilsModule;
 
 describe("chrome extension background utils", () => {
   it("builds websocket url with encoded gateway token", () => {
