@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import { prepareSkillCommandToolDispatch } from "../skill-command-dispatch-policy.js";
 import {
   listReservedChatSlashCommandNames,
   listSkillCommandsForWorkspace,
@@ -187,6 +188,17 @@ export async function handleInlineActions(params: {
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
+      const preparedDispatch = prepareSkillCommandToolDispatch({
+        cfg,
+        toolName: dispatch.toolName,
+        rawArgs,
+        commandName: skillInvocation.command.name,
+        skillName: skillInvocation.command.skillName,
+      });
+      if (!preparedDispatch.ok) {
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ ${preparedDispatch.message}` } };
+      }
       const channel =
         resolveGatewayMessageChannel(ctx.Surface) ??
         resolveGatewayMessageChannel(ctx.Provider) ??
@@ -204,20 +216,21 @@ export async function handleInlineActions(params: {
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      const tool = authorizedTools.find(
+        (candidate) => candidate.name === preparedDispatch.toolName,
+      );
       if (!tool) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
+        return {
+          kind: "reply",
+          reply: { text: `❌ Tool not available: ${preparedDispatch.toolName}` },
+        };
       }
 
       const toolCallId = `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       try {
-        const result = await tool.execute(toolCallId, {
-          command: rawArgs,
-          commandName: skillInvocation.command.name,
-          skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const result = await tool.execute(toolCallId, preparedDispatch.toolParams as any);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };

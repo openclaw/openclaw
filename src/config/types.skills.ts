@@ -22,6 +22,22 @@ export type SkillsInstallConfig = {
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
 };
 
+export type SkillsCommandDispatchConfig = {
+  /**
+   * Optional allowlist for skill `command-dispatch: tool` target tools.
+   * Supports exact names and wildcard patterns (e.g. `gateway/*`).
+   * When unset, OpenClaw applies a default denylist for high-risk tools.
+   */
+  allowTools?: string[];
+  /** Max argument length (characters) accepted for skill tool dispatch. */
+  maxArgLength?: number;
+  /**
+   * Optional tool allowlist that must receive JSON-object arguments.
+   * Supports exact names and wildcard patterns.
+   */
+  requireStructuredArgsTools?: string[];
+};
+
 export type SkillsLimitsConfig = {
   /** Max number of immediate child directories to consider under a skills root before treating it as suspicious. */
   maxCandidatesPerRoot?: number;
@@ -40,6 +56,7 @@ export type SkillsConfig = {
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
+  commandDispatch?: SkillsCommandDispatchConfig;
   limits?: SkillsLimitsConfig;
   entries?: Record<string, SkillConfig>;
 };

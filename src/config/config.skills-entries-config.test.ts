@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("skills entries config schema", () => {
+  it("accepts skills.commandDispatch policy fields", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        commandDispatch: {
+          allowTools: ["exec", "gateway/*"],
+          maxArgLength: 2048,
+          requireStructuredArgsTools: ["exec"],
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("accepts custom fields under config", () => {
     const res = OpenClawSchema.safeParse({
       skills: {

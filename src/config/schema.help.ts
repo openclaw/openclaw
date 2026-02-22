@@ -57,6 +57,12 @@ export const FIELD_HELP: Record<string, string> = {
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
   "nodeHost.browserProxy.allowProfiles":
     "Optional allowlist of browser profile names exposed via the node proxy.",
+  "skills.commandDispatch.allowTools":
+    "Optional allowlist for skill command tool-dispatch targets (supports wildcards, e.g. gateway/*). Unset keeps default denylist for high-risk tools.",
+  "skills.commandDispatch.maxArgLength":
+    "Max characters accepted for slash-command tool dispatch args (default: 4000).",
+  "skills.commandDispatch.requireStructuredArgsTools":
+    "Optional allowlist of tool targets that must receive JSON-object args for skill command tool dispatch.",
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.cacheTrace.enabled":
