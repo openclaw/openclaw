@@ -270,4 +270,16 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+
+  export async function readSlackCanvas(
+  fileId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<{ sections: Array<{ markdown?: string }> }> {
+  const client = await getClient(opts);
+  const result = await client.canvases.sections.lookup({
+    canvas_id: fileId,
+  });
+  return {
+    sections: (result.sections ?? []) as Array<{ markdown?: string }>,
+  }; 
 }

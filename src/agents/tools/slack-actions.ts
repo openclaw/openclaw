@@ -10,6 +10,7 @@ import {
   listSlackReactions,
   pinSlackMessage,
   reactSlackMessage,
+  readSlackCanvas,
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
@@ -342,6 +343,19 @@ export async function handleSlackAction(
     }
     return jsonResult({ ok: true, emojis: result });
   }
-
+if (action === "read-canvas") {
+  if (!isActionEnabled("canvas")) {
+    throw new Error("Slack canvas reading is disabled.");
+  }
+  const fileId = readStringParam(params, "fileId", { required: true });
+  const result = readOpts
+    ? await readSlackCanvas(fileId, readOpts)
+    : await readSlackCanvas(fileId);
+  const markdown = result.sections
+    .map((section) => section.markdown ?? "")
+    .join("\n\n")
+    .trim();
+  return jsonResult({ ok: true, markdown, sections: result.sections });
+}
   throw new Error(`Unknown action: ${action}`);
 }
