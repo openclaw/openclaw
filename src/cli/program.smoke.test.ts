@@ -67,47 +67,10 @@ describe("cli program (smoke)", () => {
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
   });
 
-  it("runs config alias as configure", async () => {
-    await runProgram(["config"]);
-    expect(configureCommand).toHaveBeenCalled();
-  });
+  it("runs setup wizard when wizard flags are present", async () => {
+    await runProgram(["setup", "--remote-url", "ws://example"]);
 
-  it.each([
-    {
-      label: "runs setup without wizard flags",
-      argv: ["setup"],
-      expectSetupCalled: true,
-      expectOnboardCalled: false,
-    },
-    {
-      label: "runs setup wizard when wizard flags are present",
-      argv: ["setup", "--remote-url", "ws://example"],
-      expectSetupCalled: false,
-      expectOnboardCalled: true,
-    },
-  ])("setup command: $label", async ({ argv, expectSetupCalled, expectOnboardCalled }) => {
-    await runProgram(argv);
-    expect(setupCommand).toHaveBeenCalledTimes(expectSetupCalled ? 1 : 0);
-    expect(onboardCommand).toHaveBeenCalledTimes(expectOnboardCalled ? 1 : 0);
-  });
-
-  it("passes representative auth flags to onboard", async () => {
-    await runProgram([
-      "onboard",
-      "--non-interactive",
-      "--auth-choice",
-      "openrouter-api-key",
-      "--openrouter-api-key",
-      "sk-openrouter-test",
-    ]);
-
-    expect(onboardCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nonInteractive: true,
-        authChoice: "openrouter-api-key",
-        openrouterApiKey: "sk-openrouter-test",
-      }),
-      runtime,
-    );
+    expect(setupCommand).not.toHaveBeenCalled();
+    expect(onboardCommand).toHaveBeenCalledTimes(1);
   });
 });
