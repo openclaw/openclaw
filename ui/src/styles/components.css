@@ -2441,32 +2441,65 @@
 
 .ov-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
   margin-top: 18px;
 }
 
 .ov-stat-card {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 16px;
+  --ov-accent: var(--muted);
+  display: grid;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-top: 2px solid var(--ov-accent);
+  position: relative;
 }
 
 .ov-stat-card.clickable {
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .ov-stat-card.clickable:hover {
   border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.ov-stat-card[data-kind="cost"] {
+  --ov-accent: var(--kn-bioluminescence);
+}
+
+.ov-stat-card[data-kind="sessions"] {
+  --ov-accent: var(--kn-silver);
+}
+
+.ov-stat-card[data-kind="skills"] {
+  --ov-accent: var(--kn-claw-ember);
+}
+
+.ov-stat-card[data-kind="cron"] {
+  --ov-accent: var(--vscode-accent);
+}
+
+.ov-stat-card__inner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
 }
 
 .ov-stat-card__icon {
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  color: var(--muted);
+  width: 20px;
+  height: 20px;
+  color: var(--ov-accent);
+  opacity: 0.8;
+  margin-top: 1px;
 }
 
 .ov-stat-card__icon svg {
@@ -2476,26 +2509,29 @@
 
 .ov-stat-card__body {
   min-width: 0;
+  flex: 1;
 }
 
 .ov-stat-card__body .stat-label {
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: var(--muted);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-weight: 600;
 }
 
 .ov-stat-card__body .stat-value {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  line-height: 1.2;
+  line-height: 1.1;
 }
 
 .ov-stat-card__body .muted {
-  font-size: 13px;
-  margin-top: 4px;
+  font-size: 12px;
+  margin-top: 6px;
+  line-height: 1.4;
 }
 
 .redacted {
@@ -2508,24 +2544,30 @@
 /* Recent sessions */
 
 .ov-recent-sessions {
-  margin-top: 18px;
+  margin-top: 14px;
 }
 
 .ov-session-list {
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .ov-session-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   font-size: 13px;
+  transition: opacity 0.1s ease;
 }
 
 .ov-session-row:last-child {
   border-bottom: none;
+  padding-bottom: 0;
+}
+
+.ov-session-row:first-child {
+  padding-top: 0;
 }
 
 .ov-session-key {

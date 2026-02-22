@@ -173,7 +173,7 @@ export function renderApp(state: AppViewState) {
             aria-label="Toggle redaction"
             aria-pressed=${state.streamMode}
           >
-            ${state.streamMode ? icons.eyeOff : icons.eye}
+            ${state.streamMode ? icons.eye : icons.eyeOff}
           </button>
           <span class="topbar-divider"></span>
           <div class="topbar-connection ${state.connected ? "topbar-connection--ok" : ""}">
