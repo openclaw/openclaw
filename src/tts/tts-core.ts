@@ -8,6 +8,7 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
+import { ensureOllamaApiRegistered } from "../agents/ollama-stream.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -439,6 +440,10 @@ export async function summarizeText(params: {
     await getApiKeyForModel({ model: resolved.model, cfg }),
     ref.provider,
   );
+
+  if (resolved.model.api === "ollama") {
+    ensureOllamaApiRegistered();
+  }
 
   try {
     const controller = new AbortController();
