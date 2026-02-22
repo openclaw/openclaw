@@ -150,6 +150,23 @@ export function installSessionToolResultGuard(
     return msg;
   };
 
+  const safeAppend = (
+    message: Parameters<typeof originalAppend>[0],
+  ): ReturnType<typeof originalAppend> | undefined => {
+    try {
+      return originalAppend(message);
+    } catch (err) {
+      const file =
+        (sessionManager as { getSessionFile?: () => string | null }).getSessionFile?.() ??
+        "unknown";
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[session-guard] session write failed (${reason}); message dropped (file: ${file})`,
+      );
+      return undefined;
+    }
+  };
+
   const flushPendingToolResults = () => {
     if (pending.size === 0) {
       return;
@@ -165,7 +182,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(flushed as never);
+          safeAppend(flushed as never);
         }
       }
     }
@@ -208,7 +225,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      return safeAppend(persisted as never);
     }
 
     const toolCalls =
@@ -231,7 +248,7 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
-    const result = originalAppend(finalMessage as never);
+    const result = safeAppend(finalMessage as never);
 
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }

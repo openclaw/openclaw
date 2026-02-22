@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -356,5 +356,184 @@ describe("installSessionToolResultGuard", () => {
       kind: "inter_session",
       sourceTool: "sessions_send",
     });
+  });
+
+  // --- safeAppend write-failure tests ---
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("catches write failure on main message path without throwing", () => {
+    const sm = SessionManager.inMemory();
+
+    // Patch appendMessage to throw BEFORE installing the guard,
+    // so originalAppend captures the throwing function.
+    sm.appendMessage = (() => {
+      throw new Error("EACCES: permission denied");
+    }) as SessionManager["appendMessage"];
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    installSessionToolResultGuard(sm);
+
+    // Should not throw
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "hello",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy.mock.calls[0][0]).toContain("session write failed");
+    expect(spy.mock.calls[0][0]).toContain("EACCES");
+  });
+
+  it("catches write failure on tool result path and clears pending IDs", () => {
+    const sm = SessionManager.inMemory();
+    const realAppend = sm.appendMessage.bind(sm);
+    let callCount = 0;
+
+    // Throw only on the second originalAppend call (the tool result write).
+    sm.appendMessage = ((msg: AppendMessage) => {
+      callCount++;
+      if (callCount === 2) {
+        throw new Error("EACCES: permission denied");
+      }
+      return realAppend(msg);
+    }) as SessionManager["appendMessage"];
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const guard = installSessionToolResultGuard(sm);
+
+    // First: tool call (originalAppend call 1 — succeeds)
+    sm.appendMessage(toolCallMessage);
+    // Second: tool result (originalAppend call 2 — throws, caught by safeAppend)
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0][0]).toContain("session write failed");
+    expect(guard.getPendingIds()).toEqual([]);
+  });
+
+  it("catches write failure in flushPendingToolResults and clears pending IDs", () => {
+    const sm = SessionManager.inMemory();
+
+    // Always throw
+    sm.appendMessage = (() => {
+      throw new Error("EACCES: permission denied");
+    }) as SessionManager["appendMessage"];
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const guard = installSessionToolResultGuard(sm);
+
+    // Append tool call — safeAppend catches the error, but pending IDs are still set
+    sm.appendMessage(toolCallMessage);
+
+    // Flush — safeAppend catches the error, then pending.clear() runs
+    guard.flushPendingToolResults();
+
+    expect(spy).toHaveBeenCalled();
+    expect(guard.getPendingIds()).toEqual([]);
+  });
+
+  it("write failure does not affect subsequent successful writes", () => {
+    const sm = SessionManager.inMemory();
+    const realAppend = sm.appendMessage.bind(sm);
+    let callCount = 0;
+
+    // Throw only on the first call, succeed after that.
+    sm.appendMessage = ((msg: AppendMessage) => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error("EACCES: permission denied");
+      }
+      return realAppend(msg);
+    }) as SessionManager["appendMessage"];
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    installSessionToolResultGuard(sm);
+
+    // First write: fails silently
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "first",
+        timestamp: Date.now(),
+      }),
+    );
+    expect(spy).toHaveBeenCalledOnce();
+
+    // Second write: succeeds
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "second",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    expect(messages).toHaveLength(1);
+    expect((messages[0] as { content?: string }).content).toBe("second");
+  });
+
+  it("includes getSessionFile() path in error log when available", () => {
+    const sm = SessionManager.inMemory();
+
+    // Add getSessionFile to the session manager
+    (sm as unknown as { getSessionFile: () => string }).getSessionFile = () =>
+      "/path/to/session.jsonl";
+
+    // Make append throw
+    sm.appendMessage = (() => {
+      throw new Error("EACCES: permission denied");
+    }) as SessionManager["appendMessage"];
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "test",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0][0]).toContain("/path/to/session.jsonl");
+  });
+
+  it("falls back to 'unknown' when getSessionFile is unavailable", () => {
+    const sm = SessionManager.inMemory();
+
+    // Make append throw — SessionManager.inMemory() has no getSessionFile
+    sm.appendMessage = (() => {
+      throw new Error("EACCES: permission denied");
+    }) as SessionManager["appendMessage"];
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "test",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0][0]).toContain("unknown");
   });
 });
