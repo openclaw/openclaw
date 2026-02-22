@@ -210,6 +210,7 @@ Then run:
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
+  - `allowProvider` defaults to `false` (provider switching is opt-in).
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
@@ -242,18 +243,20 @@ for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
 provide expressive tags (laughter, singing cues, etc) that should only appear in
 the audio.
 
+`provider=...` directives are ignored unless `modelOverrides.allowProvider: true`.
+
 Example reply payload:
 
 ```
 Here you go.
 
-[[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
+[[tts:voiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
 [[tts:text]](laughs) Read the song once more.[[/tts:text]]
 ```
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`)
+- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
@@ -275,7 +278,7 @@ Disable all model overrides:
 }
 ```
 
-Optional allowlist (disable specific overrides while keeping tags enabled):
+Optional allowlist (enable provider switching while keeping other knobs configurable):
 
 ```json5
 {
@@ -283,7 +286,7 @@ Optional allowlist (disable specific overrides while keeping tags enabled):
     tts: {
       modelOverrides: {
         enabled: true,
-        allowProvider: false,
+        allowProvider: true,
         allowSeed: false,
       },
     },

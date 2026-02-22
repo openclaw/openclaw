@@ -1,7 +1,9 @@
 import {
   CombinedAutocompleteProvider,
   Container,
+  Key,
   Loader,
+  matchesKey,
   ProcessTerminal,
   Text,
   TUI,
@@ -195,6 +197,44 @@ export function resolveTuiSessionKey(params: {
   return `agent:${params.currentAgentId}:${trimmed}`;
 }
 
+export function resolveGatewayDisconnectState(reason?: string): {
+  connectionStatus: string;
+  activityStatus: string;
+  pairingHint?: string;
+} {
+  const reasonLabel = reason?.trim() ? reason.trim() : "closed";
+  if (/pairing required/i.test(reasonLabel)) {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "pairing required: run openclaw devices list",
+      pairingHint:
+        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+    };
+  }
+  return {
+    connectionStatus: `gateway disconnected: ${reasonLabel}`,
+    activityStatus: "idle",
+  };
+}
+
+export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
+  const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
+  const now = params?.now ?? (() => Date.now());
+  let lastBackspaceAt = -1;
+
+  return (data: string): string => {
+    if (!matchesKey(data, Key.backspace)) {
+      return data;
+    }
+    const ts = now();
+    if (lastBackspaceAt >= 0 && ts - lastBackspaceAt <= dedupeWindowMs) {
+      return "";
+    }
+    lastBackspaceAt = ts;
+    return data;
+  };
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -213,6 +253,7 @@ export async function runTui(opts: TuiOptions) {
   let wasDisconnected = false;
   let toolsExpanded = false;
   let showThinking = false;
+  let pairingHintShown = false;
   const localRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
@@ -374,6 +415,14 @@ export async function runTui(opts: TuiOptions) {
   });
 
   const tui = new TUI(new ProcessTerminal());
+  const dedupeBackspace = createBackspaceDeduper();
+  tui.addInputListener((data) => {
+    const next = dedupeBackspace(data);
+    if (next.length === 0) {
+      return { consume: true };
+    }
+    return { data: next };
+  });
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
@@ -772,6 +821,7 @@ export async function runTui(opts: TuiOptions) {
 
   client.onConnected = () => {
     isConnected = true;
+    pairingHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     setConnectionStatus("connected");
@@ -794,9 +844,13 @@ export async function runTui(opts: TuiOptions) {
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
-    const reasonLabel = reason?.trim() ? reason.trim() : "closed";
-    setConnectionStatus(`gateway disconnected: ${reasonLabel}`, 5000);
-    setActivityStatus("idle");
+    const disconnectState = resolveGatewayDisconnectState(reason);
+    setConnectionStatus(disconnectState.connectionStatus, 5000);
+    setActivityStatus(disconnectState.activityStatus);
+    if (disconnectState.pairingHint && !pairingHintShown) {
+      pairingHintShown = true;
+      chatLog.addSystem(disconnectState.pairingHint);
+    }
     updateFooter();
     tui.requestRender();
   };

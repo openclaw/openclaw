@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { handleTelegramAction, readTelegramButtons } from "./telegram-actions.js";
 
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -12,7 +13,7 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
-const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
@@ -39,6 +40,17 @@ describe("handleTelegramAction", () => {
     } as OpenClawConfig;
   }
 
+  function telegramConfig(overrides?: Record<string, unknown>): OpenClawConfig {
+    return {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          ...overrides,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   async function expectReactionAdded(reactionLevel: "minimal" | "extensive") {
     await handleTelegramAction(defaultReactionAction, reactionConfig(reactionLevel));
     expect(reactMessageTelegram).toHaveBeenCalledWith(
@@ -50,6 +62,7 @@ describe("handleTelegramAction", () => {
   }
 
   beforeEach(() => {
+    envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
@@ -58,11 +71,7 @@ describe("handleTelegramAction", () => {
   });
 
   afterEach(() => {
-    if (originalToken === undefined) {
-      delete process.env.TELEGRAM_BOT_TOKEN;
-    } else {
-      process.env.TELEGRAM_BOT_TOKEN = originalToken;
-    }
+    envSnapshot.restore();
   });
 
   it("adds reactions when reactionLevel is minimal", async () => {
@@ -168,8 +177,16 @@ describe("handleTelegramAction", () => {
     );
   });
 
-  it("blocks reactions when reactionLevel is off", async () => {
-    const cfg = reactionConfig("off");
+  it.each([
+    {
+      level: "off" as const,
+      expectedMessage: /Telegram agent reactions disabled.*reactionLevel="off"/,
+    },
+    {
+      level: "ack" as const,
+      expectedMessage: /Telegram agent reactions disabled.*reactionLevel="ack"/,
+    },
+  ])("blocks reactions when reactionLevel is $level", async ({ level, expectedMessage }) => {
     await expect(
       handleTelegramAction(
         {
@@ -178,24 +195,9 @@ describe("handleTelegramAction", () => {
           messageId: "456",
           emoji: "✅",
         },
-        cfg,
+        reactionConfig(level),
       ),
-    ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="off"/);
-  });
-
-  it("blocks reactions when reactionLevel is ack", async () => {
-    const cfg = reactionConfig("ack");
-    await expect(
-      handleTelegramAction(
-        {
-          action: "react",
-          chatId: "123",
-          messageId: "456",
-          emoji: "✅",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="ack"/);
+    ).rejects.toThrow(expectedMessage);
   });
 
   it("also respects legacy actions.reactions gating", async () => {
@@ -222,16 +224,13 @@ describe("handleTelegramAction", () => {
   });
 
   it("sends a text message", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
     const result = await handleTelegramAction(
       {
         action: "sendMessage",
         to: "@testchannel",
         content: "Hello, Telegram!",
       },
-      cfg,
+      telegramConfig(),
     );
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "@testchannel",
@@ -244,87 +243,66 @@ describe("handleTelegramAction", () => {
     });
   });
 
-  it("sends a message with media", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
+  it.each([
+    {
+      name: "media",
+      params: {
         action: "sendMessage",
         to: "123456",
         content: "Check this image!",
         mediaUrl: "https://example.com/image.jpg",
       },
-      cfg,
-    );
-    expect(sendMessageTelegram).toHaveBeenCalledWith(
-      "123456",
-      "Check this image!",
-      expect.objectContaining({
-        token: "tok",
-        mediaUrl: "https://example.com/image.jpg",
-      }),
-    );
-  });
-
-  it("passes quoteText when provided", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
+      expectedTo: "123456",
+      expectedContent: "Check this image!",
+      expectedOptions: { mediaUrl: "https://example.com/image.jpg" },
+    },
+    {
+      name: "quoteText",
+      params: {
         action: "sendMessage",
         to: "123456",
         content: "Replying now",
         replyToMessageId: 144,
         quoteText: "The text you want to quote",
       },
-      cfg,
-    );
-    expect(sendMessageTelegram).toHaveBeenCalledWith(
-      "123456",
-      "Replying now",
-      expect.objectContaining({
-        token: "tok",
+      expectedTo: "123456",
+      expectedContent: "Replying now",
+      expectedOptions: {
         replyToMessageId: 144,
         quoteText: "The text you want to quote",
-      }),
-    );
-  });
-
-  it("allows media-only messages without content", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
+      },
+    },
+    {
+      name: "media-only",
+      params: {
         action: "sendMessage",
         to: "123456",
         mediaUrl: "https://example.com/note.ogg",
       },
-      cfg,
-    );
+      expectedTo: "123456",
+      expectedContent: "",
+      expectedOptions: { mediaUrl: "https://example.com/note.ogg" },
+    },
+  ] as const)("maps sendMessage params for $name", async (testCase) => {
+    await handleTelegramAction(testCase.params, telegramConfig());
     expect(sendMessageTelegram).toHaveBeenCalledWith(
-      "123456",
-      "",
+      testCase.expectedTo,
+      testCase.expectedContent,
       expect.objectContaining({
         token: "tok",
-        mediaUrl: "https://example.com/note.ogg",
+        ...testCase.expectedOptions,
       }),
     );
   });
 
   it("requires content when no mediaUrl is provided", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
     await expect(
       handleTelegramAction(
         {
           action: "sendMessage",
           to: "123456",
         },
-        cfg,
+        telegramConfig(),
       ),
     ).rejects.toThrow(/content required/i);
   });
@@ -415,42 +393,31 @@ describe("handleTelegramAction", () => {
     expect(sendMessageTelegram).toHaveBeenCalled();
   });
 
-  it("blocks inline buttons when scope is off", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "off" } },
-      },
-    } as OpenClawConfig;
+  it.each([
+    {
+      name: "scope is off",
+      to: "@testchannel",
+      inlineButtons: "off" as const,
+      expectedMessage: /inline buttons are disabled/i,
+    },
+    {
+      name: "scope is dm and target is group",
+      to: "-100123456",
+      inlineButtons: "dm" as const,
+      expectedMessage: /inline buttons are limited to DMs/i,
+    },
+  ])("blocks inline buttons when $name", async ({ to, inlineButtons, expectedMessage }) => {
     await expect(
       handleTelegramAction(
         {
           action: "sendMessage",
-          to: "@testchannel",
+          to,
           content: "Choose",
           buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
         },
-        cfg,
+        telegramConfig({ capabilities: { inlineButtons } }),
       ),
-    ).rejects.toThrow(/inline buttons are disabled/i);
-  });
-
-  it("blocks inline buttons in groups when scope is dm", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
-      },
-    } as OpenClawConfig;
-    await expect(
-      handleTelegramAction(
-        {
-          action: "sendMessage",
-          to: "-100123456",
-          content: "Choose",
-          buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/inline buttons are limited to DMs/i);
+    ).rejects.toThrow(expectedMessage);
   });
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
